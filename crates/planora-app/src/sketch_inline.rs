@@ -116,6 +116,8 @@ pub fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> St
                 FieldKind::Angle
                     | FieldKind::Sweep
                     | FieldKind::MoveAngle
+                    | FieldKind::MoveAngleX
+                    | FieldKind::MoveAngleY
                     | FieldKind::PatternAngle
             ) =>
         {

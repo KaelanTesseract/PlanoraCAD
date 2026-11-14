@@ -807,13 +807,7 @@ impl Sketch {
         }
         // Zwei runde Kurven ohne gemeinsames Ende berühren sich hier nur in einer gemeinsamen
         // Ebene (Ruling Review Task 3).
-        if let Tangent(a, b) = *kind
-            && shared_end(self, a, b).is_none()
-            && line_and_param(self, a, b).is_none()
-            && !is_line_kind(&self.curves[a].kind)
-            && !is_line_kind(&self.curves[b].kind)
-            && !parallel_normals(self, self.curve_normal(a), self.curve_normal(b))
-        {
+        if self.tangent_planes_apart(kind) {
             return Err(SketchError::InvalidInput(tr!("sketch-err-tangent-planes")));
         }
         let flat = |p: PointId| self.points[p].z.is_none();
@@ -830,6 +824,20 @@ impl Sketch {
             self.check_point_liftable(p)?;
         }
         Ok(lifted)
+    }
+
+    /// Ist `kind` eine Tangente zweier runder Kurven ohne gemeinsames Ende, deren Ebenen nicht
+    /// parallel liegen? Die gibt es in 3D nicht (Ruling Review Task 3): Beim Setzen wird sie
+    /// abgelehnt, beim Drehen einer Ebene entfällt sie (Task 20).
+    pub(crate) fn tangent_planes_apart(&self, kind: &ConstraintKind) -> bool {
+        let ConstraintKind::Tangent(a, b) = *kind else {
+            return false;
+        };
+        shared_end(self, a, b).is_none()
+            && line_and_param(self, a, b).is_none()
+            && !is_line_kind(&self.curves[a].kind)
+            && !is_line_kind(&self.curves[b].kind)
+            && !parallel_normals(self, self.curve_normal(a), self.curve_normal(b))
     }
 
     /// Die Punkte `seeds` und alle Punkte ebener Kurven ohne Normale, die an ihnen hängen
@@ -989,7 +997,7 @@ impl Sketch {
 }
 
 /// Kurven mit eigener Ebene (Task 2).
-fn is_planar_kind(k: &CurveKind) -> bool {
+pub(crate) fn is_planar_kind(k: &CurveKind) -> bool {
     matches!(
         k,
         CurveKind::Circle { .. }

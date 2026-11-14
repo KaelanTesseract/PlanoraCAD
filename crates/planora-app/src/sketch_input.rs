@@ -51,6 +51,12 @@ pub enum FieldKind {
     MoveY,
     /// Drehung in Grad: Vorzeichen erlaubt.
     MoveAngle,
+    /// Verschieben in 3D (Skizzen 10, nur mit „3D-Skizze“): Z-Abstand, Vorzeichen und null erlaubt.
+    MoveZ,
+    /// Drehung um die X-Achse in Grad (Skizzen 10).
+    MoveAngleX,
+    /// Drehung um die Y-Achse in Grad (Skizzen 10).
+    MoveAngleY,
     /// Faktor des Maßstabs: größer als null, ohne Einheit.
     ScaleFactor,
     /// Muster (Skizzen 5): Anzahl der ersten Richtung, ganzzahlig 1 bis
@@ -79,6 +85,8 @@ impl FieldKind {
             FieldKind::Angle
             | FieldKind::Sweep
             | FieldKind::MoveAngle
+            | FieldKind::MoveAngleX
+            | FieldKind::MoveAngleY
             | FieldKind::PatternAngle => ParamUnit::Angle,
             FieldKind::Sides
             | FieldKind::ScaleFactor
@@ -110,6 +118,9 @@ impl FieldKind {
             FieldKind::MoveX => tr!("sketch-field-move-x"),
             FieldKind::MoveY => tr!("sketch-field-move-y"),
             FieldKind::MoveAngle => tr!("sketch-field-move-angle"),
+            FieldKind::MoveZ => tr!("sketch-field-move-z"),
+            FieldKind::MoveAngleX => tr!("sketch-field-move-angle-x"),
+            FieldKind::MoveAngleY => tr!("sketch-field-move-angle-y"),
             FieldKind::ScaleFactor => tr!("sketch-field-scale-factor"),
             FieldKind::PatternCount1 => tr!("sketch-pattern-slot-count1"),
             FieldKind::PatternSpacing1 => tr!("sketch-pattern-slot-spacing1"),
@@ -336,15 +347,21 @@ fn read_field(
         FieldKind::OffsetDistance if !v.is_finite() || v == 0.0 => {
             Err(tr!("sketch-field-offset-nonzero"))
         }
-        FieldKind::MoveX | FieldKind::MoveY if !v.is_finite() => {
+        FieldKind::MoveX | FieldKind::MoveY | FieldKind::MoveZ if !v.is_finite() => {
             Err(tr!("sketch-err-value-finite"))
         }
-        FieldKind::MoveAngle if !v.is_finite() => Err(tr!("sketch-err-value-finite")),
-        FieldKind::MoveAngle => Ok(Some(v.to_radians())),
+        FieldKind::MoveAngle | FieldKind::MoveAngleX | FieldKind::MoveAngleY if !v.is_finite() => {
+            Err(tr!("sketch-err-value-finite"))
+        }
+        FieldKind::MoveAngle | FieldKind::MoveAngleX | FieldKind::MoveAngleY => {
+            Ok(Some(v.to_radians()))
+        }
         FieldKind::ScaleFactor if !v.is_finite() || v <= 0.0 => {
             Err(tr!("sketch-field-factor-positive"))
         }
-        FieldKind::OffsetDistance | FieldKind::MoveX | FieldKind::MoveY => Ok(Some(v)),
+        FieldKind::OffsetDistance | FieldKind::MoveX | FieldKind::MoveY | FieldKind::MoveZ => {
+            Ok(Some(v))
+        }
         _ if !v.is_finite() || v <= 0.0 => Err(tr!("sketch-field-positive")),
         FieldKind::MinorAxis if minor_limit.is_some_and(|l| v > l) => {
             Err(tr!("sketch-field-minor-too-big"))
@@ -420,6 +437,8 @@ fn basis_direction(sk: &Sketch, chain: Option<CurveId>, start: PointId) -> DVec2
 impl SketchSession {
     /// Felder der aktuellen Stufe; nur bei geändertem Werkzeug oder Stand neu (dann leer).
     pub fn sync_input(&mut self, sk: &Sketch) {
+        // Die Felder von Verschieben in 3D gibt es nur mit „3D-Skizze“ (Skizzen 10, A1).
+        self.move3 = sk.three_d;
         let key = (
             Some(self.tool),
             self.planned_kind(),
@@ -503,6 +522,15 @@ impl SketchSession {
         let (pts, pos) = (self.pending.len(), self.pending_pos.len());
         match self.tool {
             Tool::Offset if !self.pending_curves.is_empty() => &[F::OffsetDistance],
+            // Mit „3D-Skizze“ dazu Z-Abstand, X- und Y-Winkel in der Reihenfolge von Fusion (A1).
+            Tool::MoveCopy if self.transform.stage == TransformStage::Active && self.move3 => &[
+                F::MoveX,
+                F::MoveY,
+                F::MoveZ,
+                F::MoveAngleX,
+                F::MoveAngleY,
+                F::MoveAngle,
+            ],
             Tool::MoveCopy if self.transform.stage == TransformStage::Active => {
                 &[F::MoveX, F::MoveY, F::MoveAngle]
             }
@@ -599,7 +627,16 @@ impl SketchSession {
         if let Some(slot) = kind.pattern_slot() {
             return self.pattern_slot_value(slot);
         }
-        if matches!(kind, F::MoveX | F::MoveY | F::MoveAngle | F::ScaleFactor) {
+        if matches!(
+            kind,
+            F::MoveX
+                | F::MoveY
+                | F::MoveZ
+                | F::MoveAngle
+                | F::MoveAngleX
+                | F::MoveAngleY
+                | F::ScaleFactor
+        ) {
             return self.transform_field_value(kind);
         }
         if self.draw3 {
@@ -644,7 +681,10 @@ impl SketchSession {
             | F::OffsetDistance
             | F::MoveX
             | F::MoveY
+            | F::MoveZ
             | F::MoveAngle
+            | F::MoveAngleX
+            | F::MoveAngleY
             | F::ScaleFactor
             | F::PatternCount1
             | F::PatternSpacing1
@@ -910,7 +950,10 @@ impl SketchSession {
                                 | FieldKind::Rho
                                 | FieldKind::MoveX
                                 | FieldKind::MoveY
+                                | FieldKind::MoveZ
                                 | FieldKind::MoveAngle
+                                | FieldKind::MoveAngleX
+                                | FieldKind::MoveAngleY
                                 | FieldKind::ScaleFactor
                         )
                 })

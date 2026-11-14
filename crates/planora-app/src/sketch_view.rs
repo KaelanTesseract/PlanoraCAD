@@ -1519,10 +1519,8 @@ fn box_can_start(
         return false;
     };
     // Ein Griff geht vor dem Rahmen.
-    if let (Some(l), Some(p)) = (
-        grip_layout(state, rect),
-        ui.input(|i| i.pointer.press_origin()),
-    ) && sketch_grips::hit(&l, p).is_some()
+    if let Some(p) = ui.input(|i| i.pointer.press_origin())
+        && grip_hit(state, rect, p).is_some()
     {
         return false;
     }
@@ -1560,6 +1558,24 @@ pub fn grip_layout(state: &AppState, rect: Rect) -> Option<GripLayout> {
         dir(DVec2::Y)?,
         se.tool == Tool::Scale,
     ))
+}
+
+/// Lage der Griffe für 3D (Z-Pfeil, Drehbögen um X und Y) in diesem Bild: nur bei
+/// Verschieben/Kopieren mit „3D-Skizze“ (Skizzen 10, A1), an der Mitte der Griffe im Raum.
+pub fn grip_layout3(state: &AppState, rect: Rect) -> Option<sketch_grips::GripLayout3> {
+    let se = state.sketch_session.as_ref()?;
+    let sk = state.session_sketch()?;
+    if !se.grips_shown() || se.tool != Tool::MoveCopy || !sk.three_d {
+        return None;
+    }
+    let map = mapper(rect, state)?;
+    sketch_grips::layout3(&map, se.grip_center3()?)
+}
+
+/// Der Griff von Verschieben/Kopieren und Maßstab unter `p`, samt den Griffen für 3D.
+pub fn grip_hit(state: &AppState, rect: Rect, p: Pos2) -> Option<Grip> {
+    let l = grip_layout(state, rect)?;
+    sketch_grips::hit_any(&l, grip_layout3(state, rect).as_ref(), p)
 }
 
 /// Lage der Griffe eines Einfügen-Fensters ([`AppState::insert_grips`]) in diesem Bild: die
@@ -1749,8 +1765,7 @@ fn grip_can_start(
     if (pan_gesture && !shift_only) || crate::keymap::settings_ui::is_capturing(ui.ctx()) {
         return None;
     }
-    let l = grip_layout(state, rect)?;
-    sketch_grips::hit(&l, ui.input(|i| i.pointer.press_origin())?)
+    grip_hit(state, rect, ui.input(|i| i.pointer.press_origin())?)
 }
 
 /// Der laufende Auswahlrahmen: Fläche und Rand; Fenster durchgezogen, Kreuzung gestrichelt.
@@ -1873,9 +1888,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 
     // Ein Klick auf einen Griff schaltet beim Wählen nichts in der Auswahl.
     let click_on_grip = primary_click
-        && (pointer
-            .zip(grip_layout(state, rect))
-            .is_some_and(|(p, l)| sketch_grips::hit(&l, p).is_some())
+        && (pointer.is_some_and(|p| grip_hit(state, rect, p).is_some())
             || pointer
                 .zip(pattern_layout.as_ref())
                 .is_some_and(|(p, l)| sketch_pattern::pattern_hit(l, p).is_some()));
@@ -1934,7 +1947,15 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
     } else if let Some(grip) = starts_grip {
         let origin = ui.input(|i| i.pointer.press_origin());
-        if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
+        if grip.is_3d() {
+            // Griffe für 3D fassen eine Stelle im Raum (Skizzen 10).
+            let at3 = origin
+                .zip(se.grip_center3())
+                .and_then(|(p, c)| sketch_grips::grip_point3(&map, grip, c, p));
+            if let Some(at3) = at3 {
+                se.begin_grip3(grip, at3);
+            }
+        } else if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             se.begin_grip(grip, start);
         }
     } else if let Some(grip) = starts_pattern_grip {
@@ -2034,8 +2055,21 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             se.abort_grip();
         } else if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             let latest = ui.input(|i| i.pointer.latest_pos());
-            if let Some(p) = latest.and_then(|p| map.to_sketch(p)) {
-                se.grip_to(p);
+            let grip = se.grip_drag.map(|d| d.grip);
+            match grip {
+                Some(g) if g.is_3d() => {
+                    let at3 = latest
+                        .zip(se.grip_center3())
+                        .and_then(|(p, c)| sketch_grips::grip_point3(&map, g, c, p));
+                    if let Some(at3) = at3 {
+                        se.grip_to3(at3);
+                    }
+                }
+                _ => {
+                    if let Some(p) = latest.and_then(|p| map.to_sketch(p)) {
+                        se.grip_to(p);
+                    }
+                }
             }
             if response.drag_stopped() || !response.dragged() {
                 se.end_grip();
@@ -2787,11 +2821,15 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     if let Some(l) = grip_layout(state, rect) {
+        let l3 = grip_layout3(state, rect);
         let hot = se
             .grip_drag
             .map(|d| d.grip)
-            .or(pointer.and_then(|p| sketch_grips::hit(&l, p)));
+            .or(pointer.and_then(|p| sketch_grips::hit_any(&l, l3.as_ref(), p)));
         sketch_grips::paint(&painter, &l, hot, col.selected, lighter(col.selected));
+        if let Some(l3) = &l3 {
+            sketch_grips::paint3(&painter, l3, hot, &col);
+        }
     }
     if let Some(l) = pattern_grip_layout(state, rect) {
         let hot = se
@@ -3354,6 +3392,15 @@ fn draw_preview(
     // in ihrem Stil.
     if matches!(se.tool, Tool::MoveCopy | Tool::Scale) {
         let stroke = Stroke::new(CURVE_WIDTH, color);
+        // Mit „3D-Skizze“ im Raum (Skizzen 10).
+        if se.tool == Tool::MoveCopy && sk.three_d {
+            for (style, line) in se.transform_preview3_styled(sk).unwrap_or_default() {
+                for path in map.paths3(&line) {
+                    painter.extend(style_shapes(path, stroke, style));
+                }
+            }
+            return;
+        }
         for (style, line) in se.transform_preview_styled(sk).unwrap_or_default() {
             for path in map.paths(&line) {
                 painter.extend(style_shapes(path, stroke, style));

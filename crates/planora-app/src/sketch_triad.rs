@@ -306,6 +306,13 @@ fn units_per_px(camera: &OrbitCamera, frame: &Frame, viewport: Vec2, p: DVec3) -
     (u.is_finite() && u > 0.0).then_some(u)
 }
 
+/// Skizzeneinheiten je Bildpunkt an der Stelle `p` der Ansicht `map` (Griffe von Verschieben in
+/// 3D, Task 20).
+pub(crate) fn units_per_px_at(map: &Mapper, p: DVec3) -> Option<f64> {
+    let viewport = Vec2::new(map.rect.width(), map.rect.height());
+    units_per_px(&map.camera, &map.frame, viewport, p)
+}
+
 /// Abstand von `p` zur Geraden durch `a` und `b` (unbegrenzt) auf dem Bildschirm.
 fn line_distance(p: Vec2, a: Vec2, b: Vec2) -> Option<f32> {
     let ab = b - a;

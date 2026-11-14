@@ -8,12 +8,14 @@ use crate::sketch_cursor::DrawCursor;
 use crate::sketch_input::FieldKind;
 use crate::sketch_kinds::PREVIEW_STEPS_PER_TURN;
 use crate::sketch_state::{Item, SketchSession, Snap, Tool, TransformSet, TransformStage, err};
+use crate::sketch_view::Mapper;
+use crate::theme::SketchColors;
 use egui::{Color32, Pos2, Shape, Stroke, Vec2};
 use planora_feature::SketchFeature;
-use planora_math::DVec2;
+use planora_math::{DQuat, DVec2, DVec3};
 use planora_sketch::model::{CurveId, LineStyle, PointId, Sketch};
 use planora_sketch::transform::{
-    CopyMap, Similarity, TransformBlock, TransformSet as SketchTransformSet,
+    CopyMap, Rigid3, Similarity, TransformBlock, TransformSet as SketchTransformSet,
 };
 
 /// Länge der Pfeile und Abstand der Handhabe des Maßstabs in Bildpunkten.
@@ -38,6 +40,17 @@ pub enum Grip {
     AxisY,
     Rotate,
     Scale,
+    /// Nur mit „3D-Skizze“ (Skizzen 10): Z-Pfeil und die Drehbögen um X und Y.
+    AxisZ,
+    RotateX,
+    RotateY,
+}
+
+impl Grip {
+    /// Ein Griff für 3D: Er rechnet im Raum ([`SketchSession::grip_to3`]), nicht auf der Ebene.
+    pub fn is_3d(self) -> bool {
+        matches!(self, Grip::AxisZ | Grip::RotateX | Grip::RotateY)
+    }
 }
 
 /// Lage der Griffe auf dem Bildschirm.
@@ -149,6 +162,17 @@ pub struct GripDrag {
     pub start_factor: f64,
 }
 
+/// Der Teil eines Zugs an einem Griff für 3D (Skizzen 10), neben [`GripDrag`]: die gefasste
+/// Stelle im Raum und Z-Abstand und Winkel um X und Y davor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GripDrag3 {
+    pub grip: Grip,
+    pub press: DVec3,
+    pub start_z: f64,
+    pub start_angle_x: f64,
+    pub start_angle_y: f64,
+}
+
 /// Verschiebung, Winkel und Faktor für den Zeiger `now`, rein. `base` ist der Drehpunkt auf der
 /// Skizze. Der Winkel liegt im halben Umlauf um `start_angle`; ganze Umläufe zählt
 /// [`unwrapped_angle`]. Der Faktor ist nie null oder negativ, und ein Zeiger auf `base` oder außerhalb
@@ -174,8 +198,177 @@ pub fn grip_motion(d: &GripDrag, base: DVec2, now: DVec2) -> (DVec2, f64, f64) {
                 out.2 = (d.start_factor * to.length() / from.length()).max(GRIP_MIN_FACTOR);
             }
         }
+        // Rechnen im Raum, siehe `grip_motion3`.
+        Grip::AxisZ | Grip::RotateX | Grip::RotateY => {}
     }
     out
+}
+
+/// Z-Abstand und Winkel um X und Y für die Stelle `now` im Raum (Skizzenkoordinaten), rein.
+/// `center` ist die Mitte des Griffs. Der Z-Pfeil nimmt die Höhe des Zeigers, ein Drehbogen den
+/// Winkel um seine Achse von der gefassten Stelle zu `now`, in der Ebene senkrecht zur Achse
+/// gemessen (im halben Umlauf um den Startwinkel, ganze Umläufe zählt [`unwrapped_angle`]).
+pub fn grip_motion3(d: &GripDrag3, center: DVec3, now: DVec3) -> (f64, f64, f64) {
+    let mut out = (d.start_z, d.start_angle_x, d.start_angle_y);
+    if !now.is_finite() {
+        return out;
+    }
+    let turn = |axis: DVec3| {
+        let flat = |v: DVec3| v - axis * v.dot(axis);
+        let (from, to) = (flat(d.press - center), flat(now - center));
+        (from.length() > 0.0 && to.length() > 0.0)
+            .then(|| axis.dot(from.cross(to)).atan2(from.dot(to)))
+    };
+    match d.grip {
+        Grip::AxisZ => out.0 += now.z - d.press.z,
+        Grip::RotateX => out.1 += turn(DVec3::X).unwrap_or(0.0),
+        Grip::RotateY => out.2 += turn(DVec3::Y).unwrap_or(0.0),
+        _ => {}
+    }
+    out
+}
+
+/// Die Drehung aus den Winkeln um X, Y und Z: erst um X, dann um Y, dann um Z (wie die Felder in
+/// Fusion von oben nach unten).
+pub fn rotation3(angle_x: f64, angle_y: f64, angle_z: f64) -> DQuat {
+    DQuat::from_rotation_z(angle_z)
+        * DQuat::from_rotation_y(angle_y)
+        * DQuat::from_rotation_x(angle_x)
+}
+
+/// Lage der Griffe für 3D auf dem Bildschirm: Spitze des Z-Pfeils und die Drehbögen um X und Y
+/// (Viertelkreise zwischen den beiden anderen Achsen, wie an der Triade).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GripLayout3 {
+    pub center: Pos2,
+    pub z_tip: Option<Pos2>,
+    pub arc_x: Vec<Pos2>,
+    pub arc_y: Vec<Pos2>,
+}
+
+/// Abschnitte eines Drehbogens.
+const GRIP_ARC_STEPS: usize = 16;
+/// Kürzer als so viele Bildpunkte (Z-Pfeil) bzw. flacher (Mitte eines Drehbogens neben seiner
+/// Sehne) ist ein Griff für 3D von der Seite gesehen und fehlt: Von oben läge der Bogen um X
+/// sonst auf dem Pfeil Y.
+const GRIP_FLAT_PX: f32 = 6.0;
+
+/// Griffe für 3D um die Stelle `center` (Skizzenkoordinaten) mit Pfeil [`GRIP_ARROW_PX`] und Bögen
+/// mit dem Radius [`GRIP_RING_PX`], in Bildpunkten fest wie die Triade; `None`, wenn die Mitte
+/// hinter der Kamera liegt oder die Ansicht keinen Maßstab hat.
+pub fn layout3(map: &Mapper, center: DVec3) -> Option<GripLayout3> {
+    let c = map.to_screen3(center)?;
+    let unit = crate::sketch_triad::units_per_px_at(map, center)?;
+    let arrow = unit * f64::from(GRIP_ARROW_PX);
+    let ring = unit * f64::from(GRIP_RING_PX);
+    let arc = |a: DVec3, b: DVec3| {
+        (0..=GRIP_ARC_STEPS)
+            .map(|i| {
+                let th = std::f64::consts::FRAC_PI_2 * i as f64 / GRIP_ARC_STEPS as f64;
+                map.to_screen3(center + (a * th.cos() + b * th.sin()) * ring)
+            })
+            .collect::<Option<Vec<_>>>()
+            .filter(|path| {
+                let (a, b, m) = (path[0], path[GRIP_ARC_STEPS], path[GRIP_ARC_STEPS / 2]);
+                let chord = b - a;
+                chord.length() > 0.0
+                    && (m - a).dot(chord.rot90()).abs() / chord.length() >= GRIP_FLAT_PX
+            })
+            .unwrap_or_default()
+    };
+    let z_tip = map
+        .to_screen3(center + DVec3::Z * arrow)
+        .filter(|tip| tip.distance(c) >= GRIP_FLAT_PX);
+    Some(GripLayout3 {
+        center: c,
+        z_tip,
+        arc_x: arc(DVec3::Y, DVec3::Z),
+        arc_y: arc(DVec3::Z, DVec3::X),
+    })
+}
+
+/// Der Griff für 3D unter `p`: Z-Pfeil, dann die Bögen um X und Y.
+pub fn hit3(l: &GripLayout3, p: Pos2) -> Option<Grip> {
+    let near_path = |path: &[Pos2]| {
+        path.windows(2)
+            .any(|w| to_segment(p, w[0], w[1]) <= GRIP_HIT_PX)
+    };
+    if l.z_tip
+        .is_some_and(|tip| to_segment(p, l.center, tip) <= GRIP_HIT_PX)
+    {
+        Some(Grip::AxisZ)
+    } else if near_path(&l.arc_x) {
+        Some(Grip::RotateX)
+    } else if near_path(&l.arc_y) {
+        Some(Grip::RotateY)
+    } else {
+        None
+    }
+}
+
+/// Der Griff unter `p` mit den Griffen für 3D: Mitte und Pfeile X und Y zuerst, dann Z-Pfeil und
+/// Drehbögen, zuletzt der Ring.
+pub fn hit_any(l: &GripLayout, l3: Option<&GripLayout3>, p: Pos2) -> Option<Grip> {
+    let flat = hit(l, p);
+    if matches!(
+        flat,
+        Some(Grip::Free | Grip::AxisX | Grip::AxisY | Grip::Scale)
+    ) {
+        return flat;
+    }
+    l3.and_then(|l3| hit3(l3, p)).or(flat)
+}
+
+/// Zeichnet die Griffe für 3D in den Achsfarben wie die Triade (Z blau, Bogen um X rot, um Y
+/// grün); `hot` hebt einen hervor.
+pub fn paint3(painter: &egui::Painter, l: &GripLayout3, hot: Option<Grip>, col: &SketchColors) {
+    let stroke = |grip: Grip, color: Color32| {
+        if hot == Some(grip) {
+            Stroke::new(GRIP_WIDTH.1, crate::theme::lighten(color))
+        } else {
+            Stroke::new(GRIP_WIDTH.0, color)
+        }
+    };
+    for (grip, path, color) in [
+        (Grip::RotateX, &l.arc_x, col.axis_x),
+        (Grip::RotateY, &l.arc_y, col.axis_y),
+    ] {
+        if path.len() < 2 {
+            continue;
+        }
+        let s = stroke(grip, color);
+        painter.add(Shape::line(path.clone(), s));
+        painter.circle_filled(path[path.len() / 2], GRIP_CENTER_PX * 0.8, s.color);
+    }
+    if let Some(tip) = l.z_tip {
+        let s = stroke(Grip::AxisZ, col.axis_z);
+        painter.line_segment([l.center, tip], s);
+        let along = (tip - l.center).normalized();
+        let side = along.rot90() * GRIP_HEAD_PX.1;
+        let root = tip - along * GRIP_HEAD_PX.0;
+        painter.add(Shape::convex_polygon(
+            vec![tip, root + side, root - side],
+            s.color,
+            Stroke::NONE,
+        ));
+    }
+}
+
+/// Die Stelle im Raum unter dem Zeiger `pointer` für den Griff für 3D `grip` an `center`
+/// (Skizzenkoordinaten): beim Z-Pfeil auf der Ebene, die die Z-Achse durch `center` enthält und
+/// dem Blick am meisten zugewandt ist, bei einem Drehbogen auf der Ebene senkrecht zu seiner
+/// Achse. `None` bei streifendem Blick (Z-Pfeil von oben) oder hinter der Kamera.
+pub fn grip_point3(map: &Mapper, grip: Grip, center: DVec3, pointer: Pos2) -> Option<DVec3> {
+    let normal = match grip {
+        Grip::AxisZ => {
+            let n = map.view_normal()?;
+            (n - DVec3::Z * n.z).try_normalize()?
+        }
+        Grip::RotateX => DVec3::X,
+        Grip::RotateY => DVec3::Y,
+        _ => return None,
+    };
+    map.screen_to_plane(pointer, center, normal)
 }
 
 /// Der Winkel `raw` in dem Umlauf, der `previous` am nächsten liegt: So läuft der Griff über ±180°
@@ -303,6 +496,27 @@ fn block_message(block: TransformBlock) -> Msg {
     }
 }
 
+/// Mitte der Höhen der Punkte der Kurven und der Punkte (Skizzen 10): Um diese Höhe drehen die
+/// Bögen um X und Y; in der Ebene 0.
+fn hull_z(sk: &Sketch, curves: &[CurveId], points: &[PointId]) -> f64 {
+    let own = curves
+        .iter()
+        .filter_map(|&c| sk.curve(c))
+        .flat_map(|d| d.kind.points());
+    let zs = own
+        .chain(points.iter().copied())
+        .filter_map(|p| sk.point_xyz(p).ok())
+        .map(|p| p.z);
+    let (lo, hi) = zs.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), z| {
+        (lo.min(z), hi.max(z))
+    });
+    if lo.is_finite() && hi.is_finite() {
+        (lo + hi) * 0.5
+    } else {
+        0.0
+    }
+}
+
 /// Mitte der Hülle der Kurven und Punkte; `None` ohne Lage.
 fn hull_center(sk: &Sketch, curves: &[CurveId], points: &[PointId]) -> Option<DVec2> {
     let lines = curves
@@ -372,6 +586,7 @@ impl SketchSession {
         let set = self.selected_set(sk);
         if set != self.transform.set {
             self.transform.base = hull_center(sk, &set.curves, &set.points);
+            self.transform.base_z = hull_z(sk, &set.curves, &set.points);
             self.transform.set = set;
         }
     }
@@ -418,11 +633,15 @@ impl SketchSession {
             TransformStage::Active
         };
         self.transform.whole = whole;
+        self.transform.base_z = hull_z(sk, &set.curves, &set.points);
         self.transform.set = set;
         self.transform.base = Some(center);
         self.transform.offset = DVec2::ZERO;
         self.transform.angle = 0.0;
         self.transform.factor = 1.0;
+        self.transform.shift_z = 0.0;
+        self.transform.angle_x = 0.0;
+        self.transform.angle_y = 0.0;
     }
 
     /// Die Bewegung dieses Bilds: Gesperrte Felder gehen vor dem Griff. `None` ohne Menge.
@@ -443,18 +662,88 @@ impl SketchSession {
         })
     }
 
+    /// Die Bewegung dieses Bilds im Raum (Skizzen 10): Drehpunkt ist der Bezugspunkt auf der
+    /// Höhe `base_z`, gedreht wird erst um X, dann um Y, dann um Z ([`rotation3`]). Gesperrte
+    /// Felder gehen vor dem Griff. `None` ohne Menge.
+    pub fn transform_now3(&self) -> Option<Rigid3> {
+        let s = self.transform_now()?;
+        let t = &self.transform;
+        let input = &self.input;
+        let z = input.locked(FieldKind::MoveZ).unwrap_or(t.shift_z);
+        let ax = input.locked(FieldKind::MoveAngleX).unwrap_or(t.angle_x);
+        let ay = input.locked(FieldKind::MoveAngleY).unwrap_or(t.angle_y);
+        Some(Rigid3 {
+            rot: rotation3(ax, ay, s.angle),
+            shift: s.offset.extend(z),
+            pivot: s.base.extend(t.base_z),
+        })
+    }
+
+    /// Die Bewegung im Raum, wenn Verschieben/Kopieren mit „3D-Skizze“ läuft und sie die Ebene
+    /// verlässt (z-Anteil oder Drehung um X oder Y); sonst `None`, dann gilt der Weg der Ebene
+    /// mit [`transform_now`](Self::transform_now), Bit für Bit wie bisher.
+    pub fn moving3(&self, sk: &Sketch) -> Option<Rigid3> {
+        if self.tool != Tool::MoveCopy || !sk.three_d {
+            return None;
+        }
+        let m = self.transform_now3()?;
+        m.planar(sk.tolerance()).is_none().then_some(m)
+    }
+
+    /// Mitte der Griffe im Raum: der bewegte Bezugspunkt.
+    pub fn grip_center3(&self) -> Option<DVec3> {
+        let m = self.transform_now3()?;
+        Some(m.pivot + m.shift)
+    }
+
     /// Beginnt den Zug an einem Griff bei `at` (Skizzeneinheiten).
     pub fn begin_grip(&mut self, grip: Grip, at: DVec2) {
         if !self.grips_shown() || !at.is_finite() {
             return;
         }
-        self.grip_drag = Some(GripDrag {
+        self.grip_drag = Some(self.grip_start(grip, at));
+        self.grip_drag3 = None;
+    }
+
+    /// Beginnt den Zug an einem Griff für 3D bei der Stelle `at` im Raum (Skizzen 10, siehe
+    /// [`grip_point3`]); nur bei Verschieben/Kopieren mit „3D-Skizze“.
+    pub fn begin_grip3(&mut self, grip: Grip, at: DVec3) {
+        if !self.grips_shown() || !self.move3 || self.tool != Tool::MoveCopy || !at.is_finite() {
+            return;
+        }
+        self.grip_drag = Some(self.grip_start(grip, at.truncate()));
+        let t = &self.transform;
+        self.grip_drag3 = Some(GripDrag3 {
             grip,
             press: at,
-            start_offset: self.transform.offset,
-            start_angle: self.transform.angle,
-            start_factor: self.transform.factor,
+            start_z: t.shift_z,
+            start_angle_x: t.angle_x,
+            start_angle_y: t.angle_y,
         });
+    }
+
+    fn grip_start(&self, grip: Grip, press: DVec2) -> GripDrag {
+        let t = &self.transform;
+        GripDrag {
+            grip,
+            press,
+            start_offset: t.offset,
+            start_angle: t.angle,
+            start_factor: t.factor,
+        }
+    }
+
+    /// Führt einen Griff für 3D zur Stelle `at` im Raum.
+    pub fn grip_to3(&mut self, at: DVec3) {
+        let (Some(_), Some(d), Some(center)) =
+            (self.grip_drag, self.grip_drag3, self.grip_center3())
+        else {
+            return;
+        };
+        let (z, ax, ay) = grip_motion3(&d, center, at);
+        self.transform.shift_z = z;
+        self.transform.angle_x = unwrapped_angle(self.transform.angle_x, ax);
+        self.transform.angle_y = unwrapped_angle(self.transform.angle_y, ay);
     }
 
     /// Führt den Griff zum Zeiger `at`. Gedreht und skaliert wird um den Bezugspunkt an seiner
@@ -463,6 +752,9 @@ impl SketchSession {
         let (Some(d), Some(now)) = (self.grip_drag, self.transform_now()) else {
             return;
         };
+        if d.grip.is_3d() {
+            return;
+        }
         let (offset, angle, factor) = grip_motion(&d, now.base + now.offset, at);
         self.transform.offset = offset;
         self.transform.angle = unwrapped_angle(self.transform.angle, angle);
@@ -472,6 +764,7 @@ impl SketchSession {
     /// Beendet den Griff; der Stand bleibt in `transform`. War noch die Wahl offen, ist sie damit zu
     /// Ende, denn ein neuer Bezugspunkt nähme der Bewegung ihren Sinn.
     pub fn end_grip(&mut self) {
+        self.grip_drag3 = None;
         if self.grip_drag.take().is_some() && self.transform.stage == TransformStage::Picking {
             self.transform.stage = TransformStage::Active;
         }
@@ -481,6 +774,23 @@ impl SketchSession {
     /// beim Abschluss; geht sie wieder, verschwindet die Meldung. Eine Kopie ist frei und bleibt ohne.
     pub fn update_transform_block(&mut self, sk: &Sketch) {
         if !self.runs_transform() {
+            return;
+        }
+        // In 3D (Skizzen 10) rechnet die Prüfung die Bewegung an einer Kopie der Skizze.
+        if let (false, Some(m), Some(set)) =
+            (self.transform.copy, self.moving3(sk), self.sketch_set(sk))
+        {
+            match sk.clone().move_rigid3(&set, &m, false) {
+                Ok(_) => {
+                    if std::mem::take(&mut self.transform.blocked_note) {
+                        self.message = None;
+                    }
+                }
+                Err(e) => {
+                    self.message = Some(err(e));
+                    self.transform.blocked_note = true;
+                }
+            }
             return;
         }
         let block = match (
@@ -511,6 +821,11 @@ impl SketchSession {
             self.transform.offset = d.start_offset;
             self.transform.angle = d.start_angle;
             self.transform.factor = d.start_factor;
+            if let Some(d3) = self.grip_drag3.take() {
+                self.transform.shift_z = d3.start_z;
+                self.transform.angle_x = d3.start_angle_x;
+                self.transform.angle_y = d3.start_angle_y;
+            }
             self.box_aborted = true;
         }
     }
@@ -526,6 +841,11 @@ impl SketchSession {
             self.transform.angle = now.angle;
             self.transform.factor = now.factor;
         }
+        let input = &self.input;
+        let t = &mut self.transform;
+        t.shift_z = input.locked(FieldKind::MoveZ).unwrap_or(t.shift_z);
+        t.angle_x = input.locked(FieldKind::MoveAngleX).unwrap_or(t.angle_x);
+        t.angle_y = input.locked(FieldKind::MoveAngleY).unwrap_or(t.angle_y);
         self.grip_drag = None;
         self.draw_cursor = None;
         self.transform.stage = TransformStage::SetBase;
@@ -551,7 +871,9 @@ impl SketchSession {
                 self.sync_picked(sk);
             }
             TransformStage::SetBase => {
+                // Der Klick liegt in der Skizzenebene.
                 self.transform.base = Some(cur.at);
+                self.transform.base_z = 0.0;
                 self.transform.stage = TransformStage::Active;
             }
             TransformStage::Active => {}
@@ -589,7 +911,26 @@ impl SketchSession {
             };
             let mut notes = Vec::new();
             let mut copied = None;
-            if se.transform.copy {
+            if let Some(m) = se.moving3(sk) {
+                // Aus der Ebene (Skizzen 10): ein Weg für Verschieben und Kopieren.
+                let report = sk.move_rigid3(&set, &m, se.transform.copy).map_err(err)?;
+                if report.removed_constraints > 0 {
+                    notes.push(crate::msg!(
+                        "sketch-move-dropped",
+                        n = report.removed_constraints
+                    ));
+                }
+                if report.converted_dimensions > 0 {
+                    notes.push(crate::msg!(
+                        "sketch-move-converted",
+                        n = report.converted_dimensions
+                    ));
+                }
+                if report.split > 0 {
+                    notes.push(crate::msg!("sketch-move-split", n = report.split));
+                }
+                copied = report.copy;
+            } else if se.transform.copy {
                 copied = Some(sk.copy_transformed(&set, &now).map_err(err)?);
             } else {
                 let report = sk.apply_transform(&set, &now).map_err(block_message)?;
@@ -693,6 +1034,14 @@ impl SketchSession {
         let now = self.transform_now()?;
         let set = self.sketch_set(sk)?;
         let mut out = sk.clone();
+        if let Some(m) = self.moving3(sk) {
+            // In 3D zeigt die Draufsicht nur die Lage in der Ebene; die Ansicht nimmt
+            // `transform_preview3_styled`.
+            let copies = out.move_rigid3(&set, &m, self.transform.copy).ok()?.copy;
+            return Some(preview_lines(&out, &set, copies.as_ref(), |sk, c| {
+                sk.curve_polyline(c, PREVIEW_STEPS_PER_TURN)
+            }));
+        }
         let copies = if self.transform.copy {
             Some(out.copy_transformed(&set, &now).ok()?)
         } else {
@@ -711,6 +1060,26 @@ impl SketchSession {
         Some(lines.collect())
     }
 
+    /// Vorschau im Raum (Skizzen 10): Linienzüge mit z der bewegten Kurven samt Stil, in der
+    /// Reihenfolge der Menge, für Verschieben/Kopieren mit „3D-Skizze“, auch in der Ebene. Dieselbe
+    /// Rechnung wie der Abschluss; `None` wie bei
+    /// [`transform_preview_styled`](Self::transform_preview_styled).
+    pub fn transform_preview3_styled(&self, sk: &Sketch) -> Option<Vec<(LineStyle, Vec<DVec3>)>> {
+        if self.tool != Tool::MoveCopy || !sk.three_d {
+            return None;
+        }
+        if self.transform.stage == TransformStage::Picking && self.grip_drag.is_none() {
+            return None;
+        }
+        let m = self.transform_now3()?;
+        let set = self.sketch_set(sk)?;
+        let mut out = sk.clone();
+        let copies = out.move_rigid3(&set, &m, self.transform.copy).ok()?.copy;
+        Some(preview_lines(&out, &set, copies.as_ref(), |sk, c| {
+            crate::sketch_view::curve_points3(sk, c)
+        }))
+    }
+
     /// Wert der Felder von Verschieben/Kopieren: der Stand aus Griff und Tippen.
     pub(crate) fn transform_field_value(&self, kind: FieldKind) -> Option<f64> {
         let t = &self.transform;
@@ -718,10 +1087,30 @@ impl SketchSession {
             FieldKind::MoveX => Some(t.offset.x),
             FieldKind::MoveY => Some(t.offset.y),
             FieldKind::MoveAngle => Some(t.angle),
+            FieldKind::MoveZ => Some(t.shift_z),
+            FieldKind::MoveAngleX => Some(t.angle_x),
+            FieldKind::MoveAngleY => Some(t.angle_y),
             FieldKind::ScaleFactor => Some(t.factor),
             _ => None,
         }
     }
+}
+
+/// Die Linienzüge der bewegten Kurven der Menge (bei einer Kopie die der Kopien) in `out`, mit
+/// Stil, abgetastet mit `sample`.
+fn preview_lines<T>(
+    out: &Sketch,
+    set: &SketchTransformSet,
+    copies: Option<&CopyMap>,
+    sample: impl Fn(&Sketch, CurveId) -> Option<Vec<T>>,
+) -> Vec<(LineStyle, Vec<T>)> {
+    set.curves
+        .iter()
+        .filter_map(|c| {
+            let c = copies.map_or(Some(*c), |m| m.curves.get(c).copied())?;
+            Some((out.curve(c)?.style(), sample(out, c)?))
+        })
+        .collect()
 }
 
 #[cfg(test)]

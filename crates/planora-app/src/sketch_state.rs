@@ -139,6 +139,12 @@ pub struct TransformState {
     pub offset: DVec2,
     pub angle: f64,
     pub factor: f64,
+    /// Verschieben in 3D (Skizzen 10): Höhe des Bezugspunkts, Z-Abstand und die Drehungen um X
+    /// und Y in Radiant; ohne „3D-Skizze“ immer null.
+    pub base_z: f64,
+    pub shift_z: f64,
+    pub angle_x: f64,
+    pub angle_y: f64,
     pub copy: bool,
     pub whole: bool,
     /// Die Auswahl vor dem Befehl: Abbrechen stellt sie wieder her.
@@ -156,6 +162,10 @@ impl Default for TransformState {
             offset: DVec2::ZERO,
             angle: 0.0,
             factor: 1.0,
+            base_z: 0.0,
+            shift_z: 0.0,
+            angle_x: 0.0,
+            angle_y: 0.0,
             copy: false,
             whole: false,
             selection_before: Vec::new(),
@@ -557,6 +567,9 @@ pub struct SketchSession {
     /// Zeichnet das Werkzeug in diesem Bild in 3D ([`SketchSession::draws_in_3d`], je Bild
     /// gesetzt)? Danach richten sich die Felder am Zeiger.
     pub draw3: bool,
+    /// Hat die Skizze den Haken „3D-Skizze“ (bei [`SketchSession::sync_input`] gesetzt)? Dann hat
+    /// Verschieben/Kopieren die Felder und Griffe für 3D (Skizzen 10, A1).
+    pub move3: bool,
     /// Z-Sperre: die Stelle beim Drücken von Pfeil hoch, von der aus der Punkt entlang der Normale
     /// der Ebene läuft.
     pub lock_from: Option<DVec3>,
@@ -592,6 +605,8 @@ pub struct SketchSession {
     pub transform: TransformState,
     /// Laufender Zug an einem Griff.
     pub grip_drag: Option<GripDrag>,
+    /// Dazu bei einem Griff für 3D (Skizzen 10) die gefasste Stelle im Raum und der Stand davor.
+    pub grip_drag3: Option<crate::sketch_grips::GripDrag3>,
     /// Skizzenbemaßung.
     pub dim: DimToolState,
     /// Rechteckige und Kreisförmige Anordnung.
@@ -742,6 +757,7 @@ impl SketchSession {
             body_vertices: Vec::new(),
             included_vertices: Vec::new(),
             draw3: false,
+            move3: false,
             lock_from: None,
             pending3: Vec::new(),
             plane3: None,
@@ -755,6 +771,7 @@ impl SketchSession {
             pick_radius: 0.0,
             transform: TransformState::default(),
             grip_drag: None,
+            grip_drag3: None,
             dim: DimToolState::default(),
             pattern: Default::default(),
             project: ProjectState::default(),
