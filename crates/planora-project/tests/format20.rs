@@ -469,3 +469,104 @@ fn z_on_text_point_rejected() {
         "{e}"
     );
 }
+
+/// Ein Text in 3D (Task 13): Rahmen und Buchstaben aus 3D-Punkten in der Ebene YZ bei x = 10.
+fn text_3d_sketch() -> (Sketch, planora_sketch::text::TextId) {
+    use planora_math::DVec2;
+    use planora_sketch::text::{HAlign, TextParams, VAlign};
+    use planora_sketch::text_shape::{Contour, Glyph, Seg, ShapedLine, TextShape, TextStyle};
+    let v = DVec2::new;
+    let shape = Arc::new(TextShape {
+        lines: vec![ShapedLine {
+            glyphs: vec![Glyph {
+                origin: v(0.0, 0.0),
+                advance: 0.8,
+                contours: vec![Contour {
+                    start: v(0.0, 0.0),
+                    segs: vec![
+                        Seg::Line(v(0.6, 0.0)),
+                        Seg::Quad(v(0.7, 0.4), v(0.6, 0.7)),
+                        Seg::Cubic(v(0.4, 0.8), v(0.2, 0.8), v(0.0, 0.7)),
+                        Seg::Line(v(0.0, 0.0)),
+                    ],
+                }],
+            }],
+            width: 0.8,
+        }],
+        ascender: 0.9,
+        descender: -0.2,
+        line_height: 1.2,
+        substituted: None,
+        synthetic: false,
+        missing_chars: false,
+    });
+    let mut sk = new_sketch();
+    let t = sk
+        .add_text_box3(
+            [DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 40.0, 10.0)],
+            DVec3::X,
+            TextParams {
+                content: "A".into(),
+                style: TextStyle {
+                    font: "Sans".into(),
+                    bold: false,
+                    italic: false,
+                    spacing: 0.0,
+                },
+                height: 2.0,
+                flip_h: false,
+                flip_v: false,
+            },
+            HAlign::Left,
+            VAlign::Bottom,
+            shape,
+        )
+        .unwrap();
+    (sk, t)
+}
+
+#[test]
+fn text_3d_roundtrips_and_needs_20() {
+    let (sk, t) = text_3d_sketch();
+    assert!(sk.has_3d_entry());
+    let (back, text) = roundtrip(sk);
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let texte = &v["features"][0]["art"]["skizze"]["texte"];
+    assert_eq!(texte[0]["normale"], serde_json::json!([1.0, 0.0, 0.0]));
+    let d = sketch_of(&back).text(t).unwrap();
+    assert_eq!(d.normal, Some(DVec3::X));
+    assert!(d.points.iter().all(|&p| sketch_of(&back).is_3d_point(p)));
+}
+
+#[test]
+fn text_3d_out_of_plane_or_without_normal_rejected() {
+    let (sk, t) = text_3d_sketch();
+    let glyph = sk.text(t).unwrap().points[1];
+    let reason = |key: &str| tr!("sketch-err-text-data", reason = planora_i18n::t(key));
+
+    // Ohne Normale ist es ein Text in der Skizzenebene: z an den Buchstaben ist falsch.
+    let text = edited(sk.clone(), |s| {
+        s["texte"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("normale")
+            .unwrap();
+    });
+    let e = err_text(&text);
+    assert!(e.contains(&reason("sketch-err-text-data-3d")), "{e}");
+
+    // Ein Buchstabe außerhalb der Ebene.
+    let text = edited(sk.clone(), |s| {
+        let xi = s["punkte"][glyph.index()]["x"].as_u64().unwrap() as usize;
+        s["werte"][xi] = serde_json::json!(11.0);
+    });
+    let e = err_text(&text);
+    assert!(e.contains(&reason("sketch-err-text-data-plane")), "{e}");
+
+    // Eine Normale, die nicht normiert ist.
+    let text = edited(sk, |s| {
+        s["texte"][0]["normale"] = serde_json::json!([2.0, 0.0, 0.0]);
+    });
+    let e = err_text(&text);
+    assert!(e.contains(&reason("sketch-err-text-data-plane")), "{e}");
+}

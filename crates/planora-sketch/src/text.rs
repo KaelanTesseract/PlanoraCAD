@@ -14,7 +14,9 @@
 use crate::constraint::{ConstraintKind, LineOrPoints, curve_ends};
 use crate::error::SketchError;
 use crate::geom::Geom;
-use crate::model::{CurveId, CurveKind, PointId, Sketch, within_coord_range};
+use crate::model::{
+    CurveId, CurveKind, PointId, Sketch, plane_basis, unit_normal, within_coord_range,
+};
 use crate::profile::ProfileRef;
 use crate::text_layout::{Walk, place_box, place_path};
 use crate::text_shape::{
@@ -22,7 +24,7 @@ use crate::text_shape::{
 };
 use planora_i18n::tr;
 use planora_kernel::Id;
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -134,6 +136,11 @@ pub struct TextData {
     pub flip_h: bool,
     pub flip_v: bool,
     pub placement: TextPlacement,
+    /// Normale der Ebene eines Textes in 3D (Skizzen 10, Spec Entwurf 4): Rahmen und Buchstaben
+    /// liegen in der Ebene durch Ecke 0 mit dieser Normale, alle ihre Punkte sind 3D. Sie folgt
+    /// beim Nachführen der Lage des Rahmens (`(Ecke 1 − Ecke 0) × (Ecke 3 − Ecke 0)`). `None` für
+    /// einen gewöhnlichen Text in der Skizzenebene.
+    pub normal: Option<DVec3>,
     /// Die erzeugten Kurven in fester Reihenfolge (Zeile, Glyphe, Kontur, Stück).
     pub curves: Vec<CurveId>,
     /// Ihre Punkte in fester Reihenfolge; je Kontur der Anfang, dann je Stück die Kontrollpunkte
@@ -282,6 +289,97 @@ fn placed_ok(contours: &[Contour]) -> bool {
     })
 }
 
+/// Liegt `p` mit allen drei Werten im Rechenbereich?
+fn within_range3(p: DVec3) -> bool {
+    within_coord_range(p.truncate()) && within_coord_range(DVec2::new(p.z, 0.0))
+}
+
+/// Unter dieser Abweichung gilt die Achse eines Textrahmens in 3D als Achse der Skizze.
+const FRAME_AXIS_TOL: f64 = 1e-9;
+
+/// Die Ebene eines Textes in 3D als 2D-Basis (Skizzen 10): Ursprung Ecke 0, `u` die Richtung der
+/// Grundlinie, `v = n × u` und die Normale `n`. Gesetzt wird in dieser Basis genau wie in 2D,
+/// danach in den Raum gelegt.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Lift {
+    pub(crate) origin: DVec3,
+    pub(crate) u: DVec3,
+    pub(crate) v: DVec3,
+    pub(crate) n: DVec3,
+}
+
+impl Lift {
+    /// Die Basis des Rahmens mit den Ecken `at`: `None`, wenn die Grundlinie oder die Seite von
+    /// Ecke 0 nach Ecke 3 (quer zur Grundlinie) nicht länger als `tol` ist oder etwas nicht
+    /// endlich ist.
+    pub(crate) fn of_frame(at: [DVec3; 4], tol: f64) -> Option<Lift> {
+        let e = at[1] - at[0];
+        let len = e.length();
+        if !(len.is_finite() && len > tol) {
+            return None;
+        }
+        let u = e / len;
+        let n = u.cross(at[3] - at[0]);
+        let nl = n.length();
+        if !(nl.is_finite() && nl > tol) {
+            return None;
+        }
+        let n = n / nl;
+        Some(Lift {
+            origin: at[0],
+            u,
+            v: n.cross(u),
+            n,
+        })
+    }
+
+    /// Lage in der Ebene (senkrecht hineingelegt).
+    pub(crate) fn to2(&self, p: DVec3) -> DVec2 {
+        let d = p - self.origin;
+        DVec2::new(d.dot(self.u), d.dot(self.v))
+    }
+
+    /// Lage im Raum der Skizze.
+    pub(crate) fn to3(&self, q: DVec2) -> DVec3 {
+        self.origin + self.u * q.x + self.v * q.y
+    }
+}
+
+/// `r` um die normierte Achse `n` gedreht (Rodrigues), mit `sin` und `cos` des Winkels.
+fn rotate_about(r: DVec3, n: DVec3, sin: f64, cos: f64) -> DVec3 {
+    r * cos + n.cross(r) * sin + n * (n.dot(r) * (1.0 - cos))
+}
+
+/// Liegt die Richtung `d` auf einer Achse der Skizze? Dann die Abhängigkeit dazu an der Linie
+/// `line`: X `Horizontal`, Y `Vertical`, Z `AlongZ` (wie beim Rechteck in 3D).
+fn axis_binding(d: DVec3, line: CurveId) -> Option<ConstraintKind> {
+    let along = |a: DVec3| d.dot(a).abs() >= 1.0 - FRAME_AXIS_TOL;
+    let l = LineOrPoints::Line(line);
+    if along(DVec3::X) {
+        Some(ConstraintKind::Horizontal(l))
+    } else if along(DVec3::Y) {
+        Some(ConstraintKind::Vertical(l))
+    } else if along(DVec3::Z) {
+        Some(ConstraintKind::AlongZ(l))
+    } else {
+        None
+    }
+}
+
+/// Bindet die interne Abhängigkeit `kind` die Grundlinie oder die Seite des Rahmens mit den
+/// Linien `lines` an eine Achse der Skizze? Diese fallen beim Drehen weg.
+fn is_frame_axis(kind: &ConstraintKind, lines: &[CurveId; 4]) -> bool {
+    matches!(kind,
+        ConstraintKind::Horizontal(LineOrPoints::Line(l))
+        | ConstraintKind::Vertical(LineOrPoints::Line(l))
+        | ConstraintKind::AlongZ(LineOrPoints::Line(l)) if *l == lines[0] || *l == lines[1])
+}
+
+/// „Text auf Pfad“ gibt es nur in 2D (Spec Entwurf 4).
+fn path_3d() -> SketchError {
+    SketchError::InvalidInput(tr!("sketch-err-text-path-3d"))
+}
+
 fn out_of_range() -> SketchError {
     SketchError::InvalidInput(tr!("sketch-text-out-of-range"))
 }
@@ -377,8 +475,10 @@ impl Sketch {
         let mut out = HashSet::new();
         for (_, d) in self.texts() {
             for &p in &d.points {
-                if self.points[p].alive {
-                    out.extend([self.points[p].x, self.points[p].y]);
+                let d = &self.points[p];
+                if d.alive {
+                    out.extend([d.x, d.y]);
+                    out.extend(d.z);
                 }
             }
         }
@@ -572,7 +672,22 @@ impl Sketch {
             (d.flip_h, d.flip_v),
             shape,
             d.walk.0.as_ref(),
+            d.normal.is_some(),
         )
+    }
+
+    /// Die Ebene des Textes `t` in 3D an der aktuellen Lage seines Rahmens; `None` für einen
+    /// Text in der Skizzenebene, auf einem Pfad oder solange der Rahmen entartet ist.
+    pub(crate) fn text_lift(&self, t: TextId) -> Option<Lift> {
+        let d = &self.texts[t];
+        d.normal?;
+        let TextPlacement::Box { corners, .. } = d.placement else {
+            return None;
+        };
+        if corners.iter().any(|&p| !self.points[p].alive) {
+            return None;
+        }
+        Lift::of_frame(corners.map(|p| self.pos3(p)), self.tol.linear)
     }
 
     /// Die Konturen eines Textes auf dem Pfad `path` mit den Werten `params`, gesetzt als `shape`,
@@ -615,12 +730,16 @@ impl Sketch {
         flip_v: bool,
         shape: &TextShape,
     ) -> Option<Vec<Contour>> {
-        self.place_text_walk(placement, height, (flip_h, flip_v), shape, None)
+        self.place_text_walk(placement, height, (flip_h, flip_v), shape, None, false)
             .0
     }
 
     /// [`Sketch::place_text`] mit einer gemerkten Längentabelle `walk` des Pfades: Passt sie zum
     /// Pfad, wird sie benutzt, sonst neu gebaut. Liefert die benutzte Tabelle mit.
+    ///
+    /// `three_d`: ein Text in 3D (Skizzen 10). Dann sind die Konturen in der Basis seiner Ebene
+    /// ([`Sketch::text_lift`]) gesetzt, nicht in Skizzenkoordinaten; geprüft ist auch ihre Lage im
+    /// Raum.
     fn place_text_walk(
         &self,
         placement: TextPlacement,
@@ -628,6 +747,7 @@ impl Sketch {
         (flip_h, flip_v): (bool, bool),
         shape: &TextShape,
         walk: Option<&Arc<Walk>>,
+        three_d: bool,
     ) -> (Option<Vec<Contour>>, Option<Arc<Walk>>) {
         let mut used = None;
         let placed = match placement {
@@ -636,6 +756,20 @@ impl Sketch {
             } => {
                 if corners.iter().any(|&p| !self.points[p].alive) {
                     return (None, None);
+                }
+                if three_d {
+                    let at = corners.map(|p| self.pos3(p));
+                    let Some(lift) = Lift::of_frame(at, self.tol.linear) else {
+                        return (None, None);
+                    };
+                    if !at.iter().all(|&p| within_range3(p)) {
+                        return (None, None);
+                    }
+                    let local = at.map(|p| lift.to2(p));
+                    let placed = place_box(shape, height, local, h, va, flip_h, flip_v);
+                    let ok = placed_ok(&placed)
+                        && contour_points(&placed).all(|q| within_range3(lift.to3(q)));
+                    return (ok.then_some(placed), None);
                 }
                 let at = corners.map(|p| self.pos(p));
                 if !at.iter().all(|&p| within_coord_range(p))
@@ -747,6 +881,7 @@ impl Sketch {
                     h,
                     v,
                 },
+                normal: None,
                 curves: Vec::new(),
                 points: Vec::new(),
                 alive: true,
@@ -754,6 +889,83 @@ impl Sketch {
                 walk: WalkCache::default(),
             });
             s.touch_structure();
+            s.sync_text(t, &placed);
+            Ok(t)
+        })
+    }
+
+    /// Legt einen Text in 3D an (Skizzen 10, Spec Entwurf 4): im Rahmen mit den gegenüberliegenden
+    /// Ecken `corners` in der Ebene durch `corners[0]` mit der Normale `normal`; `corners[1]` wird
+    /// senkrecht in diese Ebene gelegt. Der Rahmen ist achsenparallel zur Basis
+    /// [`plane_basis`]`(n)` der Ebene: Ecke 0 unten links, Linie 0 → 1 die Grundlinie entlang `u`,
+    /// oben ist `v = n × u`. Er besteht aus vier 3D-Ecken und vier Konstruktionslinien mit den
+    /// internen Abhängigkeiten eines Rechtecks (1 × `Perpendicular`, 2 × `Parallel`); liegen
+    /// Grundlinie oder Seite auf einer Achse der Skizze, hält sie dazu `Horizontal`, `Vertical`
+    /// oder `AlongZ` wie beim 2D-Rahmen das `Horizontal`. Die Buchstaben werden im 2D-Satz gesetzt
+    /// und in die Ebene gelegt (3D-Punkte); sie ergeben kein Profil.
+    ///
+    /// Ist die Normale die Skizzennormale und liegen beide Ecken in der Skizzenebene, ist es ein
+    /// gewöhnlicher Text wie [`Sketch::add_text_box`]. Die Normale muss endlich und normierbar
+    /// sein. Bei einem Fehler bleibt die Skizze unverändert.
+    pub fn add_text_box3(
+        &mut self,
+        corners: [DVec3; 2],
+        normal: DVec3,
+        params: TextParams,
+        h: HAlign,
+        v: VAlign,
+        shape: Arc<TextShape>,
+    ) -> Result<TextId, SketchError> {
+        let [a, b] = corners;
+        if !(a.is_finite() && b.is_finite()) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-corners-finite")));
+        }
+        let n = unit_normal(normal)?;
+        let (lin, ang) = (self.tol.linear, self.tol.angular);
+        let sketch_plane = n.z > 0.0 && n.x.abs() <= ang && n.y.abs() <= ang;
+        if sketch_plane && a.z.abs() <= lin && b.z.abs() <= lin {
+            return self.add_text_box(a.truncate(), b.truncate(), params, h, v, shape);
+        }
+        let n = if sketch_plane { DVec3::Z } else { n };
+        let (u, w) = plane_basis(n);
+        let flat = |p: DVec3| DVec2::new(p.dot(u), p.dot(w));
+        let (qa, qb) = (flat(a), flat(b));
+        let (min, max) = (qa.min(qb), qa.max(qb));
+        let size = max - min;
+        if size.x <= lin || size.y <= lin {
+            return Err(SketchError::Degenerate(tr!("sketch-err-rect-size")));
+        }
+        check_params(&params)?;
+        check_new_shape(&shape)?;
+        let off = n * a.dot(n);
+        let lift = |q: DVec2| off + u * q.x + w * q.y;
+        let at = [min, DVec2::new(max.x, min.y), max, DVec2::new(min.x, max.y)].map(lift);
+        if !at.iter().all(|&p| within_range3(p)) {
+            return Err(out_of_range());
+        }
+        self.atomically(|s| {
+            let (points, lines) = s.push_frame3(at, u, w)?;
+            let t = s.texts.push(TextData {
+                content: params.content,
+                style: params.style,
+                height: params.height,
+                flip_h: params.flip_h,
+                flip_v: params.flip_v,
+                placement: TextPlacement::Box {
+                    lines,
+                    corners: points,
+                    h,
+                    v,
+                },
+                normal: Some(n),
+                curves: Vec::new(),
+                points: Vec::new(),
+                alive: true,
+                shaped: ShapedCache::set(shape.clone()),
+                walk: WalkCache::default(),
+            });
+            s.touch_structure();
+            let placed = s.placed_contours(t, &shape).ok_or_else(out_of_range)?;
             s.sync_text(t, &placed);
             Ok(t)
         })
@@ -802,6 +1014,7 @@ impl Sketch {
             flip_h: params.flip_h,
             flip_v: params.flip_v,
             placement,
+            normal: None,
             curves: Vec::new(),
             points: Vec::new(),
             alive: true,
@@ -915,6 +1128,10 @@ impl Sketch {
         placement: TextPlacement,
         shape: Arc<TextShape>,
     ) -> Result<(), SketchError> {
+        // Ein Text in 3D bleibt im Rahmen.
+        if self.texts[t].normal.is_some() {
+            return Err(path_3d());
+        }
         self.refuse_bad_path(path)?;
         check_params(&params)?;
         check_new_shape(&shape)?;
@@ -1052,6 +1269,12 @@ impl Sketch {
         if corners[..2].iter().any(|&p| !self.points[p].alive) {
             return None;
         }
+        // In 3D: gegen `u` der Basis [`plane_basis`] der Ebene, um ihre Normale gemessen.
+        if self.texts[t].normal.is_some() {
+            let lift = self.text_lift(t)?;
+            let (bu, bv) = plane_basis(lift.n);
+            return Some(lift.u.dot(bv).atan2(lift.u.dot(bu)));
+        }
         let d = self.pos(corners[1]) - self.pos(corners[0]);
         (d.is_finite() && d.length() > self.tol.linear).then(|| d.y.atan2(d.x))
     }
@@ -1082,23 +1305,24 @@ impl Sketch {
         if delta.abs() <= self.tol.angular {
             return Ok(());
         }
-        let c0 = self.pos(corners[0]);
         let (sin, cos) = delta.sin_cos();
-        let targets = corners.map(|p| {
-            let r = self.pos(p) - c0;
-            c0 + DVec2::new(r.x * cos - r.y * sin, r.x * sin + r.y * cos)
+        // In 3D um die Normale der Ebene durch Ecke 0; die Ebene bleibt.
+        let lift = self.text_lift(t);
+        let c0 = self.pos3(corners[0]);
+        let targets = corners.map(|p| match lift {
+            Some(l) => c0 + rotate_about(self.pos3(p) - c0, l.n, sin, cos),
+            None => {
+                let r = self.pos3(p) - c0;
+                c0 + DVec3::new(r.x * cos - r.y * sin, r.x * sin + r.y * cos, 0.0)
+            }
         });
-        if !targets.iter().all(|&p| within_coord_range(p)) {
+        if !targets.iter().all(|&p| within_range3(p)) {
             return Err(out_of_range());
         }
         let level: Vec<_> = self
             .constraints
             .iter()
-            .filter(|(_, k)| {
-                k.alive
-                    && k.internal
-                    && matches!(k.kind, ConstraintKind::Horizontal(LineOrPoints::Line(l)) if l == lines[0])
-            })
+            .filter(|(_, k)| k.alive && k.internal && is_frame_axis(&k.kind, &lines))
             .map(|(i, _)| i)
             .collect();
         let mut trial = self.clone();
@@ -1108,7 +1332,11 @@ impl Sketch {
         trial.touch_structure();
         // Ecke 0 steht schon; die anderen genau auf die gedrehte Lage.
         for (&p, at) in corners.iter().zip(targets).skip(1) {
-            trial.set_point_xy(p, at.x, at.y)?;
+            if lift.is_some() {
+                trial.set_point_xyz(p, at)?;
+            } else {
+                trial.set_point_xy(p, at.x, at.y)?;
+            }
         }
         if !trial.solve_holding_connected(&corners) {
             return Err(SketchError::InvalidInput(tr!("sketch-text-angle-held")));
@@ -1142,6 +1370,36 @@ impl Sketch {
         Ok((points, lines))
     }
 
+    /// Wie [`Sketch::push_frame`] für einen Text in 3D (siehe [`Sketch::add_text_box3`]): vier
+    /// 3D-Ecken; statt `Horizontal` binden `Horizontal`, `Vertical` oder `AlongZ` die Grundlinie
+    /// (Richtung `u`) und die Seite (Richtung `v`), soweit sie auf einer Achse der Skizze liegen.
+    /// Nur innerhalb von `atomically`.
+    fn push_frame3(
+        &mut self,
+        corners: [DVec3; 4],
+        u: DVec3,
+        v: DVec3,
+    ) -> Result<([PointId; 4], [CurveId; 4]), SketchError> {
+        let mut points = [Id::from_index(0); 4];
+        for (slot, c) in points.iter_mut().zip(corners) {
+            *slot = self.add_point3(c)?;
+        }
+        let mut lines = [Id::from_index(0); 4];
+        for (i, slot) in lines.iter_mut().enumerate() {
+            *slot = self.add_line(points[i], points[(i + 1) % 4])?;
+            self.curves[*slot].construction = true;
+        }
+        self.push_internal(ConstraintKind::Perpendicular(lines[0], lines[1]));
+        self.push_internal(ConstraintKind::Parallel(lines[0], lines[2]));
+        self.push_internal(ConstraintKind::Parallel(lines[1], lines[3]));
+        for (d, line) in [(u, lines[0]), (v, lines[1])] {
+            if let Some(k) = axis_binding(d, line) {
+                self.push_internal(k);
+            }
+        }
+        Ok((points, lines))
+    }
+
     /// Unbekannte Kurve, oder eine, die keinen Text trägt (Spec B7): erzeugte Kurven, Rahmenlinien
     /// eines Textes und Griffe.
     fn refuse_bad_path(&self, path: CurveId) -> Result<(), SketchError> {
@@ -1153,6 +1411,9 @@ impl Sketch {
             || self.is_handle_curve(path)
         {
             return Err(SketchError::InvalidInput(tr!("sketch-text-bad-path")));
+        }
+        if self.is_3d_curve(path) {
+            return Err(path_3d());
         }
         Ok(())
     }
@@ -1235,8 +1496,15 @@ impl Sketch {
                 }
                 for p in points {
                     if s.points[p].alive {
-                        let xy = s.pos(p);
-                        s.add_constraint(ConstraintKind::Fixed(p, xy.x, xy.y))?;
+                        // Ein 3D-Punkt (Text in 3D) wird im Raum fest (Ruling R2).
+                        let pin = if s.points[p].z.is_some() {
+                            let q = s.pos3(p);
+                            ConstraintKind::Fixed3(p, q.x, q.y, q.z)
+                        } else {
+                            let xy = s.pos(p);
+                            ConstraintKind::Fixed(p, xy.x, xy.y)
+                        };
+                        s.add_constraint(pin)?;
                     }
                 }
                 out.extend(curves);

@@ -1174,6 +1174,9 @@ pub struct TextDto {
     pub umkehren_waagerecht: bool,
     pub umkehren_senkrecht: bool,
     pub lage: TextLageDto,
+    /// Ab Format 20: Normale der Ebene eines Textes in 3D; fehlt in der Skizzenebene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normale: Option<V3>,
     pub kurven: Vec<usize>,
     pub punkte: Vec<usize>,
     pub lebt: bool,

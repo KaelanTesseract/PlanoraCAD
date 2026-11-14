@@ -992,6 +992,7 @@ fn text_to(t: &TextRecord) -> TextDto {
                 waagerecht: h_align_to(h),
             },
         },
+        normale: t.normal.map(v3),
         kurven: t.curves.iter().map(|c| c.index()).collect(),
         punkte: t.points.iter().map(|p| p.index()).collect(),
         lebt: t.alive,
@@ -1086,6 +1087,11 @@ fn texts_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Vec<TextReco
             flip_h: t.umkehren_waagerecht,
             flip_v: t.umkehren_senkrecht,
             placement,
+            // Normiert und in der Ebene prüft `Sketch::from_data`.
+            normal: t
+                .normale
+                .map(|n| dv3(origin, &|| sketch_label(feature, tr!("proj-l-normal")), n))
+                .transpose()?,
             curves: t.kurven.iter().map(|&i| curve(i)).collect::<Result<_>>()?,
             points: t.punkte.iter().map(|&i| point(i)).collect::<Result<_>>()?,
             alive: t.lebt,
@@ -3495,6 +3501,7 @@ fn has_format_20_data(k: &KindDto) -> bool {
     let s = &s.skizze;
     s.drei_d
         || s.punkte.iter().any(|p| p.z.is_some())
+        || s.texte.iter().any(|t| t.normale.is_some())
         || s.kurven.iter().any(|c| {
             c.normale.is_some()
                 || match &c.art {

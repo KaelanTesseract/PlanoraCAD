@@ -79,6 +79,8 @@ pub struct TextRecord {
     pub flip_h: bool,
     pub flip_v: bool,
     pub placement: TextPlacement,
+    /// Normale der Ebene eines Textes in 3D (Skizzen 10), siehe [`TextData::normal`].
+    pub normal: Option<DVec3>,
     pub curves: Vec<CurveId>,
     pub points: Vec<PointId>,
     pub alive: bool,
@@ -127,12 +129,13 @@ impl Sketch {
     }
 
     /// Steht 3D-Geometrie in der Skizze (Skizzen 10), auch in einem gelöschten Eintrag: ein
-    /// 3D-Punkt, eine Kurve mit Normale (Ellipsen dazu mit `az`), eine Freiformkurve im Raum,
-    /// eine der Abhängigkeiten `AlongZ`, `Fixed3`, `InPlane`, `EllipseAxes3` oder der Haken
-    /// „3D-Skizze“? Dann braucht die Datei Format 20.
+    /// 3D-Punkt, ein Text in 3D, eine Kurve mit Normale (Ellipsen dazu mit `az`), eine
+    /// Freiformkurve im Raum, eine der Abhängigkeiten `AlongZ`, `Fixed3`, `InPlane`,
+    /// `EllipseAxes3` oder der Haken „3D-Skizze“? Dann braucht die Datei Format 20.
     pub fn has_3d_entry(&self) -> bool {
         self.three_d
             || self.points.iter().any(|(_, p)| p.z.is_some())
+            || self.texts.iter().any(|(_, t)| t.normal.is_some())
             || self.curves.iter().any(|(_, c)| {
                 c.normal.is_some()
                     || match &c.kind {
@@ -221,6 +224,7 @@ impl Sketch {
                     flip_h: t.flip_h,
                     flip_v: t.flip_v,
                     placement: t.placement,
+                    normal: t.normal,
                     curves: t.curves.clone(),
                     points: t.points.clone(),
                     alive: t.alive,
@@ -457,6 +461,7 @@ impl Sketch {
                 flip_h: t.flip_h,
                 flip_v: t.flip_v,
                 placement: t.placement,
+                normal: t.normal,
                 curves: t.curves,
                 points: t.points,
                 alive: t.alive,
@@ -924,9 +929,18 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
         if !alive {
             return Err(bad_text("sketch-err-text-data-deleted"));
         }
-        // Erzeugte Punkte bleiben in der Skizzenebene (Skizzen 10): Der Text setzt sie dort.
-        if t.points.iter().any(|p| d.points[p.index()].z.is_some()) {
-            return Err(bad_text("sketch-err-text-data-3d"));
+        // Erzeugte Punkte eines Textes in der Skizzenebene bleiben dort (Skizzen 10): Der Text
+        // setzt sie dort. Ein Text in 3D liegt ganz in seiner Ebene: Rahmen und Buchstaben aus
+        // 3D-Punkten in der Ebene durch Ecke 0 mit seiner Normale.
+        match t.normal {
+            None if t.points.iter().any(|p| d.points[p.index()].z.is_some()) => {
+                return Err(bad_text("sketch-err-text-data-3d"));
+            }
+            None => {}
+            Some(n) if !text_in_plane(d, t, n) => {
+                return Err(bad_text("sketch-err-text-data-plane"));
+            }
+            Some(_) => {}
         }
         let glyph_kinds = t.curves.iter().all(|c| match &d.curves[c.index()].kind {
             CurveKind::Line { .. } => true,
@@ -983,6 +997,31 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
         }
     }
     Ok(())
+}
+
+/// Liegt der Text `t` in 3D ganz in seiner Ebene (Skizzen 10)? Die Normale `n` ist endlich und
+/// normiert, der Text steht im Rahmen, und alle Ecken und erzeugten Punkte sind 3D-Punkte in der
+/// Ebene durch Ecke 0 mit der Normale `n` (bis auf die Toleranz der Skizze).
+fn text_in_plane(d: &SketchData, t: &TextRecord, n: DVec3) -> bool {
+    if !(n.is_finite() && (n.length() - 1.0).abs() <= NORMAL_UNIT_TOL) {
+        return false;
+    }
+    let TextPlacement::Box { corners, .. } = t.placement else {
+        return false;
+    };
+    let var = |i: usize| d.vars.get(i).copied();
+    let at = |p: PointId| -> Option<DVec3> {
+        let r = &d.points[p.index()];
+        Some(DVec3::new(var(r.x)?, var(r.y)?, var(r.z?)?))
+    };
+    let Some(origin) = at(corners[0]) else {
+        return false;
+    };
+    let tol = d.tolerance.linear;
+    corners
+        .iter()
+        .chain(&t.points)
+        .all(|&p| at(p).is_some_and(|q| q.is_finite() && (q - origin).dot(n).abs() <= tol))
 }
 
 /// Kurven und Punkte lebender Muster: Vorlagen, Exemplare, Richtungslinien und Mitten.

@@ -13,6 +13,9 @@
 //! Skizzenkoordinaten gelegt. Fällt die Ebene mit der Skizzenebene zusammen (Normale ±Z durch
 //! z = 0, gleich wie die Triade um Z gedreht ist), entsteht normale 2D-Geometrie; sonst bekommt
 //! die Kurve die Normale der Ebene, und ihre Punkte sind 3D (Spec 1 und 4).
+//!
+//! Text (Task 13): Der Rahmen des Werkzeugs „Text“ entsteht ebenso in der Ebene der Triade
+//! ([`crate::sketch_text::text_plane`]); OK legt ihn mit [`Sketch::add_text_box3`] an.
 
 use crate::msg::Msg;
 use crate::sketch_input::Created;
@@ -74,6 +77,10 @@ impl SketchSession {
     /// Ebene Formen ([`Planar3`]) zeichnen ebenso in 3D; eine in der Ebene begonnene Form endet
     /// in der Ebene, eine in 3D begonnene in 3D.
     pub fn draws_in_3d(&self, sk: &Sketch) -> bool {
+        // Text (Task 13): der Rahmen in der Ebene der Triade.
+        if self.tool == Tool::Text {
+            return self.text_draws_in_3d(sk);
+        }
         if sk.three_d && self.line_arc.is_none() && self.planar3().is_some() {
             return !self.pending3.is_empty()
                 || (self.pending.is_empty()
@@ -215,6 +222,14 @@ impl SketchSession {
             self.message = Some(e);
             return Err(text);
         };
+        if self.tool == Tool::Text {
+            // Nur eine Ecke des Rahmens; die Skizze bleibt bis OK unverändert.
+            return self.click_text3(sk, &cur).map_err(|e| {
+                let text = e.text();
+                self.message = Some(e);
+                text
+            });
+        }
         if let Some(kind) = self.planar3() {
             return self.with_open_start(sk, |se, sk| {
                 se.atomic(sk, |se, sk, prior| se.click_planar3(sk, prior, kind, &cur))

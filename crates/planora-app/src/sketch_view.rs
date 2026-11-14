@@ -2838,7 +2838,18 @@ fn draw_text_preview(
     let Some(t) = se.text.as_ref() else {
         return;
     };
-    let cursor = se.draw_cursor.as_ref().map(|c| c.at).or(se.cursor);
+    // Ein Rahmen in 3D (Skizzen 10): Ecken, Rahmen und Buchstaben stehen in der Basis seiner
+    // Ebene und werden in den Raum gelegt.
+    // Auf dem Pfad (nur 2D) gilt sie nicht.
+    let plane = t.plane3.filter(|_| t.kind == TextToolKind::Box);
+    let paths = |line: &[DVec2]| match plane {
+        Some(pl) => map.paths3(&line.iter().map(|&q| pl.to3(q)).collect::<Vec<_>>()),
+        None => map.paths(line),
+    };
+    let cursor = match plane {
+        Some(pl) => se.cursor3.map(|c| pl.to2(c.at)),
+        None => se.draw_cursor.as_ref().map(|c| c.at).or(se.cursor),
+    };
     if t.kind == TextToolKind::Box {
         let frame: Option<Vec<DVec2>> = match (t.frame_corners(), t.corners.as_slice(), cursor) {
             (Some(c), ..) => Some(vec![c[0], c[1], c[2], c[3], c[0]]),
@@ -2847,8 +2858,14 @@ fn draw_text_preview(
             }
             _ => None,
         };
-        for path in frame.iter().flat_map(|f| map.paths(f)) {
+        for path in frame.iter().flat_map(|f| paths(f)) {
             draw_path(painter, path, Stroke::new(1.5, color), true);
+        }
+        // Beim Aufziehen in 3D: der Zeiger in der Ebene der Triade.
+        if se.draw3
+            && let Some(at) = se.cursor3.and_then(|c| map.to_screen3(c.at))
+        {
+            painter.circle_filled(at, 2.5, color);
         }
     }
     if t.kind == TextToolKind::Path
@@ -2862,7 +2879,7 @@ fn draw_text_preview(
     // Die gemerkte Lage: Gelegt wird nur nach einer Änderung (`update_text_preview`).
     let placed = se.placed_text_preview().unwrap_or_default();
     for line in crate::sketch_text::contour_polylines(&placed) {
-        for path in map.paths(&line) {
+        for path in paths(&line) {
             draw_path(painter, path, stroke, false);
         }
     }

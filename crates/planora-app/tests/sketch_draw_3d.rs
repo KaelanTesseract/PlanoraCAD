@@ -1194,3 +1194,126 @@ fn conic_in_3d_takes_a_typed_rho() {
     );
     assert!((rho[0] - 0.7).abs() < 1e-9, "{rho:?}");
 }
+
+// ---- Text (Task 13) -----------------------------------------------------------------------------
+
+/// Die Ecken eines Textes im Rahmen.
+fn text_corners(sk: &Sketch) -> Vec<DVec3> {
+    let (_, d) = sk.texts().next().expect("ein Text");
+    match d.placement {
+        planora_sketch::text::TextPlacement::Box { corners, .. } => {
+            corners.iter().map(|&p| sk.point_xyz(p).unwrap()).collect()
+        }
+        planora_sketch::text::TextPlacement::Path { .. } => panic!("kein Rahmen"),
+    }
+}
+
+/// Tippt `content` und drückt OK (mit den mitgelieferten Schriften).
+fn type_and_ok(v: &mut View, content: &str) {
+    let lib = planora_text::FontLibrary::bundled_only();
+    let (se, sf) = v.s.session_draft_mut().unwrap();
+    se.text.as_mut().expect("Werkzeug Text").params.content = content.into();
+    se.confirm_text(sf, Some(&lib)).unwrap();
+    v.frame(vec![]);
+}
+
+#[test]
+fn text_frame_in_yz_plane() {
+    let mut v = View::new(Tool::Text);
+    v.set_plane(TriadPlane::Yz);
+    let n = v.s.sketch_history().unwrap().undo_len();
+    let (c0, c2) = (DVec3::new(0.0, 40.0, 10.0), DVec3::new(0.0, 80.0, 30.0));
+    v.click3(c0);
+    v.click3(c2);
+    {
+        let t = v.s.sketch_session.as_ref().unwrap().text.as_ref().unwrap();
+        assert_eq!(t.corners.len(), 2, "zwei Ecken");
+        assert!(t.plane3.is_some(), "Rahmen in 3D");
+    }
+    assert_eq!(v.sk().texts().count(), 0, "bis OK nichts in der Skizze");
+    type_and_ok(&mut v, "Hi");
+    assert_eq!(
+        v.s.sketch_history().unwrap().undo_len(),
+        n + 1,
+        "ein Schritt"
+    );
+    let sk = v.sk();
+    let (_, d) = sk.texts().next().unwrap();
+    assert!(
+        same_axis(d.normal.expect("Normale"), DVec3::X),
+        "{:?}",
+        d.normal
+    );
+    let corners = text_corners(sk);
+    for q in &corners {
+        assert!(q.x.abs() < 1e-6, "Ecke in der Ebene YZ: {q:?}");
+    }
+    for want in [
+        c0,
+        c2,
+        DVec3::new(0.0, 80.0, 10.0),
+        DVec3::new(0.0, 40.0, 30.0),
+    ] {
+        assert!(
+            corners.iter().any(|&q| near(q, want, 0.1)),
+            "Ecke {want:?} fehlt: {corners:?}"
+        );
+    }
+    // Grundlinie entlang Y, oben ist Z: Ecke 0 unten links.
+    assert!(near(corners[0], c0, 0.1), "{corners:?}");
+    assert!(!d.points.is_empty());
+    for &p in &d.points {
+        assert!(sk.is_3d_point(p));
+        assert!(
+            sk.point_xyz(p).unwrap().x.abs() < 1e-6,
+            "Buchstabe in der Ebene"
+        );
+    }
+    assert!(sk.profiles().profiles.is_empty(), "3D-Text ohne Profil");
+
+    // Ändern: Abschnitt wie in 2D, die Vorschau in der Ebene, OK bleibt in der Ebene.
+    let (t, curves) = (sk.texts().next().unwrap().0, d.curves.len());
+    {
+        let (se, sk) = v.se_sk();
+        assert!(se.begin_text_edit(sk, t));
+        let tool = se.text.as_ref().unwrap();
+        assert!(tool.plane3.is_some(), "Ändern in der Ebene des Textes");
+        let frame = tool.frame_corners().unwrap();
+        assert!(
+            frame[0].length() < 1e-9,
+            "Ecke 0 im Ursprung der Ebene: {frame:?}"
+        );
+    }
+    type_and_ok(&mut v, "Hi Hi");
+    let sk = v.sk();
+    let d = sk.text(t).unwrap();
+    assert!(d.curves.len() > curves, "mehr Buchstaben");
+    for &p in &d.points {
+        assert!(
+            sk.point_xyz(p).unwrap().x.abs() < 1e-6,
+            "nach dem Ändern in der Ebene"
+        );
+    }
+
+    // Auf der Skizzenebene bleibt es der gewöhnliche 2D-Text.
+    let mut v = View::new(Tool::Text);
+    assert!(!v.s.sketch_session.as_ref().unwrap().draws_in_3d(v.sk()));
+    v.click3(DVec3::new(40.0, 40.0, 0.0));
+    v.click3(DVec3::new(80.0, 60.0, 0.0));
+    assert!(
+        v.s.sketch_session
+            .as_ref()
+            .unwrap()
+            .text
+            .as_ref()
+            .unwrap()
+            .plane3
+            .is_none()
+    );
+    type_and_ok(&mut v, "Hi");
+    let sk = v.sk();
+    let (_, d) = sk.texts().next().unwrap();
+    assert!(d.normal.is_none());
+    assert!(text_corners(sk).iter().all(|q| q.z == 0.0));
+    assert!(d.points.iter().all(|&p| !sk.is_3d_point(p)));
+}

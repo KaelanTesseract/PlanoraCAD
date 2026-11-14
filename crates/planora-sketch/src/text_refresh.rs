@@ -10,7 +10,7 @@ use crate::constraint::ConstraintId;
 use crate::model::{CurveData, CurveId, CurveKind, PointData, PointId, Sketch};
 use crate::text::{TextId, WalkCache};
 use crate::text_shape::{Contour, Seg};
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -21,6 +21,9 @@ pub(crate) const CUBIC_KNOTS: [f64; 8] = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0
 /// Bis zu diesem Anteil der Höhe gilt ein Punkt beim Nachführen als unverändert: Eine Datei von
 /// einem anderen Rechner (andere Rundung in `sin`, `cos` …) bekommt nach dem Laden so kein „●“.
 const SAME_POINT_REL: f64 = 1e-12;
+/// Bis zu dieser Abweichung bleibt die gespeicherte Normale eines Textes in 3D beim Nachführen,
+/// wie sie ist (aus demselben Grund wie [`SAME_POINT_REL`]).
+const SAME_NORMAL: f64 = 1e-12;
 
 /// Ein Stück mit den Indizes seiner Punkte in der Punktfolge des Textes.
 #[derive(Clone, Copy, Debug)]
@@ -127,9 +130,11 @@ impl Piece {
 
 impl Sketch {
     /// Bringt Punkte und Kurven des Textes `t` auf die Konturen `placed` (Skizzenkoordinaten,
-    /// geprüft). Neue Kurven bekommen den Stil der vorhandenen. Liefert, ob sich etwas geändert
-    /// hat; nur dann gibt es einen neuen Stand. Ein Punkt, der höchstens um
-    /// [`SAME_POINT_REL`] × Höhe abweicht, bleibt, wie er ist.
+    /// geprüft; bei einem Text in 3D in der Basis seiner Ebene, siehe `Sketch::text_lift`, dann
+    /// mit 3D-Punkten und der Normale des Rahmens). Neue Kurven bekommen den Stil der vorhandenen.
+    /// Liefert, ob sich etwas geändert hat; nur dann gibt es einen neuen Stand. Ein Punkt, der
+    /// höchstens um [`SAME_POINT_REL`] × Höhe abweicht, bleibt, wie er ist. Ein Text in 3D mit
+    /// entartetem Rahmen bleibt unverändert (die Aufrufer legen ihn dann ohnehin nicht).
     pub(crate) fn sync_text(&mut self, t: TextId, placed: &[Contour]) -> bool {
         let same = SAME_POINT_REL * self.texts[t].height;
         let (want_points, pieces) = layout(placed);
@@ -144,23 +149,63 @@ impl Sketch {
         let mut dead_points: HashSet<PointId> = HashSet::new();
         let mut dead_curves: HashSet<CurveId> = HashSet::new();
 
+        // Ein Text in 3D: Die Konturen sind in der Basis seiner Ebene gesetzt und werden in den
+        // Raum gelegt (Skizzen 10); die Normale folgt dem Rahmen.
+        let lift = self.text_lift(t);
+        if lift.is_none() && self.texts[t].normal.is_some() {
+            return false;
+        }
+        if let Some(l) = lift
+            && self.texts[t]
+                .normal
+                .is_none_or(|n| (n - l.n).length() > SAME_NORMAL)
+        {
+            self.texts[t].normal = Some(l.n);
+            values = true;
+        }
+
         let mut points: Vec<PointId> = Vec::with_capacity(want_points.len());
         for (j, &at) in want_points.iter().enumerate() {
             match old_points.get(j) {
                 Some(&p) if self.points[p].alive => {
                     let (xi, yi) = (self.points[p].x, self.points[p].y);
-                    for (i, v) in [(xi, at.x), (yi, at.y)] {
+                    let mut write = |vars: &mut Vec<f64>, i: usize, v: f64| {
                         // Ein ungültiger alter Wert (NaN) wird immer neu geschrieben.
-                        let old = self.vars[i];
+                        let old = vars[i];
                         if old.is_nan() || (old - v).abs() > same {
-                            self.vars[i] = v;
+                            vars[i] = v;
                             values = true;
+                        }
+                    };
+                    match lift {
+                        Some(l) => {
+                            let at = l.to3(at);
+                            let zi = match self.points[p].z {
+                                Some(zi) => zi,
+                                None => {
+                                    let zi = self.new_var(at.z);
+                                    self.points[p].z = Some(zi);
+                                    structure = true;
+                                    zi
+                                }
+                            };
+                            for (i, v) in [(xi, at.x), (yi, at.y), (zi, at.z)] {
+                                write(&mut self.vars, i, v);
+                            }
+                        }
+                        None => {
+                            for (i, v) in [(xi, at.x), (yi, at.y)] {
+                                write(&mut self.vars, i, v);
+                            }
                         }
                     }
                     points.push(p);
                 }
                 _ => {
-                    points.push(self.push_text_point(at));
+                    points.push(match lift {
+                        Some(l) => self.push_text_point3(l.to3(at)),
+                        None => self.push_text_point(at),
+                    });
                     structure = true;
                 }
             }
@@ -240,6 +285,18 @@ impl Sketch {
             x,
             y,
             z: None,
+            construction: false,
+            alive: true,
+        })
+    }
+
+    /// Neuer 3D-Punkt eines Textes in 3D (die Lage ist geprüft).
+    fn push_text_point3(&mut self, at: DVec3) -> PointId {
+        let (x, y, z) = (self.new_var(at.x), self.new_var(at.y), self.new_var(at.z));
+        self.points.push(PointData {
+            x,
+            y,
+            z: Some(z),
             construction: false,
             alive: true,
         })

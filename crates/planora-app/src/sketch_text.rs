@@ -28,14 +28,16 @@ use crate::fonts_library::Guarded;
 use crate::formula_field::{FormulaField, number_field_text, resolve, value_field_text};
 use crate::msg::Msg;
 use crate::sketch_cursor::DrawCursor;
+use crate::sketch_draw3::{Cursor3, Plane3};
 use crate::sketch_state::{Item, SketchSession, Tool, err};
+use crate::sketch_triad::Triad;
 use crate::theme;
 use egui::{Key, Modifiers, RichText};
 use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::{DisplayUnit, current_unit, tr};
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use planora_sketch::SketchError;
-use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch, plane_basis};
 use planora_sketch::snap::SnapHit;
 use planora_sketch::text::{
     HAlign, MAX_SPACING, TextId, TextKindEdit, TextParams, TextPlacement, VAlign, path_content,
@@ -200,8 +202,13 @@ pub fn font_choices(
 #[derive(Clone, Debug)]
 pub struct TextTool {
     pub kind: TextToolKind,
-    /// Die geklickten Ecken des Rahmens (zwei gegenüberliegende).
+    /// Die geklickten Ecken des Rahmens (zwei gegenüberliegende); bei einem Rahmen in 3D in der
+    /// Basis von [`TextTool::plane3`].
     pub corners: Vec<DVec2>,
+    /// Ein Text in 3D (Skizzen 10, Spec Entwurf 4): die Ebene des Rahmens mit der Basis, in der
+    /// die Sketch-Seite setzt ([`text_plane`]). Ecken, Rahmen und Vorschau stehen dann in ihrer
+    /// Basis und werden zum Zeichnen in den Raum gelegt. `None` in der Skizzenebene.
+    pub plane3: Option<Plane3>,
     /// Der gewählte Pfad (nur „Text auf Pfad“).
     pub path: Option<CurveId>,
     /// Inhalt (mit Zeilen, wie getippt), Schrift, Höhe in mm, Umkehren.
@@ -277,6 +284,7 @@ impl TextTool {
         TextTool {
             kind: TextToolKind::Box,
             corners: Vec::new(),
+            plane3: None,
             path: None,
             height_text: value_field_text(m.height, ParamUnit::Length),
             spacing_text: number_field_text(m.style.spacing),
@@ -344,7 +352,15 @@ impl TextTool {
                 tool.h = h;
                 tool.v = v;
                 tool.angle = sk.text_angle(t).unwrap_or(0.0);
-                let at = corners.map(|p| sk.point_xy(p).unwrap_or(DVec2::ZERO));
+                // Ein Text in 3D: Rahmen und Vorschau in der Basis seiner Ebene durch Ecke 0.
+                tool.plane3 = d.normal.and_then(|n| {
+                    let origin = sk.point_xyz(corners[0]).ok()?;
+                    Some(basis_plane(origin, n))
+                });
+                let at = corners.map(|p| match tool.plane3 {
+                    Some(plane) => sk.point_xyz(p).map_or(DVec2::ZERO, |q| plane.to2(q)),
+                    None => sk.point_xy(p).unwrap_or(DVec2::ZERO),
+                });
                 tool.edit_frame = Some((at, tool.angle));
             }
             TextPlacement::Path {
@@ -425,7 +441,7 @@ impl TextTool {
             // Ändern: genau das Ergebnis von OK, auf einer Kopie.
             let mut copy = sk.clone();
             self.apply_edit(&mut copy, t, shape.clone()).ok()?;
-            return text_contours(&copy, t);
+            return text_contours(&copy, t, self.plane3.as_ref());
         }
         let p = &self.params;
         match self.kind {
@@ -638,11 +654,41 @@ pub fn contour_polylines(contours: &[Contour]) -> Vec<Vec<DVec2>> {
         .collect()
 }
 
+/// Die Ebene eines Textes in 3D durch `origin` mit der Normale `n` in der Basis, in der die
+/// Skizze ihn setzt ([`plane_basis`]): Grundlinie entlang `u`, oben `v`.
+pub fn basis_plane(origin: DVec3, n: DVec3) -> Plane3 {
+    let (u, v) = plane_basis(n);
+    Plane3 {
+        origin,
+        u,
+        v,
+        flat: false,
+    }
+}
+
+/// Die Ebene eines neuen Textes in 3D: die aktive Ebene der Triade durch `at`, die Normale so
+/// gewählt, dass „oben“ im Text nicht nach unten (−Z) zeigt (**Annahme**: lesbar wie in Fusion
+/// von vorn, etwa in der Ebene ZX Grundlinie X und oben Z). Ein Drehen der Triade um ihre eigene
+/// Normale zählt nicht: Der Rahmen folgt der Basis der Ebene, gedreht wird er über den Winkel.
+pub fn text_plane(triad: &Triad, at: DVec3) -> Plane3 {
+    let (a, b) = triad.active.axes();
+    let mut n = triad.axis(a).cross(triad.axis(b)).normalize();
+    if plane_basis(n).1.z < -1e-9 {
+        n = -n;
+    }
+    basis_plane(at, n)
+}
+
 /// Die Buchstaben des Textes `t` als Konturen aus je einem Stück für die Vorschau: Strecke,
 /// Kegelschnitt als quadratische, Spline mit vier Kontrollpunkten als kubische Bézierkurve.
-fn text_contours(sk: &Sketch, t: TextId) -> Option<Vec<Contour>> {
+///
+/// Mit `plane` (Text in 3D) in der Basis dieser Ebene statt in Skizzenkoordinaten.
+fn text_contours(sk: &Sketch, t: TextId, plane: Option<&Plane3>) -> Option<Vec<Contour>> {
     let d = sk.text(t)?;
-    let at = |p: PointId| sk.point_xy(p).ok();
+    let at = |p: PointId| match plane {
+        Some(plane) => sk.point_xyz(p).ok().map(|q| plane.to2(q)),
+        None => sk.point_xy(p).ok(),
+    };
     let mut out = Vec::with_capacity(d.curves.len());
     for &c in &d.curves {
         let Some(data) = sk.curve(c) else {
@@ -666,7 +712,12 @@ fn text_contours(sk: &Sketch, t: TextId) -> Option<Vec<Contour>> {
         let (start, segs) = match piece {
             Some(p) => p,
             None => {
-                let line = sk.curve_polyline(c, PREVIEW_STEPS_PER_TURN)?;
+                let mut line = sk.curve_polyline(c, PREVIEW_STEPS_PER_TURN)?;
+                if let Some(plane) = plane {
+                    for p in &mut line {
+                        *p = plane.to2(DVec3::new(p.x, p.y, 0.0));
+                    }
+                }
                 let (&start, rest) = line.split_first()?;
                 (start, rest.iter().map(|&p| Seg::Line(p)).collect())
             }
@@ -936,9 +987,56 @@ impl SketchSession {
                 {
                     return Err(crate::msg!("sketch-text-bad-path"));
                 }
+                // „Text auf Pfad“ gibt es nur in 2D (Spec Entwurf 4).
+                if sk.is_3d_curve(c) {
+                    return Err(crate::msg!("sketch-err-text-path-3d"));
+                }
                 t.path = Some(c);
             }
         }
+        Ok(())
+    }
+
+    /// Zieht das Werkzeug gerade einen Rahmen in 3D auf (Skizzen 10)? In einer 3D-Skizze mit der
+    /// Art „Text“, solange der Rahmen in 3D begonnen ist oder noch keine Ecke hat und die aktive
+    /// Ebene der Triade nicht in der Skizzenebene liegt (dann zeichnet es wie in 2D, mit Fang).
+    /// „Text auf Pfad“ bleibt 2D.
+    pub fn text_draws_in_3d(&self, sk: &Sketch) -> bool {
+        let flat =
+            || Plane3::from_triad(&self.triad, self.triad.origin, sk.tolerance().linear).flat;
+        sk.three_d
+            && self.tool == Tool::Text
+            && self.text.as_ref().is_some_and(|t| {
+                t.placing_frame()
+                    && (t.plane3.is_some()
+                        || (t.corners.is_empty() && !self.triad.is_sketch_plane() && !flat()))
+            })
+    }
+
+    /// Klick des Werkzeugs beim Rahmen in 3D an der Stelle `cur` (Spec Entwurf 4): Die erste Ecke
+    /// legt die Ebene fest ([`text_plane`]), die zweite wird in diese Ebene gelegt. Die Skizze
+    /// bleibt unverändert; erst OK legt den Text an.
+    pub(crate) fn click_text3(&mut self, sk: &Sketch, cur: &Cursor3) -> Result<(), Msg> {
+        let tol = sk.tolerance().linear;
+        let fresh = text_plane(&self.triad, cur.at);
+        let Some(t) = self.text.as_mut().filter(|t| t.placing_frame()) else {
+            return Ok(());
+        };
+        let plane = t.plane3.unwrap_or(fresh);
+        let q = plane.to2(cur.at);
+        if let Some(&first) = t.corners.first() {
+            let size = (q - first).abs();
+            if size.x <= tol || size.y <= tol {
+                return Err(crate::msg!("sketch-err-rect-size"));
+            }
+        }
+        t.corners.push(q);
+        t.plane3 = Some(plane);
+        if t.corners.len() == 2 {
+            t.focus_content = true;
+        }
+        // Die Triade springt auf die Ecke; ihre Ebene bleibt dieselbe.
+        self.triad.moved_to(plane.to3(q));
         Ok(())
     }
 
@@ -1001,6 +1099,18 @@ impl SketchSession {
         self.atomic(&mut sf.sketch, |se, sk, prior| {
             let params = tool.params.clone();
             match tool.kind {
+                // Ein Rahmen in 3D (Skizzen 10): in seiner Ebene, ohne Fangbindungen.
+                TextToolKind::Box if tool.plane3.is_some() => {
+                    if let Some(plane) = tool.plane3 {
+                        let corners = [plane.to3(tool.corners[0]), plane.to3(tool.corners[1])];
+                        let id = sk
+                            .add_text_box3(corners, plane.normal(), params, tool.h, tool.v, shape)
+                            .map_err(err)?;
+                        if tool.angle != 0.0 {
+                            sk.set_text_angle(id, tool.angle).map_err(err)?;
+                        }
+                    }
+                }
                 TextToolKind::Box => {
                     let id = sk
                         .add_text_box(
