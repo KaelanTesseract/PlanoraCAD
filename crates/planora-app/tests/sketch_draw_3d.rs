@@ -2017,3 +2017,81 @@ fn tangent_arc_prefers_the_curve_in_the_plane() {
         if *x == arc && *y == line)));
     assert_shape_in_yz(&v, &made);
 }
+
+// ---- Gesamtprüfung: Fang ohne Unsichtbares ------------------------------------------------------
+
+/// Der Fang beim Zeichnen in 3D lässt einen eingeschalteten, aber gerade unsichtbaren Griff aus
+/// (wie der 2D-Weg und `pick_3d`); ein sichtbarer Stützpunkt fängt weiter.
+#[test]
+fn snap3_skips_hidden_handle_points() {
+    let mut v = View::new(Tool::Line);
+    let (at, tip) = {
+        let (_, sk) = v.se_sk();
+        let pts: Vec<PointId> = [(0.0, 0.0), (20.0, 10.0), (40.0, 0.0)]
+            .iter()
+            .map(|&(x, y)| sk.add_point(x, y).unwrap())
+            .collect();
+        let spline = sk.add_spline(&pts).unwrap();
+        let line = sk.activate_tangent_handle(spline, pts[1]).unwrap();
+        let CurveKind::Line { b, .. } = sk.curve(line).unwrap().kind else {
+            panic!("Griff ist eine Linie")
+        };
+        (pts[1], b)
+    };
+    v.s.observe_sketch(false);
+    // In der Skizzenebene zeichnet die Linie in 2D; der 3D-Fang gilt in einer anderen Ebene.
+    v.set_plane(TriadPlane::Yz);
+    let hidden = v.s.sketch_session.as_ref().unwrap().hidden_handles(v.sk());
+    assert!(
+        hidden.points.contains(&tip),
+        "Griff ohne Auswahl unsichtbar"
+    );
+    let p = v.at3(v.xyz(tip));
+    v.hover(p);
+    let cur = v.s.sketch_session.as_ref().unwrap().cursor3.unwrap();
+    assert_ne!(cur.snap, Some(tip), "unsichtbarer Griff fängt nicht");
+    let p = v.at3(v.xyz(at));
+    v.hover(p);
+    let cur = v.s.sketch_session.as_ref().unwrap().cursor3.unwrap();
+    assert_eq!(cur.snap, Some(at), "sichtbarer Stützpunkt fängt");
+}
+
+/// Gesamtprüfung (C1): Ein Kreis in der Ebene YZ um eine bemaßte 2D-Ecke (waagerechtes Maß, das
+/// es an 3D-Geometrie nicht gibt) wird abgelehnt. Der Hinweis steht da, die Skizze bleibt, und
+/// das Werkzeug steht wie vor dem Klick (Mitte gesetzt).
+#[test]
+fn circle3_around_a_dimensioned_2d_corner_is_refused_with_a_note() {
+    let mut v = View::new(Tool::Circle);
+    let p = {
+        let (se, sk) = v.se_sk();
+        se.choose_kind(sk, ToolKind::CircleCenter);
+        let p = sk.add_point(40.0, 30.0).unwrap();
+        let q = sk.add_point(70.0, 30.0).unwrap();
+        sk.add_line(p, q).unwrap();
+        sk.add_constraint(ConstraintKind::DistanceX(p, q, 30.0))
+            .unwrap();
+        p
+    };
+    v.s.observe_sketch(false);
+    v.set_plane(TriadPlane::Yz);
+    let curves = v.sk().curves().count();
+    v.click3(DVec3::new(40.0, 30.0, 0.0));
+    let pending = |v: &View| v.s.sketch_session.as_ref().unwrap().pending3.len();
+    assert_eq!(pending(&v), 1, "Mitte am vorhandenen Punkt");
+    v.click3(DVec3::new(40.0, 60.0, 20.0));
+    let note =
+        v.s.sketch_session
+            .as_ref()
+            .unwrap()
+            .message
+            .as_ref()
+            .map(|m| m.text())
+            .unwrap_or_default();
+    assert!(
+        note.contains(&planora_i18n::tr!("sketch-err-point-bound-2d")),
+        "{note}"
+    );
+    assert_eq!(v.sk().curves().count(), curves, "kein Kreis");
+    assert!(!v.sk().is_3d_point(p));
+    assert_eq!(pending(&v), 1, "Werkzeug wie vor dem Klick");
+}

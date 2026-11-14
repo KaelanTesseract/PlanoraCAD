@@ -928,20 +928,23 @@ impl SketchSession {
         self.triad.handle
     }
 
-    /// Alt allein (Aktion „Triadenebene wechseln“): schaltet die aktive Ebene reihum. Nur in
-    /// einer 3D-Skizze; `false`, wenn nichts geschah. Gehört nicht zum Rückgängig.
+    /// Alt allein (Aktion „Triadenebene wechseln“): schaltet die aktive Ebene reihum. Nur wenn die
+    /// Triade zu sehen ist (3D-Skizze und Zeichenwerkzeug,
+    /// [`crate::sketch_triad::triad_visible`]); `false`, wenn nichts geschah. Gehört nicht zum
+    /// Rückgängig.
     pub fn cycle_triad_plane(&mut self, sk: &Sketch) -> bool {
-        if !sk.three_d {
+        if !crate::sketch_triad::triad_visible(self, sk) {
             return false;
         }
         self.triad.cycle_plane();
         true
     }
 
-    /// Tab (Aktion „Triadengriff wechseln“): macht reihum einen Drehgriff aktiv. Nur in einer
-    /// 3D-Skizze; `false`, wenn nichts geschah.
+    /// Tab (Aktion „Triadengriff wechseln“): macht reihum einen Drehgriff aktiv. Nur wenn die
+    /// Triade zu sehen ist (wie [`cycle_triad_plane`](Self::cycle_triad_plane)); `false`, wenn
+    /// nichts geschah.
     pub fn cycle_triad_handle(&mut self, sk: &Sketch) -> bool {
-        if !sk.three_d {
+        if !crate::sketch_triad::triad_visible(self, sk) {
             return false;
         }
         self.triad.cycle_handle();

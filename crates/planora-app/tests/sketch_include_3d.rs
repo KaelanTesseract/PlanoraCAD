@@ -782,3 +782,52 @@ fn include_plane_size_counts_a_sphere() {
     assert!((half - expected).abs() < 0.05, "{half} gegen {expected}");
     assert!(half > 80.0);
 }
+
+/// Gesamtprüfung (I1-App): Blick parallel zur Skizzenebene. Über dem Horizont trifft der
+/// Sehstrahl die Skizzenebene nicht; der Klick auf die obere Kante bezieht sie trotzdem ein.
+#[test]
+fn include_click_where_the_ray_misses_the_sketch_plane() {
+    let mut s = box_and_sketch();
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.choose_kind(sk, ToolKind::Include3d);
+        assert_eq!(se.tool, Tool::ProjectEdge);
+    }
+    let mut cam = OrbitCamera {
+        target: Vec3::new(5.0, 10.0, 2.5),
+        distance: 120.0,
+        ..Default::default()
+    };
+    cam.look_along(Vec3::new(-1.0, 0.0, 0.0), Vec3::Z);
+    cam.set_viewport(W, H);
+    s.camera = cam;
+    let mut v = View {
+        ctx: context(),
+        s,
+        time: 0.0,
+    };
+    for _ in 0..3 {
+        v.frame(vec![]);
+    }
+    // Mitte der oberen Kante auf der Seite der Kamera (x = 0, z = 5).
+    let mid = DVec3::new(0.0, 10.0, 5.0);
+    let p = v.at3(mid);
+    let frame = *v.s.session_sketch().unwrap().frame();
+    assert_eq!(
+        sketch_view::screen_to_sketch(
+            &cam,
+            &frame,
+            glam::Vec2::new(W, H),
+            glam::Vec2::new(p.x, p.y)
+        ),
+        None,
+        "der Strahl soll die Skizzenebene verfehlen"
+    );
+    v.click(p);
+    let copies = v.s.sketch_draft.as_ref().unwrap().copies.clone();
+    assert_eq!(copies.len(), 1, "{copies:?}");
+    assert!(matches!(
+        copies[0].source,
+        CopySource::Include(IncludeRef::Edge(_))
+    ));
+}

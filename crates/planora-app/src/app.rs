@@ -1262,17 +1262,13 @@ impl PlanoraApp {
             se.toggle_dimension_preview(sk);
         }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
-        // Tab gehört der Triade nur in einer 3D-Skizze; sonst bleibt er, wie er war.
-        let three_d_sketch = self
-            .ws
-            .active_tab()
-            .state
-            .session_sketch()
-            .is_some_and(|sk| sk.three_d);
+        // Tab gehört der Triade nur, wenn sie zu sehen ist (3D-Skizze und Zeichenwerkzeug); sonst
+        // bleibt er, wie er war (Gesamtprüfung).
+        let triad_shown = self.triad_shown();
         let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
             !is_history_key(a)
                 && a != Action::SketchLockZ
-                && (a != Action::SketchTriadCycleHandle || three_d_sketch)
+                && (!is_triad_cycle(a) || triad_shown)
                 && !(windows && a.area() != keymap::Area::All)
         });
         if pressed.contains(&Action::SketchTriadCycleHandle) {
@@ -1355,6 +1351,7 @@ impl PlanoraApp {
             let before = crate::browser::open_tree_prompts(&self.ws.active_tab().state);
             let only_all = keys.dialog || self.windows_open() || self.projects.is_open();
             let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
+            let triad_shown = self.triad_shown();
             let pressed = keymap::dispatch::pressed_in(
                 &mut keys.events,
                 keys.focus,
@@ -1367,6 +1364,7 @@ impl PlanoraApp {
                     !is_history_key(a)
                         && a != Action::SketchLockZ
                         && a != Action::SketchTriadCycleHandle
+                        && (a != Action::SketchTriadCyclePlane || triad_shown)
                         && !(only_all && a.area() != keymap::Area::All)
                 },
             );
@@ -1410,6 +1408,7 @@ impl PlanoraApp {
     /// oder Eingabefeld; sonst fällt die Sperre. Die Felder am Zeiger (Länge, Winkel, Z-Abstand)
     /// sperren die Triade nicht: Sie haben beim Zeichnen fast immer die Tastatur (Task 11).
     fn triad_keys(&mut self, ctx: &egui::Context) {
+        let triad_shown = self.triad_shown();
         let tap = keymap::dispatch::tapped(ctx);
         let free = self.ws.prompt.is_none()
             && (!viewport::typing(ctx) || viewport::draw_field_has_keyboard(ctx))
@@ -1426,8 +1425,23 @@ impl PlanoraApp {
             return;
         };
         se.triad.lock_z = held && actions.is_empty();
-        for a in actions {
+        // Ebene und Griff der Triade wechseln nur, wenn sie zu sehen ist; sonst geschieht nichts,
+        // auch kein Eintrag in „Letzte Schritte“ (Gesamtprüfung).
+        for a in actions
+            .into_iter()
+            .filter(|&a| !is_triad_cycle(a) || triad_shown)
+        {
             commands::run_action(&mut self.ws, a);
+        }
+    }
+
+    /// Ist die Triade der 3D-Skizze im aktiven Tab zu sehen (3D-Skizze und Zeichenwerkzeug,
+    /// [`crate::sketch_triad::triad_visible`])? Nur dann gehören ihr Tab und Alt.
+    fn triad_shown(&self) -> bool {
+        let state = &self.ws.active_tab().state;
+        match (state.sketch_session.as_ref(), state.session_sketch()) {
+            (Some(se), Some(sk)) => crate::sketch_triad::triad_visible(se, sk),
+            _ => false,
         }
     }
 
@@ -1495,6 +1509,14 @@ impl PlanoraApp {
             }
         }
     }
+}
+
+/// Wechselt `a` Ebene oder Griff der Triade (Skizzen 10)?
+fn is_triad_cycle(a: Action) -> bool {
+    matches!(
+        a,
+        Action::SketchTriadCyclePlane | Action::SketchTriadCycleHandle
+    )
 }
 
 /// Rückgängig oder Wiederholen: deren Tasten prüft [`PlanoraApp::undo_keys`] mit eigenen Sperren.

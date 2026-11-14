@@ -244,6 +244,26 @@ pub(crate) fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     p.distance(a + ab * t)
 }
 
+/// Was in 3D weder getroffen noch gefangen wird: unsichtbare Griffe, verborgene Musterteile,
+/// Buchstaben und Rahmen eines Textes beim Ändern sowie die Punkte der Buchstaben ([`pick_3d`]
+/// und der Fang beim Zeichnen in 3D).
+pub(crate) fn hidden_in_3d(
+    se: &SketchSession,
+    sk: &Sketch,
+) -> crate::sketch_handles::HiddenHandles {
+    let handles = se.hidden_handles(sk);
+    let (mut hidden_curves, mut hidden_points) = se.pattern_hidden(sk);
+    hidden_curves.extend(handles.curves);
+    hidden_curves.extend(se.text_hidden(sk));
+    hidden_points.extend(handles.points);
+    hidden_points.extend(se.text_hidden_points(sk));
+    hidden_points.extend(sk.glyph_points());
+    crate::sketch_handles::HiddenHandles {
+        points: hidden_points,
+        curves: hidden_curves,
+    }
+}
+
 /// 3D-Punkt oder 3D-Kurve unter dem Zeiger `pointer`, über den Bildschirmabstand zur projizierten
 /// Lage (höchstens [`PICK_RADIUS_PX`]): Punkte vor Kurven, jeweils der nächste. Was die Ansicht
 /// nicht zeichnet, zählt nicht (wie beim 2D-Fang): unsichtbare Griffe, Exemplare eines Musters in
@@ -257,17 +277,7 @@ pub fn pick_3d(se: &SketchSession, sk: &Sketch, map: &Mapper, pointer: Pos2) -> 
     {
         return None;
     }
-    let handles = se.hidden_handles(sk);
-    let (mut hidden_curves, mut hidden_points) = se.pattern_hidden(sk);
-    hidden_curves.extend(handles.curves);
-    hidden_curves.extend(se.text_hidden(sk));
-    hidden_points.extend(handles.points);
-    hidden_points.extend(se.text_hidden_points(sk));
-    hidden_points.extend(sk.glyph_points());
-    let hidden = crate::sketch_handles::HiddenHandles {
-        points: hidden_points,
-        curves: hidden_curves,
-    };
+    let hidden = hidden_in_3d(se, sk);
     let nearest_point = sk
         .points()
         .map(|(p, _)| p)
@@ -2235,6 +2245,14 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             Some(scope) => se.commit_input3(sf, scope),
             None => se.click3(&mut sf.sketch),
         };
+    } else if response.clicked_by(PointerButton::Primary)
+        && !click_on_grip
+        && se.tool == Tool::ProjectEdge
+        && se.kinds.project.picks_like_include()
+    {
+        // Einbeziehen, Auf Fläche projizieren und Schnittkurve wählen in der 3D-Szene: auch dort,
+        // wo der Sehstrahl die Skizzenebene nicht trifft (Seitenansicht, Gesamtprüfung).
+        project_at = pointer;
     } else if response.clicked_by(PointerButton::Primary)
         && !click_on_grip
         && at.is_none()

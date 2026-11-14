@@ -224,15 +224,17 @@ impl SketchSession {
     }
 
     /// Fang beim Zeichnen in 3D über den Bildschirmabstand (Spec 4, A7): zuerst der nächste
-    /// vorhandene Punkt (ohne die Punkte der Buchstaben eines Textes) und der Skizzenursprung, dann
-    /// die nächste Mitte einer Linie oder eines Bogens (2D wie 3D, ohne Buchstaben und Griffe),
+    /// vorhandene, sichtbare Punkt (ohne die Punkte der Buchstaben eines Textes, unsichtbare Griffe
+    /// und verborgene Musterteile, wie [`crate::sketch_view::pick_3d`]) und der Skizzenursprung,
+    /// dann die nächste Mitte einer sichtbaren Linie oder eines Bogens (2D wie 3D, ohne Buchstaben
+    /// und Griffe),
     /// jeweils an ihrer Lage im Raum. Nach dem Ursprung fangen Körperecken (A7, Task 16): Ein
     /// neuer Punkt dort bekommt einen eingezogenen, verknüpften Punkt ([`bind_new3`]).
     fn snap3(&self, sk: &Sketch, map: &Mapper, at: Pos2, cur: &mut Cursor3) {
-        let glyph_points = sk.glyph_points();
+        let hidden = crate::sketch_view::hidden_in_3d(self, sk);
         let near = sk
             .points()
-            .filter(|(p, _)| !glyph_points.contains(p))
+            .filter(|(p, _)| !hidden.points.contains(p))
             .filter_map(|(p, _)| {
                 let q = sk.point_xyz(p).ok()?;
                 let d = map.to_screen3(q)?.distance(at);
@@ -272,7 +274,9 @@ impl SketchSession {
         let glyph_curves = sk.glyph_curves();
         let mid = sk
             .curves()
-            .filter(|(c, _)| !glyph_curves.contains(c) && !sk.is_handle_curve(*c))
+            .filter(|(c, _)| {
+                !glyph_curves.contains(c) && !sk.is_handle_curve(*c) && !hidden.curves.contains(c)
+            })
             .filter_map(|(c, _)| {
                 let m = curve_mid3(sk, c)?;
                 let d = map.to_screen3(m)?.distance(at);

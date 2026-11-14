@@ -453,9 +453,13 @@ impl ProfileCache {
 /// Alles Vorhandene muss dafür unverändert sein: Kurven (Art, Hilfslinie), Punkte und alle
 /// übrigen Werte bitgleich, Abhängigkeiten (Art samt Maßwert, „anzeigend“, aktiv, Lage), Kopien.
 /// Kam eine Kurve hinzu, fehlt oder änderte sich etwas (Maßwert, „anzeigend“, Hilfslinie), ist
-/// es ein eigener Schritt (ein Linienzug: je Linie einer).
+/// es ein eigener Schritt (ein Linienzug: je Linie einer). Ebenso ein umgeschalteter Haken
+/// „3D-Skizze“: Er ist ein eigener Schritt (Spec 4), auch bei offenem Punkt.
 fn deferred_by_tool(se: &SketchSession, before: &SketchFeature, after: &SketchFeature) -> bool {
-    if se.pending.is_empty() || before.copies != after.copies {
+    if se.pending.is_empty()
+        || before.copies != after.copies
+        || before.sketch.three_d != after.sketch.three_d
+    {
         return false;
     }
     let (b, a) = (&before.sketch, &after.sketch);

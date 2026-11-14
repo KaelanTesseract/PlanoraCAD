@@ -109,6 +109,55 @@ fn three_d_checkbox_is_one_undo_step() {
     assert_eq!(st(&mut w).sketch_history().unwrap().undo_len(), n);
 }
 
+/// Gesamtprüfung (M1): Der Haken bei offenem Punkt eines Linienzugs ist ein eigener Schritt; er
+/// verschmilzt nicht mit der Linie, die danach entsteht.
+#[test]
+fn three_d_checkbox_with_an_open_point_stays_its_own_step() {
+    let mut w = ws();
+    open_sketch(&mut w);
+    w.observe_history(false);
+    let n = st(&mut w).sketch_history().unwrap().undo_len();
+    {
+        let (se, sk) = st(&mut w).session_sketch_mut().unwrap();
+        se.choose_tool(sk, Tool::Line);
+        se.click(sk, planora_math::DVec2::new(0.0, 0.0), 0.5, false)
+            .unwrap();
+    }
+    w.observe_history(false);
+    assert_eq!(
+        st(&mut w).sketch_history().unwrap().undo_len(),
+        n,
+        "der offene Punkt gehört zur Linie"
+    );
+    {
+        let (se, sk) = st(&mut w).session_sketch_mut().unwrap();
+        se.set_three_d(sk, true);
+    }
+    w.observe_history(false);
+    assert_eq!(st(&mut w).sketch_history().unwrap().undo_len(), n + 1);
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("3D-Skizze umschalten".to_string())
+    );
+    {
+        let (se, sk) = st(&mut w).session_sketch_mut().unwrap();
+        se.click(sk, planora_math::DVec2::new(10.0, 0.0), 0.5, false)
+            .unwrap();
+    }
+    w.observe_history(false);
+    assert_eq!(st(&mut w).sketch_history().unwrap().undo_len(), n + 2);
+    let lines = |w: &mut Workspace| st(w).session_sketch().unwrap().curves().count();
+    assert_eq!(lines(&mut w), 1);
+    w.active_tab_mut().undo().unwrap();
+    assert_eq!(lines(&mut w), 0, "erst die Linie");
+    assert!(st(&mut w).session_sketch().unwrap().three_d);
+    w.active_tab_mut().undo().unwrap();
+    assert!(
+        !st(&mut w).session_sketch().unwrap().three_d,
+        "dann der Haken"
+    );
+}
+
 fn collect_text(shape: &egui::epaint::Shape, out: &mut Vec<(String, Pos2)>) {
     use egui::epaint::Shape;
     match shape {
@@ -340,6 +389,8 @@ fn alt_tap_in_the_app_cycles_the_plane_only_in_a_3d_sketch() {
     {
         let (se, sk) = st(app.ws_mut()).session_sketch_mut().unwrap();
         se.set_three_d(sk, true);
+        // Die Triade gehört zu den Zeichenwerkzeugen (Gesamtprüfung).
+        se.choose_tool(sk, Tool::Line);
     }
     frame(&mut app, Modifiers::ALT, vec![]);
     frame(&mut app, Modifiers::NONE, vec![]);
@@ -552,6 +603,7 @@ fn key_up(k: Key) -> Event {
 #[test]
 fn rebound_triad_keys_really_work() {
     let mut r = Rig::new(true);
+    r.tool(Tool::Line);
     // Ebene auf F9: die Taste wirkt, Alt allein nicht mehr.
     r.bind(Action::SketchTriadCyclePlane, Binding::Key(chord(Key::F9)));
     r.frame(Modifiers::NONE, vec![key_down(Key::F9, Modifiers::NONE)]);
@@ -695,11 +747,41 @@ fn tab_belongs_to_the_triad_only_in_a_3d_sketch() {
     r.frame(Modifiers::NONE, vec![key_down(Key::Tab, Modifiers::NONE)]);
     assert!(r.tab_left, "Tab bleibt in einer 2D-Skizze liegen");
     assert_eq!(r.handle(), None);
-    // 3D-Skizze: ein echtes Tab-Ereignis wechselt den Griff und wird verbraucht.
+    // 3D-Skizze mit Zeichenwerkzeug: ein echtes Tab-Ereignis wechselt den Griff und wird
+    // verbraucht.
     let mut r = Rig::new(true);
+    r.tool(Tool::Line);
     r.frame(Modifiers::NONE, vec![key_down(Key::Tab, Modifiers::NONE)]);
     assert!(!r.tab_left);
     assert_eq!(r.handle(), Some(TriadAxis::X));
+}
+
+/// Gesamtprüfung (M2/M5): In einer 3D-Skizze ohne sichtbare Triade (Auswahlwerkzeug) gehören
+/// Tab und Alt nicht der Triade. Tab bleibt liegen, Alt schaltet keine Ebene; unsichtbar ändert
+/// sich nichts. Mit einem Zeichenwerkzeug wirkt Alt wieder.
+#[test]
+fn tab_and_alt_leave_a_hidden_triad_alone() {
+    let mut r = Rig::new(true);
+    assert!(r.layout().is_none(), "Auswahlwerkzeug: keine Triade");
+    r.frame(Modifiers::ALT, vec![]);
+    r.frame(Modifiers::NONE, vec![]);
+    assert_eq!(r.plane(), TriadPlane::Xy);
+    run_action(r.app.ws_mut(), Action::SketchTriadCyclePlane);
+    run_action(r.app.ws_mut(), Action::SketchTriadCycleHandle);
+    assert_eq!(r.plane(), TriadPlane::Xy);
+    assert_eq!(r.handle(), None);
+    // Mit einem Zeichenwerkzeug wirkt Alt wieder.
+    r.tool(Tool::Line);
+    r.frame(Modifiers::NONE, vec![]);
+    r.frame(Modifiers::ALT, vec![]);
+    r.frame(Modifiers::NONE, vec![]);
+    assert_eq!(r.plane(), TriadPlane::Yz);
+    // Zurück im Auswahlwerkzeug bleibt Tab liegen (Fokuswechsel wie in 2D).
+    r.tool(Tool::Select);
+    r.frame(Modifiers::NONE, vec![]);
+    r.frame(Modifiers::NONE, vec![key_down(Key::Tab, Modifiers::NONE)]);
+    assert!(r.tab_left, "Tab bleibt liegen");
+    assert_eq!(r.handle(), None);
 }
 
 // ---- Task 10: die Triade selbst -----------------------------------------------------------------

@@ -196,3 +196,44 @@ fn opening_the_feedback_window_is_not_a_step() {
     assert_ne!(last.label, name);
     assert!(!has(&name));
 }
+
+/// Gesamtprüfung (M5): Alt allein in einer 2D-Skizze tut nichts und steht darum auch nicht in den
+/// letzten Schritten.
+#[test]
+fn alt_tap_in_a_2d_sketch_is_not_a_step() {
+    use eframe::App as _;
+    use egui::{Event, Modifiers, Pos2, Rect, vec2};
+    let c = egui::Context::default();
+    c.set_fonts(planora_app::fonts::definitions());
+    planora_app::theme::apply(&c, true);
+    let mut app = planora_app::app::PlanoraApp::for_tests(ws());
+    {
+        let s = &mut app.ws_mut().active_tab_mut().state;
+        let id = s
+            .add_sketch(planora_feature::SketchPlane::Standard(
+                planora_app::state::StandardPlane::XY,
+            ))
+            .unwrap();
+        s.open_sketch(id).unwrap();
+    }
+    let mut time = 0.0;
+    let mut frame = |app: &mut planora_app::app::PlanoraApp, mods: Modifiers| {
+        time += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0))),
+            time: Some(time),
+            events: vec![Event::ModifiersChanged(mods)],
+            ..Default::default()
+        };
+        let mut f = eframe::Frame::_new_kittest();
+        c.run_ui(raw, |ui| app.ui(ui, &mut f))
+            .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut app, Modifiers::NONE);
+    }
+    frame(&mut app, Modifiers::ALT);
+    frame(&mut app, Modifiers::NONE);
+    let name = diag::in_english(|| Action::SketchTriadCyclePlane.label());
+    assert!(!has(&name), "{:?}", diag::recent_steps());
+}
