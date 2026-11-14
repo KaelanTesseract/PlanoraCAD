@@ -142,6 +142,8 @@ struct SetupApp {
     /// Faden, der den behaltenen Ordner löscht (siehe `run`).
     pending: PendingCleanup,
     lang: &'static str,
+    /// Zeit (`egui`-Uhr), zu der die Seite „Installieren“ erschien; Takt des Wechselbilds.
+    install_since: Option<f64>,
 }
 
 impl SetupApp {
@@ -156,6 +158,7 @@ impl SetupApp {
             kept: None,
             pending,
             lang: system::ui_lang(),
+            install_since: None,
         }
     }
 
@@ -177,6 +180,7 @@ impl SetupApp {
             return;
         }
         self.tracker = Tracker::new();
+        self.install_since = Some(ctx.input(|i| i.time));
         let dir = engine::fresh_dir();
         let progress_file = dir.join("progress.txt");
         let log_file = dir.join("setup.log");
@@ -334,6 +338,9 @@ impl eframe::App for SetupApp {
             progress: self.tracker.current(),
             version: env!("CARGO_PKG_VERSION"),
             log_exists,
+            page_secs: self
+                .install_since
+                .map_or(0.0, |since| ctx.input(|i| i.time) - since),
         };
         let action = pages::show(ui, right - PAGE_MARGIN, &mut self.wizard, &view);
         if let Some(action) = action {

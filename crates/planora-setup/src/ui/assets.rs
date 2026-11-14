@@ -71,7 +71,7 @@ pub struct Picture {
 pub struct Assets {
     pub logo: Option<Picture>,
     pub welcome: Option<Picture>,
-    /// Karten der Installieren-Seite: Skizze, Platte, Verrunden.
+    /// Wechselbild der Installieren-Seite: Skizze, Platte, Verrunden.
     pub teasers: [Option<Picture>; 3],
 }
 

@@ -26,8 +26,16 @@ const MODE_CARD_H: f32 = 92.0;
 const FOLDER_ROW_H: f32 = 30.0;
 /// Mindestbreite von „Durchsuchen“.
 const BROWSE_MIN_W: f32 = 100.0;
-/// Höhe der Bildunterschrift unter den Karten der Installieren-Seite.
+/// Höhe der Bildunterschrift unter dem Wechselbild der Installieren-Seite.
 const CAPTION_H: f32 = 18.0;
+/// So lange steht ein Motiv des Wechselbilds, bevor das nächste kommt (Sekunden).
+const TEASER_PERIOD: f64 = 5.0;
+/// Dauer der Überblendung zwischen zwei Motiven (Sekunden).
+const TEASER_FADE: f64 = 0.4;
+/// Halbmesser der Punkte, die das gezeigte Motiv anzeigen.
+const DOT_RADIUS: f32 = 3.0;
+/// Abstand der Mittelpunkte der Punkte.
+const DOT_STEP: f32 = 12.0;
 /// Kantenlänge des Logos neben dem Schriftzug.
 const LOGO_SIZE: f32 = 26.0;
 /// Rundung der Bilder.
@@ -151,30 +159,43 @@ pub fn cover_uv(target: f32, image: f32) -> Rect {
     }
 }
 
-/// Breite und Abstand der drei gleich hohen Karten auf der Installieren-Seite.
-pub fn teaser_columns(width: f32, gap: f32) -> f32 {
-    ((width - 2.0 * gap) / 3.0).max(0.0)
+/// Bildfläche des Wechselbilds auf der Installieren-Seite: volle Breite von `area` im
+/// Querformat 16:9, darunter die Unterschrift der Höhe `caption` (Abstand `SPACE_1`). Bild und
+/// Unterschrift stehen senkrecht mittig in `area`; reicht die Höhe nicht, wird das Bild im
+/// selben Verhältnis kleiner und steht waagerecht mittig.
+pub fn teaser_shot(area: Rect, caption: f32) -> Rect {
+    let below = SPACE_1 + caption;
+    let mut w = area.width().max(0.0);
+    let mut h = w * 9.0 / 16.0;
+    let max_h = (area.height() - below).max(0.0);
+    if h > max_h {
+        h = max_h;
+        w = h * 16.0 / 9.0;
+    }
+    let left = area.center().x - w / 2.0;
+    let top = area.center().y - (h + below) / 2.0;
+    Rect::from_min_size(pos2(left, top), vec2(w, h))
 }
 
-/// Bildflächen der drei Karten auf der Installieren-Seite: gleich groß im Querformat 16:9,
-/// nebeneinander mit Abstand `gap`, darunter je eine Unterschrift der Höhe `caption`
-/// (Abstand `SPACE_1`). Die Reihe steht senkrecht mittig in `area`; reicht die Höhe nicht,
-/// werden die Karten kleiner und die Reihe steht waagerecht mittig.
-pub fn teaser_shots(area: Rect, gap: f32, caption: f32) -> [Rect; 3] {
-    let below = SPACE_1 + caption;
-    let mut col = teaser_columns(area.width(), gap);
-    let mut shot_h = col * 9.0 / 16.0;
-    let max_h = (area.height() - below).max(0.0);
-    if shot_h > max_h {
-        shot_h = max_h;
-        col = shot_h * 16.0 / 9.0;
+/// Welches Motiv das Wechselbild `elapsed_secs` nach dem Erscheinen der Seite zeigt: das
+/// aktuelle und, während der Überblendung, das nächste mit Anteil 0..1. Jedes Motiv steht
+/// `TEASER_PERIOD` Sekunden; die Überblendung beginnt an jedem Wechsel und dauert
+/// `TEASER_FADE`. Mit weniger als zwei Motiven gibt es keinen Wechsel.
+pub fn teaser_frame(elapsed_secs: f64, count: usize) -> (usize, Option<(usize, f32)>) {
+    if count < 2 {
+        return (0, None);
     }
-    let row_w = 3.0 * col + 2.0 * gap;
-    let left = area.center().x - row_w / 2.0;
-    let top = area.center().y - (shot_h + below) / 2.0;
-    std::array::from_fn(|i| {
-        Rect::from_min_size(pos2(left + i as f32 * (col + gap), top), vec2(col, shot_h))
-    })
+    let t = elapsed_secs.max(0.0);
+    let k = (t / TEASER_PERIOD).floor();
+    let into = t - k * TEASER_PERIOD;
+    // Ganzzahliger Zähler der Wechsel; `count` ist klein, daher reicht der Rest in f64.
+    let n = count as f64;
+    let at = |i: f64| (i % n) as usize;
+    if k >= 1.0 && into < TEASER_FADE {
+        (at(k - 1.0), Some((at(k), (into / TEASER_FADE) as f32)))
+    } else {
+        (at(k), None)
+    }
 }
 
 /// Daten, die die Seiten zum Zeichnen brauchen, aber nicht ändern.
@@ -184,6 +205,8 @@ pub struct View<'a> {
     pub progress: Progress,
     pub version: &'a str,
     pub log_exists: bool,
+    /// Sekunden, seit die Seite „Installieren“ erscheint (für das Wechselbild).
+    pub page_secs: f64,
 }
 
 /// Zeichnet den Inhalt des rechten Felds in `rect`; liefert die ausgelöste Aktion.
@@ -262,18 +285,31 @@ fn body(ui: &mut egui::Ui, text: String, p: &Palette) {
 
 /// Bild füllt `rect` (mittig beschnitten), mit Rundung und 1-px-Rand.
 fn picture(ui: &egui::Ui, rect: Rect, pic: Option<&Picture>, p: &Palette) {
+    picture_layer(ui, rect, pic, p, 1.0);
+    picture_border(ui, rect, p);
+}
+
+/// Nur die Bildfläche (ohne Rand), mit Deckkraft `alpha` 0..1; für die Überblendung.
+fn picture_layer(ui: &egui::Ui, rect: Rect, pic: Option<&Picture>, p: &Palette, alpha: f32) {
     let radius = egui::CornerRadius::same(SHOT_RADIUS);
     match pic {
         Some(pic) => {
             egui::Image::from_texture(&pic.texture)
                 .uv(cover_uv(rect.width() / rect.height().max(1.0), pic.aspect))
                 .corner_radius(radius)
+                .tint(egui::Color32::WHITE.gamma_multiply(alpha))
                 .paint_at(ui, rect);
         }
         None => {
-            ui.painter().rect_filled(rect, radius, p.bg_inset);
+            ui.painter()
+                .rect_filled(rect, radius, p.bg_inset.gamma_multiply(alpha));
         }
     }
+}
+
+/// 1-px-Rand um ein Bild.
+fn picture_border(ui: &egui::Ui, rect: Rect, p: &Palette) {
+    let radius = egui::CornerRadius::same(SHOT_RADIUS);
     ui.painter().rect_stroke(
         rect,
         radius,
@@ -529,8 +565,8 @@ fn installing(ui: &mut egui::Ui, view: &View) {
     );
     ui.add_space(SPACE_4);
 
-    // Drei gleich große Karten im Querformat mit Unterschrift, als Reihe senkrecht mittig im
-    // Platz unter der Fortschrittszeile (Entwurf C).
+    // Ein großes Wechselbild über die volle Breite mit Unterschrift und Punkten, senkrecht
+    // mittig im Platz unter der Fortschrittszeile (entschieden nach dem Handtest 2026-11-14).
     let avail = ui.available_rect_before_wrap();
     let area = Rect::from_min_max(avail.min, pos2(avail.right(), avail.bottom() - SPACE_3));
     if area.height() < 40.0 {
@@ -542,16 +578,51 @@ fn installing(ui: &mut egui::Ui, view: &View) {
         tr!("setup-teaser-extrude"),
         tr!("setup-teaser-fillet"),
     ];
-    let shots = teaser_shots(area, SPACE_2, CAPTION_H);
-    for ((i, caption), shot) in captions.into_iter().enumerate().zip(shots) {
-        picture(ui, shot, view.assets.teasers[i].as_ref(), p);
-        ui.painter().text(
-            pos2(shot.left(), shot.bottom() + SPACE_1 + 1.0),
-            egui::Align2::LEFT_TOP,
-            caption,
-            style::small_font(),
-            p.text_tertiary,
-        );
+    let count = captions.len();
+    let (current, fade) = teaser_frame(view.page_secs, count);
+    let shot = teaser_shot(area, CAPTION_H);
+    let teaser = |i: usize| view.assets.teasers.get(i).and_then(Option::as_ref);
+    picture_layer(ui, shot, teaser(current), p, 1.0);
+    // Ab der Hälfte der Überblendung gelten Unterschrift und Punkt schon für das neue Motiv.
+    let mut shown = current;
+    if let Some((next, t)) = fade {
+        picture_layer(ui, shot, teaser(next), p, t);
+        if t >= 0.5 {
+            shown = next;
+        }
+    }
+    picture_border(ui, shot, p);
+
+    let caption_y = shot.bottom() + SPACE_1 + 1.0;
+    ui.painter().text(
+        pos2(shot.left(), caption_y),
+        egui::Align2::LEFT_TOP,
+        captions[shown].clone(),
+        style::small_font(),
+        p.text_tertiary,
+    );
+    // Punkte rechtsbündig auf der Höhe der Unterschrift: das gezeigte Motiv in `accent`.
+    let dot_y = caption_y + CAPTION_H / 2.0 - 1.0;
+    for i in 0..count {
+        let x = shot.right() - DOT_RADIUS - (count - 1 - i) as f32 * DOT_STEP;
+        let color = if i == shown {
+            p.accent
+        } else {
+            p.border_subtle
+        };
+        ui.painter()
+            .circle_filled(pos2(x, dot_y), DOT_RADIUS, color);
+    }
+
+    // Weiterzeichnen: während der Überblendung jedes Bild, sonst erst zum nächsten Wechsel
+    // (auch wenn der Motor gerade keinen Fortschritt meldet).
+    if fade.is_some() {
+        ui.ctx().request_repaint();
+    } else {
+        let into = view.page_secs.max(0.0) % TEASER_PERIOD;
+        let wait = (TEASER_PERIOD - into).max(0.01);
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(wait));
     }
 }
 
@@ -752,36 +823,54 @@ mod tests {
     }
 
     #[test]
-    fn three_teaser_columns_fill_width() {
-        let col = teaser_columns(616.0, 8.0);
-        assert!((3.0 * col + 2.0 * 8.0 - 616.0).abs() < 1e-3);
-        assert_eq!(teaser_columns(4.0, 8.0), 0.0);
+    fn teaser_shot_fills_width_and_is_centered() {
+        let area = Rect::from_min_size(pos2(10.0, 100.0), vec2(630.0, 420.0));
+        let shot = teaser_shot(area, 18.0);
+        assert!(
+            (shot.width() / shot.height() - 16.0 / 9.0).abs() < 1e-3,
+            "{shot:?}"
+        );
+        // Volle Breite, Bild samt Unterschrift senkrecht mittig.
+        assert!((shot.left() - area.left()).abs() < 1e-3);
+        assert!((shot.right() - area.right()).abs() < 1e-3);
+        let bottom = shot.bottom() + SPACE_1 + 18.0;
+        assert!(((shot.top() - area.top()) - (area.bottom() - bottom)).abs() < 1e-3);
+        // Zu niedrig: kleineres Bild im selben Verhältnis, passt hinein, waagerecht mittig.
+        let flat = Rect::from_min_size(pos2(0.0, 0.0), vec2(630.0, 200.0));
+        let shot = teaser_shot(flat, 18.0);
+        assert!(shot.width() < flat.width());
+        assert!((shot.width() / shot.height() - 16.0 / 9.0).abs() < 1e-3);
+        assert!(shot.bottom() + SPACE_1 + 18.0 <= flat.bottom() + 1e-3);
+        assert!(shot.top() >= flat.top() - 1e-3);
+        let (l, r) = (shot.left() - flat.left(), flat.right() - shot.right());
+        assert!((l - r).abs() < 1e-3);
+        // Kein Platz: leere Fläche statt Absturz.
+        let none = teaser_shot(Rect::from_min_size(pos2(0.0, 0.0), vec2(630.0, 5.0)), 18.0);
+        assert_eq!(none.size(), vec2(0.0, 0.0));
     }
 
     #[test]
-    fn teaser_shots_are_landscape_and_centered() {
-        let area = Rect::from_min_size(pos2(10.0, 100.0), vec2(616.0, 400.0));
-        let shots = teaser_shots(area, 8.0, 18.0);
-        for s in &shots {
-            assert!((s.width() / s.height() - 16.0 / 9.0).abs() < 1e-3, "{s:?}");
-            assert_eq!(s.size(), shots[0].size());
-            assert_eq!(s.top(), shots[0].top());
-        }
-        // Volle Breite, Reihe samt Unterschrift senkrecht mittig.
-        assert!((shots[0].left() - area.left()).abs() < 1e-3);
-        assert!((shots[2].right() - area.right()).abs() < 1e-3);
-        let bottom = shots[0].bottom() + SPACE_1 + 18.0;
-        assert!(((shots[0].top() - area.top()) - (area.bottom() - bottom)).abs() < 1e-3);
-        // Zu niedrig: kleinere Karten, die Reihe passt hinein und steht waagerecht mittig.
-        let flat = Rect::from_min_size(pos2(0.0, 0.0), vec2(616.0, 80.0));
-        let shots = teaser_shots(flat, 8.0, 18.0);
-        assert!((shots[0].width() / shots[0].height() - 16.0 / 9.0).abs() < 1e-3);
-        assert!(shots[0].bottom() + SPACE_1 + 18.0 <= flat.bottom() + 1e-3);
-        let (l, r) = (
-            shots[0].left() - flat.left(),
-            flat.right() - shots[2].right(),
-        );
-        assert!((l - r).abs() < 1e-3);
+    fn teaser_frame_rotates_with_cross_fade() {
+        // Start: erstes Motiv, keine Überblendung.
+        assert_eq!(teaser_frame(0.0, 3), (0, None));
+        assert_eq!(teaser_frame(4.9, 3), (0, None));
+        // Wechsel bei 5 s: Überblendung von 0 auf 1, bei 5,2 s halb.
+        let (cur, fade) = teaser_frame(5.2, 3);
+        assert_eq!(cur, 0);
+        let (next, t) = fade.expect("Überblendung");
+        assert_eq!(next, 1);
+        assert!((t - 0.5).abs() < 1e-3, "{t}");
+        assert_eq!(teaser_frame(5.0, 3).1.map(|f| f.1), Some(0.0));
+        assert_eq!(teaser_frame(5.5, 3), (1, None));
+        assert_eq!(teaser_frame(10.5, 3), (2, None));
+        // Nach einem ganzen Umlauf wieder das erste Motiv, mit Überblendung von 2 auf 0.
+        let (cur, fade) = teaser_frame(15.1, 3);
+        assert_eq!((cur, fade.map(|f| f.0)), (2, Some(0)));
+        assert_eq!(teaser_frame(15.5, 3), (0, None));
+        // Wenige Motive oder Zeit vor dem Start: kein Wechsel, kein Absturz.
+        assert_eq!(teaser_frame(7.0, 0), (0, None));
+        assert_eq!(teaser_frame(7.0, 1), (0, None));
+        assert_eq!(teaser_frame(-3.0, 3), (0, None));
     }
 
     #[test]
