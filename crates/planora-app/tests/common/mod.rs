@@ -320,6 +320,36 @@ impl Screen {
         self.children().builders.get(&id).cloned()
     }
 
+    /// Spielt das Betriebssystem für die Größe des Kindfensters `id`: Eine neue Größe im Builder
+    /// (beim Öffnen und bei jeder Änderung) und jeder neue `InnerSize`-Befehl gelten als Punkte
+    /// des Kindfensters (wie winit mit dessen Faktor). `last` merkt, was schon angewandt ist.
+    pub fn apply_child_size(
+        &mut self,
+        id: egui::ViewportId,
+        last: &mut (Option<egui::Vec2>, usize),
+    ) {
+        let built = self.child_builder(id).and_then(|b| b.inner_size);
+        let commands = self.child_commands(id);
+        let mut size = None;
+        if built != last.0 {
+            size = built;
+            last.0 = built;
+        }
+        for c in &commands[last.1.min(commands.len())..] {
+            if let egui::ViewportCommand::InnerSize(s) = c {
+                size = Some(*s);
+            }
+        }
+        last.1 = commands.len();
+        if let Some(s) = size {
+            self.child_info(id, |i| {
+                let min = i.outer_rect.map_or(egui::Pos2::ZERO, |r| r.min);
+                i.outer_rect = Some(egui::Rect::from_min_size(min, s));
+                i.inner_rect = i.outer_rect;
+            });
+        }
+    }
+
     /// Wie oft das Kindfenster `id` gezeichnet wurde.
     pub fn child_runs(&self, id: egui::ViewportId) -> usize {
         self.children().runs.get(&id).copied().unwrap_or(0)

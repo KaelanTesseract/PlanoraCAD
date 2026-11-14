@@ -332,6 +332,14 @@ struct Opened {
     /// egui schickt bei jeder Änderung des Builders die Lage erneut, winit rechnete sie mit dem
     /// Faktor des Fensters um und das Fenster spränge.
     position: Option<egui::Pos2>,
+    /// Innere Größe im Builder (Punkte des Aufrufers) bei Fenstern mit Größenänderung: fest,
+    /// solange das Fenster offen ist. Jede Änderung schickte egui als `InnerSize`, und winit
+    /// rechnete sie mit dem Faktor des Kindfensters um; auf einem anders skalierten Monitor
+    /// wüchse das Feld dann nach jedem Ziehen.
+    size: egui::Vec2,
+    /// Gewollte physische Größe beim Öffnen (für die Korrektur im zweiten Bild; nur Fenster mit
+    /// Größenänderung und gemerkter Lage).
+    wanted_size: Option<egui::Vec2>,
     /// Gewollte physische Lage beim Öffnen (für die Korrektur im zweiten Bild).
     wanted: Option<egui::Pos2>,
     /// Äußeres Rechteck (Punkte des Fensters) beim Beginn eines Zieh- oder Größenvorgangs.
@@ -420,6 +428,13 @@ fn show_core<R>(
                 parent_frame: frame,
                 position,
                 wanted,
+                size: spec.inner_size,
+                wanted_size: match placement {
+                    Placement::Saved(Some(w)) if spec.resizable => {
+                        Some(egui::vec2(w.width, w.height))
+                    }
+                    _ => None,
+                },
                 moving: None,
                 close_frame: None,
                 drag_frame: None,
@@ -434,7 +449,11 @@ fn show_core<R>(
         .with_title(format!("PlanoraCAD – {}", spec.title))
         .with_decorations(false)
         .with_taskbar(false)
-        .with_inner_size(spec.inner_size)
+        .with_inner_size(if spec.resizable {
+            opened.size
+        } else {
+            spec.inner_size
+        })
         .with_resizable(spec.resizable)
         .with_active(spec.focus_on_open);
     if let Some(p) = opened.position {
@@ -577,6 +596,15 @@ fn window_contents<R>(
             > POSITION_TOLERANCE_PX
     {
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(wanted / ppp));
+    }
+    // Ebenso die Größe eines Felds: der Builder gibt sie in Punkten des Aufrufers an, winit
+    // nimmt sie mit dem Faktor des Kindfensters. Einmal physisch genau setzen.
+    if ctx.cumulative_frame_nr() == 1
+        && let Some(wanted) = opened.wanted_size.take()
+        && let Some(outer) = outer
+        && (outer.size() * ppp - wanted).abs().max_elem() > POSITION_TOLERANCE_PX
+    {
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(wanted / ppp));
     }
 
     let parent_frame = opened.parent_frame;

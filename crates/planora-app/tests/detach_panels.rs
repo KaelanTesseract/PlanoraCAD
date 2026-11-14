@@ -497,3 +497,179 @@ fn delete_prompt_from_drawing_view_stays_in_main() {
     assert_eq!(rig.screen.child_runs(sub), 0, "kein Unterdialog");
     assert!(rig.screen.child_runs(tree) > 0, "Baum bleibt abgedockt");
 }
+
+fn press_at(at: Pos2, pressed: bool) -> Event {
+    Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+/// Ziehen am Kopf des Felds im Kindfenster `id` (das Betriebssystem verschiebt das Fenster um
+/// 30/10 Punkte und ändert seine Größe um `grow` Punkte, wie beim Ziehen am Rand); `last` wie bei
+/// [`Screen::apply_child_size`].
+fn drag_field(
+    rig: &mut Rig,
+    id: egui::ViewportId,
+    last: &mut (Option<Vec2>, usize),
+    head: &str,
+    grow: Vec2,
+) {
+    let mut step = |rig: &mut Rig, events: Vec<Event>| {
+        rig.frame_child(id, events);
+        rig.screen.apply_child_size(id, last);
+    };
+    let at = center_of(&rig.screen.child_seen(id), head);
+    let to = at + vec2(30.0, 10.0);
+    step(rig, vec![Event::PointerMoved(at)]);
+    step(rig, vec![press_at(at, true)]);
+    step(rig, vec![Event::PointerMoved(to)]);
+    rig.screen.child_info(id, |i| {
+        i.outer_rect = i
+            .outer_rect
+            .map(|r| Rect::from_min_size(r.min + vec2(30.0, 10.0), r.size() + grow));
+        i.inner_rect = i.outer_rect;
+    });
+    step(rig, vec![press_at(to, false)]);
+    for _ in 0..3 {
+        step(rig, vec![]);
+    }
+}
+
+#[test]
+fn undocked_field_keeps_its_size_on_a_monitor_with_other_scale() {
+    // Hauptfenster 100 %, Baumfenster auf einem Monitor mit 125 %.
+    let mut rig = Rig::new(&[]);
+    let id = detach::viewport_id(Place::Tree);
+    rig.screen.child_info(id, |i| {
+        i.native_pixels_per_point = Some(1.25);
+        i.outer_rect = Some(Rect::from_min_size(pos2(80.0, 80.0), Vec2::ZERO));
+    });
+    let saved = window_at(100.0, 100.0);
+    rig.app.ws_mut().detach.set(Place::Tree, saved);
+    let mut last = (None, 0);
+    for _ in 0..4 {
+        rig.frame(vec![]);
+        rig.screen.apply_child_size(id, &mut last);
+    }
+    let size = |rig: &mut Rig| {
+        let w = rig.app.ws_mut().detach.get(Place::Tree).expect("abgedockt");
+        vec2(w.width, w.height)
+    };
+    // Ziehen ändert die Größe nicht; einmal am Rand 40 Punkte breiter (50 px), danach bleibt
+    // sie bei jedem weiteren Ziehen.
+    let mut want = vec2(saved.width, saved.height);
+    for (n, grow) in [Vec2::ZERO, vec2(40.0, 0.0), Vec2::ZERO, Vec2::ZERO]
+        .into_iter()
+        .enumerate()
+    {
+        drag_field(&mut rig, id, &mut last, "Feature-Baum", grow);
+        want += grow * 1.25;
+        let got = size(&mut rig);
+        assert!(
+            (got - want).length() < 1.0,
+            "Vorgang {n}: {got:?} statt {want:?}"
+        );
+    }
+}
+
+#[test]
+fn tab_switch_with_undocked_sketch_side() {
+    let mut rig = Rig::new(&[(Place::SketchSide, window_at(1500.0, 100.0))]);
+    let side = detach::viewport_id(Place::SketchSide);
+    // Tab A: Skizze offen, Skizzenfeld im eigenen Fenster.
+    open_sketch(&mut rig);
+    rig.settle(2);
+    assert!(rig.screen.child_runs(side) > 0);
+
+    // Tab B (Modell): kein Skizzenfenster mehr, rechte Spalte da – schon im ersten Bild.
+    rig.app.ws_mut().new_tab();
+    let runs = rig.screen.child_runs(side);
+    rig.frame(vec![]);
+    assert_eq!(rig.screen.child_runs(side), runs, "kein verwaistes Fenster");
+    let l = rig.layout();
+    assert!(l.strip.is_none() && l.right.width() > 0.0, "{l:?}");
+    assert!(rig.fields().contains(&"rechts"), "{:?}", rig.fields());
+    rig.settle(2);
+    assert_eq!(rig.screen.child_runs(side), runs);
+
+    // Zurück zu A: Fenster und Layout ohne Spalte im ersten Bild.
+    rig.app.ws_mut().activate(0);
+    rig.frame(vec![]);
+    assert!(rig.screen.child_runs(side) > runs, "Fenster wieder da");
+    let l = rig.layout();
+    assert!(l.strip.is_some() && l.right.width() == 0.0, "{l:?}");
+    assert!(!rig.fields().contains(&"Skizze"), "{:?}", rig.fields());
+    assert!(rig.fields().contains(&"Leiste"), "{:?}", rig.fields());
+}
+
+#[test]
+fn tab_switch_model_and_drawing_keeps_the_right_window() {
+    let mut rig = Rig::new(&[(Place::Right, window_at(1500.0, 100.0))]);
+    let right = detach::viewport_id(Place::Right);
+    let title = |rig: &Rig| {
+        rig.screen
+            .child_builder(right)
+            .and_then(|b| b.title)
+            .unwrap_or_default()
+    };
+    assert_eq!(title(&rig), "PlanoraCAD – Eigenschaften");
+    // Tab B mit offener Zeichnung: dasselbe Fenster zeigt das Ansichtsfeld.
+    rig.app.ws_mut().new_tab();
+    open_drawing(&mut rig);
+    rig.settle(3);
+    assert_eq!(title(&rig), "PlanoraCAD – Ansicht");
+    let child = rig.screen.child_seen(right);
+    assert!(
+        find(&child, "Ansicht löschen").is_some(),
+        "{}",
+        join(&child)
+    );
+    assert!(
+        !rig.fields().contains(&"Ansichtsfeld"),
+        "{:?}",
+        rig.fields()
+    );
+    // Zurück zu A (Modell): wieder die Eigenschaften im selben Fenster.
+    rig.app.ws_mut().activate(0);
+    rig.frame(vec![]);
+    assert_eq!(title(&rig), "PlanoraCAD – Eigenschaften");
+    let child = rig.screen.child_seen(right);
+    assert!(find(&child, "Eigenschaften").is_some(), "{}", join(&child));
+    assert!(
+        find(&child, "Ansicht löschen").is_none(),
+        "{}",
+        join(&child)
+    );
+    assert!(!rig.fields().contains(&"rechts"), "{:?}", rig.fields());
+}
+
+#[test]
+fn rename_from_tree_window_survives_a_tab_switch() {
+    let mut rig = Rig::new(&[(Place::Tree, window_at(300.0, 100.0))]);
+    let tree = detach::viewport_id(Place::Tree);
+    let row = center_of(&rig.screen.child_seen(tree), "Quader 1");
+    rig.click_child(tree, row, PointerButton::Secondary);
+    let entry = center_of(&rig.screen.child_seen(tree), "Umbenennen");
+    rig.click_child(tree, entry, PointerButton::Primary);
+    assert!(rig.state().rename_draft.is_some());
+    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::new("Umbenennen"));
+    rig.settle(2);
+    assert!(rig.screen.child_runs(sub) > 0);
+
+    // Tab B und zurück: das offene Umbenennen bleibt über dem Baumfenster.
+    rig.app.ws_mut().new_tab();
+    rig.settle(3);
+    rig.app.ws_mut().activate(0);
+    assert!(rig.state().rename_draft.is_some(), "noch offen");
+    let runs = rig.screen.child_runs(sub);
+    let main = rig.settle(3);
+    assert!(rig.screen.child_runs(sub) > runs, "wieder als Unterdialog");
+    assert!(
+        find(&main, "Übernehmen").is_none(),
+        "nicht im Hauptfenster: {}",
+        join(&main)
+    );
+}

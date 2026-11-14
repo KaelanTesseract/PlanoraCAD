@@ -698,3 +698,56 @@ fn multi_pass_frame_handles_close_and_drag_once() {
     assert_eq!(cancels, 1, "{:?}", s.child_commands(id));
     assert!(!*t.open.borrow());
 }
+
+#[test]
+fn undocked_dialog_size_is_stable_on_a_monitor_with_other_scale() {
+    // Hauptfenster 100 %, Dialog auf einem Monitor mit 125 %: Ziehen ändert seine Größe nicht
+    // (das Harness wendet Builder-Größe und `InnerSize` wie winit mit dem Faktor des Kinds an).
+    let t = DialogTest::new(Some(on_main_monitor()));
+    let mut s = Screen::with_viewports(1920.0, 1080.0);
+    let id = detach::viewport_id(BLEND);
+    s.child_info(id, |i| {
+        i.native_pixels_per_point = Some(1.25);
+        i.outer_rect = Some(egui::Rect::from_min_size(
+            pos2(160.0, 120.0),
+            egui::Vec2::ZERO,
+        ));
+        i.monitor_size = Some(vec2(1536.0, 864.0));
+    });
+    let mut f = t.frame();
+    let mut last = (None, 0);
+    for _ in 0..6 {
+        s.frame(vec![], &mut f);
+        s.apply_child_size(id, &mut last);
+    }
+    let built = s.child_builder(id).expect("Builder").inner_size;
+    for n in 0..3 {
+        let title = find(&s.child_seen(id), BLEND_TITLE)
+            .expect("Titel")
+            .rect
+            .center();
+        let to = title + vec2(30.0, 10.0);
+        for events in [
+            vec![Event::PointerMoved(title)],
+            vec![press(title, true)],
+            vec![Event::PointerMoved(to)],
+        ] {
+            s.frame_child(id, events, &mut f);
+            s.apply_child_size(id, &mut last);
+        }
+        s.child_info(id, |i| {
+            i.outer_rect = i.outer_rect.map(|r| r.translate(vec2(30.0, 10.0)));
+        });
+        s.frame_child(id, vec![press(to, false)], &mut f);
+        for _ in 0..4 {
+            s.frame(vec![], &mut f);
+            s.apply_child_size(id, &mut last);
+        }
+        assert!(t.state.borrow().get(BLEND).is_some());
+        assert_eq!(
+            s.child_builder(id).expect("Builder").inner_size,
+            built,
+            "Ziehen {n}: Größe bleibt"
+        );
+    }
+}

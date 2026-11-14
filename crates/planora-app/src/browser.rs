@@ -1077,13 +1077,14 @@ fn open_prompts(state: &AppState) -> PromptSet {
     TreePrompt::ALL.map(|p| p.is_open(state))
 }
 
-/// Rückfragen, die im abgedockten Baum entstanden sind (bleibt, bis sie zu sind).
-fn tree_hosted_id() -> egui::Id {
-    egui::Id::new("planora-tree-prompts-in-tree-window")
+/// Rückfragen, die im abgedockten Baum entstanden sind, je Tab (`instance`; bleibt, bis sie zu
+/// sind, auch über einen Tab-Wechsel).
+fn tree_hosted_id(state: &AppState) -> egui::Id {
+    egui::Id::new(("planora-tree-prompts-in-tree-window", state.instance))
 }
 
-fn tree_hosted(ctx: &egui::Context) -> PromptSet {
-    ctx.data(|d| d.get_temp::<PromptSet>(tree_hosted_id()))
+fn tree_hosted(ctx: &egui::Context, state: &AppState) -> PromptSet {
+    ctx.data(|d| d.get_temp::<PromptSet>(tree_hosted_id(state)))
         .unwrap_or_default()
 }
 
@@ -1092,7 +1093,7 @@ fn store_tree_hosted(ctx: &egui::Context, state: &AppState, mut hosted: PromptSe
     for (h, open) in hosted.iter_mut().zip(open_prompts(state)) {
         *h &= open;
     }
-    ctx.data_mut(|d| d.insert_temp(tree_hosted_id(), hosted));
+    ctx.data_mut(|d| d.insert_temp(tree_hosted_id(state), hosted));
 }
 
 /// Zeigt die Rückfragen am Ende des Baums. Angedockt alle (wie bisher); im abgedockten
@@ -1100,7 +1101,7 @@ fn store_tree_hosted(ctx: &egui::Context, state: &AppState, mut hosted: PromptSe
 /// Zeilen des Baums), als Unterdialog über dem Baumfenster.
 fn tree_prompts(ctx: &egui::Context, state: &mut AppState, before: PromptSet) {
     let in_tree_window = crate::detach::host_place(ctx) == Some(crate::detach::Place::Tree);
-    let mut hosted = tree_hosted(ctx);
+    let mut hosted = tree_hosted(ctx, state);
     if in_tree_window {
         for ((h, was), now) in hosted.iter_mut().zip(before).zip(open_prompts(state)) {
             *h |= now && !was;
@@ -1117,7 +1118,7 @@ fn tree_prompts(ctx: &egui::Context, state: &mut AppState, before: PromptSet) {
 /// Bei abgedocktem Baum: die Rückfragen des Baums, die nicht aus dem Baumfenster kamen, im
 /// Hauptfenster (Aufruf dort, wo sonst der Baum gezeichnet wird).
 pub fn main_window_prompts(ctx: &egui::Context, state: &mut AppState) {
-    let hosted = tree_hosted(ctx);
+    let hosted = tree_hosted(ctx, state);
     for (p, h) in TreePrompt::ALL.into_iter().zip(hosted) {
         if !h && p.is_open(state) {
             p.show(ctx, state);
