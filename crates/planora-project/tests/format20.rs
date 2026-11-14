@@ -744,8 +744,19 @@ fn format20_piece_and_new_sources_roundtrip() {
             kind: ProjectType::AlongVector(DVec3::new(0.0, -0.6, 0.8)),
         }),
         CopySource::Intersection(IntersectionSpec {
-            sources: vec![sketch_curve.clone()],
-            targets: vec![IncludeRef::Plane(PlaneId::Standard(StandardPlane::XY))],
+            curves: vec![CurveSource::SketchCurve {
+                sketch: s1,
+                curve: src,
+            }],
+            targets: vec![
+                IntersectTarget::Face(top.clone()),
+                IntersectTarget::Plane(PlaneId::Feature(plane)),
+                IntersectTarget::Plane(PlaneId::Standard(StandardPlane::XY)),
+                IntersectTarget::SketchCurve {
+                    sketch: s1,
+                    curve: src,
+                },
+            ],
         }),
     ];
     let point_sources = vec![

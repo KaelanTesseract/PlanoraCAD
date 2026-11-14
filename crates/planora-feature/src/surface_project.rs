@@ -16,6 +16,12 @@
 //! 6. Sonderfälle exakt: Ist das einzige Ziel eine Ebene, wird eine Linie zur Linie, und ein zur
 //!    Ebene paralleler Kreis oder Bogen wird senkrecht projiziert zum Kreis bzw. Bogen.
 //!
+//! „Schnittkurve“ (Spec 7, [`intersection_curve`]): Die Quellkurve wird entlang der Normale ihrer
+//! Skizze ausgezogen. Gegen Flächen und Ebenen ist das „Entlang Vektor“ mit dieser Normale (derselbe
+//! Weg); gegen die Kurve einer anderen Skizze wird auch diese entlang ihrer Normale ausgezogen, und
+//! je Abtastpunkt sucht ein Newton-Verfahren den Punkt auf dem zweiten Auszug (Start aus einem
+//! groben Raster von 64 Werten). Abtasten, Teilen und Annähern wie oben.
+//!
 //! Die Rechnung ist rein und hält eine Zeitgrenze ein; wird sie überschritten, gibt es
 //! [`ProjectError::TooSlow`] und kein Ergebnis.
 
@@ -50,8 +56,10 @@ const JUMP_FACTOR: f64 = 10.0;
 const MAX_REFINE: usize = 4;
 /// Höchstzahl Halbierungen beim Eingrenzen einer Abriss- oder Sprungstelle.
 const EDGE_BISECTIONS: usize = 60;
-/// Höchstzahl Newton-Schritte für einen Strahltreffer auf einer Freiformfläche.
+/// Höchstzahl Newton-Schritte für einen Strahltreffer auf einer Freiformfläche oder einem Auszug.
 const NEWTON_STEPS: usize = 30;
+/// Grobes Raster der Startwerte auf dem Auszug einer Zielkurve (Schnittkurve, Spec 7).
+const EXTRUSION_GRID: usize = 64;
 /// Richtungen gelten als parallel bzw. eine Gerade als parallel zur Ebene unter diesem Wert.
 const PARALLEL_EPS: f64 = 1e-9;
 
@@ -121,6 +129,135 @@ impl SurfaceProjection {
                 CurveSource::Edge(_) | CurveSource::Vertex(_) => None,
             })
             .collect()
+    }
+}
+
+impl SurfaceProjection {
+    /// Dieselbe Projektion mit nachgeführten Hinweispunkten der Flächen und Kanten (für die
+    /// Neuberechnung; was sich nicht auflösen lässt, bleibt wie gespeichert).
+    pub(crate) fn with_hints(&self, solids: &[&Solid], tol: &Tolerance) -> Self {
+        Self {
+            sources: self
+                .sources
+                .iter()
+                .map(|s| s.with_hints(solids, tol))
+                .collect(),
+            faces: self
+                .faces
+                .iter()
+                .map(|f| match f {
+                    FaceTarget::Face(r) => FaceTarget::Face(face_hinted(solids, r, tol)),
+                    FaceTarget::Plane(_) => f.clone(),
+                })
+                .collect(),
+            kind: self.kind.clone(),
+        }
+    }
+}
+
+impl CurveSource {
+    fn with_hints(&self, solids: &[&Solid], tol: &Tolerance) -> Self {
+        match self {
+            CurveSource::Edge(e) => CurveSource::Edge(edge_hinted(solids, e, tol)),
+            CurveSource::Vertex(v) => CurveSource::Vertex(VertexRef {
+                edge: edge_hinted(solids, &v.edge, tol),
+                end: v.end,
+            }),
+            CurveSource::SketchCurve { .. } | CurveSource::ConstructionPoint(_) => self.clone(),
+        }
+    }
+}
+
+/// Der Verweis mit dem Hinweispunkt der gefundenen Fläche (unverändert, wenn sie fehlt).
+fn face_hinted(solids: &[&Solid], r: &FaceRef, tol: &Tolerance) -> FaceRef {
+    resolve_face(solids, r, tol).map_or_else(
+        |_| r.clone(),
+        |f| FaceRef {
+            hint: f.hint,
+            ..r.clone()
+        },
+    )
+}
+
+/// Der Verweis mit dem Hinweispunkt der gefundenen Kante (unverändert, wenn sie fehlt).
+fn edge_hinted(solids: &[&Solid], e: &EdgeRef, tol: &Tolerance) -> EdgeRef {
+    resolve_edge(solids, e, tol).map_or_else(
+        |_| e.clone(),
+        |f| EdgeRef {
+            hint: f.hint,
+            ..e.clone()
+        },
+    )
+}
+
+/// Ziel der Schnittkurve: eine Körperfläche (getrimmt), eine Grund- bzw. Konstruktionsebene oder
+/// die Kurve einer anderen fertigen Skizze (entlang der Normale ihrer Skizze ausgezogen).
+#[derive(Clone, Debug, PartialEq)]
+pub enum IntersectTarget {
+    Face(FaceRef),
+    Plane(PlaneId),
+    SketchCurve { sketch: FeatureId, curve: CurveId },
+}
+
+/// „Schnittkurve“ (Spec 7): Kurven fertiger Skizzen (nur [`CurveSource::SketchCurve`]; andere
+/// Quellen gelten als verloren) und ihre Ziele.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct IntersectionSpec {
+    pub curves: Vec<CurveSource>,
+    pub targets: Vec<IntersectTarget>,
+}
+
+impl IntersectionSpec {
+    /// Feste Verweise (Flächen, Konstruktionsebenen), siehe [`crate::CopySource::origins`].
+    pub(crate) fn origins(&self, out: &mut Vec<FeatureId>) {
+        for s in &self.curves {
+            if let CurveSource::Edge(e) | CurveSource::Vertex(VertexRef { edge: e, .. }) = s {
+                out.push(FeatureId(e.a.origin));
+                out.push(FeatureId(e.b.origin));
+            }
+        }
+        for t in &self.targets {
+            match t {
+                IntersectTarget::Face(f) => out.push(FeatureId(f.origin)),
+                IntersectTarget::Plane(PlaneId::Feature(id)) => out.push(*id),
+                IntersectTarget::Plane(PlaneId::Standard(_))
+                | IntersectTarget::SketchCurve { .. } => {}
+            }
+        }
+    }
+
+    /// Lose Verweise: die Skizzen der Quell- und Zielkurven (siehe
+    /// [`crate::CopySource::loose_origins`]).
+    pub(crate) fn loose_origins(&self) -> Vec<FeatureId> {
+        let curves = self.curves.iter().filter_map(|s| match s {
+            CurveSource::SketchCurve { sketch, .. } => Some(*sketch),
+            CurveSource::ConstructionPoint(id) => Some(*id),
+            CurveSource::Edge(_) | CurveSource::Vertex(_) => None,
+        });
+        let targets = self.targets.iter().filter_map(|t| match t {
+            IntersectTarget::SketchCurve { sketch, .. } => Some(*sketch),
+            IntersectTarget::Face(_) | IntersectTarget::Plane(_) => None,
+        });
+        curves.chain(targets).collect()
+    }
+
+    /// Dieselbe Schnittkurve mit nachgeführten Hinweispunkten der Zielflächen.
+    pub(crate) fn with_hints(&self, solids: &[&Solid], tol: &Tolerance) -> Self {
+        Self {
+            curves: self
+                .curves
+                .iter()
+                .map(|s| s.with_hints(solids, tol))
+                .collect(),
+            targets: self
+                .targets
+                .iter()
+                .map(|t| match t {
+                    IntersectTarget::Face(r) => IntersectTarget::Face(face_hinted(solids, r, tol)),
+                    IntersectTarget::Plane(_) | IntersectTarget::SketchCurve { .. } => t.clone(),
+                })
+                .collect(),
+        }
     }
 }
 
@@ -226,20 +363,7 @@ pub fn project_to_surface(
     pr.check()?;
     let mut out = Vec::new();
     for s in &sources {
-        match s {
-            Source::Point(q) => {
-                if let Some(h) = pr.hit(*q, None)? {
-                    out.push(Included::Point(view.frame.to_local(h.p)));
-                }
-            }
-            Source::Curve(c, t0, t1) => {
-                if let Some(g) = pr.exact(c, *t0, *t1) {
-                    out.extend(g);
-                } else {
-                    out.extend(pr.project_curve(c, *t0, *t1)?);
-                }
-            }
-        }
+        pr.run(s, &mut out)?;
     }
     // Auch die letzte Annäherung zählt zur Zeitgrenze: Wer darüber liegt, bekommt nichts.
     pr.check()?;
@@ -248,6 +372,94 @@ pub fn project_to_surface(
     } else {
         Ok(out)
     }
+}
+
+/// Schnittkurve (Spec 7): Jede Quellkurve wird entlang der Normale ihrer Skizze ausgezogen und mit
+/// den Zielen geschnitten; Flächen und Ebenen wie „Entlang Vektor“ mit dieser Normale, Kurven
+/// anderer Skizzen über ihren eigenen Auszug. Ergebnis, Fehler und Zeitgrenze wie
+/// [`project_to_surface`]. Quell- und Zielkurven müssen aus Skizzen vor `view.at` stammen (nie aus
+/// der aktiven Skizze), sonst [`ProjectError::Lost`].
+pub fn intersection_curve(
+    view: &DocView<'_>,
+    spec: &IntersectionSpec,
+    tol: &Tolerance,
+    budget: Duration,
+) -> Result<Vec<Included>, ProjectError> {
+    let start = Instant::now();
+    let doc = view.doc;
+    let visible = doc.visible_at(view.at);
+    let solids: Vec<&Solid> = visible.iter().filter_map(|b| doc.body(*b)).collect();
+    let sources = spec
+        .curves
+        .iter()
+        .map(|s| match s {
+            CurveSource::SketchCurve { sketch, curve } => sketch_curve(view, *sketch, *curve),
+            CurveSource::Edge(_) | CurveSource::Vertex(_) | CurveSource::ConstructionPoint(_) => {
+                None
+            }
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(ProjectError::Lost)?;
+    let mut targets = spec
+        .targets
+        .iter()
+        .map(|t| match t {
+            IntersectTarget::Face(r) => {
+                resolve_target(view, &solids, &FaceTarget::Face(r.clone()), tol, true)
+            }
+            IntersectTarget::Plane(p) => {
+                resolve_target(view, &solids, &FaceTarget::Plane(p.clone()), tol, true)
+            }
+            IntersectTarget::SketchCurve { sketch, curve } => sketch_curve(view, *sketch, *curve)
+                .map(|(c, t0, t1, n)| Target::Extrusion(Box::new(Extrusion::new(c, t0, t1, n)))),
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(ProjectError::Lost)?;
+    if targets.is_empty() || sources.is_empty() {
+        return Err(ProjectError::NoHit);
+    }
+    let mut out = Vec::new();
+    for (c, t0, t1, normal) in sources {
+        let dir = normal.normalize_or_zero();
+        if !dir.is_finite() || dir == DVec3::ZERO {
+            return Err(ProjectError::NoHit);
+        }
+        let pr = Projector {
+            targets,
+            dir: Some(dir),
+            tol: *tol,
+            start,
+            budget,
+            frame: view.frame,
+            cache: RefCell::new(HashMap::new()),
+            used: Cell::new(0),
+        };
+        pr.check()?;
+        pr.run(&Source::Curve(c, t0, t1), &mut out)?;
+        pr.check()?;
+        targets = pr.targets;
+    }
+    if out.is_empty() {
+        Err(ProjectError::NoHit)
+    } else {
+        Ok(out)
+    }
+}
+
+/// Kurve `curve` der Skizze `sketch` im Raum mit der Normale der Skizze; nur eine Skizze vor der
+/// Stelle `view.at` im Verlauf gilt (Spec 10), sonst `None`.
+fn sketch_curve(
+    view: &DocView<'_>,
+    sketch: FeatureId,
+    curve: CurveId,
+) -> Option<(Curve, f64, f64, DVec3)> {
+    let i = view.doc.index_of(sketch)?;
+    if i >= view.at || !matches!(view.doc.features[i].kind, FeatureKind::Sketch(_)) {
+        return None;
+    }
+    let sk = view.doc.sketch_of(sketch)?;
+    let (c, t0, t1) = sk.curve_world(curve)?;
+    Some((c, t0, t1, sk.frame().z))
 }
 
 /// Aufgelöstes Ziel.
@@ -261,6 +473,162 @@ enum Target {
     },
     /// Unbegrenzte Ebene.
     Plane(Frame),
+    /// Auszug einer Skizzenkurve entlang der Normale ihrer Skizze (Schnittkurve, Spec 7).
+    Extrusion(Box<Extrusion>),
+}
+
+/// Auszug `c(s) + w·n` einer Kurve `c(t0 … t1)` (unbegrenzt in `w`) mit dem groben Raster der
+/// Startwerte.
+struct Extrusion {
+    curve: Curve,
+    lo: f64,
+    hi: f64,
+    normal: DVec3,
+    /// Periode, wenn die Kurve über eine volle Periode läuft (Parameter werden umgebrochen).
+    period: Option<f64>,
+    grid: Vec<(f64, DVec3)>,
+}
+
+impl Extrusion {
+    fn new(curve: Curve, t0: f64, t1: f64, normal: DVec3) -> Self {
+        let (lo, hi) = (t0.min(t1), t0.max(t1));
+        let period = curve
+            .period()
+            .filter(|p| ((hi - lo) - p).abs() < 1e-9 * p.max(1.0));
+        let grid = (0..EXTRUSION_GRID)
+            .map(|i| {
+                let s = lo + (hi - lo) * i as f64 / (EXTRUSION_GRID - 1) as f64;
+                (s, curve.point(s))
+            })
+            .collect();
+        Self {
+            curve,
+            lo,
+            hi,
+            normal: normal.normalize_or_zero(),
+            period,
+            grid,
+        }
+    }
+
+    /// Bringt `s` in den Bereich der Kurve (umgebrochen bei voller Periode); `None` außerhalb
+    /// einer offenen Kurve.
+    fn fold(&self, s: f64) -> Option<f64> {
+        if !s.is_finite() {
+            return None;
+        }
+        if let Some(p) = self.period {
+            return Some(self.lo + (s - self.lo).rem_euclid(p));
+        }
+        let slack = 1e-12 * (1.0 + (self.hi - self.lo).abs());
+        (s >= self.lo - slack && s <= self.hi + slack).then(|| s.clamp(self.lo, self.hi))
+    }
+
+    /// Abstand (mit Vorzeichen) des Kurvenpunkts bei `s` von der Ebene durch `q` mit der
+    /// Normale `m`.
+    fn gap(&self, s: f64, q: DVec3, m: DVec3) -> f64 {
+        (self.curve.point(s) - q).dot(m)
+    }
+
+    /// Newton auf `gap(s) = 0` von `s` aus: der Parameter, wenn auf ein Hundertstel der
+    /// Toleranz genau, sonst `None`.
+    fn newton(&self, s: f64, q: DVec3, m: DVec3, lin: f64) -> Option<f64> {
+        let mut s = self.fold(s)?;
+        for _ in 0..NEWTON_STEPS {
+            let g = self.gap(s, q, m);
+            if !g.is_finite() {
+                return None;
+            }
+            if g.abs() <= 0.01 * lin {
+                return Some(s);
+            }
+            let dg = self.curve.tangent(s).dot(m);
+            if !dg.is_finite() || dg.abs() < 1e-300 {
+                return None;
+            }
+            s = self.fold(s - g / dg)?;
+        }
+        None
+    }
+
+    /// Gesicherter Newton im Intervall `a … b` mit Vorzeichenwechsel (`ga` ist der Wert bei
+    /// `a`): Schritte aus dem Intervall heraus werden durch Halbieren ersetzt.
+    fn bracketed(&self, ab: (f64, f64), ga: f64, q: DVec3, m: DVec3, lin: f64) -> Option<f64> {
+        let ((mut a, mut b), mut ga) = (ab, ga);
+        let mut s = 0.5 * (a + b);
+        for _ in 0..NEWTON_STEPS + EDGE_BISECTIONS {
+            let g = self.gap(s, q, m);
+            if !g.is_finite() {
+                return None;
+            }
+            if g.abs() <= 0.01 * lin {
+                return Some(s);
+            }
+            if (g < 0.0) == (ga < 0.0) {
+                a = s;
+                ga = g;
+            } else {
+                b = s;
+            }
+            if (b - a).abs() <= f64::EPSILON * (1.0 + a.abs().max(b.abs())) {
+                return None;
+            }
+            let dg = self.curve.tangent(s).dot(m);
+            let n = s - g / dg;
+            s = if n.is_finite() && n > a.min(b) && n < a.max(b) {
+                n
+            } else {
+                0.5 * (a + b)
+            };
+        }
+        None
+    }
+
+    /// Schnittpunkte der Geraden `q + v·d` mit dem Auszug: Parameter `s`, Punkt und `v`. Mit
+    /// `hint` (Parameter eines Nachbarpunkts) zuerst Newton von dort, sonst aus dem Raster.
+    /// Laufen Gerade und Auszug parallel, gibt es keinen eindeutigen Schnitt.
+    fn roots(&self, q: DVec3, d: DVec3, hint: Option<f64>, lin: f64) -> Vec<(f64, DVec3, f64)> {
+        let m = d.cross(self.normal);
+        let ml = m.length();
+        if !ml.is_finite() || ml < PARALLEL_EPS {
+            return Vec::new();
+        }
+        let m = m / ml;
+        // Der Kurvenpunkt liegt in der Ebene von `d` und `n` durch `q`: `c(s) − q = v·d − w·n`.
+        let k = d.dot(self.normal);
+        let den = 1.0 - k * k;
+        let solve = |s: f64| {
+            let r = self.curve.point(s) - q;
+            let v = (r.dot(d) - k * r.dot(self.normal)) / den;
+            let p = q + d * v;
+            p.is_finite().then_some((s, p, v))
+        };
+        if let Some(s) = hint.and_then(|h| self.newton(h, q, m, lin)) {
+            return solve(s).into_iter().collect();
+        }
+        let eps = 0.01 * lin;
+        let gs: Vec<f64> = self.grid.iter().map(|(_, p)| (*p - q).dot(m)).collect();
+        let mut out: Vec<(f64, DVec3, f64)> = Vec::new();
+        for i in 0..self.grid.len() {
+            let (sa, ga) = (self.grid[i].0, gs[i]);
+            let found = if ga.abs() <= eps {
+                Some(sa)
+            } else if i + 1 < self.grid.len()
+                && gs[i + 1].abs() > eps
+                && (ga < 0.0) != (gs[i + 1] < 0.0)
+            {
+                self.bracketed((sa, self.grid[i + 1].0), ga, q, m, lin)
+            } else {
+                None
+            };
+            if let Some(r) = found.and_then(solve)
+                && out.iter().all(|o| o.1.distance(r.1) > lin)
+            {
+                out.push(r);
+            }
+        }
+        out
+    }
 }
 
 /// Aufgelöste Quelle: ein Punkt oder ein Kurvenstück im Raum.
@@ -325,11 +693,7 @@ fn resolve_source(
     match s {
         CurveSource::SketchCurve { sketch, curve } => {
             // Nur Skizzen vor der Skizze im Verlauf (Spec 10).
-            let i = view.doc.index_of(*sketch)?;
-            if i >= view.at || !matches!(view.doc.features[i].kind, FeatureKind::Sketch(_)) {
-                return None;
-            }
-            let (c, t0, t1) = view.doc.sketch_of(*sketch)?.curve_world(*curve)?;
+            let (c, t0, t1, _) = sketch_curve(view, *sketch, *curve)?;
             Some(Source::Curve(c, t0, t1))
         }
         CurveSource::Edge(e) => {
@@ -473,6 +837,25 @@ fn ray_newton(
 }
 
 impl Projector {
+    /// Rechnet eine Quelle und hängt ihre Stücke an `out` an.
+    fn run(&self, s: &Source, out: &mut Vec<Included>) -> Result<(), ProjectError> {
+        match s {
+            Source::Point(q) => {
+                if let Some(h) = self.hit(*q, None)? {
+                    out.push(Included::Point(self.frame.to_local(h.p)));
+                }
+            }
+            Source::Curve(c, t0, t1) => {
+                if let Some(g) = self.exact(c, *t0, *t1) {
+                    out.extend(g);
+                } else {
+                    out.extend(self.project_curve(c, *t0, *t1)?);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn check(&self) -> Result<(), ProjectError> {
         if self.start.elapsed() > self.budget {
             Err(ProjectError::TooSlow)
@@ -497,6 +880,20 @@ impl Projector {
         for (k, t) in self.targets.iter().enumerate() {
             let near = hint.filter(|h| h.target == k).map(|h| h.uv);
             match (t, self.dir) {
+                // Ein Auszug ist nur Ziel der Schnittkurve (immer mit Richtung).
+                (Target::Extrusion(_), None) => {}
+                (Target::Extrusion(e), Some(d)) => {
+                    for (s, p, v) in e.roots(q, d, near.map(|n| n.0), self.tol.linear) {
+                        take(
+                            v.abs(),
+                            Hit {
+                                p,
+                                target: k,
+                                uv: (s, 0.0),
+                            },
+                        );
+                    }
+                }
                 (Target::Plane(f), None) => {
                     let p = q - f.z * (q - f.origin).dot(f.z);
                     take(
@@ -885,6 +1282,38 @@ impl Projector {
 thread_local! {
     /// Künstliche Verzögerung jeder Annäherung (nur für Tests, siehe [`slow_fit_for_tests`]).
     static FIT_DELAY: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    /// Zeitgrenze der Neuberechnung, wenn ein Test sie ändert (siehe
+    /// [`recompute_budget_for_tests`]).
+    static RECOMPUTE_BUDGET: Cell<Option<Duration>> = const { Cell::new(None) };
+}
+
+/// Zeitgrenze für die Neuberechnung (Spec 10): [`SURFACE_PROJECT_BUDGET`], außer ein Test hat sie
+/// im laufenden Thread geändert.
+pub(crate) fn recompute_budget() -> Duration {
+    RECOMPUTE_BUDGET
+        .with(Cell::get)
+        .unwrap_or(SURFACE_PROJECT_BUDGET)
+}
+
+/// Setzt im aufrufenden Thread die Zeitgrenze der Neuberechnung auf `budget`, bis der Wächter
+/// fällt (nur für Tests: belegt, dass eine zu lange Neuberechnung die Lage stehen lässt).
+#[doc(hidden)]
+#[must_use]
+pub fn recompute_budget_for_tests(budget: Duration) -> RecomputeBudgetGuard {
+    let previous = RECOMPUTE_BUDGET.with(|c| c.replace(Some(budget)));
+    RecomputeBudgetGuard { previous }
+}
+
+/// Stellt beim Fallen die vorige Zeitgrenze wieder her.
+#[doc(hidden)]
+pub struct RecomputeBudgetGuard {
+    previous: Option<Duration>,
+}
+
+impl Drop for RecomputeBudgetGuard {
+    fn drop(&mut self) {
+        RECOMPUTE_BUDGET.with(|c| c.set(self.previous));
+    }
 }
 
 /// Verlangsamt im aufrufenden Thread jede Annäherung um `delay`, bis der Wächter fällt (nur für

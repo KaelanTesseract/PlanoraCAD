@@ -86,7 +86,7 @@ pub fn sketch_curve_points(
         frame,
         tol: &tol,
     };
-    let (_, pieces) = source_pieces(&ctx, &CopySource::SketchCurve { sketch, curve }, true)?;
+    let (_, pieces) = source_pieces(&ctx, &CopySource::SketchCurve { sketch, curve }, true).ok()?;
     pieces
         .into_iter()
         .map(|p| match p {
@@ -96,39 +96,82 @@ pub fn sketch_curve_points(
         .collect()
 }
 
+/// Warum sich die Stücke einer Herkunft nicht neu rechnen lassen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unfollowed {
+    /// Der Bezug ist verloren.
+    Lost,
+    /// Die Rechnung überschreitet die Zeitgrenze (Spec 10): Die Lage bleibt, die Skizze warnt.
+    TooSlow,
+}
+
 /// Rechnet die Stücke der Herkunft `source` neu (nur die Arten aus Skizzen 10) und liefert die
 /// Herkunft mit nachgeführten Hinweispunkten. `points` heißt: Die Ziele der Gruppe sind Punkte
-/// (bei einer Skizzenkurve als Quelle: Schneiden statt Projizieren). `None` bei verlorenem
-/// Bezug.
+/// (bei einer Skizzenkurve als Quelle: Schneiden statt Projizieren). „Auf Fläche projizieren“ und
+/// „Schnittkurve“ rechnen mit der Zeitgrenze der Neuberechnung; trifft nichts mehr, sind es null
+/// Stücke (also eine andere Stückzahl).
 pub(crate) fn source_pieces(
     ctx: &IncludeCtx<'_>,
     source: &CopySource,
     points: bool,
-) -> Option<(CopySource, Vec<Piece>)> {
+) -> Result<(CopySource, Vec<Piece>), Unfollowed> {
+    use crate::surface_project::{intersection_curve, project_to_surface, recompute_budget};
+    let view = crate::surface_project::DocView::new(ctx.doc, ctx.idx, *ctx.frame);
+    let lost = Unfollowed::Lost;
     match source {
         CopySource::Include(r) => {
-            let (r, pieces) = include_ref_pieces(ctx, r)?;
-            Some((
+            let (r, pieces) = include_ref_pieces(ctx, r).ok_or(lost)?;
+            Ok((
                 CopySource::Include(r),
                 pieces.into_iter().map(Piece::Include).collect(),
             ))
         }
         CopySource::SketchCurve { sketch, curve } => {
-            let sk = source_sketch(ctx, *sketch)?;
-            let (c, t0, t1) = sk.curve_world(*curve)?;
+            let sk = source_sketch(ctx, *sketch).ok_or(lost)?;
+            let (c, t0, t1) = sk.curve_world(*curve).ok_or(lost)?;
             let pieces = if points {
-                section_points(&c, t0, t1, ctx.frame, ctx.tol)?
+                section_points(&c, t0, t1, ctx.frame, ctx.tol)
+                    .ok_or(lost)?
                     .into_iter()
                     .map(Piece::Include)
                     .collect()
             } else {
                 vec![Piece::Project(c, t0, t1)]
             };
-            Some((source.clone(), pieces))
+            Ok((source.clone(), pieces))
         }
-        // Die Rechnungen kommen in Task 17 und 18; bis dahin bleibt die Geometrie stehen.
-        CopySource::OnSurface(_) | CopySource::Intersection(_) => None,
-        CopySource::Edge(_) | CopySource::Section { .. } | CopySource::Silhouette { .. } => None,
+        // Projektion und Schnittkurve ergeben Kurven (und Punkte aus Ecken); die Art des Ziels
+        // prüft `apply_piece`.
+        CopySource::OnSurface(p) => surface_pieces(
+            source,
+            project_to_surface(&view, p, ctx.tol, recompute_budget()),
+            || CopySource::OnSurface(p.with_hints(ctx.solids, ctx.tol)),
+        ),
+        CopySource::Intersection(p) => surface_pieces(
+            source,
+            intersection_curve(&view, p, ctx.tol, recompute_budget()),
+            || CopySource::Intersection(p.with_hints(ctx.solids, ctx.tol)),
+        ),
+        CopySource::Edge(_) | CopySource::Section { .. } | CopySource::Silhouette { .. } => {
+            Err(lost)
+        }
+    }
+}
+
+/// Stücke aus „Auf Fläche projizieren“ oder „Schnittkurve“: bei Erfolg mit nachgeführten
+/// Hinweispunkten (`refreshed`); trifft nichts mehr, null Stücke; zu lange gerechnet oder Bezug
+/// verloren als Grund.
+fn surface_pieces(
+    source: &CopySource,
+    got: Result<Vec<Included>, crate::surface_project::ProjectError>,
+    refreshed: impl FnOnce() -> CopySource,
+) -> Result<(CopySource, Vec<Piece>), Unfollowed> {
+    use crate::surface_project::ProjectError;
+    match got {
+        Ok(g) => Ok((refreshed(), g.into_iter().map(Piece::Include).collect())),
+        Err(ProjectError::NoHit) => Ok((source.clone(), Vec::new())),
+        Err(ProjectError::TooSlow) => Err(Unfollowed::TooSlow),
+        Err(ProjectError::Lost) => Err(Unfollowed::Lost),
     }
 }
 

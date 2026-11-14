@@ -2193,6 +2193,10 @@ feature-sketch-reference-mismatch = { $count ->
     [one] Bezug passt nicht mehr: Die Quelle einer Kurve ergibt eine andere Zahl von Stücken; die Kurve bleibt an ihrer letzten Stelle.
    *[other] Bezug passt nicht mehr: Die Quelle von { $count } Kurven ergibt eine andere Zahl von Stücken; die Kurven bleiben an ihrer letzten Stelle.
 }
+feature-sketch-too-slow = { $count ->
+    [one] Die Neuberechnung einer projizierten Kurve dauert zu lange (über 2 s); die Kurve bleibt an ihrer letzten Stelle.
+   *[other] Die Neuberechnung von { $count } projizierten Kurven dauert zu lange (über 2 s); die Kurven bleiben an ihrer letzten Stelle.
+}
 feature-sketch-include-constraints-removed = { $count ->
     [one] Eine Abhängigkeit an einbezogener Geometrie gilt im Raum nicht und ist entfallen.
    *[other] { $count } Abhängigkeiten an einbezogener Geometrie gelten im Raum nicht und sind entfallen.

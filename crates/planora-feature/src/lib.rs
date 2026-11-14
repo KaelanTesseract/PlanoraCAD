@@ -55,8 +55,8 @@ pub use include::{included_pieces, sketch_curve_points};
 pub use meshes::VisibleMesh;
 pub use model::{
     AxisId, BlendArt, BodyRef, CopySource, CopyTarget, Document, EdgeCopy, Feature, FeatureId,
-    FeatureKind, FeatureStatus, IncludeRef, IntersectionSpec, MAX_CHAMFER_ANGLE_DEG,
-    MAX_MESH_SCALE, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, MeshId, PlaneId, PointRefId, ProfileSel,
+    FeatureKind, FeatureStatus, IncludeRef, MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE,
+    MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, MeshId, PlaneId, PointRefId, ProfileSel,
     ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane, VertexRef,
     include_plane_half, mesh_locked, sketch_source_allowed,
 };
@@ -79,7 +79,7 @@ pub use step_bodies::{
 // `ProjectError` bleibt im Modul (`surface_project::ProjectError`), damit es nicht mit
 // `planora_project::ProjectError` in Glob-Imports zusammenstößt.
 pub use surface_project::{
-    CurveSource, DocView, FaceTarget, MAX_SURFACE_SAMPLES, ProjectType, SURFACE_PROJECT_BUDGET,
-    SurfaceProjection, project_to_surface,
+    CurveSource, DocView, FaceTarget, IntersectTarget, IntersectionSpec, MAX_SURFACE_SAMPLES,
+    ProjectType, SURFACE_PROJECT_BUDGET, SurfaceProjection, intersection_curve, project_to_surface,
 };
 pub use visibility::{HiddenFolders, Visibility};

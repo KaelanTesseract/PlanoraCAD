@@ -2210,6 +2210,10 @@ feature-sketch-reference-mismatch = { $count ->
     [one] Reference no longer matches: the source of a curve gives a different number of pieces; the curve stays where it was.
    *[other] Reference no longer matches: the source of { $count } curves gives a different number of pieces; the curves stay where they were.
 }
+feature-sketch-too-slow = { $count ->
+    [one] Recomputing a projected curve takes too long (over 2 s); the curve stays where it was.
+   *[other] Recomputing { $count } projected curves takes too long (over 2 s); the curves stay where they were.
+}
 feature-sketch-include-constraints-removed = { $count ->
     [one] A constraint on included geometry does not apply in 3D and was removed.
    *[other] { $count } constraints on included geometry do not apply in 3D and were removed.

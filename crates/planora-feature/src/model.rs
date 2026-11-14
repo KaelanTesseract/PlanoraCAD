@@ -2,7 +2,7 @@
 
 use crate::refs::{EdgeRef, FaceRef};
 use crate::step_bodies::{StepShape, StepShapeId};
-use crate::surface_project::SurfaceProjection;
+use crate::surface_project::{IntersectionSpec, SurfaceProjection};
 use planora_exchange::{ExchangeMesh, MeshTransform};
 use planora_i18n::tr;
 use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
@@ -107,7 +107,7 @@ pub enum CopySource {
     },
     /// Auf Fläche projizieren (Skizzen 10, Spec 6; Rechnung in [`crate::project_to_surface`]).
     OnSurface(SurfaceProjection),
-    /// Schnittkurve (Skizzen 10, Spec 7; Rechnung in Task 18).
+    /// Schnittkurve (Skizzen 10, Spec 7; Rechnung in [`crate::intersection_curve`]).
     Intersection(IntersectionSpec),
 }
 
@@ -169,13 +169,6 @@ pub fn include_plane_half(solids: &[&Solid]) -> f64 {
     )
 }
 
-/// Platzhalter „Schnittkurve“ (Task 18 legt die Felder fest): Quellen und Ziele.
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct IntersectionSpec {
-    pub sources: Vec<IncludeRef>,
-    pub targets: Vec<IncludeRef>,
-}
-
 impl IncludeRef {
     /// Features, aus denen der Verweis stammt und die vor der Skizze stehen müssen (feste
     /// Verweise wie bei Kanten). Quellskizzen und Konstruktionspunkte sind lose Verweise
@@ -228,11 +221,9 @@ impl CopySource {
                 p.origins(&mut out);
                 out
             }
-            CopySource::Intersection(IntersectionSpec { sources, targets }) => {
+            CopySource::Intersection(p) => {
                 let mut out = Vec::new();
-                for r in sources.iter().chain(targets) {
-                    r.origins(&mut out);
-                }
+                p.origins(&mut out);
                 out
             }
         }
@@ -248,11 +239,7 @@ impl CopySource {
             CopySource::Include(r) => r.loose_origin().into_iter().collect(),
             CopySource::SketchCurve { sketch, .. } => vec![*sketch],
             CopySource::OnSurface(p) => p.loose_origins(),
-            CopySource::Intersection(IntersectionSpec { sources, targets }) => sources
-                .iter()
-                .chain(targets)
-                .filter_map(IncludeRef::loose_origin)
-                .collect(),
+            CopySource::Intersection(p) => p.loose_origins(),
         }
     }
 

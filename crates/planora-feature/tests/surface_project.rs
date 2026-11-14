@@ -510,3 +510,390 @@ fn far_hits_are_dropped() {
         assert_eq!(run(&d, &spec), Err(ProjectError::NoHit));
     }
 }
+
+// --- Task 18: Schnittkurve (Spec 7) und Neuberechnung beider (Spec 10) ---
+
+fn add_sketch_on(d: &mut Document, sk: Sketch, plane: StandardPlane) -> FeatureId {
+    d.add_feature(
+        "Skizze",
+        FeatureKind::Sketch(SketchFeature {
+            sketch: sk,
+            plane: SketchPlane::Standard(plane),
+            copies: vec![],
+            formulas: Default::default(),
+        }),
+    )
+    .unwrap()
+}
+
+fn run_intersection(d: &Document, spec: &IntersectionSpec) -> Result<Vec<Included>, ProjectError> {
+    intersection_curve(
+        &DocView::new(d, d.features().len(), Frame::WORLD),
+        spec,
+        &tol(),
+        SURFACE_PROJECT_BUDGET,
+    )
+}
+
+/// Die Deckfläche (Normale +z, oben) des Körpers.
+fn top_face(solid: &Solid) -> FaceRef {
+    let hi = solid
+        .vertices
+        .iter()
+        .map(|(_, v)| v.point.z)
+        .fold(f64::MIN, f64::max);
+    let (id, _) = solid
+        .faces
+        .iter()
+        .find(|(f, _)| {
+            planora_sketch::plane_of_face(solid, *f)
+                .is_some_and(|fr| fr.z.z > 0.5 && (fr.origin.z - hi).abs() < 1e-9)
+        })
+        .unwrap();
+    FaceRef::from_face(solid, id, &Tolerance::default()).unwrap()
+}
+
+#[test]
+fn intersection_with_face_equals_along_sketch_normal() {
+    let mut d = Document::new();
+    let sph = d
+        .add_feature(
+            "Kugel",
+            FeatureKind::Sphere {
+                radius: 10.0,
+                origin: DVec3::new(0.0, 0.0, -3.0),
+            },
+        )
+        .unwrap();
+    // Quelle auf der Vorderebene (Normale -y): Linie quer durch die Kugel.
+    let mut sk = Sketch::new(StandardPlane::XZ.frame(), "Quelle", Tolerance::default());
+    let p = sk.add_point(-4.0, -2.0).unwrap();
+    let q = sk.add_point(5.0, 1.0).unwrap();
+    let line = sk.add_line(p, q).unwrap();
+    let s = add_sketch_on(&mut d, sk, StandardPlane::XZ);
+    let faces = faces_of(&body(&d, sph), SurfaceKind::Sphere);
+    let FaceTarget::Face(face) = faces[0].clone() else {
+        unreachable!()
+    };
+    let source = CurveSource::SketchCurve {
+        sketch: s,
+        curve: line,
+    };
+    let got = run_intersection(
+        &d,
+        &IntersectionSpec {
+            curves: vec![source.clone()],
+            targets: vec![IntersectTarget::Face(face)],
+        },
+    )
+    .unwrap();
+    let normal = StandardPlane::XZ.frame().z;
+    let want = run(
+        &d,
+        &SurfaceProjection {
+            sources: vec![source],
+            faces,
+            kind: ProjectType::AlongVector(normal),
+        },
+    )
+    .unwrap();
+    assert!(!got.is_empty());
+    assert_eq!(got, want);
+    // Gegen eine Ebene quer zur Normale: die exakte Linie wie „Entlang Vektor“ (hier die Ebene
+    // der Quelle selbst, also die Linie an ihrer Stelle).
+    let plane = |p: StandardPlane| IntersectionSpec {
+        curves: vec![CurveSource::SketchCurve {
+            sketch: s,
+            curve: line,
+        }],
+        targets: vec![IntersectTarget::Plane(PlaneId::Standard(p))],
+    };
+    let got = run_intersection(&d, &plane(StandardPlane::XZ)).unwrap();
+    let [Included::Line(a, b)] = got.as_slice() else {
+        panic!("keine Linie: {got:?}");
+    };
+    assert!(a.distance(DVec3::new(-4.0, 0.0, -2.0)) < 1e-12, "{a:?}");
+    assert!(b.distance(DVec3::new(5.0, 0.0, 1.0)) < 1e-12, "{b:?}");
+    // Eine Ebene, die die Normale enthält, trifft der Auszug nicht eindeutig.
+    assert_eq!(
+        run_intersection(&d, &plane(StandardPlane::XY)),
+        Err(ProjectError::NoHit)
+    );
+}
+
+#[test]
+fn two_sketch_curves_from_top_and_front_make_3d_curve() {
+    let mut d = Document::new();
+    let mut top = Sketch::new(Frame::WORLD, "Oben", Tolerance::default());
+    let m = top.add_point(0.0, 0.0).unwrap();
+    let circle = top.add_circle(m, 10.0).unwrap();
+    let s_top = add_sketch_on(&mut d, top, StandardPlane::XY);
+    // Vorn (XZ: x nach X, y nach Z): die Linie z = x.
+    let mut front = Sketch::new(StandardPlane::XZ.frame(), "Vorn", Tolerance::default());
+    let a = front.add_point(-20.0, -20.0).unwrap();
+    let b = front.add_point(20.0, 20.0).unwrap();
+    let line = front.add_line(a, b).unwrap();
+    let s_front = add_sketch_on(&mut d, front, StandardPlane::XZ);
+    let spec = IntersectionSpec {
+        curves: vec![CurveSource::SketchCurve {
+            sketch: s_top,
+            curve: circle,
+        }],
+        targets: vec![IntersectTarget::SketchCurve {
+            sketch: s_front,
+            curve: line,
+        }],
+    };
+    let got = run_intersection(&d, &spec).unwrap();
+    // Der ganze Kreis trifft: ein geschlossenes Stück, eine Ellipse im Raum.
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(matches!(got[0], Included::Spline { .. }), "{got:?}");
+    let pts = samples(&got[0]);
+    for p in &pts {
+        let r = (p.x * p.x + p.y * p.y).sqrt();
+        assert!((r - 10.0).abs() <= tol().linear, "Radius {r} bei {p:?}");
+        assert!((p.z - p.x).abs() <= tol().linear, "z = x verletzt: {p:?}");
+    }
+    let (s, e) = ends(&got[0]);
+    assert!(s.distance(e) < 1e-6, "geschlossen: {s:?} {e:?}");
+    let zmax = pts.iter().map(|p| p.z).fold(f64::MIN, f64::max);
+    assert!((zmax - 10.0).abs() < 1e-2, "{zmax}");
+}
+
+#[test]
+fn curve_from_active_sketch_refused() {
+    let mut d = Document::new();
+    let mut top = Sketch::new(Frame::WORLD, "Oben", Tolerance::default());
+    let m = top.add_point(0.0, 0.0).unwrap();
+    let circle = top.add_circle(m, 10.0).unwrap();
+    let s_top = add_sketch_on(&mut d, top, StandardPlane::XY);
+    let mut front = Sketch::new(StandardPlane::XZ.frame(), "Vorn", Tolerance::default());
+    let a = front.add_point(-20.0, -20.0).unwrap();
+    let b = front.add_point(20.0, 20.0).unwrap();
+    let line = front.add_line(a, b).unwrap();
+    let s_front = add_sketch_on(&mut d, front, StandardPlane::XZ);
+    let spec = IntersectionSpec {
+        curves: vec![CurveSource::SketchCurve {
+            sketch: s_top,
+            curve: circle,
+        }],
+        targets: vec![IntersectTarget::SketchCurve {
+            sketch: s_front,
+            curve: line,
+        }],
+    };
+    let at = |i: usize| {
+        intersection_curve(
+            &DocView::new(&d, i, Frame::WORLD),
+            &spec,
+            &tol(),
+            SURFACE_PROJECT_BUDGET,
+        )
+    };
+    // Aktiv ist die Skizze „Vorn“ (Stelle 1): Ihre Kurve ist kein Ziel.
+    assert_eq!(at(1), Err(ProjectError::Lost));
+    // Aktiv ist „Oben“ (Stelle 0): Ihre Kurve ist keine Quelle.
+    assert_eq!(at(0), Err(ProjectError::Lost));
+    assert!(at(2).is_ok());
+    // Nur Skizzenkurven sind Quellen der Schnittkurve.
+    let not_a_curve = IntersectionSpec {
+        curves: vec![CurveSource::ConstructionPoint(FeatureId(99))],
+        targets: vec![IntersectTarget::Plane(PlaneId::Standard(StandardPlane::XY))],
+    };
+    assert_eq!(run_intersection(&d, &not_a_curve), Err(ProjectError::Lost));
+}
+
+/// Quader 20 × 20 × 5, Quellskizze mit der Linie (1, 10) – (19, 10) auf XY, Zielskizze auf XY mit
+/// den Kopien der Quellen von `make` (je eine Gruppe). Liefert Dokument, Quader, Zielskizze und
+/// die Kurven der Kopien.
+fn recompute_doc(
+    make: impl Fn(FeatureId, CurveId, FaceRef) -> Vec<CopySource>,
+) -> (Document, FeatureId, FeatureId, Vec<CurveId>) {
+    let mut d = Document::new();
+    let bx = d
+        .add_feature(
+            "Quader",
+            FeatureKind::Box {
+                size: DVec3::new(20.0, 20.0, 5.0),
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    let (s, c) = line_sketch(&mut d, (1.0, 10.0), (19.0, 10.0));
+    let face = top_face(&body(&d, bx));
+    let view = DocView::new(&d, d.features().len(), Frame::WORLD);
+    let doc_tol = d.kernel().tolerance;
+    let mut sk = Sketch::new(Frame::WORLD, "Ziel", Tolerance::default());
+    let mut copies = Vec::new();
+    let mut curves = Vec::new();
+    for source in make(s, c, face) {
+        let pieces = match &source {
+            CopySource::OnSurface(p) => {
+                project_to_surface(&view, p, &doc_tol, SURFACE_PROJECT_BUDGET).unwrap()
+            }
+            CopySource::Intersection(p) => {
+                intersection_curve(&view, p, &doc_tol, SURFACE_PROJECT_BUDGET).unwrap()
+            }
+            other => panic!("{other:?}"),
+        };
+        for (k, g) in pieces.iter().enumerate() {
+            let ids = sk.add_included(g).unwrap();
+            curves.push(ids.curves[0]);
+            copies.push(EdgeCopy {
+                target: CopyTarget::Curve(ids.curves[0]),
+                source: source.clone(),
+                piece: k as u32,
+                of: pieces.len() as u32,
+            });
+        }
+    }
+    let t = d
+        .add_feature(
+            "Ziel",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk,
+                plane: SketchPlane::Standard(StandardPlane::XY),
+                copies,
+                formulas: Default::default(),
+            }),
+        )
+        .unwrap();
+    (d, bx, t, curves)
+}
+
+fn on_top(s: FeatureId, c: CurveId, face: FaceRef) -> CopySource {
+    CopySource::OnSurface(SurfaceProjection {
+        sources: vec![CurveSource::SketchCurve {
+            sketch: s,
+            curve: c,
+        }],
+        faces: vec![FaceTarget::Face(face)],
+        kind: ProjectType::AlongVector(DVec3::Z),
+    })
+}
+
+fn cut_on_top(s: FeatureId, c: CurveId, face: FaceRef) -> CopySource {
+    CopySource::Intersection(IntersectionSpec {
+        curves: vec![CurveSource::SketchCurve {
+            sketch: s,
+            curve: c,
+        }],
+        targets: vec![IntersectTarget::Face(face)],
+    })
+}
+
+/// Höhen (z) entlang der berechneten Kurve `c` der Skizze `s`.
+fn heights(d: &Document, s: FeatureId, c: CurveId) -> Vec<f64> {
+    let (curve, t0, t1) = d.sketch_of(s).unwrap().curve_world(c).unwrap();
+    (0..=20)
+        .map(|i| curve.point(t0 + (t1 - t0) * i as f64 / 20.0).z)
+        .collect()
+}
+
+fn set_box_height(d: &mut Document, b: FeatureId, z: f64) {
+    d.update(b, |k| {
+        if let FeatureKind::Box { size, .. } = k {
+            size.z = z;
+        }
+    })
+    .unwrap();
+}
+
+fn warning_of(d: &Document, s: FeatureId) -> String {
+    let f = d.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    f.warning().unwrap_or_default().to_string()
+}
+
+#[test]
+fn recompute_follows_body_change() {
+    let (mut d, bx, t, curves) =
+        recompute_doc(|s, c, face| vec![on_top(s, c, face.clone()), cut_on_top(s, c, face)]);
+    assert_eq!(curves.len(), 2);
+    assert_eq!(warning_of(&d, t), "");
+    for &c in &curves {
+        assert!(heights(&d, t, c).iter().all(|z| (z - 5.0).abs() < 1e-6));
+    }
+    set_box_height(&mut d, bx, 8.0);
+    assert_eq!(warning_of(&d, t), "");
+    for &c in &curves {
+        let h = heights(&d, t, c);
+        assert!(h.iter().all(|z| (z - 8.0).abs() < 1e-6), "{h:?}");
+    }
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn recompute_piece_change_warns() {
+    let (mut d, bx, t, curves) = recompute_doc(|s, c, face| vec![on_top(s, c, face)]);
+    assert_eq!(curves.len(), 1);
+    assert_eq!(warning_of(&d, t), "");
+    let before = heights(&d, t, curves[0]);
+    // Vor die Skizzen ein Loch in den Quader: Die Linie zerfällt in zwei Stücke.
+    d.set_marker(1).unwrap();
+    let cyl = d
+        .add_feature(
+            "Zylinder",
+            FeatureKind::Cylinder {
+                radius: 3.0,
+                height: 9.0,
+                origin: DVec3::new(10.0, 10.0, -2.0),
+            },
+        )
+        .unwrap();
+    d.add_feature(
+        "Loch",
+        FeatureKind::Boolean {
+            target: BodyRef {
+                feature: bx,
+                index: 0,
+            },
+            tool: BodyRef {
+                feature: cyl,
+                index: 0,
+            },
+            op: BoolOp::Difference,
+        },
+    )
+    .unwrap();
+    d.set_marker(d.features().len()).unwrap();
+    let w = warning_of(&d, t);
+    assert!(
+        w.contains(&planora_i18n::tr!(
+            "feature-sketch-reference-mismatch",
+            count = 1
+        )),
+        "{w}"
+    );
+    assert_eq!(heights(&d, t, curves[0]), before);
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn recompute_tooslow_keeps_position_and_warns() {
+    let (mut d, bx, t, curves) =
+        recompute_doc(|s, c, face| vec![on_top(s, c, face.clone()), cut_on_top(s, c, face)]);
+    assert_eq!(warning_of(&d, t), "");
+    let before: Vec<Vec<f64>> = curves.iter().map(|&c| heights(&d, t, c)).collect();
+    {
+        let _budget = surface_project::recompute_budget_for_tests(Duration::from_millis(1));
+        let _slow = surface_project::slow_fit_for_tests(Duration::from_millis(5));
+        set_box_height(&mut d, bx, 8.0);
+    }
+    let w = warning_of(&d, t);
+    assert!(
+        w.contains(&planora_i18n::tr!("feature-sketch-too-slow", count = 2)),
+        "{w}"
+    );
+    for (k, &c) in curves.iter().enumerate() {
+        assert_eq!(heights(&d, t, c), before[k]);
+    }
+    // Mit der normalen Zeitgrenze folgt die Kurve wieder.
+    set_box_height(&mut d, bx, 9.0);
+    assert_eq!(warning_of(&d, t), "");
+    assert!(
+        heights(&d, t, curves[0])
+            .iter()
+            .all(|z| (z - 9.0).abs() < 1e-6)
+    );
+}

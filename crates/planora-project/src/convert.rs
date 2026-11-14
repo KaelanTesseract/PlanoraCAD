@@ -26,7 +26,7 @@ use planora_feature::planes::{AxisRef, PlaneBase, PlaneDef, PlaneFeature, PointR
 use planora_feature::{
     BlendArt, BodyRef, CanvasBase, CanvasFeature, CanvasImage, CopySource, CopyTarget, CurveSource,
     EdgeCopy, EdgeRef, FaceRef, FaceTarget, FeatureId, FeatureKind, FieldKey, Formulas, ImageId,
-    IncludeRef, IntersectionSpec, MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS,
+    IncludeRef, IntersectTarget, IntersectionSpec, MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS,
     MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS, MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS,
     MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS, MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit,
     Parameter, PlaneId, ProfileSel, ProjectType, SketchFeature, SketchFormulas, SketchPlane,
@@ -1810,12 +1810,7 @@ fn copy_to(c: &EdgeCopy) -> EdgeCopyDto {
             });
         }
         CopySource::OnSurface(p) => d.auf_flaeche = Some(on_surface_to(p)),
-        CopySource::Intersection(p) => {
-            d.schnittkurve = Some(QuellenZieleDto {
-                quellen: p.sources.iter().map(include_to).collect(),
-                ziele: p.targets.iter().map(include_to).collect(),
-            });
-        }
+        CopySource::Intersection(p) => d.schnittkurve = Some(intersection_to(p)),
     }
     d
 }
@@ -1897,26 +1892,109 @@ fn include_from(origin: &str, name: &str, d: &EinbezugDto) -> Result<IncludeRef>
     })
 }
 
-fn on_surface_to(p: &SurfaceProjection) -> AufFlaecheDto {
-    AufFlaecheDto {
-        quellen: p
-            .sources
+fn curve_source_to(s: &CurveSource) -> KurvenquelleDto {
+    match s {
+        CurveSource::SketchCurve { sketch, curve } => KurvenquelleDto::Skizzenkurve {
+            skizze: sketch.0,
+            kurve: curve.index(),
+        },
+        CurveSource::Edge(e) => KurvenquelleDto::Kante { kante: edge_to(e) },
+        CurveSource::Vertex(v) => KurvenquelleDto::Ecke {
+            kante: edge_to(&v.edge),
+            ende: v.end,
+        },
+        CurveSource::ConstructionPoint(id) => KurvenquelleDto::Konstruktionspunkt { feature: id.0 },
+    }
+}
+
+fn curve_source_from(origin: &str, name: &str, s: &KurvenquelleDto) -> Result<CurveSource> {
+    Ok(match s {
+        KurvenquelleDto::Skizzenkurve { skizze, kurve } => CurveSource::SketchCurve {
+            sketch: FeatureId(*skizze),
+            curve: CurveId::from_index(sketch_index(origin, name, *kurve)?),
+        },
+        KurvenquelleDto::Kante { kante } => CurveSource::Edge(edge_from(origin, name, kante)?),
+        KurvenquelleDto::Ecke { kante, ende } => CurveSource::Vertex(VertexRef {
+            edge: edge_from(origin, name, kante)?,
+            end: *ende,
+        }),
+        KurvenquelleDto::Konstruktionspunkt { feature } => {
+            CurveSource::ConstructionPoint(FeatureId(*feature))
+        }
+    })
+}
+
+/// Liest eine Ebene als Ziel; eine Körperfläche steht als `flaeche`, nicht als Ebene.
+fn plane_id_from(origin: &str, name: &str, ebene: &PlaneDto) -> Result<PlaneId> {
+    match base_from(origin, name, ebene)? {
+        PlaneBase::Standard(s) => Ok(PlaneId::Standard(s)),
+        PlaneBase::Plane(id) => Ok(PlaneId::Feature(id)),
+        PlaneBase::Face(_) => Err(feature_corrupt(origin, name, tr!("proj-copy-source-count"))),
+    }
+}
+
+fn plane_id_to(p: &PlaneId) -> PlaneDto {
+    match p {
+        PlaneId::Standard(s) => base_to(&PlaneBase::Standard(*s)),
+        PlaneId::Feature(id) => base_to(&PlaneBase::Plane(*id)),
+    }
+}
+
+fn intersection_to(p: &IntersectionSpec) -> SchnittkurveDto {
+    SchnittkurveDto {
+        kurven: p.curves.iter().map(curve_source_to).collect(),
+        ziele: p
+            .targets
             .iter()
-            .map(|s| match s {
-                CurveSource::SketchCurve { sketch, curve } => KurvenquelleDto::Skizzenkurve {
+            .map(|t| match t {
+                IntersectTarget::Face(r) => SchnittzielDto::Flaeche {
+                    flaeche: face_to(r),
+                },
+                IntersectTarget::Plane(p) => SchnittzielDto::Ebene {
+                    ebene: plane_id_to(p),
+                },
+                IntersectTarget::SketchCurve { sketch, curve } => SchnittzielDto::Skizzenkurve {
                     skizze: sketch.0,
                     kurve: curve.index(),
                 },
-                CurveSource::Edge(e) => KurvenquelleDto::Kante { kante: edge_to(e) },
-                CurveSource::Vertex(v) => KurvenquelleDto::Ecke {
-                    kante: edge_to(&v.edge),
-                    ende: v.end,
-                },
-                CurveSource::ConstructionPoint(id) => {
-                    KurvenquelleDto::Konstruktionspunkt { feature: id.0 }
-                }
             })
             .collect(),
+    }
+}
+
+/// Liest die „Schnittkurve“ mit der Längengrenze der Listen.
+fn intersection_from(origin: &str, name: &str, d: &SchnittkurveDto) -> Result<IntersectionSpec> {
+    check_len(origin, &|| tr!("proj-l-edge-copies"), d.kurven.len())?;
+    check_len(origin, &|| tr!("proj-l-edge-copies"), d.ziele.len())?;
+    let curves = d
+        .kurven
+        .iter()
+        .map(|s| curve_source_from(origin, name, s))
+        .collect::<Result<Vec<_>>>()?;
+    let targets = d
+        .ziele
+        .iter()
+        .map(|t| {
+            Ok(match t {
+                SchnittzielDto::Flaeche { flaeche } => {
+                    IntersectTarget::Face(face_from(origin, name, flaeche)?)
+                }
+                SchnittzielDto::Ebene { ebene } => {
+                    IntersectTarget::Plane(plane_id_from(origin, name, ebene)?)
+                }
+                SchnittzielDto::Skizzenkurve { skizze, kurve } => IntersectTarget::SketchCurve {
+                    sketch: FeatureId(*skizze),
+                    curve: CurveId::from_index(sketch_index(origin, name, *kurve)?),
+                },
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(IntersectionSpec { curves, targets })
+}
+
+fn on_surface_to(p: &SurfaceProjection) -> AufFlaecheDto {
+    AufFlaecheDto {
+        quellen: p.sources.iter().map(curve_source_to).collect(),
         flaechen: p
             .faces
             .iter()
@@ -1924,11 +2002,8 @@ fn on_surface_to(p: &SurfaceProjection) -> AufFlaecheDto {
                 FaceTarget::Face(r) => FlaechenzielDto::Flaeche {
                     flaeche: face_to(r),
                 },
-                FaceTarget::Plane(PlaneId::Standard(s)) => FlaechenzielDto::Ebene {
-                    ebene: base_to(&PlaneBase::Standard(*s)),
-                },
-                FaceTarget::Plane(PlaneId::Feature(id)) => FlaechenzielDto::Ebene {
-                    ebene: base_to(&PlaneBase::Plane(*id)),
+                FaceTarget::Plane(p) => FlaechenzielDto::Ebene {
+                    ebene: plane_id_to(p),
                 },
             })
             .collect(),
@@ -1946,24 +2021,7 @@ fn on_surface_from(origin: &str, name: &str, d: &AufFlaecheDto) -> Result<Surfac
     let sources = d
         .quellen
         .iter()
-        .map(|s| {
-            Ok(match s {
-                KurvenquelleDto::Skizzenkurve { skizze, kurve } => CurveSource::SketchCurve {
-                    sketch: FeatureId(*skizze),
-                    curve: CurveId::from_index(sketch_index(origin, name, *kurve)?),
-                },
-                KurvenquelleDto::Kante { kante } => {
-                    CurveSource::Edge(edge_from(origin, name, kante)?)
-                }
-                KurvenquelleDto::Ecke { kante, ende } => CurveSource::Vertex(VertexRef {
-                    edge: edge_from(origin, name, kante)?,
-                    end: *ende,
-                }),
-                KurvenquelleDto::Konstruktionspunkt { feature } => {
-                    CurveSource::ConstructionPoint(FeatureId(*feature))
-                }
-            })
-        })
+        .map(|s| curve_source_from(origin, name, s))
         .collect::<Result<Vec<_>>>()?;
     let faces = d
         .flaechen
@@ -1973,14 +2031,9 @@ fn on_surface_from(origin: &str, name: &str, d: &AufFlaecheDto) -> Result<Surfac
                 FlaechenzielDto::Flaeche { flaeche } => {
                     FaceTarget::Face(face_from(origin, name, flaeche)?)
                 }
-                FlaechenzielDto::Ebene { ebene } => match base_from(origin, name, ebene)? {
-                    PlaneBase::Standard(s) => FaceTarget::Plane(PlaneId::Standard(s)),
-                    PlaneBase::Plane(id) => FaceTarget::Plane(PlaneId::Feature(id)),
-                    // Eine Körperfläche steht als `flaeche`, nicht als Ebene.
-                    PlaneBase::Face(_) => {
-                        return Err(feature_corrupt(origin, name, tr!("proj-copy-source-count")));
-                    }
-                },
+                FlaechenzielDto::Ebene { ebene } => {
+                    FaceTarget::Plane(plane_id_from(origin, name, ebene)?)
+                }
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1997,12 +2050,6 @@ fn on_surface_from(origin: &str, name: &str, d: &AufFlaecheDto) -> Result<Surfac
         faces,
         kind,
     })
-}
-
-/// Quellen und Ziele eines Platzhalters (Schnittkurve) mit der Längengrenze der Listen.
-fn include_list(origin: &str, name: &str, list: &[EinbezugDto]) -> Result<Vec<IncludeRef>> {
-    check_len(origin, &|| tr!("proj-l-edge-copies"), list.len())?;
-    list.iter().map(|r| include_from(origin, name, r)).collect()
 }
 
 /// Liest eine Projektion; genau ein Ziel (`kurve` oder `punkt`) und genau eine Herkunft müssen
@@ -2043,10 +2090,7 @@ fn copy_from(origin: &str, name: &str, d: &EdgeCopyDto) -> Result<EdgeCopy> {
     } else if let Some(p) = &d.auf_flaeche {
         CopySource::OnSurface(on_surface_from(origin, name, p)?)
     } else if let Some(p) = &d.schnittkurve {
-        CopySource::Intersection(IntersectionSpec {
-            sources: include_list(origin, name, &p.quellen)?,
-            targets: include_list(origin, name, &p.ziele)?,
-        })
+        CopySource::Intersection(intersection_from(origin, name, p)?)
     } else {
         return Err(corrupt());
     };

@@ -901,6 +901,8 @@ struct CopyCounts {
     mismatch: usize,
     /// Beim Nachführen einbezogener Geometrie entfallene Abhängigkeiten des Benutzers.
     removed: usize,
+    /// Kopien, deren Neuberechnung die Zeitgrenze überschritt (Lage bleibt, Spec 10).
+    too_slow: usize,
 }
 
 /// Nachgeführte Kopien (in der Reihenfolge der Definition) und die Zählstände.
@@ -915,7 +917,9 @@ struct Followed {
 /// gelöschte Stücke bleiben gelöscht. Ergibt die Quelle eine andere Stückzahl als gespeichert
 /// ([`EdgeCopy::of`]), bleiben alle Kopien der Gruppe stehen (Abhängigkeiten und Maße
 /// bleiben erhalten) und zählen zu „Bezug passt nicht mehr“ (Spec 10). Eine Kopie mit verlorenem
-/// Bezug behält die Lage aus `previous`; ihr Verweis bleibt wie gespeichert.
+/// Bezug behält die Lage aus `previous`; ihr Verweis bleibt wie gespeichert. Überschreitet die
+/// Rechnung („Auf Fläche projizieren“, „Schnittkurve“) die Zeitgrenze, bleibt die Lage ebenso,
+/// und die Skizze warnt (Spec 10, im selben Weg ohne eigenen Hintergrundfaden).
 fn follow_copies(
     sketch: &mut Sketch,
     sf: &SketchFeature,
@@ -967,19 +971,22 @@ fn follow_copies(
             .max()
             .unwrap_or(0);
         match crate::include::source_pieces(ctx, &c.source, points) {
-            None => {
+            Err(why) => {
                 for &j in &group {
                     restore_copy(sketch, &sf.copies[j], previous);
                 }
-                counts.lost += group.len();
+                match why {
+                    crate::include::Unfollowed::Lost => counts.lost += group.len(),
+                    crate::include::Unfollowed::TooSlow => counts.too_slow += group.len(),
+                }
             }
-            Some((_, pieces)) if pieces.len() != expected => {
+            Ok((_, pieces)) if pieces.len() != expected => {
                 for &j in &group {
                     restore_copy(sketch, &sf.copies[j], previous);
                 }
                 counts.mismatch += group.len();
             }
-            Some((source, pieces)) => {
+            Ok((source, pieces)) => {
                 for &j in &group {
                     let copy = &sf.copies[j];
                     match apply_piece(sketch, copy, &pieces[copy.piece as usize]) {
@@ -1061,8 +1068,8 @@ fn restore_copy(sketch: &mut Sketch, copy: &EdgeCopy, previous: Option<&Sketch>)
 }
 
 /// Die Warnung einer Skizze: verlorene Bezüge von Projektionen, Quellen mit anderer Stückzahl,
-/// beim Nachführen entfallene Abhängigkeiten, fehlende Schriften und Texte, die sich nicht setzen
-/// ließen, je eine Zeile; `None` ohne all das.
+/// beim Nachführen entfallene Abhängigkeiten, zu lange Rechnungen, fehlende Schriften und Texte,
+/// die sich nicht setzen ließen, je eine Zeile; `None` ohne all das.
 fn sketch_warning(counts: &CopyCounts, sketch: &Sketch) -> Option<String> {
     let mut lines = Vec::new();
     if counts.lost > 0 {
@@ -1079,6 +1086,9 @@ fn sketch_warning(counts: &CopyCounts, sketch: &Sketch) -> Option<String> {
             "feature-sketch-include-constraints-removed",
             count = counts.removed
         ));
+    }
+    if counts.too_slow > 0 {
+        lines.push(tr!("feature-sketch-too-slow", count = counts.too_slow));
     }
     lines.extend(text_warning_lines(sketch));
     (!lines.is_empty()).then(|| lines.join("\n"))

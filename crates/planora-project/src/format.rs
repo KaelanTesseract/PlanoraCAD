@@ -731,7 +731,7 @@ pub struct EdgeCopyDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auf_flaeche: Option<AufFlaecheDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schnittkurve: Option<QuellenZieleDto>,
+    pub schnittkurve: Option<SchnittkurveDto>,
 }
 
 fn is_zero_u32(v: &u32) -> bool {
@@ -807,14 +807,23 @@ pub enum ProjektionsartDto {
     EntlangVektor { richtung: V3 },
 }
 
-/// Quellen und Ziele der „Schnittkurve“ (ab Format 20; vorläufig, die genauen Felder legt
-/// Task 18 fest).
+/// „Schnittkurve“ (ab Format 20): Kurven fertiger Skizzen und ihre Ziele.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct QuellenZieleDto {
+pub struct SchnittkurveDto {
     #[serde(default)]
-    pub quellen: Vec<EinbezugDto>,
+    pub kurven: Vec<KurvenquelleDto>,
     #[serde(default)]
-    pub ziele: Vec<EinbezugDto>,
+    pub ziele: Vec<SchnittzielDto>,
+}
+
+/// Ziel der „Schnittkurve“ (ab Format 20): Körperfläche, Grund- bzw. Konstruktionsebene oder
+/// Kurve einer anderen Skizze.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum SchnittzielDto {
+    Flaeche { flaeche: FaceRefDto },
+    Ebene { ebene: PlaneDto },
+    Skizzenkurve { skizze: u64, kurve: usize },
 }
 
 /// Drehachse einer Ebene unter Winkel (ab Format 16): Ursprungsachse (`x`, `y`, `z`), gerade
