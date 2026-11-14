@@ -13,11 +13,12 @@ use crate::args::{EngineChoice, engine_args};
 use crate::engine::{self, RunError, Unpacked};
 use crate::progress::{self, Tracker};
 use crate::system;
-use crate::wizard::{Page, Wizard};
+use crate::wizard::{self, Page, Wizard};
 use egui::{Margin, Rect, StrokeKind, UiBuilder, pos2, vec2};
 use pages::{Action, View};
 use planora_i18n::tr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -41,8 +42,10 @@ const APP_EXE: &str = "PlanoraCAD.exe";
 /// darauf erst, wenn das Fenster schon zu ist.
 type PendingCleanup = Arc<Mutex<Option<JoinHandle<()>>>>;
 
-/// Öffnet das Fenster und läuft, bis es geschlossen wird.
-pub fn run(wizard: Wizard) -> eframe::Result<()> {
+/// Öffnet das Fenster und läuft, bis es geschlossen wird. `shown` wird gesetzt, sobald Fenster
+/// und Grafik stehen (eframe legt die App erst danach an); ab da gibt es keinen Rückfall auf den
+/// Inno-Assistenten mehr.
+pub fn run(wizard: Wizard, shown: Arc<AtomicBool>) -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(tr!("setup-window-title"))
         .with_inner_size(WINDOW_SIZE)
@@ -63,7 +66,10 @@ pub fn run(wizard: Wizard) -> eframe::Result<()> {
     let result = eframe::run_native(
         "planoracad-setup",
         options,
-        Box::new(move |cc| Ok(Box::new(SetupApp::new(&cc.egui_ctx, wizard, app_pending)))),
+        Box::new(move |cc| {
+            shown.store(true, Ordering::SeqCst);
+            Ok(Box::new(SetupApp::new(&cc.egui_ctx, wizard, app_pending)))
+        }),
     );
     // Das Fenster ist zu; jetzt darf das Löschen des Temp-Ordners noch kurz dauern.
     let handle = pending.lock().ok().and_then(|mut slot| slot.take());
@@ -110,11 +116,12 @@ fn keeps_folder(result: &Result<u32, RunError>) -> bool {
 /// Admin-Abfrage gleich aufräumen. Scheitert das Auspacken, gibt es keinen Ordner (und kein
 /// Protokoll).
 fn run_engine(dir: PathBuf, args: &[String], elevate: bool) -> Finished {
-    let unpacked = match Unpacked::unpack_into(dir) {
+    let mut unpacked = match Unpacked::unpack_into(dir) {
         Ok(u) => u,
         Err(err) => return (Err(RunError::Io(err)), None),
     };
-    let result = engine::spawn(&unpacked.exe, args, elevate).map(|process| process.wait());
+    // Die Sperre der Datei fällt erst, wenn der Motor gestartet ist (siehe Unpacked::spawn).
+    let result = unpacked.spawn(args, elevate).map(|process| process.wait());
     if keeps_folder(&result) {
         (result, Some(unpacked))
     } else {
@@ -176,7 +183,7 @@ impl SetupApp {
         let choice = EngineChoice {
             all_users: self.wizard.all_users,
             dir: PathBuf::from(&self.wizard.dir),
-            desktop_icon: self.wizard.desktop_icon,
+            desktop_icon: self.wizard.desktop_icon_choice(),
             lang: self.lang,
             progress_file: progress_file.clone(),
             log_file: log_file.clone(),
@@ -255,7 +262,9 @@ impl SetupApp {
                 self.wizard.recheck_running(running);
             }
             Action::Browse => {
+                // Wie im Inno-Assistenten kommt der App-Ordner an den gewählten Ordner.
                 if let Some(dir) = folder_dialog::pick(Path::new(&self.wizard.dir)) {
+                    let dir = wizard::with_app_folder(&dir);
                     self.wizard.set_dir(dir.to_string_lossy().into_owned());
                 }
             }

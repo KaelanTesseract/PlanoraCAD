@@ -3,7 +3,23 @@
 use crate::engine::RunError;
 use crate::existing::Existing;
 use crate::system::default_dir;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Name des App-Ordners, den Inno (`AppendDefaultDirName=yes`) an einen gewählten Ordner hängt.
+const APP_FOLDER: &str = "PlanoraCAD";
+
+/// Ordner aus „Durchsuchen“ wie im Inno-Assistenten: `\PlanoraCAD` wird angehängt, außer der
+/// letzte Teil heißt schon so (ohne Rücksicht auf Groß- und Kleinschreibung). Arbeitet auf
+/// Windows-Pfaden (`\` und `/`), auch außerhalb von Windows.
+pub fn with_app_folder(picked: &Path) -> PathBuf {
+    let text = picked.to_string_lossy();
+    let trimmed = text.trim_end_matches(['\\', '/']);
+    let last = trimmed.rsplit(['\\', '/']).next().unwrap_or("");
+    if last.eq_ignore_ascii_case(APP_FOLDER) {
+        return picked.to_path_buf();
+    }
+    PathBuf::from(format!("{trimmed}\\{APP_FOLDER}"))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -35,6 +51,8 @@ pub struct Wizard {
     pub accepted: bool,
     pub all_users: bool,
     pub dir: String,
+    /// Desktop-Symbol anlegen? Bei einer vorhandenen Installation (gesperrt) gilt deren frühere
+    /// Wahl: Der Haken ist dann verborgen, der Motor bekommt keine Vorgabe dazu.
     pub desktop_icon: bool,
     pub start_app: bool,
     pub locked: bool,
@@ -188,6 +206,16 @@ impl Wizard {
         }
     }
 
+    /// Vorgabe für das Desktop-Symbol an den Motor: `None` bei einer vorhandenen Installation
+    /// (Inno behält dann die frühere Wahl), sonst der Haken.
+    pub fn desktop_icon_choice(&self) -> Option<bool> {
+        if self.locked {
+            None
+        } else {
+            Some(self.desktop_icon)
+        }
+    }
+
     /// Die fünf Schritte der linken Leiste mit ihrem Zustand. Die Fehlerseite gehört zum Schritt
     /// „Installieren“.
     pub fn steps(&self) -> [(Page, StepState); 5] {
@@ -302,6 +330,37 @@ mod tests {
         assert!(w.all_users);
         assert_eq!(w.dir, r"E:\Apps\PlanoraCAD");
         assert!(w.desktop_icon && w.start_app);
+    }
+
+    #[test]
+    fn update_keeps_earlier_desktop_icon_choice() {
+        let mut w = Wizard::new(Some(Existing {
+            all_users: false,
+            dir: PathBuf::from(r"E:\A"),
+        }));
+        assert_eq!(w.desktop_icon_choice(), None);
+        w.desktop_icon = false;
+        assert_eq!(w.desktop_icon_choice(), None);
+        let mut n = Wizard::new(None);
+        assert_eq!(n.desktop_icon_choice(), Some(true));
+        n.desktop_icon = false;
+        assert_eq!(n.desktop_icon_choice(), Some(false));
+    }
+
+    #[test]
+    fn browse_appends_app_folder_like_inno() {
+        let case = |picked: &str| {
+            with_app_folder(Path::new(picked))
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(case(r"D:\Programme"), r"D:\Programme\PlanoraCAD");
+        assert_eq!(case(r"D:\x\planoracad"), r"D:\x\planoracad");
+        assert_eq!(case(r"D:\x\PlanoraCAD"), r"D:\x\PlanoraCAD");
+        assert_eq!(case(r"D:\"), r"D:\PlanoraCAD");
+        assert_eq!(case(r"D:\Programme\"), r"D:\Programme\PlanoraCAD");
+        assert_eq!(case(r"\\Server\Freigabe"), r"\\Server\Freigabe\PlanoraCAD");
+        assert_eq!(case(r"D:\PlanoraCAD-alt"), r"D:\PlanoraCAD-alt\PlanoraCAD");
     }
 
     #[test]

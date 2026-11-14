@@ -76,17 +76,19 @@ pub fn is_passthrough(args: &[String]) -> bool {
 pub struct EngineChoice {
     pub all_users: bool,
     pub dir: PathBuf,
-    pub desktop_icon: bool,
+    /// `Some` setzt das Desktop-Symbol an oder ab; `None` (Update einer vorhandenen Installation)
+    /// gibt keine Vorgabe, dann behält Inno die frühere Wahl.
+    pub desktop_icon: Option<bool>,
     pub lang: &'static str,
     pub progress_file: PathBuf,
     pub log_file: PathBuf,
 }
 
 /// Parameter für den stillen Lauf des Motors mit der Auswahl `c`; Pfade stehen immer in
-/// Anführungszeichen.
+/// Anführungszeichen. Ohne Vorgabe zum Desktop-Symbol fehlt `/MERGETASKS` ganz.
 pub fn engine_args(c: &EngineChoice) -> Vec<String> {
     let quoted = |key: &str, path: &PathBuf| format!("/{key}=\"{}\"", path.display());
-    vec![
+    let mut args: Vec<String> = vec![
         "/VERYSILENT".into(),
         "/SUPPRESSMSGBOXES".into(),
         "/NORESTART".into(),
@@ -98,16 +100,18 @@ pub fn engine_args(c: &EngineChoice) -> Vec<String> {
         }
         .into(),
         quoted("DIR", &c.dir),
-        if c.desktop_icon {
-            "/MERGETASKS=desktopicon"
-        } else {
-            "/MERGETASKS=!desktopicon"
-        }
-        .into(),
+    ];
+    match c.desktop_icon {
+        Some(true) => args.push("/MERGETASKS=desktopicon".into()),
+        Some(false) => args.push("/MERGETASKS=!desktopicon".into()),
+        None => {}
+    }
+    args.extend([
         format!("/LANG={}", c.lang),
         quoted("PROGRESSFILE", &c.progress_file),
         quoted("LOG", &c.log_file),
-    ]
+    ]);
+    args
 }
 
 #[cfg(test)]
@@ -150,7 +154,7 @@ mod tests {
         assert!(split_command_line("   ").is_empty());
     }
 
-    fn choice(all_users: bool, desktop_icon: bool, lang: &'static str) -> EngineChoice {
+    fn choice(all_users: bool, desktop_icon: Option<bool>, lang: &'static str) -> EngineChoice {
         EngineChoice {
             all_users,
             dir: PathBuf::from(r"C:\Program Files\PlanoraCAD"),
@@ -164,7 +168,7 @@ mod tests {
     #[test]
     fn engine_args_for_current_user() {
         assert_eq!(
-            engine_args(&choice(false, true, "de")),
+            engine_args(&choice(false, Some(true), "de")),
             strings(&[
                 "/VERYSILENT",
                 "/SUPPRESSMSGBOXES",
@@ -183,7 +187,7 @@ mod tests {
     #[test]
     fn engine_args_for_all_users_without_icon() {
         assert_eq!(
-            engine_args(&choice(true, false, "en")),
+            engine_args(&choice(true, Some(false), "en")),
             strings(&[
                 "/VERYSILENT",
                 "/SUPPRESSMSGBOXES",
@@ -197,5 +201,19 @@ mod tests {
                 r#"/LOG="C:\Temp\x y\setup.log""#,
             ])
         );
+    }
+
+    #[test]
+    fn engine_args_for_update_leave_desktop_icon_alone() {
+        let args = engine_args(&choice(true, None, "de"));
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.contains("MERGETASKS") || a.contains("TASKS")),
+            "{args:?}"
+        );
+        assert_eq!(args.len(), 9);
+        assert_eq!(args[5], r#"/DIR="C:\Program Files\PlanoraCAD""#);
+        assert_eq!(args[6], "/LANG=de");
     }
 }

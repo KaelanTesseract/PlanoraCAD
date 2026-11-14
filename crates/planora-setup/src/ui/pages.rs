@@ -388,8 +388,12 @@ fn folder(ui: &mut egui::Ui, wizard: &mut Wizard, view: &View) -> Option<Action>
         }
     });
     ui.add_space(SPACE_3);
-    ui.checkbox(&mut wizard.desktop_icon, tr!("setup-desktop-icon"));
-    ui.add_space(SPACE_3);
+    // Beim Update einer vorhandenen Installation bleibt deren Wahl zum Desktop-Symbol; dann
+    // gibt es hier keinen Haken (siehe Wizard::desktop_icon_choice).
+    if !wizard.locked {
+        ui.checkbox(&mut wizard.desktop_icon, tr!("setup-desktop-icon"));
+        ui.add_space(SPACE_3);
+    }
 
     // Hinweiszeile.
     let hint = match wizard.hint {
@@ -555,6 +559,15 @@ fn done(ui: &mut egui::Ui, wizard: &mut Wizard, view: &View) {
     ui.checkbox(&mut wizard.start_app, tr!("setup-start-app"));
 }
 
+/// Text der Fehlerseite; den Hinweis auf das Protokoll gibt es nur, wenn es die Datei gibt.
+pub fn failed_text(log_exists: bool) -> String {
+    if log_exists {
+        tr!("setup-failed-text")
+    } else {
+        tr!("setup-failed-text-nolog")
+    }
+}
+
 fn failed(ui: &mut egui::Ui, log: &std::path::Path, view: &View) {
     let p = view.p;
     ui.horizontal(|ui| {
@@ -570,7 +583,7 @@ fn failed(ui: &mut egui::Ui, log: &std::path::Path, view: &View) {
         );
     });
     ui.add_space(SPACE_1 + 2.0);
-    body(ui, tr!("setup-failed-text"), p);
+    body(ui, failed_text(view.log_exists), p);
     if view.log_exists {
         ui.add_space(SPACE_2);
         ui.label(
@@ -633,6 +646,25 @@ mod tests {
                 .filter(|b| b.primary)
                 .count();
             assert_eq!(primaries, 1);
+        }
+    }
+
+    #[test]
+    fn failed_text_mentions_log_only_when_it_exists() {
+        for lang in [german(), english()] {
+            with_lang(&lang, || {
+                let with_log = failed_text(true);
+                let without = failed_text(false);
+                assert!(
+                    with_log.contains("Protokoll") || with_log.contains("log"),
+                    "{with_log}"
+                );
+                assert!(
+                    !without.contains("Protokoll") && !without.contains("log"),
+                    "{without}"
+                );
+                assert!(!with_log.contains("nichts verändert") && !with_log.contains("Nothing"));
+            });
         }
     }
 

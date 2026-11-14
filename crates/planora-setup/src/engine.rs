@@ -1,7 +1,8 @@
 //! Der eingebettete Inno-Setup-Motor (`planoracad-engine-x64.exe`): auspacken, starten, warten,
 //! aufräumen.
 
-use std::io;
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -31,10 +32,14 @@ pub fn fresh_dir() -> PathBuf {
     std::env::temp_dir().join(format!("planoracad-setup-{}-{millis}", std::process::id()))
 }
 
-/// Der ausgepackte Motor in seinem eigenen Ordner.
+/// Der ausgepackte Motor in seinem eigenen Ordner. Bis zum Start hält er die Datei gesperrt
+/// (siehe [`lock_verified`]): Niemand kann sie zwischen Prüfung und Start umschreiben, umbenennen
+/// oder löschen.
 pub struct Unpacked {
-    pub dir: PathBuf,
-    pub exe: PathBuf,
+    dir: PathBuf,
+    exe: PathBuf,
+    /// Griff mit Freigabe nur zum Lesen, über den die Bytes geprüft wurden; `None` nach dem Start.
+    lock: Option<File>,
 }
 
 impl Unpacked {
@@ -44,30 +49,91 @@ impl Unpacked {
         Unpacked::unpack_into(fresh_dir())
     }
 
-    /// Packt den Motor in den Ordner `dir` aus (wird angelegt). Ohne eingebetteten Motor: Fehler
-    /// `NotFound`; scheitert das Schreiben, wird der Ordner wieder entfernt.
+    /// Packt den Motor in den neuen Ordner `dir` aus. Gibt es `dir` schon, scheitert es
+    /// (`AlreadyExists`), damit niemand einen vorbereiteten Ordner unterschieben kann. Ohne
+    /// eingebetteten Motor: Fehler `NotFound`; scheitert Schreiben oder Prüfung, wird der Ordner
+    /// wieder entfernt.
     pub fn unpack_into(dir: PathBuf) -> io::Result<Unpacked> {
         let bytes = engine_bytes()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "kein Motor eingebettet"))?;
-        std::fs::create_dir_all(&dir)?;
-        let exe = dir.join(ENGINE_FILE);
-        if let Err(err) = std::fs::write(&exe, bytes) {
-            let _ = std::fs::remove_dir_all(&dir);
-            return Err(err);
-        }
-        Ok(Unpacked { dir, exe })
+        Unpacked::unpack_bytes(dir, bytes)
     }
 
-    /// Löscht den Ordner. Der Motor kann die Datei nach dem Ende noch kurz halten, daher einige
-    /// Versuche mit kurzer Pause; bleibt er danach liegen, wird der Fehler ignoriert.
+    /// Schreibt `bytes` als Motor in den neuen Ordner `dir` und sperrt die Datei geprüft.
+    fn unpack_bytes(dir: PathBuf, bytes: &[u8]) -> io::Result<Unpacked> {
+        // Nur anlegen, nie einen vorhandenen Ordner übernehmen.
+        std::fs::create_dir(&dir)?;
+        let exe = dir.join(ENGINE_FILE);
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&exe)
+            .and_then(|mut f| f.write_all(bytes));
+        match written.and_then(|()| lock_verified(&exe, bytes)) {
+            Ok(lock) => Ok(Unpacked {
+                dir,
+                exe,
+                lock: Some(lock),
+            }),
+            Err(err) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                Err(err)
+            }
+        }
+    }
+
+    /// Startet den Motor (siehe [`spawn`]) und gibt die Sperre erst danach frei, auch wenn der
+    /// Start scheitert.
+    pub fn spawn(&mut self, args: &[String], elevate: bool) -> Result<ProcessHandle, RunError> {
+        let result = spawn(&self.exe, args, elevate);
+        self.lock = None;
+        result
+    }
+
+    /// Löscht den Ordner (vorher fällt die Sperre). Der Motor kann die Datei nach dem Ende noch
+    /// kurz halten, daher einige Versuche mit kurzer Pause; bleibt er danach liegen, wird der
+    /// Fehler ignoriert.
     pub fn cleanup(self) {
+        let Unpacked { dir, lock, .. } = self;
+        drop(lock);
         for _ in 0..10 {
-            if std::fs::remove_dir_all(&self.dir).is_ok() || !self.dir.exists() {
+            if std::fs::remove_dir_all(&dir).is_ok() || !dir.exists() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(200));
         }
     }
+}
+
+/// Öffnet `file` mit Freigabe nur zum Lesen (`FILE_SHARE_READ`) und prüft über genau diesen
+/// Griff, dass die Datei aus `expected` besteht (wie `lock_verified` in der Update-Funktion der
+/// App). Solange der Griff offen ist, kann niemand die Datei schreiben, umbenennen oder löschen;
+/// lesen und starten geht weiter (Windows öffnet ein Programm zum Start nur zum Lesen und
+/// Ausführen). Hält schon jemand die Datei zum Schreiben offen, scheitert das Öffnen. Anderswo
+/// ist es nur eine offene Datei.
+fn lock_verified(file: &Path, expected: &[u8]) -> io::Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ);
+    }
+    let mut f = options.open(file)?;
+    if !reader_matches(&mut f, expected)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unpacked engine differs",
+        ));
+    }
+    Ok(f)
+}
+
+/// Liest `reader` bis zum Ende und vergleicht mit `expected` (Länge und Inhalt).
+fn reader_matches(reader: &mut impl Read, expected: &[u8]) -> io::Result<bool> {
+    let mut actual = Vec::with_capacity(expected.len());
+    reader.read_to_end(&mut actual)?;
+    Ok(actual == expected)
 }
 
 /// Warum der Motor nicht gestartet ist.
@@ -237,5 +303,64 @@ impl ProcessHandle {
             .wait()
             .map(|s| s.code().unwrap_or(1) as u32)
             .unwrap_or(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Eigener, noch nicht vorhandener Testordner unter `%TEMP%`.
+    fn test_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("planora-setup-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn unpack_refuses_existing_dir() {
+        let dir = test_dir("vorhanden");
+        let first = Unpacked::unpack_bytes(dir.clone(), b"motor").expect("erstes Auspacken");
+        let err = match Unpacked::unpack_bytes(dir.clone(), b"anders") {
+            Ok(_) => panic!("vorhandener Ordner darf nicht übernommen werden"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        // Der erste Ordner bleibt unberührt.
+        assert_eq!(std::fs::read(dir.join(ENGINE_FILE)).unwrap(), b"motor");
+        first.cleanup();
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn reader_matches_compares_length_and_content() {
+        assert!(reader_matches(&mut &b"abc"[..], b"abc").unwrap());
+        assert!(!reader_matches(&mut &b"abd"[..], b"abc").unwrap());
+        assert!(!reader_matches(&mut &b"abcd"[..], b"abc").unwrap());
+        assert!(!reader_matches(&mut &b"ab"[..], b"abc").unwrap());
+    }
+
+    /// Unter Windows ist der ausgepackte Motor bis zum Start gesperrt: nicht zum Schreiben zu
+    /// öffnen, nicht zu löschen, aber zu lesen. Nach der Freigabe geht beides wieder.
+    #[cfg(windows)]
+    #[test]
+    fn unpacked_engine_is_locked_until_released() {
+        let dir = test_dir("sperre");
+        let mut unpacked = Unpacked::unpack_bytes(dir.clone(), b"motor").expect("auspacken");
+        let exe = dir.join(ENGINE_FILE);
+        assert!(
+            std::fs::OpenOptions::new().write(true).open(&exe).is_err(),
+            "gesperrt: kein Schreiben"
+        );
+        assert!(
+            std::fs::remove_file(&exe).is_err(),
+            "gesperrt: kein Löschen"
+        );
+        assert_eq!(std::fs::read(&exe).unwrap(), b"motor", "lesen geht");
+        unpacked.lock = None;
+        assert!(std::fs::OpenOptions::new().write(true).open(&exe).is_ok());
+        unpacked.cleanup();
+        assert!(!dir.exists());
     }
 }

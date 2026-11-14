@@ -33,10 +33,11 @@ png = "0.18"
 # (Diagnostics_ToolHelp) und Pfad laufender Prozesse (Threading). Für „Durchsuchen“ der
 # Windows-Ordnerdialog (IFileOpenDialog): COM einrichten, Objekt anlegen und Text freigeben
 # (System_Com, schaltet in Shell auch SHCreateItemFromParsingName frei) und das eigene Fenster als
-# Besitzer des Dialogs (GetActiveWindow, UI_Input_KeyboardAndMouse). Gleiche Version wie in
-# planora-app; windows-sys ist ohnehin im Baum.
+# Besitzer des Dialogs (GetActiveWindow, UI_Input_KeyboardAndMouse). Den ausgepackten Motor bis
+# zum Start nur zum Lesen freigeben (FILE_SHARE_READ, Storage_FileSystem; wie in planora-app).
+# Gleiche Version wie in planora-app; windows-sys ist ohnehin im Baum.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Environment", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Environment", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 # Programmsymbol und Manifest in die .exe einbetten (nur Windows, siehe build.rs).

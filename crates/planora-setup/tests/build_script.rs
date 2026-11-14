@@ -28,7 +28,7 @@ fn build_script_checks_inno_version() {
 fn build_script_builds_engine_then_shell() {
     let s = bauskript();
     let motor = s
-        .find("/F\"planoracad-engine-x64\"")
+        .find(" /Fplanoracad-engine-x64 ")
         .expect("Motor-Name fehlt");
     let huelle = s.find("-p planora-setup").expect("Hüllen-Build fehlt");
     assert!(s.contains("planoracad-setup-x64.exe"), "Ausgabename fehlt");
@@ -39,6 +39,45 @@ fn build_script_builds_engine_then_shell() {
     assert!(motor < huelle, "erst Motor, dann Hülle");
     assert!(huelle < kopie, "erst Hülle, dann Kopie nach <OutDir>");
     assert!(s.contains("PLANORA_SETUP_ENGINE"));
+}
+
+/// Kein ISCC-Argument darf Anführungszeichen im Inneren tragen: PowerShell ab 7.3 maskiert sie
+/// (`\"`), und ISCC scheitert dann (Release läuft mit `shell: pwsh`).
+#[test]
+fn iscc_args_have_no_embedded_quotes() {
+    let s = bauskript();
+    let aufruf = s
+        .lines()
+        .find(|l| l.trim_start().starts_with("& $isccPath /Qp"))
+        .expect("ISCC-Aufruf fehlt");
+    assert!(
+        !aufruf.contains('\''),
+        "keine Argumente in einfachen Anführungszeichen: {aufruf}"
+    );
+    for arg in aufruf.split_whitespace().skip(2) {
+        let innen = arg.trim_matches('"');
+        assert!(!innen.contains('"'), "Anführungszeichen im Argument {arg}");
+    }
+    assert!(aufruf.contains("\"/O$engineDir\""));
+}
+
+/// Die Hülle wird dort gesucht, wo cargo sie ablegt (`CARGO_TARGET_DIR`, sonst `target`), und
+/// eine alte Hülle wird vor dem Bau gelöscht.
+#[test]
+fn shell_path_follows_cargo_target_dir_and_old_shell_is_removed() {
+    let s = bauskript();
+    let ziel = s
+        .find("$env:CARGO_TARGET_DIR")
+        .expect("CARGO_TARGET_DIR fehlt");
+    let pfad = s
+        .find(r"$shell = Join-Path $targetDir 'release\planoracad-setup.exe'")
+        .expect("Hüllen-Pfad fehlt");
+    let loeschen = s
+        .find("Remove-Item -LiteralPath $shell -Force")
+        .expect("alte Hülle wird nicht gelöscht");
+    let bau = s.find("-p planora-setup").expect("Hüllen-Build fehlt");
+    assert!(ziel < pfad && pfad < loeschen && loeschen < bau);
+    assert!(!s.contains(r"Join-Path $root 'target\release\planoracad-setup.exe'"));
 }
 
 #[test]

@@ -39,6 +39,7 @@ const KEYS: &[&str] = &[
     "setup-start-app",
     "setup-failed-title",
     "setup-failed-text",
+    "setup-failed-text-nolog",
     "setup-open-log",
     "setup-no-engine",
     "setup-next",

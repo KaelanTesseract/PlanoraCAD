@@ -133,11 +133,20 @@ $engine = Join-Path $engineDir 'planoracad-engine-x64.exe'
 if (-not (Test-Path -LiteralPath $engineDir)) { New-Item -ItemType Directory -Path $engineDir | Out-Null }
 if (Test-Path -LiteralPath $engine) { Remove-Item -LiteralPath $engine -Force }
 $script = Join-Path $root 'installer\planoracad.iss'
-& $isccPath /Qp "/DAppVersion=$version" "/DAppVersionNumeric=$versionNumeric" "/DSourceExe=$Exe" "/DLicensesFile=$Licenses" '/F"planoracad-engine-x64"' "/O$engineDir" $script
+# Keine Anfuehrungszeichen innerhalb der Argumente: PowerShell ab 7.3 ($PSNativeCommandArgumentPassing)
+# maskiert sie mit \", und ISCC lehnt den Namen dann ab. Jedes Argument ist ein eigener String; hat
+# es Leerzeichen (Pfade), setzen PowerShell 5.1 und 7 es als Ganzes in Anfuehrungszeichen.
+& $isccPath /Qp "/DAppVersion=$version" "/DAppVersionNumeric=$versionNumeric" "/DSourceExe=$Exe" "/DLicensesFile=$Licenses" /Fplanoracad-engine-x64 "/O$engineDir" $script
 if ($LASTEXITCODE -ne 0) { Stop-Build "ISCC ist mit Code $LASTEXITCODE fehlgeschlagen." }
 if (-not (Test-Path -LiteralPath $engine)) { Stop-Build "Motor fehlt: $engine" }
 
 # ---- Huelle bauen (bettet den Motor ein) ----
+# cargo legt die Huelle unter CARGO_TARGET_DIR ab, wenn gesetzt (sonst unter target). Eine alte
+# Huelle wird vorher geloescht, damit nie eine veraltete Datei nach <OutDir> gelangt.
+if ($env:CARGO_TARGET_DIR) { $targetDir = Resolve-Full $env:CARGO_TARGET_DIR }
+else { $targetDir = Join-Path $root 'target' }
+$shell = Join-Path $targetDir 'release\planoracad-setup.exe'
+if (Test-Path -LiteralPath $shell) { Remove-Item -LiteralPath $shell -Force }
 $oldEngine = $env:PLANORA_SETUP_ENGINE
 $env:PLANORA_SETUP_ENGINE = $engine
 try {
@@ -149,7 +158,6 @@ finally {
     else { $env:PLANORA_SETUP_ENGINE = $oldEngine }
 }
 if ($cargoCode -ne 0) { Stop-Build "cargo build fuer planora-setup ist mit Code $cargoCode fehlgeschlagen." }
-$shell = Join-Path $root 'target\release\planoracad-setup.exe'
 if (-not (Test-Path -LiteralPath $shell)) { Stop-Build "Huelle fehlt: $shell" }
 
 $setup = Join-Path $OutDir $setupName
