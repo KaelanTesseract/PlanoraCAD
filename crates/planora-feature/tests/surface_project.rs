@@ -438,3 +438,75 @@ fn lost_source_is_lost() {
     };
     assert_eq!(run(&d, &spec), Err(ProjectError::Lost));
 }
+
+/// Fix-Runde 1: Auch eine Annäherung, die die Zeitgrenze überschreitet, ergibt `TooSlow` und
+/// nichts (der Test verlangsamt jede Annäherung künstlich).
+#[test]
+fn budget_exceeded_in_fit_is_tooslow() {
+    let mut d = Document::new();
+    let cyl = d
+        .add_feature(
+            "Zylinder",
+            FeatureKind::Cylinder {
+                radius: 5.0,
+                height: 20.0,
+                origin: DVec3::new(0.0, 0.0, -10.0),
+            },
+        )
+        .unwrap();
+    let (s, c) = line_sketch(&mut d, (-3.0, 8.0), (3.0, 8.0));
+    let spec = SurfaceProjection {
+        sources: vec![CurveSource::SketchCurve {
+            sketch: s,
+            curve: c,
+        }],
+        faces: faces_of(&body(&d, cyl), SurfaceKind::Cylinder),
+        kind: ProjectType::ClosestPoint,
+    };
+    let view = DocView::new(&d, d.features().len(), Frame::WORLD);
+    // Ohne Verzögerung reicht eine Sekunde sicher.
+    assert!(project_to_surface(&view, &spec, &tol(), Duration::from_secs(1)).is_ok());
+    let _slow = surface_project::slow_fit_for_tests(Duration::from_millis(1200));
+    assert_eq!(
+        project_to_surface(&view, &spec, &tol(), Duration::from_secs(1)),
+        Err(ProjectError::TooSlow)
+    );
+}
+
+/// Fix-Runde 1: Treffer jenseits des Rechenbereichs (Richtung fast parallel zur Ebene) zählen
+/// nicht, im allgemeinen Weg wie im exakten Sonderfall.
+#[test]
+fn far_hits_are_dropped() {
+    let mut d = Document::new();
+    let bx = d
+        .add_feature(
+            "Quader",
+            FeatureKind::Box {
+                size: DVec3::new(2.0, 3.0, 4.0),
+                origin: DVec3::new(1.0, 1.0, 5.0),
+            },
+        )
+        .unwrap();
+    let solid = body(&d, bx);
+    let (edge, _) = solid
+        .edges
+        .iter()
+        .find(|(_, e)| solid.vertices[e.start].point.z > 8.9 && solid.vertices[e.end].point.z > 8.9)
+        .unwrap();
+    let edge = EdgeRef::from_edge(&solid, edge, &Tolerance::default()).unwrap();
+    let along = ProjectType::AlongVector(DVec3::new(1.0, 0.0, 2e-9));
+    for source in [
+        CurveSource::Vertex(VertexRef {
+            edge: edge.clone(),
+            end: true,
+        }),
+        CurveSource::Edge(edge.clone()),
+    ] {
+        let spec = SurfaceProjection {
+            sources: vec![source],
+            faces: vec![FaceTarget::Plane(PlaneId::Standard(StandardPlane::XY))],
+            kind: along.clone(),
+        };
+        assert_eq!(run(&d, &spec), Err(ProjectError::NoHit));
+    }
+}

@@ -31,7 +31,7 @@ use planora_math::nurbs::NurbsCurve;
 use planora_math::{DMat3, DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::helpers::{Included, include_curve};
 use planora_sketch::model::CurveId;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::time::{Duration, Instant};
@@ -50,8 +50,6 @@ const JUMP_FACTOR: f64 = 10.0;
 const MAX_REFINE: usize = 4;
 /// Höchstzahl Halbierungen beim Eingrenzen einer Abriss- oder Sprungstelle.
 const EDGE_BISECTIONS: usize = 60;
-/// Versuche der Annäherung mit vervierfachter Schranke, wenn sie mit der Toleranz scheitert.
-const FIT_RETRIES: usize = 3;
 /// Höchstzahl Newton-Schritte für einen Strahltreffer auf einer Freiformfläche.
 const NEWTON_STEPS: usize = 30;
 /// Richtungen gelten als parallel bzw. eine Gerade als parallel zur Ebene unter diesem Wert.
@@ -223,6 +221,7 @@ pub fn project_to_surface(
         budget,
         frame: view.frame,
         cache: RefCell::new(HashMap::new()),
+        used: Cell::new(0),
     };
     pr.check()?;
     let mut out = Vec::new();
@@ -242,6 +241,8 @@ pub fn project_to_surface(
             }
         }
     }
+    // Auch die letzte Annäherung zählt zur Zeitgrenze: Wer darüber liegt, bekommt nichts.
+    pr.check()?;
     if out.is_empty() {
         Err(ProjectError::NoHit)
     } else {
@@ -384,6 +385,22 @@ struct Projector {
     /// Schon gerechnete Abtastpunkte der laufenden Quellkurve, nach den Bits des Parameters
     /// (Mittelpunkte aus dem Abtasten werden bei der Prüfung der Annäherung wieder gebraucht).
     cache: RefCell<HashMap<u64, Sample>>,
+    /// Abtastpunkte der laufenden Quellkurve in den Stücken (höchstens [`MAX_SURFACE_SAMPLES`]).
+    used: Cell<usize>,
+}
+
+/// Liegt der Punkt im Rechenbereich (endlich, Beträge höchstens [`crate::MAX_COORD_MM`])?
+/// Treffer weit draußen (Richtung fast parallel zur Ebene) zählen wie kein Treffer.
+fn in_range(p: DVec3) -> bool {
+    p.is_finite() && p.abs().max_element() <= crate::MAX_COORD_MM
+}
+
+/// Ergebnis der Annäherung eines Stücks.
+enum Fitted {
+    /// Fertig (oder `None`: das Stück fällt zu einem Punkt zusammen).
+    Done(Option<Included>),
+    /// Die Toleranz ist mit diesem Stück nicht zu halten: dichter teilen.
+    Split(Vec<Sample>),
 }
 
 /// Abstand von `p` zur Strecke `a`–`b`.
@@ -473,7 +490,7 @@ impl Projector {
         }
         let mut best: Option<(f64, Hit)> = None;
         let mut take = |dist: f64, h: Hit| {
-            if h.p.is_finite() && best.is_none_or(|(b, _)| dist < b) {
+            if in_range(h.p) && best.is_none_or(|(b, _)| dist < b) {
                 best = Some((dist, h));
             }
         };
@@ -618,6 +635,9 @@ impl Projector {
         match c {
             Curve::Line { .. } => {
                 let (a, b) = (proj(c.point(t0)), proj(c.point(t1)));
+                if !(in_range(a) && in_range(b)) {
+                    return Some(Vec::new());
+                }
                 if a.distance(b) <= self.tol.linear {
                     // Entlang der eigenen Richtung projiziert: ein Punkt.
                     return Some(vec![Included::Point(local(a))]);
@@ -629,6 +649,9 @@ impl Projector {
                 let parallel = frame.z.cross(f.z).length() < PARALLEL_EPS;
                 if !(perpendicular && parallel) {
                     return None;
+                }
+                if !in_range(proj(frame.origin)) {
+                    return Some(Vec::new());
                 }
                 let moved = Curve::Circle {
                     frame: Frame {
@@ -649,6 +672,7 @@ impl Projector {
     fn project_curve(&self, c: &Curve, t0: f64, t1: f64) -> Result<Vec<Included>, ProjectError> {
         self.cache.borrow_mut().clear();
         let samples = self.adaptive(c, t0, t1)?;
+        self.used.set(samples.len());
         let closed = c
             .period()
             .is_some_and(|p| ((t1 - t0).abs() - p).abs() < 1e-9)
@@ -656,9 +680,7 @@ impl Projector {
         let pieces = self.pieces(c, &samples, closed)?;
         let mut out = Vec::new();
         for p in pieces {
-            if let Some(g) = self.fit_piece(c, p)? {
-                out.push(g);
-            }
+            out.extend(self.fit_piece(c, p)?);
         }
         Ok(out)
     }
@@ -718,7 +740,8 @@ impl Projector {
     fn edge(&self, c: &Curve, good: Sample, bad: Sample) -> Result<Sample, ProjectError> {
         let (mut g, mut b) = (good, bad);
         for _ in 0..EDGE_BISECTIONS {
-            if g.q.distance(b.q) <= 0.5 * self.tol.linear {
+            if g.q.distance(b.q) <= 0.5 * self.tol.linear || self.used.get() >= MAX_SURFACE_SAMPLES
+            {
                 break;
             }
             let m = self.sample(c, 0.5 * (g.t + b.t), g.h)?;
@@ -751,6 +774,7 @@ impl Projector {
                 let e = self.edge(c, s[i], s[i - 1])?;
                 if e.t != s[i].t {
                     cur.push(e);
+                    self.used.set(self.used.get() + 1);
                 }
             }
             cur.push(s[i]);
@@ -759,6 +783,7 @@ impl Projector {
                     let e = self.edge(c, s[i], s[i + 1])?;
                     if e.t != s[i].t {
                         cur.push(e);
+                        self.used.set(self.used.get() + 1);
                     }
                 }
                 pieces.push(std::mem::take(&mut cur));
@@ -782,13 +807,32 @@ impl Projector {
         Ok(pieces)
     }
 
-    /// Nähert ein Stück als Spline (Grad 3) an und verfeinert an den Mittelpunkten, wo die
-    /// Abweichung über der Toleranz liegt (höchstens [`MAX_REFINE`]-mal). `None`, wenn das Stück
-    /// zu einem Punkt zusammenfällt oder sich nicht annähern lässt.
-    fn fit_piece(&self, c: &Curve, mut p: Vec<Sample>) -> Result<Option<Included>, ProjectError> {
+    /// Nähert ein Stück als Spline (Grad 3) an (siehe [`Projector::fit_refined`]). Lässt sich die
+    /// Toleranz nicht halten, wird das Stück in der Mitte geteilt und jede Hälfte für sich
+    /// angenähert; die Schranke wird nie gelockert. Ist auch das nicht mehr möglich (Stück aus
+    /// zwei Punkten, Deckel der Abtastpunkte erreicht), gibt es [`ProjectError::TooSlow`].
+    fn fit_piece(&self, c: &Curve, p: Vec<Sample>) -> Result<Vec<Included>, ProjectError> {
+        match self.fit_refined(c, p)? {
+            Fitted::Done(g) => Ok(g.into_iter().collect()),
+            Fitted::Split(p) => {
+                if p.len() < 3 {
+                    return Err(ProjectError::TooSlow);
+                }
+                let k = p.len() / 2;
+                let mut out = self.fit_piece(c, p[..=k].to_vec())?;
+                out.extend(self.fit_piece(c, p[k..].to_vec())?);
+                Ok(out)
+            }
+        }
+    }
+
+    /// Annäherung mit der Schranke `tol.linear` und Prüfung an den Mittelpunkten; wo die
+    /// Abweichung darüber liegt, wird verfeinert (höchstens [`MAX_REFINE`]-mal, solange der
+    /// Deckel [`MAX_SURFACE_SAMPLES`] es zulässt). Bleibt eine Abweichung über der Toleranz oder
+    /// scheitert die Annäherung, ist das Stück zu teilen.
+    fn fit_refined(&self, c: &Curve, mut p: Vec<Sample>) -> Result<Fitted, ProjectError> {
         let lin = self.tol.linear;
-        let mut round = 0;
-        loop {
+        for round in 0..=MAX_REFINE {
             self.check()?;
             let pts: Vec<DVec3> = p
                 .iter()
@@ -796,49 +840,127 @@ impl Projector {
                 .collect();
             let length: f64 = pts.windows(2).map(|w| w[0].distance(w[1])).sum();
             if pts.len() < 2 || length <= lin {
-                return Ok(None);
+                return Ok(Fitted::Done(None));
             }
-            let Some(curve) = fit(&pts, lin) else {
-                return Ok(None);
+            let fitted = fit(&pts, lin);
+            // Die Annäherung selbst kann teuer sein: Zeitgrenze gleich danach prüfen.
+            self.check()?;
+            let Some(curve) = fitted else {
+                return Ok(Fitted::Split(p));
             };
-            if round == MAX_REFINE || p.len() >= MAX_SURFACE_SAMPLES {
-                return Ok(Some(Included::Spline { curve }));
-            }
-            round += 1;
             let mut np = vec![p[0]];
-            let mut added = false;
+            let (mut bad, mut added) = (false, false);
             for w in p.windows(2) {
                 let (a, b) = (w[0], w[1]);
-                if np.len() + 1 < MAX_SURFACE_SAMPLES && self.linked(&a, &b) {
+                if self.linked(&a, &b) {
                     let m = self.mid(c, &a, &b)?;
                     if self.linked(&a, &m)
                         && self.linked(&m, &b)
                         && m.hp()
                             .is_some_and(|h| curve.distance_to(self.frame.to_local(h)) > lin)
                     {
-                        np.push(m);
-                        added = true;
+                        bad = true;
+                        if round < MAX_REFINE && self.used.get() < MAX_SURFACE_SAMPLES {
+                            np.push(m);
+                            self.used.set(self.used.get() + 1);
+                            added = true;
+                        }
                     }
                 }
                 np.push(b);
             }
+            self.check()?;
+            if !bad {
+                return Ok(Fitted::Done(Some(Included::Spline { curve })));
+            }
             if !added {
-                return Ok(Some(Included::Spline { curve }));
+                return Ok(Fitted::Split(np));
             }
             p = np;
         }
+        Ok(Fitted::Split(p))
     }
 }
 
-/// Annäherung mit der Schranke `lin`; scheitert sie, mit vervierfachter Schranke (höchstens
-/// [`FIT_RETRIES`]-mal).
-fn fit(pts: &[DVec3], lin: f64) -> Option<NurbsCurve> {
-    let mut bound = lin;
-    for _ in 0..=FIT_RETRIES {
-        if let Ok(c) = NurbsCurve::fit(pts, bound) {
-            return Some(c);
-        }
-        bound *= 4.0;
+thread_local! {
+    /// Künstliche Verzögerung jeder Annäherung (nur für Tests, siehe [`slow_fit_for_tests`]).
+    static FIT_DELAY: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+}
+
+/// Verlangsamt im aufrufenden Thread jede Annäherung um `delay`, bis der Wächter fällt (nur für
+/// Tests: belegt, dass die Zeitgrenze auch die Annäherung erfasst).
+#[doc(hidden)]
+#[must_use]
+pub fn slow_fit_for_tests(delay: Duration) -> SlowFitGuard {
+    let previous = FIT_DELAY.with(|c| c.replace(delay));
+    SlowFitGuard { previous }
+}
+
+/// Stellt beim Fallen die vorige Verzögerung wieder her.
+#[doc(hidden)]
+pub struct SlowFitGuard {
+    previous: Duration,
+}
+
+impl Drop for SlowFitGuard {
+    fn drop(&mut self) {
+        FIT_DELAY.with(|c| c.set(self.previous));
     }
-    None
+}
+
+/// Annäherung mit der Schranke `lin` (nie gelockert).
+fn fit(pts: &[DVec3], lin: f64) -> Option<NurbsCurve> {
+    let delay = FIT_DELAY.with(Cell::get);
+    if !delay.is_zero() {
+        std::thread::sleep(delay);
+    }
+    NurbsCurve::fit(pts, lin).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fix-Runde 1: Eine Quelle mit Knick (Polygonzug Grad 1) wird nicht mit gelockerter
+    /// Schranke angenähert, sondern dichter geteilt; jede Abweichung bleibt ≤ Toleranz.
+    #[test]
+    fn kink_is_split_not_loosened() {
+        let tol = Tolerance {
+            linear: 1e-6,
+            ..Tolerance::default()
+        };
+        let pts = [
+            DVec3::new(0.0, 0.0, 1.0),
+            DVec3::new(5.0, 5.0, 1.0),
+            DVec3::new(10.0, 0.0, 1.0),
+        ];
+        let v =
+            NurbsCurve::new(1, vec![0.0, 0.0, 0.5, 1.0, 1.0], pts.to_vec(), vec![1.0; 3]).unwrap();
+        let c = Curve::nurbs(v);
+        let pr = Projector {
+            targets: vec![Target::Plane(Frame::WORLD)],
+            dir: None,
+            tol,
+            start: Instant::now(),
+            budget: Duration::from_secs(60),
+            frame: Frame::WORLD,
+            cache: RefCell::new(HashMap::new()),
+            used: Cell::new(0),
+        };
+        let got = pr.project_curve(&c, 0.0, 1.0).unwrap();
+        assert!(!got.is_empty());
+        let flat = |p: DVec3| DVec3::new(p.x, p.y, 0.0);
+        let (a, m, b) = (flat(pts[0]), flat(pts[1]), flat(pts[2]));
+        for g in &got {
+            let Included::Spline { curve } = g else {
+                panic!("{g:?}");
+            };
+            let (t0, t1) = curve.domain();
+            for i in 0..=400 {
+                let p = curve.point(t0 + (t1 - t0) * i as f64 / 400.0);
+                let gap = seg_distance(p, a, m).min(seg_distance(p, m, b));
+                assert!(gap <= tol.linear, "Abweichung {gap} bei {p:?}");
+            }
+        }
+    }
 }
