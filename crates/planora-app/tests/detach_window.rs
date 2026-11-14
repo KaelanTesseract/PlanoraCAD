@@ -6,7 +6,7 @@ mod common;
 
 use common::{Screen, find, join};
 use egui::{Event, PointerButton, ViewportCommand, ViewportEvent, pos2, vec2};
-use planora_app::detach::{self, DetachState, Place, WindowEvent, WindowSpec};
+use planora_app::detach::{self, DetachState, Head, Place, WindowEvent, WindowSpec};
 use planora_app::dialog::{Dialog, DialogSize};
 use planora_app::icons::{self, Icon};
 use planora_project::config::DetachedWindow;
@@ -22,6 +22,7 @@ fn spec() -> WindowSpec<'static> {
         resizable: true,
         focus_on_open: false,
         closable: false,
+        head: Head::Title,
     }
 }
 

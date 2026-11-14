@@ -968,6 +968,8 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
         d.insert_temp(folders_id(), Vec::<(Folder, egui::Rect)>::new());
         d.insert_temp(eyes_id(), Vec::<(String, egui::Rect)>::new());
     });
+    // Stand der Rückfragen vor den Zeilen: was danach offen ist, kam aus dem Baum.
+    let before = open_prompts(state);
     theme::section_header(ui, &tr!("tree-header"), theme::HEADER_H);
     ui.add_space(theme::SPACE_1);
     let name = state.document_name.clone();
@@ -1021,10 +1023,107 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     if let Some(a) = action {
         run(state, a);
     }
-    rename_window(ui.ctx(), state);
-    delete_window(ui.ctx(), state);
-    crate::drawing_browser::windows(ui.ctx(), state);
-    crate::dimension_browser::windows(ui.ctx(), state);
+    tree_prompts(ui.ctx(), state, before);
+}
+
+/// Fenster und Rückfragen des Baums: Umbenennen und Löschen von Features, Zeichnungen und
+/// Maßen. Sie gehören dem Fenster, aus dem sie kamen: Ist der Baum abgedockt, erscheint eine
+/// Rückfrage aus dem Baum als Unterdialog über dem Baumfenster, dieselbe Rückfrage aus dem
+/// Hauptfenster (etwa die Lösch-Rückfrage aus der Zeichnungsansicht, Umbenennen aus der
+/// Verlaufsleiste) im Hauptfenster ([`main_window_prompts`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TreePrompt {
+    Rename,
+    Delete,
+    DrawingRename,
+    DrawingDelete,
+    DimensionDelete,
+}
+
+impl TreePrompt {
+    const ALL: [TreePrompt; 5] = [
+        TreePrompt::Rename,
+        TreePrompt::Delete,
+        TreePrompt::DrawingRename,
+        TreePrompt::DrawingDelete,
+        TreePrompt::DimensionDelete,
+    ];
+
+    fn is_open(self, state: &AppState) -> bool {
+        match self {
+            TreePrompt::Rename => state.rename_draft.is_some(),
+            TreePrompt::Delete => state.pending_delete.is_some(),
+            TreePrompt::DrawingRename => state.rename_drawing_draft.is_some(),
+            TreePrompt::DrawingDelete => state.pending_delete_drawing.is_some(),
+            TreePrompt::DimensionDelete => state.pending_delete_dimension.is_some(),
+        }
+    }
+
+    fn show(self, ctx: &egui::Context, state: &mut AppState) {
+        match self {
+            TreePrompt::Rename => rename_window(ctx, state),
+            TreePrompt::Delete => delete_window(ctx, state),
+            TreePrompt::DrawingRename => crate::drawing_browser::rename_window(ctx, state),
+            TreePrompt::DrawingDelete => crate::drawing_browser::delete_window(ctx, state),
+            TreePrompt::DimensionDelete => crate::dimension_browser::windows(ctx, state),
+        }
+    }
+}
+
+/// Welche Rückfragen gerade offen sind (Reihenfolge wie [`TreePrompt::ALL`]).
+type PromptSet = [bool; 5];
+
+fn open_prompts(state: &AppState) -> PromptSet {
+    TreePrompt::ALL.map(|p| p.is_open(state))
+}
+
+/// Rückfragen, die im abgedockten Baum entstanden sind (bleibt, bis sie zu sind).
+fn tree_hosted_id() -> egui::Id {
+    egui::Id::new("planora-tree-prompts-in-tree-window")
+}
+
+fn tree_hosted(ctx: &egui::Context) -> PromptSet {
+    ctx.data(|d| d.get_temp::<PromptSet>(tree_hosted_id()))
+        .unwrap_or_default()
+}
+
+/// Merkt die Rückfragen aus dem Baumfenster; geschlossene fallen heraus.
+fn store_tree_hosted(ctx: &egui::Context, state: &AppState, mut hosted: PromptSet) {
+    for (h, open) in hosted.iter_mut().zip(open_prompts(state)) {
+        *h &= open;
+    }
+    ctx.data_mut(|d| d.insert_temp(tree_hosted_id(), hosted));
+}
+
+/// Zeigt die Rückfragen am Ende des Baums. Angedockt alle (wie bisher); im abgedockten
+/// Baumfenster nur die dort entstandenen (in diesem Bild neu gegenüber `before`, Stand vor den
+/// Zeilen des Baums), als Unterdialog über dem Baumfenster.
+fn tree_prompts(ctx: &egui::Context, state: &mut AppState, before: PromptSet) {
+    let in_tree_window = crate::detach::host_place(ctx) == Some(crate::detach::Place::Tree);
+    let mut hosted = tree_hosted(ctx);
+    if in_tree_window {
+        for ((h, was), now) in hosted.iter_mut().zip(before).zip(open_prompts(state)) {
+            *h |= now && !was;
+        }
+    }
+    for (p, h) in TreePrompt::ALL.into_iter().zip(hosted) {
+        if !in_tree_window || h {
+            p.show(ctx, state);
+        }
+    }
+    store_tree_hosted(ctx, state, hosted);
+}
+
+/// Bei abgedocktem Baum: die Rückfragen des Baums, die nicht aus dem Baumfenster kamen, im
+/// Hauptfenster (Aufruf dort, wo sonst der Baum gezeichnet wird).
+pub fn main_window_prompts(ctx: &egui::Context, state: &mut AppState) {
+    let hosted = tree_hosted(ctx);
+    for (p, h) in TreePrompt::ALL.into_iter().zip(hosted) {
+        if !h && p.is_open(state) {
+            p.show(ctx, state);
+        }
+    }
+    store_tree_hosted(ctx, state, hosted);
 }
 
 /// Misst die Statustexte einmal aus: Das legt ihre Zeichen schon im ersten Bild in den

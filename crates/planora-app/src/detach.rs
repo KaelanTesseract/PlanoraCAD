@@ -76,7 +76,15 @@ pub const DIALOG_KEYS: &[&str] = &[
     "update_done",
 ];
 
+/// Die abdockbaren Felder (alle Plätze außer den Dialogen).
+pub const FIELDS: [Place; 3] = [Place::Tree, Place::Right, Place::SketchSide];
+
 impl Place {
+    /// Ein Feld (Baum, rechte Spalte, Skizzenfeld), kein Dialog?
+    pub fn is_field(self) -> bool {
+        !matches!(self, Place::Dialog(_))
+    }
+
     /// Schlüssel in `config.json` (`detached`).
     pub fn key(self) -> String {
         match self {
@@ -267,6 +275,23 @@ pub struct WindowSpec<'a> {
     /// Schließen-Symbol in der Kopfzeile (Dialoge mit `.open(..)`); ein Klick meldet
     /// [`WindowEvent::CloseRequested`].
     pub closable: bool,
+    /// Art der Kopfzeile.
+    pub head: Head,
+}
+
+/// Kopfzeile eines abgedockten Fensters.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Head {
+    /// Graphit-Kopfzeile mit Titel, Symbol „Andocken“ und (bei `closable`) Schließen-Symbol;
+    /// Doppelklick dockt an (Dialoge).
+    Title,
+    /// Keine eigene Zeile: Der Kopf des Inhalts (etwa „Feature-Baum“) ist die Kopfzeile. Oben
+    /// rechts darüber steht „Andocken“ an derselben Stelle wie angedockt „Abdocken“; ein
+    /// Streifen der Höhe `band` über dem Inhalt zieht das Fenster (Felder, siehe
+    /// [`dock_band`]).
+    Overlay { band: f32 },
+    /// Graphit-Kopfzeile mit Titel, ohne Symbol „Andocken“ (Unterdialoge über einem Feld).
+    TitleOnly,
 }
 
 /// Was im abgedockten Fenster in diesem Bild geschah.
@@ -319,12 +344,13 @@ struct Opened {
 }
 
 /// Zeigt `add_contents` als eigenes Betriebssystemfenster für den Platz `spec.place`: ohne
-/// Rahmen des Betriebssystems und ohne Taskleisten-Eintrag, mit der Graphit-Kopfzeile (Titel,
-/// Symbol „Andocken“), Ziehen an der Kopfzeile und, falls `resizable`, Rändern zum Ändern der
+/// Rahmen des Betriebssystems und ohne Taskleisten-Eintrag, mit der Kopfzeile nach `spec.head`
+/// (Symbol „Andocken“), Ziehen an der Kopfzeile und, falls `resizable`, Rändern zum Ändern der
 /// Größe. Lage aus `state`; nach dem Ende eines Zieh- oder Größenvorgangs wird die neue Lage
 /// (physische Pixel) in `state` gemerkt.
 ///
-/// Der einzige Ort, der ein abgedocktes Fenster erzeugt. `add_contents` ist `FnMut`, weil egui
+/// Mit [`show_sub_window`] der einzige Ort, der ein eigenes Fenster erzeugt. `add_contents` ist
+/// `FnMut`, weil egui
 /// den Inhalt eines Kindfensters in einem Bild mehrmals ausführen kann (verworfene Durchgänge,
 /// `request_discard`); geliefert wird das Ergebnis des letzten Durchgangs.
 ///
@@ -334,7 +360,7 @@ pub fn show_window<R>(
     ctx: &egui::Context,
     state: &mut DetachState,
     spec: WindowSpec,
-    mut add_contents: impl FnMut(&mut egui::Ui) -> R,
+    add_contents: impl FnMut(&mut egui::Ui) -> R,
 ) -> (Option<R>, WindowEvent) {
     if !can_detach(ctx) {
         debug_assert!(
@@ -344,8 +370,38 @@ pub fn show_window<R>(
         );
         return (None, WindowEvent::None);
     }
-    let id = viewport_id(spec.place);
+    let saved = state.get(spec.place);
     let memory = egui::Id::new(("detach_fenster", spec.place.key()));
+    show_core(
+        ctx,
+        Some(state),
+        (viewport_id(spec.place), memory),
+        Placement::Saved(saved),
+        spec,
+        add_contents,
+    )
+}
+
+/// Wo ein Fenster steht.
+#[derive(Clone, Copy)]
+enum Placement {
+    /// Gemerkte Lage (physische Pixel) beim Öffnen; danach fest, bis es zu ist.
+    Saved(Option<DetachedWindow>),
+    /// Linke obere Ecke in Punkten des Aufrufers, in jedem Bild neu (Unterdialoge: mittig über
+    /// ihrem Feld, auch wenn ihre Höhe sich ändert).
+    Follow(egui::Pos2),
+}
+
+/// Gemeinsamer Teil von [`show_window`] und [`show_sub_window`]; `state` nur bei gemerkten
+/// Plätzen.
+fn show_core<R>(
+    ctx: &egui::Context,
+    mut state: Option<&mut DetachState>,
+    (id, memory): (egui::ViewportId, egui::Id),
+    placement: Placement,
+    spec: WindowSpec,
+    mut add_contents: impl FnMut(&mut egui::Ui) -> R,
+) -> (Option<R>, WindowEvent) {
     let frame = ctx.cumulative_frame_nr();
     // Punkte des Aufrufers: der Builder gibt die Lage logisch an winit weiter.
     let ppp = ctx.pixels_per_point();
@@ -353,17 +409,26 @@ pub fn show_window<R>(
         .data(|d| d.get_temp::<Opened>(memory))
         .filter(|o| o.parent_frame + 1 >= frame)
         .unwrap_or_else(|| {
-            let saved = state.get(spec.place);
+            let (position, wanted) = match placement {
+                Placement::Saved(saved) => (
+                    saved.map(|w| to_points(w, ppp).min),
+                    saved.map(|w| egui::pos2(w.x, w.y)),
+                ),
+                Placement::Follow(p) => (Some(p), Some((p.to_vec2() * ppp).to_pos2())),
+            };
             Opened {
                 parent_frame: frame,
-                position: saved.map(|w| to_points(w, ppp).min),
-                wanted: saved.map(|w| egui::pos2(w.x, w.y)),
+                position,
+                wanted,
                 moving: None,
                 close_frame: None,
                 drag_frame: None,
             }
         });
     opened.parent_frame = frame;
+    if let Placement::Follow(p) = placement {
+        opened.position = Some(p);
+    }
 
     let mut builder = egui::ViewportBuilder::default()
         .with_title(format!("PlanoraCAD – {}", spec.title))
@@ -376,16 +441,120 @@ pub fn show_window<R>(
         builder = builder.with_position(p);
     }
     let out = ctx.show_viewport_immediate(id, builder, |ui, _class| {
-        window_contents(ui, state, &mut opened, &spec, &mut add_contents)
+        window_contents(
+            ui,
+            state.as_deref_mut(),
+            &mut opened,
+            &spec,
+            &mut add_contents,
+        )
     });
     ctx.data_mut(|d| d.insert_temp(memory, opened));
     (Some(out.0), out.1)
 }
 
+/// Kennung des Fensters eines Unterdialogs (Dialog-Id `dialog`) über dem Feld `host`.
+pub fn sub_viewport_id(host: Place, dialog: egui::Id) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("detach_unterdialog", host.key(), dialog))
+}
+
+/// Angaben eines Unterdialogs für [`show_sub_window`].
+#[derive(Clone, Copy, Debug)]
+pub struct SubWindow<'a> {
+    /// Feld, über dem der Unterdialog steht.
+    pub host: Place,
+    /// Id des Dialogs (für die Kennung des Fensters).
+    pub dialog: egui::Id,
+    pub title: &'a str,
+    /// Innere Größe in Punkten.
+    pub inner_size: egui::Vec2,
+    /// Linke obere Ecke in Punkten des Feldfensters, in jedem Bild neu.
+    pub position: egui::Pos2,
+    /// Schließen-Symbol in der Kopfzeile.
+    pub closable: bool,
+}
+
+/// Zeigt einen Unterdialog (Rückfrage, Umbenennen) eines abgedockten Felds als eigenes kleines
+/// Fenster: Kopfzeile mit Titel und (bei `closable`) Schließen-Symbol, ohne „Andocken“, ohne
+/// Größenänderung; nichts wird gemerkt. Solange er offen ist, ist das Feld gesperrt
+/// ([`sub_dialog_open`]). Bei eingebetteten Viewports `(None, WindowEvent::None)`.
+pub fn show_sub_window<R>(
+    ctx: &egui::Context,
+    sub: SubWindow,
+    add_contents: impl FnMut(&mut egui::Ui) -> R,
+) -> (Option<R>, WindowEvent) {
+    if !can_detach(ctx) {
+        return (None, WindowEvent::None);
+    }
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data_mut(|d| d.insert_temp(sub_open_id(sub.host), frame));
+    let spec = WindowSpec {
+        place: sub.host,
+        title: sub.title,
+        inner_size: sub.inner_size,
+        resizable: false,
+        focus_on_open: true,
+        closable: sub.closable,
+        head: Head::TitleOnly,
+    };
+    let memory = egui::Id::new(("detach_unterfenster", sub.host.key(), sub.dialog));
+    show_core(
+        ctx,
+        None,
+        (sub_viewport_id(sub.host, sub.dialog), memory),
+        Placement::Follow(sub.position),
+        spec,
+        add_contents,
+    )
+}
+
+fn sub_open_id(host: Place) -> egui::Id {
+    egui::Id::new(("detach_unterdialog_offen", host.key()))
+}
+
+/// Ist über dem Feld `host` ein Unterdialog offen (im vorigen oder diesem Bild des
+/// Feldfensters gezeigt)? Dann ist das Feld gesperrt wie der Hintergrund einer Rückfrage.
+pub fn sub_dialog_open(ctx: &egui::Context, host: Place) -> bool {
+    let frame = ctx.cumulative_frame_nr_for(viewport_id(host));
+    ctx.data(|d| d.get_temp::<u64>(sub_open_id(host)))
+        .is_some_and(|f| f + 1 >= frame)
+}
+
+/// Höhe des Streifens oben im Feld, in dem das Symbol „Abdocken“/„Andocken“ steht: die Höhe
+/// des Kopfs, den das Feld oben zeigt (Skizzenfeld: Zeile mit Name und „Profil anzeigen“).
+pub fn dock_band(place: Place) -> f32 {
+    match place {
+        Place::SketchSide => theme::ROW_H,
+        _ => theme::HEADER_H,
+    }
+}
+
+/// Das abgedockte Feld, in dessen Fenster gerade gezeichnet wird.
+pub fn host_place(ctx: &egui::Context) -> Option<Place> {
+    if !can_detach(ctx) {
+        return None;
+    }
+    let current = ctx.viewport_id();
+    FIELDS.into_iter().find(|p| viewport_id(*p) == current)
+}
+
+fn host_rect_id(place: Place) -> egui::Id {
+    egui::Id::new(("detach_feldfenster", place.key()))
+}
+
+/// Bildschirm-Rechteck (Punkte) des Fensters, in dem gerade gezeichnet wird, wenn es ein
+/// abgedocktes **Feld** ist; sonst `None` (Hauptfenster, abgedockter Dialog, eingebettet). Meldet
+/// das Betriebssystem die Lage nicht (Wayland, Tests): Lage beim Öffnen, Größe des Builders.
+pub fn host_viewport_rect(ctx: &egui::Context) -> Option<egui::Rect> {
+    let place = host_place(ctx)?;
+    ctx.input(|i| i.viewport().outer_rect)
+        .or_else(|| ctx.data(|d| d.get_temp::<egui::Rect>(host_rect_id(place))))
+}
+
 /// Inhalt des Kindfensters (läuft mit dessen Eingabe und Faktor).
 fn window_contents<R>(
     ui: &mut egui::Ui,
-    state: &mut DetachState,
+    state: Option<&mut DetachState>,
     opened: &mut Opened,
     spec: &WindowSpec,
     add_contents: &mut impl FnMut(&mut egui::Ui) -> R,
@@ -417,6 +586,14 @@ fn window_contents<R>(
         event = WindowEvent::CloseRequested;
     }
 
+    if spec.place.is_field() && spec.head != Head::TitleOnly {
+        // Für Unterdialoge des Felds ([`host_viewport_rect`]), falls das Betriebssystem die Lage
+        // nicht meldet.
+        let rect =
+            egui::Rect::from_min_size(opened.position.unwrap_or(egui::Pos2::ZERO), spec.inner_size);
+        ctx.data_mut(|d| d.insert_temp(host_rect_id(spec.place), rect));
+    }
+
     let dark = ui.visuals().dark_mode;
     // Rahmen der Felder, aber eckig: das Fenster selbst ist rechteckig, gerundete Ecken
     // zeigten dahinter die leere Fensterfläche.
@@ -424,35 +601,69 @@ fn window_contents<R>(
     let r = egui::CentralPanel::default()
         .frame(frame)
         .show(ui, |ui| {
-            // Fläche der Kopfzeile vor deren Symbolen: die Symbole liegen darüber und behalten
-            // ihre Klicks, der Rest der Zeile zieht das Fenster bzw. dockt per Doppelklick an.
-            let head = egui::Rect::from_min_size(
-                ui.cursor().min,
-                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
-            );
-            let drag = ui.interact(
-                head,
-                ui.id().with("detach_kopfzeile"),
-                egui::Sense::click_and_drag(),
-            );
-            let clicks = crate::dialog::header(
-                ui,
-                spec.title,
-                spec.closable,
-                Some(crate::dialog::DockButton::Dock),
-            );
-            if clicks.close {
-                event = WindowEvent::CloseRequested;
-            } else if clicks.dock || drag.double_clicked() {
-                event = WindowEvent::DockClicked;
-            } else if drag.drag_started_by(egui::PointerButton::Primary)
-                && opened.drag_frame != Some(parent_frame)
-            {
-                opened.drag_frame = Some(parent_frame);
-                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                opened.moving = outer;
+            let mut head_event =
+                |clicks: crate::dialog::HeaderClicks, double: bool, drag: &egui::Response| {
+                    if clicks.close {
+                        event = WindowEvent::CloseRequested;
+                    } else if clicks.dock || double {
+                        event = WindowEvent::DockClicked;
+                    } else if drag.drag_started_by(egui::PointerButton::Primary)
+                        && opened.drag_frame != Some(parent_frame)
+                    {
+                        opened.drag_frame = Some(parent_frame);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        opened.moving = outer;
+                    }
+                };
+            match spec.head {
+                Head::Title | Head::TitleOnly => {
+                    // Fläche der Kopfzeile vor deren Symbolen: die Symbole liegen darüber und
+                    // behalten ihre Klicks, der Rest der Zeile zieht das Fenster bzw. dockt per
+                    // Doppelklick an.
+                    let head = egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                    );
+                    let drag = ui.interact(
+                        head,
+                        ui.id().with("detach_kopfzeile"),
+                        egui::Sense::click_and_drag(),
+                    );
+                    let dock =
+                        (spec.head == Head::Title).then_some(crate::dialog::DockButton::Dock);
+                    let clicks = crate::dialog::header(ui, spec.title, spec.closable, dock);
+                    head_event(clicks, dock.is_some() && drag.double_clicked(), &drag);
+                    add_contents(ui)
+                }
+                Head::Overlay { band } => {
+                    // Gesperrt, solange ein Unterdialog des Felds offen ist.
+                    let locked = sub_dialog_open(&ctx, spec.place);
+                    let area = ui.max_rect();
+                    let r = ui.add_enabled_ui(!locked, |ui| add_contents(ui)).inner;
+                    // Nach dem Inhalt angelegt, damit der Streifen über ihm liegt: Ziehen im Kopf
+                    // des Inhalts zieht das Fenster (statt den Inhalt zu rollen); Klicks behalten
+                    // die Knöpfe darunter, weil der Streifen nur Ziehen annimmt.
+                    let strip = egui::Rect::from_min_size(area.min, egui::vec2(area.width(), band));
+                    let drag = ui.interact(
+                        strip,
+                        ui.id().with("detach_kopfstreifen"),
+                        egui::Sense::drag(),
+                    );
+                    let dock = ui
+                        .add_enabled_ui(!locked, |ui| {
+                            crate::dialog::corner_dock_icon(
+                                ui,
+                                area,
+                                band,
+                                crate::dialog::DockButton::Dock,
+                            )
+                        })
+                        .inner;
+                    let clicks = crate::dialog::HeaderClicks { close: false, dock };
+                    head_event(clicks, false, &drag);
+                    r
+                }
             }
-            add_contents(ui)
         })
         .inner;
 
@@ -467,6 +678,7 @@ fn window_contents<R>(
         opened.moving = None;
         if let Some(now) = outer
             && now != start
+            && let Some(state) = state
         {
             state.set(spec.place, to_physical(now, ppp));
         }

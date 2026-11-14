@@ -230,6 +230,9 @@ dialog-close = Schließen
 dialog-dock = Andocken
 dialog-undock = Abdocken
 
+## Felder (Titel abgedockter Felder)
+panel-sketch-side = Skizzenfeld
+
 ## Tabs
 tab-close = Schließen
 

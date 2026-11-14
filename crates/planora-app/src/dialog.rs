@@ -227,6 +227,34 @@ impl<'a> Dialog<'a> {
         if matches!(open.as_deref(), Some(false)) {
             return None;
         }
+        // Aus einem abgedockten Feld geöffnet (Rückfragen und Umbenennen des Baums, Rückfragen
+        // der Versionen): eigenes kleines Fenster mittig über dem Feldfenster, nicht im (zu
+        // schmalen) Feldfenster; ohne „Abdocken“, nicht gemerkt; feste Rückfragen ebenso.
+        if let (Some(host), Some(host_rect)) =
+            (detach::host_place(ctx), detach::host_viewport_rect(ctx))
+        {
+            let width = match size {
+                DialogSize::File => DialogSize::Wide.width(),
+                other => other.width(),
+            };
+            let max_height = ctx
+                .input(|i| i.viewport().monitor_size)
+                .filter(|m| m.y > DETACHED_MONITOR_MARGIN)
+                .map_or(host_rect.height(), |m| m.y - DETACHED_MONITOR_MARGIN);
+            return show_own_window(
+                ctx,
+                OwnDialog {
+                    kind: OwnKind::Sub { host, host_rect },
+                    title: &title,
+                    id,
+                    width,
+                    max_height,
+                },
+                open,
+                add_contents,
+                footer,
+            );
+        }
         let content = ctx.content_rect();
         // Abdockbar: mit Schlüssel, nicht fest, nicht unten rechts, mit eigenen Fenstern und
         // abgelegtem Zustand. Sonst bleibt alles wie bisher (auch in allen übrigen Tests).
@@ -249,16 +277,15 @@ impl<'a> Dialog<'a> {
             };
             ctx.data_mut(|d| d.insert_temp(memo_id, DetachMemo { frame, detached }));
             if detached {
-                let width = limits(content, size).0;
-                return show_detached(
+                let (width, max_height) = limits(content, size);
+                return show_own_window(
                     ctx,
-                    DetachedDialog {
-                        place,
+                    OwnDialog {
+                        kind: OwnKind::Detached { place, memo_id },
                         title: &title,
                         id,
                         width,
-                        max_height: limits(content, size).1,
-                        memo_id,
+                        max_height,
                     },
                     open,
                     add_contents,
@@ -415,99 +442,140 @@ impl<'a> Dialog<'a> {
     }
 }
 
-/// Angaben eines abgedockten Dialogs für [`show_detached`].
-struct DetachedDialog<'t> {
-    place: Place,
+/// Wo ein Dialog im eigenen Fenster steht.
+#[derive(Clone, Copy)]
+enum OwnKind {
+    /// Abgedockt an der gemerkten Lage seines Platzes ([`detach::show_window`]).
+    Detached { place: Place, memo_id: egui::Id },
+    /// Unterdialog eines abgedockten Felds: mittig über dessen Fenster `host_rect` (Punkte),
+    /// nicht gemerkt ([`detach::show_sub_window`]).
+    Sub { host: Place, host_rect: egui::Rect },
+}
+
+/// Angaben eines Dialogs im eigenen Fenster für [`show_own_window`].
+struct OwnDialog<'t> {
+    kind: OwnKind,
     title: &'t str,
     id: egui::Id,
     /// Außenbreite wie angedockt (Punkte).
     width: f32,
-    /// Größte Höhe, wenn der Monitor des Fensters unbekannt ist (wie angedockt).
+    /// Größte Höhe, wenn der Monitor des Fensters unbekannt ist.
     max_height: f32,
-    memo_id: egui::Id,
 }
 
-/// Zeigt den Dialog als eigenes Fenster ([`detach::show_window`]): Kopfzeile mit „Andocken“
-/// und (bei `open`) Schließen-Symbol, darunter der rollende Inhalt und die Fußzeile wie
-/// angedockt. Die Fensterhöhe folgt dem Inhalt (gemessen im Fenster, angewandt im nächsten
-/// Bild), höchstens bis zur Monitorhöhe abzüglich [`DETACHED_MONITOR_MARGIN`].
-fn show_detached<R>(
+/// Erste Höhe eines Unterdialogs, bevor sein Inhalt gemessen ist (Punkte).
+const SUB_FIRST_HEIGHT: f32 = 160.0;
+
+/// Zeigt den Dialog als eigenes Fenster: abgedockt ([`detach::show_window`], Kopfzeile mit
+/// „Andocken“) oder als Unterdialog über einem abgedockten Feld ([`detach::show_sub_window`],
+/// ohne „Andocken“); dazu (bei `open`) das Schließen-Symbol, darunter der rollende Inhalt und
+/// die Fußzeile wie angedockt. Die Fensterhöhe folgt dem Inhalt (gemessen im Fenster, angewandt
+/// im nächsten Bild), höchstens bis zur Monitorhöhe abzüglich [`DETACHED_MONITOR_MARGIN`].
+fn show_own_window<R>(
     ctx: &egui::Context,
-    d: DetachedDialog,
+    d: OwnDialog,
     open: Option<&mut bool>,
     mut add_contents: impl FnMut(&mut egui::Ui) -> R,
     mut footer: Option<impl FnMut(&mut egui::Ui)>,
 ) -> Option<egui::InnerResponse<Option<R>>> {
-    let height_id = d.id.with("dialog_abgedockt_hoehe");
-    let footer_id = d.id.with("dialog_abgedockt_fusszeile");
+    let (height_id, footer_id) = match d.kind {
+        OwnKind::Detached { .. } => (
+            d.id.with("dialog_abgedockt_hoehe"),
+            d.id.with("dialog_abgedockt_fusszeile"),
+        ),
+        OwnKind::Sub { .. } => (
+            d.id.with("dialog_unter_hoehe"),
+            d.id.with("dialog_unter_fusszeile"),
+        ),
+    };
     let ppp = ctx.pixels_per_point();
     let height = ctx
         .data(|m| m.get_temp::<f32>(height_id))
-        .or_else(|| {
-            detach::with_state(ctx, |s| s.get(d.place))
+        .or_else(|| match d.kind {
+            OwnKind::Detached { place, .. } => detach::with_state(ctx, |s| s.get(place))
                 .flatten()
-                .map(|w| detach::to_points(w, ppp).height())
+                .map(|w| detach::to_points(w, ppp).height()),
+            OwnKind::Sub { .. } => Some(SUB_FIRST_HEIGHT.min(d.max_height)),
         })
         .unwrap_or(d.max_height)
         .max(1.0);
-    let spec = WindowSpec {
-        place: d.place,
-        title: d.title,
-        inner_size: egui::vec2(d.width, height),
-        resizable: false,
-        focus_on_open: true,
-        closable: open.is_some(),
-    };
     let max_height = d.max_height;
     let mut wanted = None;
-    let shown = detach::with_state(ctx, |state| {
-        detach::show_window(ctx, state, spec, |ui| {
-            let child = ui.ctx().clone();
-            let frame_h = {
-                let dark = ui.visuals().dark_mode;
-                theme::panel_frame(dark).total_margin().sum().y
-            };
-            // Gemessen am Cursor: die Fläche des Felds (`min_rect`) reicht immer bis zum
-            // Fensterrand. Oben beginnt sie an der Kopfzeile.
-            let top = ui.max_rect().top();
-            let spacing = ui.spacing().item_spacing.y;
-            let footer_h = match footer {
-                Some(_) => child.data(|m| m.get_temp::<f32>(footer_id)).unwrap_or(0.0),
-                None => 0.0,
-            };
-            let max_h = (ui.available_height() - footer_h).max(0.0);
-            let out = egui::ScrollArea::vertical()
-                .id_salt("dialog_inhalt")
-                .auto_shrink([false, true])
-                .max_height(max_h)
-                .show(ui, &mut add_contents);
-            if let Some(footer) = footer.as_mut() {
-                let start = ui.cursor().top();
-                footer(ui);
-                let h = ui.cursor().top() - start;
-                if (h - footer_h).abs() > 0.5 {
-                    child.data_mut(|m| m.insert_temp(footer_id, h));
-                    child.request_discard("Dialog: footer measured");
-                }
+    let mut body = |ui: &mut egui::Ui| {
+        let child = ui.ctx().clone();
+        let frame_h = {
+            let dark = ui.visuals().dark_mode;
+            theme::panel_frame(dark).total_margin().sum().y
+        };
+        // Gemessen am Cursor: die Fläche des Felds (`min_rect`) reicht immer bis zum
+        // Fensterrand. Oben beginnt sie an der Kopfzeile.
+        let top = ui.max_rect().top();
+        let spacing = ui.spacing().item_spacing.y;
+        let footer_h = match footer {
+            Some(_) => child.data(|m| m.get_temp::<f32>(footer_id)).unwrap_or(0.0),
+            None => 0.0,
+        };
+        let max_h = (ui.available_height() - footer_h).max(0.0);
+        let out = egui::ScrollArea::vertical()
+            .id_salt("dialog_inhalt")
+            .auto_shrink([false, true])
+            .max_height(max_h)
+            .show(ui, &mut add_contents);
+        if let Some(footer) = footer.as_mut() {
+            let start = ui.cursor().top();
+            footer(ui);
+            let h = ui.cursor().top() - start;
+            if (h - footer_h).abs() > 0.5 {
+                child.data_mut(|m| m.insert_temp(footer_id, h));
+                child.request_discard("Dialog: footer measured");
             }
-            // Höhe, die das Fenster ohne Rollen bräuchte: alles Gezeichnete (ohne den Abstand
-            // nach dem letzten Element), mit dem Inhalt in voller statt in sichtbarer Höhe.
-            let used = ui.cursor().top() - spacing - top;
-            let content_h = out.content_size.y;
-            let needed = used - content_h.min(max_h) + content_h + frame_h;
-            let limit = child
-                .input(|i| i.viewport().monitor_size)
-                .filter(|m| m.y > DETACHED_MONITOR_MARGIN)
-                .map_or(max_height, |m| m.y - DETACHED_MONITOR_MARGIN);
-            wanted = Some(needed.min(limit).ceil());
-            let area = ui.interact(
-                ui.min_rect(),
-                ui.id().with("dialog_abgedockt_flaeche"),
-                egui::Sense::hover(),
-            );
-            (out.inner, area)
-        })
-    });
+        }
+        // Höhe, die das Fenster ohne Rollen bräuchte: alles Gezeichnete (ohne den Abstand
+        // nach dem letzten Element), mit dem Inhalt in voller statt in sichtbarer Höhe.
+        let used = ui.cursor().top() - spacing - top;
+        let content_h = out.content_size.y;
+        let needed = used - content_h.min(max_h) + content_h + frame_h;
+        let limit = child
+            .input(|i| i.viewport().monitor_size)
+            .filter(|m| m.y > DETACHED_MONITOR_MARGIN)
+            .map_or(max_height, |m| m.y - DETACHED_MONITOR_MARGIN);
+        wanted = Some(needed.min(limit).ceil());
+        let area = ui.interact(
+            ui.min_rect(),
+            ui.id().with("dialog_abgedockt_flaeche"),
+            egui::Sense::hover(),
+        );
+        (out.inner, area)
+    };
+    let size = egui::vec2(d.width, height);
+    let shown = match d.kind {
+        OwnKind::Detached { place, .. } => {
+            let spec = WindowSpec {
+                place,
+                title: d.title,
+                inner_size: size,
+                resizable: false,
+                focus_on_open: true,
+                closable: open.is_some(),
+                head: detach::Head::Title,
+            };
+            detach::with_state(ctx, |state| {
+                detach::show_window(ctx, state, spec, &mut body)
+            })
+        }
+        OwnKind::Sub { host, host_rect } => Some(detach::show_sub_window(
+            ctx,
+            detach::SubWindow {
+                host,
+                dialog: d.id,
+                title: d.title,
+                inner_size: size,
+                position: host_rect.center() - size / 2.0,
+                closable: open.is_some(),
+            },
+            &mut body,
+        )),
+    };
     if let Some(h) = wanted
         && (h - height).abs() > 0.5
     {
@@ -518,14 +586,14 @@ fn show_detached<R>(
     let Some((Some((r, area)), event)) = shown else {
         return None;
     };
-    match event {
-        WindowEvent::None => {}
-        WindowEvent::DockClicked => {
-            detach::with_state(ctx, |s| s.undock(d.place));
+    match (event, d.kind) {
+        (WindowEvent::None, _) | (WindowEvent::DockClicked, OwnKind::Sub { .. }) => {}
+        (WindowEvent::DockClicked, OwnKind::Detached { place, memo_id }) => {
+            detach::with_state(ctx, |s| s.undock(place));
             let frame = ctx.cumulative_frame_nr();
             ctx.data_mut(|m| {
                 m.insert_temp(
-                    d.memo_id,
+                    memo_id,
                     DetachMemo {
                         frame,
                         detached: false,
@@ -534,7 +602,7 @@ fn show_detached<R>(
             });
             ctx.request_repaint();
         }
-        WindowEvent::CloseRequested => {
+        (WindowEvent::CloseRequested, _) => {
             if let Some(open) = open {
                 *open = false;
             }
@@ -577,6 +645,30 @@ pub(crate) fn header(
     });
     ui.add_space(SPACE_2);
     clicks
+}
+
+/// Symbol „Abdocken“/„Andocken“ eines Felds: rechts oben in `area`, senkrecht mittig im
+/// Streifen der Höhe `band` (dem Kopf des Felds), über dem Inhalt; `true`, wenn angeklickt.
+/// Nimmt im Feld keinen Platz ein (eigene Fläche).
+pub(crate) fn corner_dock_icon(
+    ui: &mut egui::Ui,
+    area: egui::Rect,
+    band: f32,
+    button: DockButton,
+) -> bool {
+    let strip = egui::Rect::from_min_size(area.min, egui::vec2(area.width(), band));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(strip)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    theme::frameless(child.style_mut());
+    header_icon(&mut child, button.icon(), button.label())
+}
+
+/// Breite, die [`corner_dock_icon`] rechts im Kopf eines Felds belegt (mit Abstand).
+pub(crate) fn corner_dock_width(ui: &egui::Ui) -> f32 {
+    HEADER_ICON_SIZE + 2.0 * ui.spacing().button_padding.x + ui.spacing().item_spacing.x
 }
 
 /// Ein Symbolknopf der Kopfzeile mit Tooltip `label`; `true`, wenn angeklickt.

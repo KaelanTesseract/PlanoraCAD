@@ -340,6 +340,33 @@ impl Screen {
         events: Vec<egui::Event>,
         f: &mut dyn FnMut(&egui::Context),
     ) -> (Vec<Seen>, Vec<egui::epaint::ClippedShape>) {
+        self.frame_ui_shapes(events, &mut |ui| f(ui.ctx()))
+    }
+
+    /// Wie [`Screen::frame`], aber mit der obersten `Ui` des Bilds (etwa für `PlanoraApp::ui`).
+    pub fn frame_ui(
+        &mut self,
+        events: Vec<egui::Event>,
+        f: &mut dyn FnMut(&mut egui::Ui),
+    ) -> Vec<Seen> {
+        self.frame_ui_shapes(events, f).0
+    }
+
+    /// Legt `events` ins nächste Bild des Kindfensters `id` (ohne ein Bild auszuführen).
+    pub fn queue_child(&mut self, id: egui::ViewportId, events: Vec<egui::Event>) {
+        self.children()
+            .child_events
+            .entry(id)
+            .or_default()
+            .extend(events);
+    }
+
+    /// Wie [`Screen::frame_shapes`] mit der obersten `Ui`.
+    pub fn frame_ui_shapes(
+        &mut self,
+        events: Vec<egui::Event>,
+        f: &mut dyn FnMut(&mut egui::Ui),
+    ) -> (Vec<Seen>, Vec<egui::epaint::ClippedShape>) {
         self.time += 0.05;
         if let Some(c) = &self.children {
             c.borrow_mut().time = self.time;
@@ -350,7 +377,7 @@ impl Screen {
             time: Some(self.time),
             ..Default::default()
         };
-        let mut out = self.ctx.run_ui(raw, |ui| f(ui.ctx()));
+        let mut out = self.ctx.run_ui(raw, |ui| f(ui));
         let mut seen = Vec::new();
         for c in &out.shapes {
             walk_shape(&c.shape, c.clip_rect, &mut seen);
