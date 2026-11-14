@@ -447,7 +447,7 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
         Dialog::new(tr!("versions-delete-title"), DialogSize::Prompt)
             .fixed()
             .show(ctx, |ui| {
-                ui.label(question);
+                ui.label(question.as_str());
                 ui.horizontal(|ui| {
                     if ui.button(tr!("versions-delete-title")).clicked() {
                         answer = Some(true);

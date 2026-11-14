@@ -952,6 +952,7 @@ impl StepImportDialog {
         let chooser = RefCell::new(&mut self.chooser);
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
         let response = Dialog::new(title(), DialogSize::File)
+            .dock_key("step_import")
             .center_on_open()
             .open(&mut open)
             .show_with_footer(

@@ -610,6 +610,7 @@ impl CanvasDialog {
             tr!("insert-canvas-title")
         };
         let response = Dialog::new(title, DialogSize::File)
+            .dock_key("canvas")
             .center_on_open()
             .open(&mut open)
             .show_with_footer(

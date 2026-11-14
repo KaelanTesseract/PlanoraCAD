@@ -2842,6 +2842,9 @@ impl eframe::App for PlanoraApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Der Abdock-Zustand liegt für dieses Bild in `ctx.data`, damit jeder `Dialog` ihn
+        // erreicht; am Ende kommt er zurück nach `ws.detach`.
+        crate::detach::install(&ctx, &mut self.ws.detach);
         let dark = self.ws.active_tab().state.dark;
         if self.applied_dark != Some(dark) {
             theme::apply(&ctx, dark);
@@ -3073,6 +3076,7 @@ impl eframe::App for PlanoraApp {
         if self.first_frame.is_none() {
             self.first_frame = Some(ctx.cumulative_frame_nr());
         }
+        crate::detach::uninstall(&ctx, &mut self.ws.detach);
         // Abdock-Zustand nur bei Änderung schreiben; ein Fehler bricht nichts ab, die Änderung
         // bleibt aber vorgemerkt.
         self.ws.detach.save_if_dirty(&self.ws.config_path);

@@ -445,14 +445,16 @@ pub(crate) fn field<R>(
         .inner
 }
 
-/// Welche Plätze gerade im eigenen Fenster liegen.
+/// Welche Plätze gerade im eigenen Fenster liegen. Während eines Bilds liegt der Zustand in
+/// `ctx.data` ([`crate::detach::install`]), sonst (Tests) in `app.ws.detach`.
 pub fn undocked_places(ctx: &egui::Context, app: &PlanoraApp) -> shell::Undocked {
-    use crate::detach::{Place, is_undocked};
-    shell::Undocked {
-        tree: is_undocked(ctx, &app.ws.detach, Place::Tree),
-        right: is_undocked(ctx, &app.ws.detach, Place::Right),
-        sketch_side: is_undocked(ctx, &app.ws.detach, Place::SketchSide),
-    }
+    use crate::detach::{DetachState, Place, is_undocked, with_state};
+    let of = |s: &DetachState| shell::Undocked {
+        tree: is_undocked(ctx, s, Place::Tree),
+        right: is_undocked(ctx, s, Place::Right),
+        sketch_side: is_undocked(ctx, s, Place::SketchSide),
+    };
+    with_state(ctx, |s| of(s)).unwrap_or_else(|| of(&app.ws.detach))
 }
 
 /// Zeichnet alle Felder (Area-basiert) und liefert die freie Fläche; Reihenfolge: Felder vor dem

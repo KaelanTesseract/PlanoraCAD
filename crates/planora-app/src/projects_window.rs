@@ -963,6 +963,7 @@ impl ProjectsWindow {
         let mut acts = Vec::new();
         let (mut open, mut refresh) = (true, false);
         let response = Dialog::new(title(), DialogSize::File)
+            .dock_key("projects")
             .id(egui::Id::new(WINDOW_ID))
             .center_on_open()
             .open(&mut open)

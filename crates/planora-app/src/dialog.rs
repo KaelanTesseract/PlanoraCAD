@@ -3,6 +3,7 @@
 //! Dialog ist so hoch wie sein Inhalt; nur zu hoher Inhalt scrollt (unter der stehenden
 //! Kopfzeile). Der Dialog bleibt ganz im Fenster.
 
+use crate::detach::{self, Place, WindowEvent, WindowSpec};
 use crate::icons::{self, Icon};
 use crate::shell::SHELL_INSET;
 use crate::theme::{self, SPACE_2};
@@ -23,10 +24,6 @@ pub(crate) enum DockButton {
     /// Abgedocktes Fenster: zurück ins Hauptfenster.
     Dock,
     /// Angedockt: als eigenes Fenster herauslösen.
-    #[expect(
-        dead_code,
-        reason = "das Symbol Abdocken bekommen die Dialoge und Felder in den nächsten Aufgaben"
-    )]
     Undock,
 }
 
@@ -84,6 +81,10 @@ pub const FILE_WIDTH_SHARE: f32 = 0.55;
 /// Größte Breite eines Dateifensters.
 pub const FILE_MAX_WIDTH: f32 = 1200.0;
 
+/// Rand zur Monitorhöhe, den ein abgedockter Dialog frei lässt (Taskleiste, Luft); höher wird
+/// er nicht, darüber rollt sein Inhalt.
+pub const DETACHED_MONITOR_MARGIN: f32 = 80.0;
+
 /// Außenbreite und größte Außenhöhe im Fenster `content` (Rand [`SHELL_INSET`] rundum). Ein
 /// Dateifenster ist [`FILE_WIDTH_SHARE`] der Fensterbreite breit, mindestens 720 und höchstens
 /// [`FILE_MAX_WIDTH`] px.
@@ -108,6 +109,16 @@ pub struct Dialog<'a> {
     center_on_open: bool,
     /// Fest unten rechts in diesem Bereich statt mittig ([`Dialog::bottom_right_in`]).
     dock: Option<egui::Rect>,
+    /// Platz zum Abdocken ([`Dialog::dock_key`]).
+    dock_key: Option<&'static str>,
+}
+
+/// Ob ein abdockbarer Dialog in diesem Öffnen abgedockt steht (Bild der letzten Anzeige,
+/// abgedockt). Entschieden beim Öffnen (Monitorprüfung), danach durch die Symbole.
+#[derive(Clone, Copy, Debug)]
+struct DetachMemo {
+    frame: u64,
+    detached: bool,
 }
 
 impl<'a> Dialog<'a> {
@@ -122,7 +133,22 @@ impl<'a> Dialog<'a> {
             fixed: false,
             center_on_open: false,
             dock: None,
+            dock_key: None,
         }
+    }
+
+    /// Abdockbar unter dem festen, sprachunabhängigen Schlüssel `key` (aus
+    /// [`detach::DIALOG_KEYS`]): Mit eigenen Fenstern zeigt die Kopfzeile links vom
+    /// Schließen-Symbol das Symbol „Abdocken“; abgedockt steht der Dialog als eigenes Fenster an
+    /// der gemerkten Lage. Ohne Schlüssel, bei festen Dialogen und ohne abgelegten
+    /// Abdock-Zustand ([`detach::install`]) wie bisher.
+    pub fn dock_key(mut self, key: &'static str) -> Self {
+        debug_assert!(
+            detach::DIALOG_KEYS.contains(&key),
+            "dialog key `{key}` is missing from detach::DIALOG_KEYS"
+        );
+        self.dock_key = Some(key);
+        self
     }
 
     /// Steht fest unten rechts im Bereich `area` (nicht verschiebbar) und bleibt darin; höher
@@ -159,11 +185,14 @@ impl<'a> Dialog<'a> {
         self
     }
 
-    /// Zeigt den Dialog; `None`, wenn er nicht (mehr) offen ist.
+    /// Zeigt den Dialog; `None`, wenn er nicht (mehr) offen ist. `add_contents` kann in einem
+    /// Bild mehrmals laufen (abgedockt wiederholt egui verworfene Durchgänge des eigenen
+    /// Fensters); geliefert wird das Ergebnis des letzten Laufs. Abgedockt beschreibt die
+    /// Antwort die Fläche des Inhalts im eigenen Fenster (dessen Punkte).
     pub fn show<R>(
         self,
         ctx: &egui::Context,
-        add_contents: impl FnOnce(&mut egui::Ui) -> R,
+        add_contents: impl FnMut(&mut egui::Ui) -> R,
     ) -> Option<egui::InnerResponse<Option<R>>> {
         self.show_inner(ctx, add_contents, None::<fn(&mut egui::Ui)>)
     }
@@ -173,8 +202,8 @@ impl<'a> Dialog<'a> {
     pub fn show_with_footer<R>(
         self,
         ctx: &egui::Context,
-        add_contents: impl FnOnce(&mut egui::Ui) -> R,
-        footer: impl FnOnce(&mut egui::Ui),
+        add_contents: impl FnMut(&mut egui::Ui) -> R,
+        footer: impl FnMut(&mut egui::Ui),
     ) -> Option<egui::InnerResponse<Option<R>>> {
         self.show_inner(ctx, add_contents, Some(footer))
     }
@@ -182,8 +211,8 @@ impl<'a> Dialog<'a> {
     fn show_inner<R>(
         self,
         ctx: &egui::Context,
-        add_contents: impl FnOnce(&mut egui::Ui) -> R,
-        footer: Option<impl FnOnce(&mut egui::Ui)>,
+        mut add_contents: impl FnMut(&mut egui::Ui) -> R,
+        footer: Option<impl FnMut(&mut egui::Ui)>,
     ) -> Option<egui::InnerResponse<Option<R>>> {
         let Dialog {
             title,
@@ -193,12 +222,51 @@ impl<'a> Dialog<'a> {
             fixed,
             center_on_open,
             dock,
+            dock_key,
         } = self;
         if matches!(open.as_deref(), Some(false)) {
             return None;
         }
-        let dark = ctx.global_style().visuals.dark_mode;
         let content = ctx.content_rect();
+        // Abdockbar: mit Schlüssel, nicht fest, nicht unten rechts, mit eigenen Fenstern und
+        // abgelegtem Zustand. Sonst bleibt alles wie bisher (auch in allen übrigen Tests).
+        let place = dock_key
+            .filter(|_| dock.is_none() && !fixed)
+            .map(Place::Dialog)
+            .filter(|_| detach::can_detach(ctx) && detach::is_installed(ctx));
+        let memo_id = id.with("dialog_abgedockt");
+        if let Some(place) = place {
+            let frame = ctx.cumulative_frame_nr();
+            let detached = match ctx.data(|d| d.get_temp::<DetachMemo>(memo_id)) {
+                // Im vorigen (oder diesem) Bild gezeigt: wie dort.
+                Some(m) if m.frame + 1 >= frame => m.detached,
+                // Frisch geöffnet: abgedockt, wenn gemerkt und sein Monitor da ist; fehlt der
+                // Monitor, steht er angedockt und der Eintrag bleibt.
+                _ => detach::with_state(ctx, |s| {
+                    detach::should_detach(s.get(place), detach::on_screen).is_some()
+                })
+                .unwrap_or(false),
+            };
+            ctx.data_mut(|d| d.insert_temp(memo_id, DetachMemo { frame, detached }));
+            if detached {
+                let width = limits(content, size).0;
+                return show_detached(
+                    ctx,
+                    DetachedDialog {
+                        place,
+                        title: &title,
+                        id,
+                        width,
+                        max_height: limits(content, size).1,
+                        memo_id,
+                    },
+                    open,
+                    add_contents,
+                    footer,
+                );
+            }
+        }
+        let dark = ctx.global_style().visuals.dark_mode;
         let (width, height) = match dock {
             Some(area) => (size.width().min(area.width()), area.height()),
             None => limits(content, size),
@@ -261,7 +329,12 @@ impl<'a> Dialog<'a> {
                 ui.ctx().request_discard("Dialog: first sizing pass");
             }
             let top = ui.min_rect().top();
-            let close = header(ui, &title, open.is_some(), None).close;
+            let clicks = header(
+                ui,
+                &title,
+                open.is_some(),
+                place.map(|_| DockButton::Undock),
+            );
             let used = ui.cursor().top() - top;
             // Höhe der Fußzeile aus dem vorigen Bild (ändert sie sich, wird das Bild unten
             // verworfen und wiederholt).
@@ -277,9 +350,9 @@ impl<'a> Dialog<'a> {
                 .id_salt("dialog_inhalt")
                 .auto_shrink([false, true])
                 .max_height((height - frame_h - used - footer_h).max(0.0))
-                .show(ui, add_contents)
+                .show(ui, &mut add_contents)
                 .inner;
-            if let Some(footer) = footer {
+            if let Some(mut footer) = footer {
                 // Ab der Unterkante des Inhalts: mit dem Abstand zur Fußzeile.
                 let start = ui.min_rect().bottom();
                 footer(ui);
@@ -289,7 +362,7 @@ impl<'a> Dialog<'a> {
                     ui.ctx().request_discard("Dialog: footer measured");
                 }
             }
-            (close, r)
+            (clicks, r)
         });
         // Größe geändert: dieses Bild verwerfen und mit der neuen Größe wiederholen (egui
         // begrenzt das auf `max_passes`, eine Schleife ist ausgeschlossen).
@@ -299,9 +372,40 @@ impl<'a> Dialog<'a> {
         {
             ctx.request_discard("Dialog: height changed");
         }
+        // „Abdocken“: an der jetzigen Stelle (Bildschirmkoordinaten, physische Pixel) als eigenes
+        // Fenster, ab dem nächsten Bild.
+        if let (Some(place), Some(response)) = (place, closed.as_ref())
+            && response
+                .inner
+                .as_ref()
+                .is_some_and(|(clicks, _)| clicks.dock)
+        {
+            let rect = response.response.rect;
+            let origin = ctx
+                .input(|i| i.viewport().inner_rect)
+                .map_or(egui::Vec2::ZERO, |r| r.min.to_vec2());
+            let ppp = ctx.pixels_per_point();
+            detach::with_state(ctx, |s| {
+                s.set(place, detach::to_physical(rect.translate(origin), ppp));
+            });
+            let frame = ctx.cumulative_frame_nr();
+            ctx.data_mut(|d| {
+                d.insert_temp(
+                    memo_id,
+                    DetachMemo {
+                        frame,
+                        detached: true,
+                    },
+                );
+                d.insert_temp(id.with("dialog_abgedockt_hoehe"), rect.height());
+            });
+            ctx.request_repaint();
+        }
         closed.map(|response| {
-            let inner = response.inner.map(|(close, r)| {
-                if close && let Some(open) = open {
+            let inner = response.inner.map(|(clicks, r)| {
+                if clicks.close
+                    && let Some(open) = open
+                {
                     *open = false;
                 }
                 r
@@ -309,6 +413,134 @@ impl<'a> Dialog<'a> {
             egui::InnerResponse::new(inner, response.response)
         })
     }
+}
+
+/// Angaben eines abgedockten Dialogs für [`show_detached`].
+struct DetachedDialog<'t> {
+    place: Place,
+    title: &'t str,
+    id: egui::Id,
+    /// Außenbreite wie angedockt (Punkte).
+    width: f32,
+    /// Größte Höhe, wenn der Monitor des Fensters unbekannt ist (wie angedockt).
+    max_height: f32,
+    memo_id: egui::Id,
+}
+
+/// Zeigt den Dialog als eigenes Fenster ([`detach::show_window`]): Kopfzeile mit „Andocken“
+/// und (bei `open`) Schließen-Symbol, darunter der rollende Inhalt und die Fußzeile wie
+/// angedockt. Die Fensterhöhe folgt dem Inhalt (gemessen im Fenster, angewandt im nächsten
+/// Bild), höchstens bis zur Monitorhöhe abzüglich [`DETACHED_MONITOR_MARGIN`].
+fn show_detached<R>(
+    ctx: &egui::Context,
+    d: DetachedDialog,
+    open: Option<&mut bool>,
+    mut add_contents: impl FnMut(&mut egui::Ui) -> R,
+    mut footer: Option<impl FnMut(&mut egui::Ui)>,
+) -> Option<egui::InnerResponse<Option<R>>> {
+    let height_id = d.id.with("dialog_abgedockt_hoehe");
+    let footer_id = d.id.with("dialog_abgedockt_fusszeile");
+    let ppp = ctx.pixels_per_point();
+    let height = ctx
+        .data(|m| m.get_temp::<f32>(height_id))
+        .or_else(|| {
+            detach::with_state(ctx, |s| s.get(d.place))
+                .flatten()
+                .map(|w| detach::to_points(w, ppp).height())
+        })
+        .unwrap_or(d.max_height)
+        .max(1.0);
+    let spec = WindowSpec {
+        place: d.place,
+        title: d.title,
+        inner_size: egui::vec2(d.width, height),
+        resizable: false,
+        focus_on_open: true,
+        closable: open.is_some(),
+    };
+    let max_height = d.max_height;
+    let mut wanted = None;
+    let shown = detach::with_state(ctx, |state| {
+        detach::show_window(ctx, state, spec, |ui| {
+            let child = ui.ctx().clone();
+            let frame_h = {
+                let dark = ui.visuals().dark_mode;
+                theme::panel_frame(dark).total_margin().sum().y
+            };
+            // Gemessen am Cursor: die Fläche des Felds (`min_rect`) reicht immer bis zum
+            // Fensterrand. Oben beginnt sie an der Kopfzeile.
+            let top = ui.max_rect().top();
+            let spacing = ui.spacing().item_spacing.y;
+            let footer_h = match footer {
+                Some(_) => child.data(|m| m.get_temp::<f32>(footer_id)).unwrap_or(0.0),
+                None => 0.0,
+            };
+            let max_h = (ui.available_height() - footer_h).max(0.0);
+            let out = egui::ScrollArea::vertical()
+                .id_salt("dialog_inhalt")
+                .auto_shrink([false, true])
+                .max_height(max_h)
+                .show(ui, &mut add_contents);
+            if let Some(footer) = footer.as_mut() {
+                let start = ui.cursor().top();
+                footer(ui);
+                let h = ui.cursor().top() - start;
+                if (h - footer_h).abs() > 0.5 {
+                    child.data_mut(|m| m.insert_temp(footer_id, h));
+                    child.request_discard("Dialog: footer measured");
+                }
+            }
+            // Höhe, die das Fenster ohne Rollen bräuchte: alles Gezeichnete (ohne den Abstand
+            // nach dem letzten Element), mit dem Inhalt in voller statt in sichtbarer Höhe.
+            let used = ui.cursor().top() - spacing - top;
+            let content_h = out.content_size.y;
+            let needed = used - content_h.min(max_h) + content_h + frame_h;
+            let limit = child
+                .input(|i| i.viewport().monitor_size)
+                .filter(|m| m.y > DETACHED_MONITOR_MARGIN)
+                .map_or(max_height, |m| m.y - DETACHED_MONITOR_MARGIN);
+            wanted = Some(needed.min(limit).ceil());
+            let area = ui.interact(
+                ui.min_rect(),
+                ui.id().with("dialog_abgedockt_flaeche"),
+                egui::Sense::hover(),
+            );
+            (out.inner, area)
+        })
+    });
+    if let Some(h) = wanted
+        && (h - height).abs() > 0.5
+    {
+        // Neue Höhe ab dem nächsten Bild (der Builder schickt sie als `InnerSize`).
+        ctx.data_mut(|m| m.insert_temp(height_id, h));
+        ctx.request_repaint();
+    }
+    let Some((Some((r, area)), event)) = shown else {
+        return None;
+    };
+    match event {
+        WindowEvent::None => {}
+        WindowEvent::DockClicked => {
+            detach::with_state(ctx, |s| s.undock(d.place));
+            let frame = ctx.cumulative_frame_nr();
+            ctx.data_mut(|m| {
+                m.insert_temp(
+                    d.memo_id,
+                    DetachMemo {
+                        frame,
+                        detached: false,
+                    },
+                );
+            });
+            ctx.request_repaint();
+        }
+        WindowEvent::CloseRequested => {
+            if let Some(open) = open {
+                *open = false;
+            }
+        }
+    }
+    Some(egui::InnerResponse::new(Some(r), area))
 }
 
 /// Kopfzeile: Titel links, rechts (falls `closable`) das Schließen-Symbol und links daneben

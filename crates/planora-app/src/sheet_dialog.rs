@@ -359,6 +359,7 @@ impl SheetInfoDialog {
             ..
         } = self;
         let response = Dialog::new(title(), DialogSize::Wide)
+            .dock_key("sheet_info")
             .open(&mut open)
             .show_with_footer(
                 ctx,

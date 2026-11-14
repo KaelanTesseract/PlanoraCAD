@@ -877,6 +877,7 @@ pub fn show(ctx: &egui::Context, state: &mut FeedbackDialog, dark: bool) -> Opti
     let sent = state.sent.is_some();
     let enough = Cell::new(state.long_enough());
     Dialog::new(title(), DialogSize::Wide)
+        .dock_key("feedback")
         .id(window_id())
         .center_on_open()
         .open(&mut open)

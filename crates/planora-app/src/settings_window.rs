@@ -565,6 +565,7 @@ impl SettingsWindow {
         let chooser = RefCell::new(self.chooser.as_mut());
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
         let response = Dialog::new(title(), DialogSize::File)
+            .dock_key("settings")
             .id(egui::Id::new(WINDOW_ID))
             .center_on_open()
             .open(&mut open)
@@ -617,7 +618,7 @@ impl SettingsWindow {
                         theme::section_header(ui, &section_projects(), theme::SUB_HEADER_H);
                         ui.add_space(theme::SPACE_2);
                         ui.strong(directory_label());
-                        ui.add(egui::Label::new(path).wrap());
+                        ui.add(egui::Label::new(path.as_str()).wrap());
                         if !choosing && ui.button(change_directory()).clicked() {
                             start = true;
                         }

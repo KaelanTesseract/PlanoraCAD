@@ -501,6 +501,7 @@ pub fn show_after_update(
         update_install::updated_title(&info.version),
         DialogSize::Wide,
     )
+    .dock_key("update_done")
     .id(egui::Id::new(DONE_WINDOW_ID))
     .center_on_open()
     .open(&mut open)

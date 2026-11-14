@@ -604,6 +604,7 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     let (mut apply, mut cancel) = (false, false);
     let mut open = true;
     Dialog::new(tr!("tree-rename"), DialogSize::Prompt)
+        .dock_key("drawing_rename")
         .id(egui::Id::new("planora-rename-drawing"))
         .open(&mut open)
         .show(ctx, |ui| {
@@ -646,6 +647,7 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
     Dialog::new(tr!("tree-confirm-title"), DialogSize::Prompt)
+        .dock_key("drawing_delete")
         .id(egui::Id::new("planora-delete-drawing"))
         .open(&mut open)
         .show(ctx, |ui| {

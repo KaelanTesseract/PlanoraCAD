@@ -1705,6 +1705,7 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     let (mut apply, mut cancel) = (false, false);
     let mut open = true;
     Dialog::new(tr!("tree-rename"), DialogSize::Prompt)
+        .dock_key("tree_rename")
         .open(&mut open)
         .show(ctx, |ui| {
             let r = theme::text_field(ui, egui::TextEdit::singleline(name));
@@ -1736,6 +1737,7 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
     Dialog::new(tr!("tree-confirm-title"), DialogSize::Prompt)
+        .dock_key("tree_delete")
         .open(&mut open)
         .show(ctx, |ui| {
             ui.label(plan.text());

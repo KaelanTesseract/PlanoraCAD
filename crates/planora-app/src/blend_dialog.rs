@@ -432,6 +432,15 @@ impl BlendDialog {
         }
     }
 
+    /// Platz zum Abdocken: Verrunden und Fase stehen getrennt (je Befehl, wie Fusion).
+    pub fn dock_key(&self) -> &'static str {
+        if matches!(self.art, ArtChoice::Rundung | ArtChoice::RundungVariabel) {
+            "fillet"
+        } else {
+            "chamfer"
+        }
+    }
+
     /// Feste Kennung des Fensters (hängt nicht vom übersetzten Titel ab, damit es beim
     /// Sprachwechsel nicht springt).
     pub fn window_id(&self) -> egui::Id {
@@ -661,6 +670,7 @@ impl BlendDialog {
         let scope = state.document.param_scope();
         let mut errors: Vec<String> = Vec::new();
         Dialog::new(self.title(), DialogSize::Normal)
+            .dock_key(self.dock_key())
             .id(self.window_id())
             .open(&mut open)
             .show(ctx, |ui| {

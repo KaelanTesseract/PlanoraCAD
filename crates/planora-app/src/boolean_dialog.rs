@@ -83,6 +83,7 @@ impl BooleanDialog {
         let mut open = true;
         let (mut run, mut cancel) = (false, false);
         Dialog::new(tr!("boolean-title"), DialogSize::Normal)
+            .dock_key("boolean")
             .id(egui::Id::new("boolean_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {

@@ -15,8 +15,66 @@ pub enum Place {
     Dialog(&'static str),
 }
 
-/// Alle Dialogschlüssel (wird mit den Dialogen in Aufgabe 5 gefüllt).
-pub const DIALOG_KEYS: &[&str] = &[];
+/// Alle Dialogschlüssel (`Dialog::dock_key`): fest und sprachunabhängig, je Dialog bzw. je
+/// Feature-Art einer. Der Test `tests/dialog_dock_keys.rs` hält die Liste und die Aufrufe
+/// gleich.
+pub const DIALOG_KEYS: &[&str] = &[
+    "about",
+    "boolean",
+    // Erzeugen (`create_dialog`), je Art
+    "box",
+    "cylinder",
+    "sphere",
+    "cone",
+    "extrude",
+    "revolve",
+    // Verrunden und Fase (`blend_dialog`)
+    "fillet",
+    "chamfer",
+    // Bearbeiten eines Features (`feature_dialog`), je Art; eigene Plätze, weil das Fenster
+    // „Bearbeiten“ neben dem Erzeugen-Fenster derselben Art offen sein kann
+    "edit_box",
+    "edit_cylinder",
+    "edit_sphere",
+    "edit_cone",
+    "edit_extrude",
+    "edit_revolve",
+    "edit_boolean",
+    "edit_move",
+    "edit_fillet",
+    "edit_chamfer",
+    "edit_feature",
+    // Konstruktionsebenen (`plane_dialog`), je Befehl
+    "plane_offset",
+    "plane_angle",
+    "plane_tangent",
+    "plane_mid",
+    "plane_three_points",
+    // Einfügen (Skizzen 9)
+    "insert_dxf",
+    "insert_svg",
+    "canvas",
+    // Baum und Zeichnung
+    "tree_rename",
+    "tree_delete",
+    "drawing_rename",
+    "drawing_delete",
+    "dimension_delete",
+    "dimension_edit",
+    "drawing_new",
+    "sheet_info",
+    // Austausch
+    "export",
+    "mesh_import",
+    "step_import",
+    // Fenster
+    "parameters",
+    "projects",
+    "settings",
+    "shortcuts",
+    "feedback",
+    "update_done",
+];
 
 impl Place {
     /// Schlüssel in `config.json` (`detached`).
@@ -89,6 +147,47 @@ impl DetachState {
         let windows = self.windows.clone();
         Config::update_at(config_path, |c| c.detached = windows).is_ok()
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Zustand im egui-Kontext
+// ---------------------------------------------------------------------------------------------
+
+/// Ablage des Abdock-Zustands in `ctx.data` während eines Bilds.
+fn state_id() -> egui::Id {
+    egui::Id::new("planora_detach_state")
+}
+
+/// Legt den Abdock-Zustand für dieses Bild in `ctx.data` ab, damit `Dialog` ihn erreicht, ohne
+/// dass alle Aufrufe ihn durchreichen. `state` ist danach leer, bis [`uninstall`] ihn
+/// zurückholt (am Ende von `PlanoraApp::ui`).
+pub fn install(ctx: &egui::Context, state: &mut DetachState) {
+    let s = std::mem::take(state);
+    ctx.data_mut(|d| d.insert_temp(state_id(), s));
+}
+
+/// Holt den mit [`install`] abgelegten Zustand nach `state` zurück.
+pub fn uninstall(ctx: &egui::Context, state: &mut DetachState) {
+    let back = ctx.data_mut(|d| d.remove_temp::<DetachState>(state_id()));
+    debug_assert!(back.is_some(), "uninstall without install");
+    if let Some(back) = back {
+        *state = back;
+    }
+}
+
+/// Ist ein Zustand abgelegt (und gerade nicht von [`with_state`] ausgeliehen)?
+pub fn is_installed(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<DetachState>(state_id()).is_some())
+}
+
+/// Führt `f` mit dem abgelegten Zustand aus; `None`, wenn keiner abgelegt ist. Während `f`
+/// läuft, ist der Zustand ausgeliehen: Ein darin gezeigter Dialog (etwa im abgedockten Fenster)
+/// findet keinen und bleibt wie heute angedockt.
+pub fn with_state<R>(ctx: &egui::Context, f: impl FnOnce(&mut DetachState) -> R) -> Option<R> {
+    let mut state = ctx.data_mut(|d| d.remove_temp::<DetachState>(state_id()))?;
+    let r = f(&mut state);
+    ctx.data_mut(|d| d.insert_temp(state_id(), state));
+    Some(r)
 }
 
 /// Prüft, ob der Kopfstreifen des Fensters (physische Pixel) auf einem Monitor liegt.
@@ -165,6 +264,9 @@ pub struct WindowSpec<'a> {
     pub resizable: bool,
     /// Beim Öffnen den Fokus nehmen (Dialoge ja, beim Start erscheinende Felder nein).
     pub focus_on_open: bool,
+    /// Schließen-Symbol in der Kopfzeile (Dialoge mit `.open(..)`); ein Klick meldet
+    /// [`WindowEvent::CloseRequested`].
+    pub closable: bool,
 }
 
 /// Was im abgedockten Fenster in diesem Bild geschah.
@@ -173,8 +275,9 @@ pub enum WindowEvent {
     None,
     /// Symbol „Andocken“ oder Doppelklick auf die Kopfzeile.
     DockClicked,
-    /// Das Betriebssystem will das Fenster schließen (Alt+F4); das Schließen ist schon
-    /// abgebrochen, der Aufrufer entscheidet (Feld andocken, Dialog abbrechen).
+    /// Schließen-Symbol (nur bei [`WindowSpec::closable`]) oder das Betriebssystem will das
+    /// Fenster schließen (Alt+F4); das Schließen durch das Betriebssystem ist schon abgebrochen,
+    /// der Aufrufer entscheidet (Feld andocken, Dialog abbrechen).
     CloseRequested,
 }
 
@@ -208,6 +311,11 @@ struct Opened {
     wanted: Option<egui::Pos2>,
     /// Äußeres Rechteck (Punkte des Fensters) beim Beginn eines Zieh- oder Größenvorgangs.
     moving: Option<egui::Rect>,
+    /// Bild des Aufrufers, in dem das Schließen zuletzt abgebrochen bzw. ein Zieh- oder
+    /// Größenvorgang begonnen wurde: Läuft das Kindfenster in einem Bild mit mehreren
+    /// Durchgängen (`request_discard`) mehrmals, geht jeder Befehl nur einmal ans Fenster.
+    close_frame: Option<u64>,
+    drag_frame: Option<u64>,
 }
 
 /// Zeigt `add_contents` als eigenes Betriebssystemfenster für den Platz `spec.place`: ohne
@@ -231,7 +339,7 @@ pub fn show_window<R>(
     if !can_detach(ctx) {
         debug_assert!(
             false,
-            "show_window ohne eigene Fenster ({:?}); vorher can_detach prüfen",
+            "show_window without native windows ({:?}); check can_detach first",
             spec.place
         );
         return (None, WindowEvent::None);
@@ -251,6 +359,8 @@ pub fn show_window<R>(
                 position: saved.map(|w| to_points(w, ppp).min),
                 wanted: saved.map(|w| egui::pos2(w.x, w.y)),
                 moving: None,
+                close_frame: None,
+                drag_frame: None,
             }
         });
     opened.parent_frame = frame;
@@ -300,7 +410,9 @@ fn window_contents<R>(
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(wanted / ppp));
     }
 
-    if ctx.input(|i| i.viewport().close_requested()) {
+    let parent_frame = opened.parent_frame;
+    if ctx.input(|i| i.viewport().close_requested()) && opened.close_frame != Some(parent_frame) {
+        opened.close_frame = Some(parent_frame);
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         event = WindowEvent::CloseRequested;
     }
@@ -323,11 +435,20 @@ fn window_contents<R>(
                 ui.id().with("detach_kopfzeile"),
                 egui::Sense::click_and_drag(),
             );
-            let clicks =
-                crate::dialog::header(ui, spec.title, false, Some(crate::dialog::DockButton::Dock));
-            if clicks.dock || drag.double_clicked() {
+            let clicks = crate::dialog::header(
+                ui,
+                spec.title,
+                spec.closable,
+                Some(crate::dialog::DockButton::Dock),
+            );
+            if clicks.close {
+                event = WindowEvent::CloseRequested;
+            } else if clicks.dock || drag.double_clicked() {
                 event = WindowEvent::DockClicked;
-            } else if drag.drag_started_by(egui::PointerButton::Primary) {
+            } else if drag.drag_started_by(egui::PointerButton::Primary)
+                && opened.drag_frame != Some(parent_frame)
+            {
+                opened.drag_frame = Some(parent_frame);
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 opened.moving = outer;
             }
@@ -398,7 +519,10 @@ fn resize_edges(ui: &mut egui::Ui, opened: &mut Opened, outer: Option<egui::Rect
                 D::NorthEast | D::SouthWest => egui::CursorIcon::ResizeNeSw,
             });
         }
-        if response.drag_started_by(egui::PointerButton::Primary) {
+        if response.drag_started_by(egui::PointerButton::Primary)
+            && opened.drag_frame != Some(opened.parent_frame)
+        {
+            opened.drag_frame = Some(opened.parent_frame);
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
             opened.moving = outer;
@@ -425,6 +549,35 @@ mod tests {
         assert_eq!(Place::Right.key(), "right");
         assert_eq!(Place::SketchSide.key(), "sketch_side");
         assert_eq!(Place::Dialog("blend").key(), "dialog:blend");
+    }
+
+    #[test]
+    fn keys_per_kind_are_listed() {
+        for c in crate::plane_dialog::PlaneCommand::ALL {
+            assert!(DIALOG_KEYS.contains(&c.dock_key()), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn with_state_lends_installed_state() {
+        let ctx = egui::Context::default();
+        assert!(!is_installed(&ctx));
+        assert_eq!(with_state(&ctx, |_| 1), None, "ohne install nichts");
+        let mut s = DetachState::default();
+        s.set(Place::Tree, win());
+        install(&ctx, &mut s);
+        assert_eq!(s.get(Place::Tree), None, "abgelegt");
+        assert!(is_installed(&ctx));
+        let inner = with_state(&ctx, |st| {
+            st.undock(Place::Tree);
+            // Ausgeliehen: ein verschachtelter Aufruf findet keinen Zustand.
+            (is_installed(&ctx), with_state(&ctx, |_| ()))
+        });
+        assert_eq!(inner, Some((false, None)));
+        uninstall(&ctx, &mut s);
+        assert_eq!(s.get(Place::Tree), None, "Änderung zurück");
+        assert!(s.take_dirty());
+        assert!(!is_installed(&ctx));
     }
 
     #[test]

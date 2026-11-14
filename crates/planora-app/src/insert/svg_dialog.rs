@@ -451,6 +451,7 @@ impl SvgDialog {
         let loaded = &self.loaded;
         let labels = field_labels();
         let response = Dialog::new(tr!("insert-svg-title"), DialogSize::File)
+            .dock_key("insert_svg")
             .center_on_open()
             .open(&mut open)
             .show_with_footer(

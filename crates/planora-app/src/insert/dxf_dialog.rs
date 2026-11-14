@@ -369,6 +369,7 @@ impl DxfDialog {
         let target = &mut self.target;
         let loaded = &self.loaded;
         let response = Dialog::new(tr!("insert-dxf-title"), DialogSize::File)
+            .dock_key("insert_dxf")
             .center_on_open()
             .open(&mut open)
             .show_with_footer(

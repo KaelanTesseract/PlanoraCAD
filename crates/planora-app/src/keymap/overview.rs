@@ -135,6 +135,7 @@ pub fn show(ctx: &egui::Context, ws: &Workspace, state: &mut OverviewState) -> O
     let (mut open, mut close, mut to_settings) = (true, false, false);
     let km = &ws.keymap;
     Dialog::new(title(), DialogSize::Wide)
+        .dock_key("shortcuts")
         .id(egui::Id::new(WINDOW_ID))
         .center_on_open()
         .open(&mut open)
