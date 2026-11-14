@@ -1543,6 +1543,22 @@ pub fn grip_layout(state: &AppState, rect: Rect) -> Option<GripLayout> {
     }
     let now = se.transform_now()?;
     let map = mapper(rect, state)?;
+    // Mit „3D-Skizze“ liegt das ganze Griffkreuz an der Mitte im Raum (Fix-Runde 1 Task 20).
+    if se.tool == Tool::MoveCopy && state.session_sketch()?.three_d {
+        let c = se.grip_center3()?;
+        let center = map.to_screen3(c)?;
+        let step = crate::sketch_triad::units_per_px_at(&map, c)?;
+        let dir = |axis: DVec3| {
+            map.to_screen3(c + axis * step)
+                .map(|q| (q - center).normalized())
+        };
+        return Some(sketch_grips::layout(
+            center,
+            dir(DVec3::X)?,
+            dir(DVec3::Y)?,
+            false,
+        ));
+    }
     let at = now.base + now.offset;
     let center = map.to_screen(at)?;
     // Ein kleiner Schritt, der auf dem Bildschirm etwa so lang ist wie der Fangradius: Eine feste
@@ -1569,7 +1585,7 @@ pub fn grip_layout3(state: &AppState, rect: Rect) -> Option<sketch_grips::GripLa
         return None;
     }
     let map = mapper(rect, state)?;
-    sketch_grips::layout3(&map, se.grip_center3()?)
+    sketch_grips::layout3(&map, se.grip_center3()?, se.grip_arc_axes())
 }
 
 /// Der Griff von Verschieben/Kopieren und Maßstab unter `p`, samt den Griffen für 3D.
@@ -1949,9 +1965,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         let origin = ui.input(|i| i.pointer.press_origin());
         if grip.is_3d() {
             // Griffe für 3D fassen eine Stelle im Raum (Skizzen 10).
+            let arcs = se.grip_arc_axes();
             let at3 = origin
                 .zip(se.grip_center3())
-                .and_then(|(p, c)| sketch_grips::grip_point3(&map, grip, c, p));
+                .and_then(|(p, c)| sketch_grips::grip_point3(&map, grip, c, arcs, p));
             if let Some(at3) = at3 {
                 se.begin_grip3(grip, at3);
             }
@@ -2058,9 +2075,11 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             let grip = se.grip_drag.map(|d| d.grip);
             match grip {
                 Some(g) if g.is_3d() => {
+                    // Die Ebene des Bogens wie beim Fassen (sie hängt nicht am eigenen Winkel).
+                    let arcs = se.grip_arc_axes();
                     let at3 = latest
                         .zip(se.grip_center3())
-                        .and_then(|(p, c)| sketch_grips::grip_point3(&map, g, c, p));
+                        .and_then(|(p, c)| sketch_grips::grip_point3(&map, g, c, arcs, p));
                     if let Some(at3) = at3 {
                         se.grip_to3(at3);
                     }

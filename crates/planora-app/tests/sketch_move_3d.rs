@@ -251,6 +251,7 @@ fn grip_motion3_measures_turns_about_their_axis() {
     let d = sketch_grips::GripDrag3 {
         grip: Grip::RotateY,
         press: DVec3::new(1.0, 7.0, 0.0),
+        axis: DVec3::Y,
         start_z: 2.0,
         start_angle_x: 0.1,
         start_angle_y: 0.2,
@@ -261,5 +262,146 @@ fn grip_motion3_measures_turns_about_their_axis() {
     assert!(
         (ay - (0.2 + std::f64::consts::FRAC_PI_2)).abs() < 1e-12,
         "{ay}"
+    );
+}
+
+// ---- Fix-Runde 1 ---------------------------------------------------------------------------------
+
+/// Wie `rotation3` angewandt um `pivot`.
+fn turned(p: DVec3, pivot: DVec3, rot: planora_math::DQuat) -> DVec3 {
+    pivot + rot * (p - pivot)
+}
+
+/// Erst 90° um Z, dann am X-Bogen ziehen: Der Bogen liegt um die gedrehte Achse (Rz·X = Welt-Y),
+/// und genau um sie dreht die Geometrie.
+#[test]
+fn x_arc_after_z_turn_turns_about_the_shown_axis() {
+    let (mut s, ids) = active(true, |_, _| {});
+    type_in(&mut s, F::MoveAngle, "90");
+    let before: Vec<DVec3> = ids
+        .points
+        .iter()
+        .map(|&p| sketch(&s).point_xyz(p).unwrap())
+        .collect();
+    let (pivot, axis) = {
+        let (se, _) = s.session_sketch_mut().unwrap();
+        let c = se.grip_center3().unwrap();
+        let [(axis, u, w), _] = se.grip_arc_axes();
+        assert!((axis - DVec3::Y).length() < 1e-12, "{axis:?}");
+        se.begin_grip3(Grip::RotateX, c + u * 4.0);
+        se.grip_to3(c + w * 4.0);
+        se.end_grip();
+        assert!((se.transform.angle_x - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        (c, axis)
+    };
+    finish(&mut s).unwrap();
+    // Ergebnis = 90° um die gezeigte Achse, nach den 90° um Z.
+    let shown = planora_math::DQuat::from_axis_angle(axis, std::f64::consts::FRAC_PI_2)
+        * planora_math::DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+    for (&p, b) in ids.points.iter().zip(&before) {
+        let got = sketch(&s).point_xyz(p).unwrap();
+        let want = turned(*b, pivot, shown);
+        assert!((got - want).length() < 1e-6, "{got:?} statt {want:?}");
+    }
+}
+
+/// Zusammengesetzte Drehung aus den Feldern: Das Ergebnis ist Rz·Ry·Rx um den Bezugspunkt, und
+/// jeder Bogen liegt um die Achse, um die sein Feldwinkel dreht.
+#[test]
+fn composite_field_turn_matches_the_result_and_the_arcs() {
+    let (mut s, ids) = active(true, |_, _| {});
+    type_in(&mut s, F::MoveAngleX, "30");
+    type_in(&mut s, F::MoveAngleY, "20");
+    type_in(&mut s, F::MoveAngle, "40");
+    type_in(&mut s, F::MoveZ, "3");
+    let before: Vec<DVec3> = ids
+        .points
+        .iter()
+        .map(|&p| sketch(&s).point_xyz(p).unwrap())
+        .collect();
+    let (ax, ay, az) = (30f64.to_radians(), 20f64.to_radians(), 40f64.to_radians());
+    let rot = sketch_grips::rotation3(ax, ay, az);
+    let (pivot, arcs) = {
+        let se = s.sketch_session.as_ref().unwrap();
+        let m = se.transform_now3().unwrap();
+        assert!((m.rot.dot(rot).abs() - 1.0).abs() < 1e-12);
+        (m.pivot, se.grip_arc_axes())
+    };
+    // Ein kleiner Zusatz am X-Winkel ist eine Drehung um die Achse des X-Bogens (von links).
+    let d = 1e-3;
+    let more_x = sketch_grips::rotation3(ax + d, ay, az) * rot.inverse();
+    let (axis, angle) = more_x.to_axis_angle();
+    assert!((angle - d).abs() < 1e-9 && (axis - arcs[0].0).length() < 1e-6);
+    let more_y = sketch_grips::rotation3(ax, ay + d, az) * rot.inverse();
+    let (axis, _) = more_y.to_axis_angle();
+    assert!((axis - arcs[1].0).length() < 1e-6, "{axis:?}");
+    finish(&mut s).unwrap();
+    for (&p, b) in ids.points.iter().zip(&before) {
+        let got = sketch(&s).point_xyz(p).unwrap();
+        let want = turned(*b, pivot, rot) + DVec3::new(0.0, 0.0, 3.0);
+        assert!((got - want).length() < 1e-6, "{got:?} statt {want:?}");
+    }
+}
+
+/// Pfeile X/Y, Ring, Z-Pfeil und Bögen liegen an derselben Stelle, auch nach einem Z-Zug in
+/// schräger Ansicht.
+#[test]
+fn grip_cross_stays_together_after_a_z_move() {
+    use egui::{Rect, pos2};
+    let screen = Rect::from_min_max(pos2(0.0, 0.0), pos2(1920.0, 1080.0));
+    let (mut s, _) = active(true, |_, _| {});
+    s.camera.yaw = 0.7;
+    s.camera.pitch = 0.5;
+    s.sketch_session.as_mut().unwrap().transform.shift_z = 7.0;
+    let flat = planora_app::sketch_view::grip_layout(&s, screen).expect("Griffe");
+    let up = planora_app::sketch_view::grip_layout3(&s, screen).expect("Griffe 3D");
+    assert!(
+        flat.center.distance(up.center) < 0.01,
+        "{:?} {:?}",
+        flat.center,
+        up.center
+    );
+}
+
+/// Eine Kopie, die aus der Ebene nicht geht, meldet das sofort wie der 2D-Weg.
+#[test]
+fn a_failing_3d_copy_is_reported_at_once() {
+    let (mut s, _) = active(true, |_, _| {});
+    s.sketch_session.as_mut().unwrap().transform.copy = true;
+    type_in(&mut s, F::MoveZ, "5000000000");
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    se.update_transform_block(sk);
+    assert!(
+        se.message_text().is_some(),
+        "Meldung schon vor dem Abschluss"
+    );
+    assert!(se.transform_preview3_styled(sk).is_none());
+}
+
+/// Ein neuer Bezugspunkt behält die Höhe der Menge.
+#[test]
+fn a_new_base_point_keeps_the_height() {
+    let (mut s, ids) = active(true, |sk, ids| {
+        let set = planora_sketch::transform::TransformSet {
+            curves: ids.lines.to_vec(),
+            points: Vec::new(),
+        };
+        let up = planora_sketch::transform::Rigid3 {
+            rot: planora_math::DQuat::IDENTITY,
+            shift: DVec3::new(0.0, 0.0, 6.0),
+            pivot: DVec3::ZERO,
+        };
+        sk.move_rigid3(&set, &up, false).unwrap();
+    });
+    assert_eq!(z_of(&s, &ids), vec![Some(6.0); 4]);
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    assert!((se.transform.base_z - 6.0).abs() < 1e-12);
+    se.begin_set_base();
+    se.click(sk, v(20.0, 10.0), 0.5, false).unwrap();
+    assert_eq!(se.transform.base, Some(v(20.0, 10.0)));
+    assert!(
+        (se.transform.base_z - 6.0).abs() < 1e-12,
+        "{}",
+        se.transform.base_z
     );
 }

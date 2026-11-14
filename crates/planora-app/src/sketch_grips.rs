@@ -168,6 +168,9 @@ pub struct GripDrag {
 pub struct GripDrag3 {
     pub grip: Grip,
     pub press: DVec3,
+    /// Achse des gefassten Drehbogens, wie er gezeichnet ist ([`arc_axes`]); beim Z-Pfeil
+    /// ungenutzt.
+    pub axis: DVec3,
     pub start_z: f64,
     pub start_angle_x: f64,
     pub start_angle_y: f64,
@@ -206,14 +209,16 @@ pub fn grip_motion(d: &GripDrag, base: DVec2, now: DVec2) -> (DVec2, f64, f64) {
 
 /// Z-Abstand und Winkel um X und Y für die Stelle `now` im Raum (Skizzenkoordinaten), rein.
 /// `center` ist die Mitte des Griffs. Der Z-Pfeil nimmt die Höhe des Zeigers, ein Drehbogen den
-/// Winkel um seine Achse von der gefassten Stelle zu `now`, in der Ebene senkrecht zur Achse
-/// gemessen (im halben Umlauf um den Startwinkel, ganze Umläufe zählt [`unwrapped_angle`]).
+/// Winkel um seine Achse `d.axis` von der gefassten Stelle zu `now`, in der Ebene senkrecht zur
+/// Achse gemessen (im halben Umlauf um den Startwinkel, ganze Umläufe zählt
+/// [`unwrapped_angle`]).
 pub fn grip_motion3(d: &GripDrag3, center: DVec3, now: DVec3) -> (f64, f64, f64) {
     let mut out = (d.start_z, d.start_angle_x, d.start_angle_y);
     if !now.is_finite() {
         return out;
     }
     let turn = |axis: DVec3| {
+        let axis = axis.try_normalize()?;
         let flat = |v: DVec3| v - axis * v.dot(axis);
         let (from, to) = (flat(d.press - center), flat(now - center));
         (from.length() > 0.0 && to.length() > 0.0)
@@ -221,8 +226,8 @@ pub fn grip_motion3(d: &GripDrag3, center: DVec3, now: DVec3) -> (f64, f64, f64)
     };
     match d.grip {
         Grip::AxisZ => out.0 += now.z - d.press.z,
-        Grip::RotateX => out.1 += turn(DVec3::X).unwrap_or(0.0),
-        Grip::RotateY => out.2 += turn(DVec3::Y).unwrap_or(0.0),
+        Grip::RotateX => out.1 += turn(d.axis).unwrap_or(0.0),
+        Grip::RotateY => out.2 += turn(d.axis).unwrap_or(0.0),
         _ => {}
     }
     out
@@ -234,6 +239,19 @@ pub fn rotation3(angle_x: f64, angle_y: f64, angle_z: f64) -> DQuat {
     DQuat::from_rotation_z(angle_z)
         * DQuat::from_rotation_y(angle_y)
         * DQuat::from_rotation_x(angle_x)
+}
+
+/// Achse und Bogenrichtungen der Drehbögen um X und Y bei den Winkeln `angle_y` und `angle_z`
+/// (Fix-Runde 1 Task 20): Die Drehung ist Rz·Ry·Rx, ein Zug am X-Winkel dreht also um Rz·Ry·X,
+/// einer am Y-Winkel um Rz·Y. Je Bogen (Achse, Anfang, Ende) des Viertelkreises; so dreht der
+/// Bogen genau um die Achse, um die die Geometrie sich dreht.
+pub fn arc_axes(angle_y: f64, angle_z: f64) -> [(DVec3, DVec3, DVec3); 2] {
+    let rz = DQuat::from_rotation_z(angle_z);
+    let rzy = rz * DQuat::from_rotation_y(angle_y);
+    [
+        (rzy * DVec3::X, rzy * DVec3::Y, rzy * DVec3::Z),
+        (rz * DVec3::Y, rz * DVec3::Z, rz * DVec3::X),
+    ]
 }
 
 /// Lage der Griffe für 3D auf dem Bildschirm: Spitze des Z-Pfeils und die Drehbögen um X und Y
@@ -254,9 +272,13 @@ const GRIP_ARC_STEPS: usize = 16;
 const GRIP_FLAT_PX: f32 = 6.0;
 
 /// Griffe für 3D um die Stelle `center` (Skizzenkoordinaten) mit Pfeil [`GRIP_ARROW_PX`] und Bögen
-/// mit dem Radius [`GRIP_RING_PX`], in Bildpunkten fest wie die Triade; `None`, wenn die Mitte
-/// hinter der Kamera liegt oder die Ansicht keinen Maßstab hat.
-pub fn layout3(map: &Mapper, center: DVec3) -> Option<GripLayout3> {
+/// mit dem Radius [`GRIP_RING_PX`] um die Achsen `arcs` ([`arc_axes`]), in Bildpunkten fest wie
+/// die Triade; `None`, wenn die Mitte hinter der Kamera liegt oder die Ansicht keinen Maßstab hat.
+pub fn layout3(
+    map: &Mapper,
+    center: DVec3,
+    arcs: [(DVec3, DVec3, DVec3); 2],
+) -> Option<GripLayout3> {
     let c = map.to_screen3(center)?;
     let unit = crate::sketch_triad::units_per_px_at(map, center)?;
     let arrow = unit * f64::from(GRIP_ARROW_PX);
@@ -282,8 +304,8 @@ pub fn layout3(map: &Mapper, center: DVec3) -> Option<GripLayout3> {
     Some(GripLayout3 {
         center: c,
         z_tip,
-        arc_x: arc(DVec3::Y, DVec3::Z),
-        arc_y: arc(DVec3::Z, DVec3::X),
+        arc_x: arc(arcs[0].1, arcs[0].2),
+        arc_y: arc(arcs[1].1, arcs[1].2),
     })
 }
 
@@ -357,15 +379,22 @@ pub fn paint3(painter: &egui::Painter, l: &GripLayout3, hot: Option<Grip>, col: 
 /// Die Stelle im Raum unter dem Zeiger `pointer` für den Griff für 3D `grip` an `center`
 /// (Skizzenkoordinaten): beim Z-Pfeil auf der Ebene, die die Z-Achse durch `center` enthält und
 /// dem Blick am meisten zugewandt ist, bei einem Drehbogen auf der Ebene senkrecht zu seiner
-/// Achse. `None` bei streifendem Blick (Z-Pfeil von oben) oder hinter der Kamera.
-pub fn grip_point3(map: &Mapper, grip: Grip, center: DVec3, pointer: Pos2) -> Option<DVec3> {
+/// Achse aus `arcs` ([`arc_axes`]). `None` bei streifendem Blick (Z-Pfeil von oben) oder hinter
+/// der Kamera.
+pub fn grip_point3(
+    map: &Mapper,
+    grip: Grip,
+    center: DVec3,
+    arcs: [(DVec3, DVec3, DVec3); 2],
+    pointer: Pos2,
+) -> Option<DVec3> {
     let normal = match grip {
         Grip::AxisZ => {
             let n = map.view_normal()?;
             (n - DVec3::Z * n.z).try_normalize()?
         }
-        Grip::RotateX => DVec3::X,
-        Grip::RotateY => DVec3::Y,
+        Grip::RotateX => arcs[0].0,
+        Grip::RotateY => arcs[1].0,
         _ => return None,
     };
     map.screen_to_plane(pointer, center, normal)
@@ -690,6 +719,22 @@ impl SketchSession {
         m.planar(sk.tolerance()).is_none().then_some(m)
     }
 
+    /// Die Winkel um X, Y und Z dieses Bilds (gesperrte Felder vor dem Griff).
+    fn angles3(&self) -> (f64, f64, f64) {
+        let (t, input) = (&self.transform, &self.input);
+        (
+            input.locked(FieldKind::MoveAngleX).unwrap_or(t.angle_x),
+            input.locked(FieldKind::MoveAngleY).unwrap_or(t.angle_y),
+            input.locked(FieldKind::MoveAngle).unwrap_or(t.angle),
+        )
+    }
+
+    /// Achsen der Drehbögen um X und Y dieses Bilds ([`arc_axes`]).
+    pub fn grip_arc_axes(&self) -> [(DVec3, DVec3, DVec3); 2] {
+        let (_, ay, az) = self.angles3();
+        arc_axes(ay, az)
+    }
+
     /// Mitte der Griffe im Raum: der bewegte Bezugspunkt.
     pub fn grip_center3(&self) -> Option<DVec3> {
         let m = self.transform_now3()?;
@@ -712,10 +757,16 @@ impl SketchSession {
             return;
         }
         self.grip_drag = Some(self.grip_start(grip, at.truncate()));
+        let arcs = self.grip_arc_axes();
+        let axis = match grip {
+            Grip::RotateY => arcs[1].0,
+            _ => arcs[0].0,
+        };
         let t = &self.transform;
         self.grip_drag3 = Some(GripDrag3 {
             grip,
             press: at,
+            axis,
             start_z: t.shift_z,
             start_angle_x: t.angle_x,
             start_angle_y: t.angle_y,
@@ -776,11 +827,10 @@ impl SketchSession {
         if !self.runs_transform() {
             return;
         }
-        // In 3D (Skizzen 10) rechnet die Prüfung die Bewegung an einer Kopie der Skizze.
-        if let (false, Some(m), Some(set)) =
-            (self.transform.copy, self.moving3(sk), self.sketch_set(sk))
-        {
-            match sk.clone().move_rigid3(&set, &m, false) {
+        // In 3D (Skizzen 10) rechnet die Prüfung die Bewegung an einer Kopie der Skizze, auch
+        // beim Kopieren: Die Kopie wird dort ebenfalls bewegt und kann scheitern.
+        if let (Some(m), Some(set)) = (self.moving3(sk), self.sketch_set(sk)) {
+            match sk.clone().move_rigid3(&set, &m, self.transform.copy) {
                 Ok(_) => {
                     if std::mem::take(&mut self.transform.blocked_note) {
                         self.message = None;
@@ -871,9 +921,8 @@ impl SketchSession {
                 self.sync_picked(sk);
             }
             TransformStage::SetBase => {
-                // Der Klick liegt in der Skizzenebene.
+                // Der Klick setzt die Lage in der Draufsicht; die Höhe der Menge bleibt.
                 self.transform.base = Some(cur.at);
-                self.transform.base_z = 0.0;
                 self.transform.stage = TransformStage::Active;
             }
             TransformStage::Active => {}
