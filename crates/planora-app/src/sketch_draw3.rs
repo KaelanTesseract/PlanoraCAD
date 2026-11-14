@@ -202,6 +202,7 @@ impl SketchSession {
                 cur.axis = None;
             }
         }
+        self.track_arc_sweep3(cur.at);
         self.cursor3 = Some(cur);
     }
 
@@ -950,14 +951,22 @@ fn kind_positions(kind: ToolKind) -> usize {
     }
 }
 
-/// Bogen „Mittelpunkt“ aus Mitte `m`, Start `s` und der Richtung des Endes `e`: gegen den
-/// Uhrzeigersinn, das Ende auf dem Radius.
-fn arc_center_plan(m: DVec2, s: DVec2, e: DVec2, tol: f64) -> Option<ArcPlan> {
+/// Ende des Bogens „Mittelpunkt“ aus Mitte `m`, Start `s` und der Richtung `e`: auf dem Radius.
+fn arc_center_end(m: DVec2, s: DVec2, e: DVec2, tol: f64) -> Option<DVec2> {
     let r = m.distance(s);
     let end = m + (e - m).try_normalize()? * r;
-    (r > tol && end.distance(s) > tol).then_some(ArcPlan {
+    (r > tol && end.distance(s) > tol).then_some(end)
+}
+
+/// Bogen „Mittelpunkt“ aus Mitte `m`, Start `s` und der Richtung des Endes `e`, das Ende auf dem
+/// Radius. Er folgt dem Zug: gegen den Uhrzeigersinn, mit `cw` im Uhrzeigersinn (dann läuft der
+/// Plan vom Ende zum Start, wie `ArcPlan` es verlangt).
+fn arc_center_plan(m: DVec2, s: DVec2, e: DVec2, cw: bool, tol: f64) -> Option<ArcPlan> {
+    let end = arc_center_end(m, s, e, tol)?;
+    let (start, end) = if cw { (end, s) } else { (s, end) };
+    Some(ArcPlan {
         center: m,
-        start: s,
+        start,
         end,
     })
 }
@@ -965,7 +974,7 @@ fn arc_center_plan(m: DVec2, s: DVec2, e: DVec2, tol: f64) -> Option<ArcPlan> {
 /// Der Plan der Lagen `q` (in der 2D-Basis der Ebene, die letzte ist der Zeiger) für die Arten, die
 /// nur Lagen setzen; dieselben Formen wie in 2D. Ein Bogenlangloch zeigt mit drei Lagen seinen
 /// Mittelbogen.
-fn shape_plan3(kind: ToolKind, q: &[DVec2], sides: usize, tol: f64) -> Option<ShapePlan> {
+fn shape_plan3(kind: ToolKind, q: &[DVec2], sides: usize, cw: bool, tol: f64) -> Option<ShapePlan> {
     use ToolKind::*;
     match (kind, q) {
         (CircleCenter, &[m, p]) => {
@@ -975,7 +984,7 @@ fn shape_plan3(kind: ToolKind, q: &[DVec2], sides: usize, tol: f64) -> Option<Sh
         (Circle3P, &[a, b, c]) => {
             shapes::circle_through(a, b, c, tol).map(|(m, r)| ShapePlan::Circle(m, r))
         }
-        (ArcCenter, &[m, s, e]) => arc_center_plan(m, s, e, tol).map(ShapePlan::Arc),
+        (ArcCenter, &[m, s, e]) => arc_center_plan(m, s, e, cw, tol).map(ShapePlan::Arc),
         (Rect3P, &[a, b, c]) => shapes::rect_three_point(a, b, c, tol).map(ShapePlan::Quad),
         (RectCenter, &[m, c]) => shapes::rect_center(m, c, tol).map(ShapePlan::Quad),
         (PolygonInscribed, &[m, p]) => {
@@ -1014,6 +1023,32 @@ fn finish_refusal3(kind: ToolKind) -> Msg {
 }
 
 impl SketchSession {
+    /// Läuft der Bogen „Mittelpunkt“ in 3D im Uhrzeigersinn (so gezogen)?
+    fn arc_cw3(&self) -> bool {
+        self.arc_sweep3.is_some_and(|(_, total)| total < 0.0)
+    }
+
+    /// Führt beim Bogen „Mittelpunkt“ in 3D nach dem Start den gezogenen Winkel des Zeigers `at`
+    /// mit (Fusion: Der Bogen folgt dem Zug). Sonst vergessen.
+    fn track_arc_sweep3(&mut self, at: DVec3) {
+        let (Some(Planar3::Kind(ToolKind::ArcCenter)), Some(plane), [m, s]) =
+            (self.planar3(), self.plane3, self.pending3.as_slice())
+        else {
+            self.arc_sweep3 = None;
+            return;
+        };
+        let (m, s) = (plane.to2(m.at), plane.to2(s.at));
+        let p = plane.to2(at) - m;
+        if p.length() <= 0.0 || !p.is_finite() {
+            return;
+        }
+        let angle = (s - m).angle_to(p);
+        let (last, total) = self.arc_sweep3.unwrap_or((0.0, 0.0));
+        let step = (angle - last + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+            - std::f64::consts::PI;
+        self.arc_sweep3 = Some((angle, total + step));
+    }
+
     /// Wählt die laufende Art in 3D gerade eine Kurve (Kreis „2 Tangenten“, „3 Tangenten“)?
     pub fn picks_curve3(&self) -> bool {
         matches!(self.planar3(), Some(Planar3::Kind(k)) if self.pending_curves.len() < kind_picks(k))
@@ -1104,7 +1139,7 @@ impl SketchSession {
         if kind == ToolKind::ArcTangent && self.pending3.is_empty() {
             let prev = hit
                 .snap
-                .and_then(|p| tangent_start3(sk, p))
+                .and_then(|p| tangent_start3(sk, p, plane))
                 .ok_or_else(|| kind.refusal())?;
             if !curve_in_plane(sk, plane, prev) {
                 return Err(crate::msg!("sketch-3d-tangent-plane"));
@@ -1202,16 +1237,22 @@ impl SketchSession {
                 return Ok(Created::Circle(circle));
             }
             (ToolKind::ArcCenter, &[m, s, e]) => {
-                let plan = arc_center_plan(m, s, e, tol).ok_or_else(|| kind.refusal())?;
+                let at_end = arc_center_end(m, s, e, tol).ok_or_else(|| kind.refusal())?;
                 let center = own_point(sk, plane, &hits[0])?;
                 let start = own_point(sk, plane, &hits[1])?;
                 // Das Ende liegt auf dem Radius; es bindet nur, wenn der Klick genau dort lag.
-                let end = if e.distance(plan.end) <= tol {
+                let end = if e.distance(at_end) <= tol {
                     own_point(sk, plane, &hits[2])?
                 } else {
-                    new_point(sk, plane, plane.to3(plan.end))?
+                    new_point(sk, plane, plane.to3(at_end))?
                 };
-                Created::Arc(sk.add_arc3(center, start, end, n).map_err(err)?)
+                // Im Uhrzeigersinn gezogen läuft der Bogen vom Ende zum Start.
+                let arc = if self.arc_cw3() {
+                    sk.add_arc3(center, end, start, n)
+                } else {
+                    sk.add_arc3(center, start, end, n)
+                };
+                Created::Arc(arc.map_err(err)?)
             }
             (ToolKind::ArcTangent, &[_, _]) => {
                 let straight = || crate::msg!("sketch-arc-tangent-straight");
@@ -1232,7 +1273,7 @@ impl SketchSession {
                 Created::Arc(arc)
             }
             _ => {
-                let plan = shape_plan3(kind, &q, self.current_sides(), tol)
+                let plan = shape_plan3(kind, &q, self.current_sides(), self.arc_cw3(), tol)
                     .ok_or_else(|| finish_refusal3(kind))?;
                 transplanted(sk, kind, plane, &plan, &q, hits)?
             }
@@ -1322,7 +1363,7 @@ impl SketchSession {
                     }
                     _ => {
                         q.push(p);
-                        shape_plan3(kind, &q, self.current_sides(), tol)
+                        shape_plan3(kind, &q, self.current_sides(), self.arc_cw3(), tol)
                             .map(|plan| plan.outline(steps))
                             .unwrap_or_default()
                     }
@@ -1409,10 +1450,12 @@ fn leaving3(sk: &Sketch, c: CurveId, p: PointId) -> Option<DVec3> {
 
 /// Die Kurve, an der ein tangentialer Bogen in `p` anläuft: die jüngste Linie oder der jüngste
 /// Bogen, die dort enden; Konstruktionslinien nur, wenn sonst nichts dort endet (wie in 2D).
-fn tangent_start3(sk: &Sketch, p: PointId) -> Option<CurveId> {
+/// Kurven in der Ebene `plane` gehen vor; endet dort keine, die jüngste andere (der Klick meldet
+/// dann, dass sie nicht in der Ebene liegt).
+fn tangent_start3(sk: &Sketch, p: PointId, plane: &Plane3) -> Option<CurveId> {
     sk.curves()
         .filter(|&(c, _)| leaving3(sk, c, p).is_some())
-        .max_by_key(|(_, d)| !d.construction)
+        .max_by_key(|&(c, d)| (curve_in_plane(sk, plane, c), !d.construction))
         .map(|(c, _)| c)
 }
 

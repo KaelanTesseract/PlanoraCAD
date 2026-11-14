@@ -558,6 +558,10 @@ pub struct SketchSession {
     pub pending3: Vec<crate::sketch_draw3::Hit3>,
     /// Ebene der laufenden ebenen Form in 3D, beim ersten Klick aus der Triade genommen.
     pub plane3: Option<crate::sketch_draw3::Plane3>,
+    /// Bogen „Mittelpunkt“ in 3D nach dem Start (Task H, Fix-Runde 1): letzter Winkel des Zeigers
+    /// zum Start und der seitdem gezogene Winkel (mit Vorzeichen, gegen den Uhrzeigersinn um die
+    /// Normale der Ebene positiv). Das Vorzeichen gibt die Richtung des Bogens wie der Zug.
+    pub arc_sweep3: Option<(f64, f64)>,
     /// Letzte Stelle beim Stutzen durch Ziehen (`None`: kein Zug läuft).
     pub trim_drag: Option<DVec2>,
     /// Zählt die gelungenen Änderungen durch Stutzen, Dehnen und Brechen, mit dem Werkzeug der
@@ -731,6 +735,7 @@ impl SketchSession {
             lock_from: None,
             pending3: Vec::new(),
             plane3: None,
+            arc_sweep3: None,
             trim_drag: None,
             modify_edits: (0, None),
             fillet_run: None,
@@ -824,6 +829,7 @@ impl SketchSession {
         self.pick_points.clear();
         self.pending3.clear();
         self.plane3 = None;
+        self.arc_sweep3 = None;
         self.input = DrawInput::default();
         // Bemaßen: Wahl und gesetztes Maß (sein Feld schließt) entfallen, nichts bleibt.
         self.dim = DimToolState::default();
@@ -869,6 +875,7 @@ impl SketchSession {
             // Eine ebene Form in 3D hat die Skizze noch nicht geändert; ihre Lagen verfallen.
             self.pending3.clear();
             self.plane3 = None;
+            self.arc_sweep3 = None;
         }
     }
 

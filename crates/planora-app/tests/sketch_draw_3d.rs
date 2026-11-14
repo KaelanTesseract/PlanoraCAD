@@ -1929,3 +1929,91 @@ fn triad_is_visible_for_every_kind() {
         assert!(v.layout().is_some(), "{kind:?}: Triade fehlt");
     }
 }
+
+// ---- Fix-Runde 1 (Task H) ------------------------------------------------------------------------
+
+/// Länge der Kurve `c` aus ihren Abtastpunkten.
+fn curve_length(v: &View, c: CurveId) -> f64 {
+    v.samples(c)
+        .windows(2)
+        .map(|w| (w[1] - w[0]).length())
+        .sum()
+}
+
+/// Bogen „Mittelpunkt“ in 3D folgt dem Zug wie in Fusion: im und gegen den Uhrzeigersinn gezogen
+/// entsteht jeweils der Viertelbogen, nicht der Ergänzungsbogen.
+#[test]
+fn arc_center_in_3d_follows_the_drag() {
+    let m = DVec3::new(0.0, 20.0, 20.0);
+    let start = DVec3::new(0.0, 35.0, 20.0);
+    // In YZ ist die Normale X: Gegen den Uhrzeigersinn geht es von +Y nach +Z.
+    for (via, end) in [
+        (DVec3::new(0.0, 30.0, 30.0), DVec3::new(0.0, 20.0, 35.0)),
+        (DVec3::new(0.0, 30.0, 10.0), DVec3::new(0.0, 20.0, 5.0)),
+    ] {
+        let mut v = View::new(Tool::Arc);
+        {
+            let (se, sk) = v.se_sk();
+            se.choose_kind(sk, ToolKind::ArcCenter);
+        }
+        v.set_plane(TriadPlane::Yz);
+        v.click3(m);
+        v.click3(start);
+        let at = v.at3(via);
+        v.hover(at);
+        v.click3(end);
+        let curves = v.curves();
+        assert_eq!(curves.len(), 1, "{end:?}: {curves:?}");
+        let (
+            arc,
+            CurveKind::Arc {
+                start: s, end: e, ..
+            },
+        ) = curves[0].clone()
+        else {
+            panic!("kein Bogen: {curves:?}");
+        };
+        let quarter = 15.0 * std::f64::consts::FRAC_PI_2;
+        let len = curve_length(&v, arc);
+        assert!((len - quarter).abs() < 0.2, "{end:?}: Bogenlänge {len}");
+        let ends = [v.xyz(s), v.xyz(e)];
+        for want in [start, end] {
+            assert!(ends.iter().any(|&q| near(q, want, 0.1)), "{ends:?}");
+        }
+        assert_shape_in_yz(&v, &curves);
+    }
+}
+
+/// Tangential in 3D: Enden an einem Punkt eine Linie in der Ebene und eine jüngere außerhalb, gilt
+/// die in der Ebene (kein falscher Hinweis).
+#[test]
+fn tangent_arc_prefers_the_curve_in_the_plane() {
+    let mut v = View::new(Tool::Arc);
+    let (a, b) = (DVec3::new(0.0, 10.0, 10.0), DVec3::new(0.0, 40.0, 10.0));
+    let line = add_line3(&mut v, a, b);
+    // Jünger, am selben Punkt, aber entlang X (nicht in YZ).
+    {
+        let (_, sk) = v.se_sk();
+        let end = match sk.curve(line).unwrap().kind {
+            CurveKind::Line { b, .. } => b,
+            _ => unreachable!(),
+        };
+        let off = sk.add_point3(DVec3::new(20.0, 40.0, 10.0)).unwrap();
+        sk.add_line(end, off).unwrap();
+    }
+    v.frame(vec![]);
+    let before = v.curves();
+    draw_kind(
+        &mut v,
+        ToolKind::ArcTangent,
+        TriadPlane::Yz,
+        &[b, DVec3::new(0.0, 40.0, 40.0)],
+    );
+    let made = new_curves(&v, &before);
+    let (arc, CurveKind::Arc { .. }) = made[0].clone() else {
+        panic!("kein Bogen: {made:?}");
+    };
+    assert!(has(v.sk(), |k| matches!(k, ConstraintKind::Tangent(x, y)
+        if *x == arc && *y == line)));
+    assert_shape_in_yz(&v, &made);
+}
