@@ -221,11 +221,40 @@ pub fn scroll_area<R>(
     out.inner
 }
 
-/// Hauptknopf: Fläche `accent`, Schrift `on_accent` (wie `theme::primary_button` der App).
-pub fn primary_button(text: String, p: &Palette) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).color(p.on_accent))
-        .fill(p.accent)
-        .stroke(Stroke::new(1.0, p.accent))
+/// Fläche, Rand und Schrift eines Knopfs der Knopfzeile. Hauptknopf: `accent` mit `on_accent`
+/// (wie `theme::primary_button` der App). Gesperrt sieht jeder Knopf gleich aus: neutrale
+/// Fläche `bg_field`, gedämpfte Schrift `text_muted`, kein Akzent; so ist ein gesperrter
+/// Hauptknopf nicht mit einem drückbaren zu verwechseln.
+pub fn button_colors(primary: bool, enabled: bool, p: &Palette) -> (Color32, Stroke, Color32) {
+    if !enabled {
+        (p.bg_field, Stroke::new(1.0, p.border_subtle), p.text_muted)
+    } else if primary {
+        (p.accent, Stroke::new(1.0, p.accent), p.on_accent)
+    } else {
+        (
+            p.bg_field,
+            Stroke::new(1.0, p.border_subtle),
+            p.text_primary,
+        )
+    }
+}
+
+/// Knopf der Knopfzeile in den Farben von [`button_colors`]. Ein drückbarer Nebenknopf bleibt
+/// ein gewöhnlicher Knopf: Seine Ruhefarben stehen schon in den Visuals, und nur so behält er
+/// die Fläche beim Überfahren.
+pub fn bar_button(
+    text: String,
+    primary: bool,
+    enabled: bool,
+    p: &Palette,
+) -> egui::Button<'static> {
+    if enabled && !primary {
+        return egui::Button::new(text);
+    }
+    let (fill, stroke, color) = button_colors(primary, enabled, p);
+    egui::Button::new(egui::RichText::new(text).color(color))
+        .fill(fill)
+        .stroke(stroke)
 }
 
 /// Fläche einer Karte: in Ruhe `bg_section`, gewählt `accent_subtle` (wie `theme::card_fill`).
@@ -246,6 +275,24 @@ mod tests {
         assert!(is_dark(None));
         assert!(is_dark(Some(egui::Theme::Dark)));
         assert!(!is_dark(Some(egui::Theme::Light)));
+    }
+
+    #[test]
+    fn disabled_buttons_have_no_accent() {
+        for dark in [true, false] {
+            let p = palette(dark);
+            let (fill, stroke, text) = button_colors(true, true, p);
+            assert_eq!((fill, text), (p.accent, p.on_accent));
+            assert_eq!(stroke.color, p.accent);
+            // Gesperrt: Haupt- und Nebenknopf gleich, neutral und mit gedämpfter Schrift.
+            for primary in [true, false] {
+                let (fill, stroke, text) = button_colors(primary, false, p);
+                assert_eq!((fill, text), (p.bg_field, p.text_muted));
+                assert_ne!(stroke.color, p.accent);
+            }
+            // Drückbarer Nebenknopf mit heller Schrift, damit gesperrt sichtbar anders ist.
+            assert_eq!(button_colors(false, true, p).2, p.text_primary);
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
-//! Eingebettete Bilder: Programmsymbol und vier Screenshots (1280 × 720, aus dem Wiki
-//! verkleinert). Die Texturen werden beim Start einmal geladen; ein unlesbares Bild fehlt nur.
+//! Eingebettete Bilder: Programmsymbol, die Startseite (1280 × 720) und drei Karten der
+//! Installieren-Seite (960 × 540, aus den Wiki-Bildern auf das Modell zugeschnitten). Die Texturen werden beim Start einmal geladen; ein unlesbares Bild fehlt nur.
 
 use std::sync::Arc;
 
@@ -9,10 +9,10 @@ pub const ICON_256: &[u8] = include_bytes!("../../../../assets/logo/planoracad-i
 const STARTSEITE: &[u8] = include_bytes!("../../assets/startseite.png");
 /// Skizze zeichnen (Karte auf der Installieren-Seite).
 const SKIZZE: &[u8] = include_bytes!("../../assets/skizze.png");
-/// Zeichnung (Karte auf der Installieren-Seite).
-const ZEICHNUNG: &[u8] = include_bytes!("../../assets/zeichnung.png");
-/// Schnittansicht (Karte auf der Installieren-Seite).
-const SCHNITT: &[u8] = include_bytes!("../../assets/schnitt.png");
+/// Aus einer Skizze hochgezogene Platte (Karte auf der Installieren-Seite).
+const PLATTE: &[u8] = include_bytes!("../../assets/platte.png");
+/// Winkel mit verrundeten Kanten (Karte auf der Installieren-Seite).
+const VERRUNDEN: &[u8] = include_bytes!("../../assets/verrunden.png");
 
 /// Lineare Filterung mit Mipmaps: Logo und Screenshots werden stark verkleinert gezeigt und
 /// flimmern so nicht.
@@ -71,7 +71,7 @@ pub struct Picture {
 pub struct Assets {
     pub logo: Option<Picture>,
     pub welcome: Option<Picture>,
-    /// Karten der Installieren-Seite: Skizze, Zeichnung, Schnitt.
+    /// Karten der Installieren-Seite: Skizze, Platte, Verrunden.
     pub teasers: [Option<Picture>; 3],
 }
 
@@ -94,8 +94,8 @@ impl Assets {
             welcome: load("setup-startseite", STARTSEITE),
             teasers: [
                 load("setup-skizze", SKIZZE),
-                load("setup-zeichnung", ZEICHNUNG),
-                load("setup-schnitt", SCHNITT),
+                load("setup-platte", PLATTE),
+                load("setup-verrunden", VERRUNDEN),
             ],
         }
     }
@@ -109,9 +109,11 @@ mod tests {
     fn embedded_images_decode() {
         let icon = decode(ICON_256).expect("Symbol lesbar");
         assert_eq!((icon.width, icon.height), (256, 256));
-        for bytes in [STARTSEITE, SKIZZE, ZEICHNUNG, SCHNITT] {
-            let shot = decode(bytes).expect("Screenshot lesbar");
-            assert_eq!((shot.width, shot.height), (1280, 720));
+        let start = decode(STARTSEITE).expect("Startseite lesbar");
+        assert_eq!((start.width, start.height), (1280, 720));
+        for bytes in [SKIZZE, PLATTE, VERRUNDEN] {
+            let shot = decode(bytes).expect("Karte lesbar");
+            assert_eq!((shot.width, shot.height), (960, 540));
         }
         assert!(decode(b"kein png").is_none());
     }

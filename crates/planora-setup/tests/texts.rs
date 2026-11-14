@@ -33,9 +33,11 @@ const KEYS: &[&str] = &[
     "setup-progress-done",
     "setup-progress-line",
     "setup-teaser-sketch",
-    "setup-teaser-drawing",
-    "setup-teaser-section",
+    "setup-teaser-extrude",
+    "setup-teaser-fillet",
     "setup-done-text",
+    "setup-done-where",
+    "setup-done-where-desktop",
     "setup-start-app",
     "setup-failed-title",
     "setup-failed-text",
@@ -74,17 +76,18 @@ fn png_width(bytes: &[u8]) -> u32 {
 fn setup_assets_are_small() {
     let dir: PathBuf = [env!("CARGO_MANIFEST_DIR"), "assets"].iter().collect();
     let mut count = 0;
-    for name in [
-        "startseite.png",
-        "skizze.png",
-        "zeichnung.png",
-        "schnitt.png",
+    // Startseite 1280 breit, die drei Karten der Installieren-Seite 960 (16:9).
+    for (name, width) in [
+        ("startseite.png", 1280),
+        ("skizze.png", 960),
+        ("platte.png", 960),
+        ("verrunden.png", 960),
     ] {
         let path = dir.join(name);
         let bytes = std::fs::read(&path)
             .unwrap_or_else(|err| panic!("{} nicht lesbar: {err}", path.display()));
         assert!(bytes.len() < 600 * 1024, "{name}: {} Bytes", bytes.len());
-        assert_eq!(png_width(&bytes), 1280, "{name}");
+        assert_eq!(png_width(&bytes), width, "{name}");
         count += 1;
     }
     // Keine weiteren, ungeprüften Dateien im Ordner.

@@ -22,6 +22,12 @@ const ICON_CHECK_CIRCLE: char = '\u{e184}';
 const BUTTONS_H: f32 = 30.0;
 /// Höhe der beiden Karten auf der Ordner-Seite (gleich hoch).
 const MODE_CARD_H: f32 = 92.0;
+/// Höhe der Ordnerzeile (Feld und „Durchsuchen“).
+const FOLDER_ROW_H: f32 = 30.0;
+/// Mindestbreite von „Durchsuchen“.
+const BROWSE_MIN_W: f32 = 100.0;
+/// Höhe der Bildunterschrift unter den Karten der Installieren-Seite.
+const CAPTION_H: f32 = 18.0;
 /// Kantenlänge des Logos neben dem Schriftzug.
 const LOGO_SIZE: f32 = 26.0;
 /// Rundung der Bilder.
@@ -150,11 +156,25 @@ pub fn teaser_columns(width: f32, gap: f32) -> f32 {
     ((width - 2.0 * gap) / 3.0).max(0.0)
 }
 
-/// Bildhöhe der Karten auf der Installieren-Seite: Das Bild füllt die Fläche der Höhe `area`
-/// bis auf die Unterschrift (`caption`) und den Abstand darüber (`gap`), wie `flex: 1` in
-/// Entwurf C; das Bild wird mittig beschnitten (`cover_uv`).
-pub fn teaser_shot_height(area: f32, caption: f32, gap: f32) -> f32 {
-    (area - caption - gap).max(0.0)
+/// Bildflächen der drei Karten auf der Installieren-Seite: gleich groß im Querformat 16:9,
+/// nebeneinander mit Abstand `gap`, darunter je eine Unterschrift der Höhe `caption`
+/// (Abstand `SPACE_1`). Die Reihe steht senkrecht mittig in `area`; reicht die Höhe nicht,
+/// werden die Karten kleiner und die Reihe steht waagerecht mittig.
+pub fn teaser_shots(area: Rect, gap: f32, caption: f32) -> [Rect; 3] {
+    let below = SPACE_1 + caption;
+    let mut col = teaser_columns(area.width(), gap);
+    let mut shot_h = col * 9.0 / 16.0;
+    let max_h = (area.height() - below).max(0.0);
+    if shot_h > max_h {
+        shot_h = max_h;
+        col = shot_h * 16.0 / 9.0;
+    }
+    let row_w = 3.0 * col + 2.0 * gap;
+    let left = area.center().x - row_w / 2.0;
+    let top = area.center().y - (shot_h + below) / 2.0;
+    std::array::from_fn(|i| {
+        Rect::from_min_size(pos2(left + i as f32 * (col + gap), top), vec2(col, shot_h))
+    })
 }
 
 /// Daten, die die Seiten zum Zeichnen brauchen, aber nicht ändern.
@@ -210,12 +230,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, wizard: &mut Wizard, view: &View) -> 
             .layout(Layout::right_to_left(Align::Center)),
     );
     for spec in buttons(wizard, view.log_exists).iter().rev() {
-        let text = label(spec.action);
-        let button = if spec.primary {
-            style::primary_button(text, view.p)
-        } else {
-            egui::Button::new(text)
-        };
+        let button = style::bar_button(label(spec.action), spec.primary, spec.enabled, view.p);
         if ui.add_enabled(spec.enabled, button).clicked() {
             action = Some(spec.action);
         }
@@ -366,27 +381,33 @@ fn folder(ui: &mut egui::Ui, wizard: &mut Wizard, view: &View) -> Option<Action>
     );
     ui.add_space(SPACE_4);
 
-    // Ordnerfeld mit „Durchsuchen“.
-    ui.horizontal(|ui| {
-        let browse_w = 110.0;
-        let mut dir = wizard.dir.clone();
-        let edit = egui::TextEdit::singleline(&mut dir)
-            .desired_width(ui.available_width() - browse_w - SPACE_2)
-            .margin(vec2(SPACE_2, 6.0));
-        if ui.add_enabled(!wizard.locked, edit).changed() {
-            wizard.set_dir(dir);
-        }
-        let can_browse = !wizard.locked && cfg!(windows);
-        if ui
-            .add_enabled(
-                can_browse,
-                egui::Button::new(label(Action::Browse)).min_size(vec2(browse_w, 0.0)),
-            )
-            .clicked()
-        {
-            action = Some(Action::Browse);
-        }
-    });
+    // Ordnerfeld mit „Durchsuchen“: von rechts nach links, damit der Knopf bündig mit dem
+    // rechten Rand der Karten abschließt und das Feld den Rest füllt, gleich wie breit die
+    // Beschriftung des Knopfs ist.
+    ui.allocate_ui_with_layout(
+        vec2(width, FOLDER_ROW_H),
+        Layout::right_to_left(Align::Center),
+        |ui| {
+            let can_browse = !wizard.locked && cfg!(windows);
+            if ui
+                .add_enabled(
+                    can_browse,
+                    egui::Button::new(label(Action::Browse))
+                        .min_size(vec2(BROWSE_MIN_W, FOLDER_ROW_H)),
+                )
+                .clicked()
+            {
+                action = Some(Action::Browse);
+            }
+            let mut dir = wizard.dir.clone();
+            let edit = egui::TextEdit::singleline(&mut dir)
+                .desired_width(ui.available_width())
+                .margin(vec2(SPACE_2, 6.0));
+            if ui.add_enabled(!wizard.locked, edit).changed() {
+                wizard.set_dir(dir);
+            }
+        },
+    );
     ui.add_space(SPACE_3);
     // Beim Update einer vorhandenen Installation bleibt deren Wahl zum Desktop-Symbol; dann
     // gibt es hier keinen Haken (siehe Wizard::desktop_icon_choice).
@@ -508,35 +529,39 @@ fn installing(ui: &mut egui::Ui, view: &View) {
     );
     ui.add_space(SPACE_4);
 
-    // Drei gleich hohe Karten mit Bild und Unterschrift.
+    // Drei gleich große Karten im Querformat mit Unterschrift, als Reihe senkrecht mittig im
+    // Platz unter der Fortschrittszeile (Entwurf C).
     let avail = ui.available_rect_before_wrap();
     let area = Rect::from_min_max(avail.min, pos2(avail.right(), avail.bottom() - SPACE_3));
     if area.height() < 40.0 {
         return;
     }
     ui.allocate_rect(area, Sense::hover());
-    let gap = SPACE_2;
-    let col = teaser_columns(area.width(), gap);
-    let caption_h = 18.0;
     let captions = [
         tr!("setup-teaser-sketch"),
-        tr!("setup-teaser-drawing"),
-        tr!("setup-teaser-section"),
+        tr!("setup-teaser-extrude"),
+        tr!("setup-teaser-fillet"),
     ];
-    // Die Karten wachsen bis zum unteren Rand (Entwurf C), das Bild wird mittig beschnitten;
-    // alle drei Karten sind gleich hoch, die Unterschrift steht darunter.
-    let shot_h = teaser_shot_height(area.height(), caption_h, SPACE_1);
-    for (i, caption) in captions.into_iter().enumerate() {
-        let x = area.left() + i as f32 * (col + gap);
-        let shot = Rect::from_min_size(pos2(x, area.top()), vec2(col, shot_h));
+    let shots = teaser_shots(area, SPACE_2, CAPTION_H);
+    for ((i, caption), shot) in captions.into_iter().enumerate().zip(shots) {
         picture(ui, shot, view.assets.teasers[i].as_ref(), p);
         ui.painter().text(
-            pos2(x, shot.bottom() + SPACE_1 + 1.0),
+            pos2(shot.left(), shot.bottom() + SPACE_1 + 1.0),
             egui::Align2::LEFT_TOP,
             caption,
             style::small_font(),
             p.text_tertiary,
         );
+    }
+}
+
+/// Wo die Verknüpfungen liegen: immer im Startmenü, auf dem Desktop nur, wenn der Haken dafür
+/// gesetzt war. Beim Update gibt es den Haken nicht; dann bleibt der Desktop ungenannt.
+pub fn done_where(wizard: &Wizard) -> String {
+    if wizard.desktop_icon_choice() == Some(true) {
+        tr!("setup-done-where-desktop")
+    } else {
+        tr!("setup-done-where")
     }
 }
 
@@ -555,8 +580,18 @@ fn done(ui: &mut egui::Ui, wizard: &mut Wizard, view: &View) {
                 .color(p.text_secondary),
         );
     });
-    ui.add_space(SPACE_4);
+    ui.add_space(SPACE_1);
+    body(ui, done_where(wizard), p);
+    ui.add_space(SPACE_3);
     ui.checkbox(&mut wizard.start_app, tr!("setup-start-app"));
+    ui.add_space(SPACE_4);
+    // Die Startseite füllt den Rest bis kurz über die Knöpfe, wie auf der Willkommen-Seite.
+    let avail = ui.available_rect_before_wrap();
+    let rect = Rect::from_min_max(avail.min, pos2(avail.right(), avail.bottom() - SPACE_4));
+    if rect.height() > 40.0 {
+        ui.allocate_rect(rect, Sense::hover());
+        picture(ui, rect, view.assets.welcome.as_ref(), p);
+    }
 }
 
 /// Text der Fehlerseite; den Hinweis auf das Protokoll gibt es nur, wenn es die Datei gibt.
@@ -724,9 +759,55 @@ mod tests {
     }
 
     #[test]
-    fn teaser_shots_fill_remaining_height() {
-        // Bild füllt die Fläche bis auf Unterschrift und Abstand.
-        assert_eq!(teaser_shot_height(300.0, 18.0, 4.0), 278.0);
-        assert_eq!(teaser_shot_height(10.0, 18.0, 4.0), 0.0);
+    fn teaser_shots_are_landscape_and_centered() {
+        let area = Rect::from_min_size(pos2(10.0, 100.0), vec2(616.0, 400.0));
+        let shots = teaser_shots(area, 8.0, 18.0);
+        for s in &shots {
+            assert!((s.width() / s.height() - 16.0 / 9.0).abs() < 1e-3, "{s:?}");
+            assert_eq!(s.size(), shots[0].size());
+            assert_eq!(s.top(), shots[0].top());
+        }
+        // Volle Breite, Reihe samt Unterschrift senkrecht mittig.
+        assert!((shots[0].left() - area.left()).abs() < 1e-3);
+        assert!((shots[2].right() - area.right()).abs() < 1e-3);
+        let bottom = shots[0].bottom() + SPACE_1 + 18.0;
+        assert!(((shots[0].top() - area.top()) - (area.bottom() - bottom)).abs() < 1e-3);
+        // Zu niedrig: kleinere Karten, die Reihe passt hinein und steht waagerecht mittig.
+        let flat = Rect::from_min_size(pos2(0.0, 0.0), vec2(616.0, 80.0));
+        let shots = teaser_shots(flat, 8.0, 18.0);
+        assert!((shots[0].width() / shots[0].height() - 16.0 / 9.0).abs() < 1e-3);
+        assert!(shots[0].bottom() + SPACE_1 + 18.0 <= flat.bottom() + 1e-3);
+        let (l, r) = (
+            shots[0].left() - flat.left(),
+            flat.right() - shots[2].right(),
+        );
+        assert!((l - r).abs() < 1e-3);
+    }
+
+    #[test]
+    fn done_mentions_desktop_only_when_chosen() {
+        let mut fresh = Wizard::new(None);
+        let update = Wizard::new(Some(Existing {
+            all_users: false,
+            dir: PathBuf::from(r"C:\X"),
+        }));
+        for lang in [german(), english()] {
+            with_lang(&lang, || {
+                fresh.desktop_icon = true;
+                let with = done_where(&fresh);
+                fresh.desktop_icon = false;
+                let without = done_where(&fresh);
+                assert!(with.to_lowercase().contains("desktop"), "{with}");
+                assert!(!without.to_lowercase().contains("desktop"), "{without}");
+                assert_eq!(done_where(&update), without);
+            });
+        }
+        with_lang(&german(), || {
+            let text = done_where(&Wizard::new(None));
+            assert_eq!(
+                text,
+                "Du findest PlanoraCAD im Startmenü und auf dem Desktop."
+            );
+        });
     }
 }

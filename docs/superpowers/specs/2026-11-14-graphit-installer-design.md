@@ -70,7 +70,7 @@ Linkes Feld „Installation“: Willkommen, Lizenz, Ordner, Installieren, Fertig
 - Damit die Farben nicht doppelt gepflegt werden, wandern `Palette`, `DARK`, `LIGHT` und die Schriften-Einrichtung aus `planora-app/src/theme.rs` in ein kleines gemeinsames Crate `planora-style`. `planora-app` nutzt es weiter unverändert (reine Verschiebung, Aussehen der App bleibt gleich) **(Claude)**. Achtung: Andere Zweige ändern `theme.rs` vielleicht auch. Die Verschiebung klein halten und beim Merge prüfen.
 - Fenster: feste Größe 960 × 640 (logische Punkte), nicht veränderbar, mittig, Windows-Titelleiste im dunklen Modus, Programmsymbol `planoracad.ico` **(Claude)**. Die Felder schweben mit Abstand, Rundung und Rand wie die Dialoge der App.
 - Sprache nach Windows-Sprache: Deutsch, sonst Englisch. Texte über `tr!` aus `.ftl`-Dateien in de und en, wie in der App **(Claude)**.
-- Screenshots: aus `D:\Vault\Vault\Projekte\PlanoraCAD\Wiki\bilder\` (`startseite-uebersicht`, `skizze-zeichnen`, `zeichnung-uebersicht`, `schnittansicht`), passend verkleinert nach `assets/setup/` im Repo. Vorerst dieselben (deutschen) Bilder für beide Sprachen **(Claude, offen)**.
+- Screenshots: aus `D:\Vault\Vault\Projekte\PlanoraCAD\Wiki\bilder\` (`startseite-uebersicht`; für die drei Karten der Installieren-Seite nach dem Handtest dunkle, ruhige Bilder des Modellbereichs: `skizze-zeichnen`, `erste-platte-verrundet`, `verrunden`, auf 16:9 zugeschnitten und 960 × 540 groß), passend verkleinert nach `assets/setup/` im Repo. Vorerst dieselben (deutschen) Bilder für beide Sprachen **(Claude, offen)**.
 
 ### Bauen
 

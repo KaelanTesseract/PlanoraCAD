@@ -57,6 +57,48 @@ DisableProgramGroupPage=yes
 Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "de"; MessagesFile: "compiler:Languages\German.isl"
 
+[Messages]
+; Deutsch in der Du-Form wie App und Huelle: German.isl spricht mit "Sie" an. Ueberschrieben
+; sind die Texte, die den Nutzer ansprechen, im Rueckfall-Assistenten (Willkommen, Lizenz,
+; Ordner, Bereit, Installieren, Fertig und ihre Rueckfragen) und in der Deinstallation.
+; Platzhalter (%1, %n, [name] ...) bleiben wie im Original. Datei ist UTF-8 ohne BOM.
+de.SetupAppRunningError=Das Setup hat bemerkt, dass %1 gerade läuft.%n%nBitte schließe alle Fenster von %1 und klicke auf "OK", um weiterzumachen, oder auf "Abbrechen", um aufzuhören.
+de.UninstallAppRunningError=Die Deinstallation hat bemerkt, dass %1 gerade läuft.%n%nBitte schließe alle Fenster von %1 und klicke auf "OK", um weiterzumachen, oder auf "Abbrechen", um aufzuhören.
+de.PrivilegesRequiredOverrideInstruction=Bitte wähle, für wen installiert wird
+de.PrivilegesRequiredOverrideText1=%1 kann für alle Benutzer (braucht Administratorrechte) oder nur für dich installiert werden.
+de.PrivilegesRequiredOverrideText2=%1 kann nur für dich oder für alle Benutzer (braucht Administratorrechte) installiert werden.
+de.PrivilegesRequiredOverrideCurrentUser=Installation nur für &mich
+de.PrivilegesRequiredOverrideCurrentUserRecommended=Installation nur für &mich (empfohlen)
+de.ExitSetupMessage=Das Setup ist noch nicht fertig. Wenn du jetzt aufhörst, wird das Programm nicht installiert.%n%nDu kannst das Setup später noch einmal starten und die Installation dann abschließen.%n%nSetup verlassen?
+de.BrowseDialogLabel=Wähle einen Ordner und klicke dann auf "OK".
+de.WelcomeLabel2=Dieser Assistent installiert jetzt [name/ver] auf deinem Computer.%n%nAm besten schließt du vorher alle anderen Programme.
+de.LicenseLabel=Bitte lies die folgenden wichtigen Informationen, bevor du weitermachst.
+de.LicenseLabel3=Bitte lies die folgende Lizenz. Zum Blättern nimm die Bildlaufleiste oder die Taste "Bild ab".
+de.SelectDirBrowseLabel=Klicke auf "Weiter", um fortzufahren. Klicke auf "Durchsuchen", wenn du einen anderen Ordner wählen möchtest.
+de.InvalidPath=Bitte gib einen vollständigen Pfad mit Laufwerksbuchstaben an, zum Beispiel:%n%nC:\Beispiel%n%noder einen Netzwerkpfad in der Form:%n%n\\Server\Freigabe
+de.InvalidDrive=Das Laufwerk oder der Netzwerkpfad existiert nicht oder ist nicht erreichbar. Bitte wähle einen anderen Ordner.
+de.DiskSpaceWarning=Das Setup braucht mindestens %1 KB freien Speicherplatz, auf dem gewählten Laufwerk sind aber nur %2 KB frei.%n%nMöchtest du trotzdem weitermachen?
+de.DirExists=Den Ordner%n%n%1%n%ngibt es schon. Möchtest du trotzdem in diesen Ordner installieren?
+de.SelectTasksLabel2=Wähle, was das Setup bei der Installation von [name] zusätzlich tun soll, und klicke dann auf "Weiter".
+de.ReadyLabel1=Das Setup ist jetzt bereit, [name] auf deinem Computer zu installieren.
+de.ReadyLabel2a=Klicke auf "Installieren", um zu beginnen, oder auf "Zurück", um deine Einstellungen zu prüfen oder zu ändern.
+de.ReadyLabel2b=Klicke auf "Installieren", um zu beginnen.
+de.CannotContinue=Das Setup kann nicht weitermachen. Bitte klicke auf "Abbrechen", um es zu beenden.
+de.PrepareToInstallNeedsRestart=Das Setup muss deinen Computer neu starten. Starte das Setup danach noch einmal, um die Installation von [name] abzuschließen.%n%nMöchtest du jetzt neu starten?
+de.InstallingLabel=Bitte warte, während [name] auf deinem Computer installiert wird.
+de.FinishedLabelNoIcons=Das Setup hat [name] auf deinem Computer installiert.
+de.FinishedLabel=Das Setup hat [name] auf deinem Computer installiert. Du kannst das Programm über die angelegten Verknüpfungen starten.
+de.ClickFinish=Klicke auf "Fertigstellen", um das Setup zu beenden.
+de.FinishedRestartLabel=Um die Installation von [name] abzuschließen, muss das Setup deinen Computer neu starten. Möchtest du jetzt neu starten?
+de.FinishedRestartMessage=Um die Installation von [name] abzuschließen, muss das Setup deinen Computer neu starten.%n%nMöchtest du jetzt neu starten?
+de.SetupAborted=Das Setup konnte nicht abgeschlossen werden.%n%nBitte behebe das Problem und starte das Setup noch einmal.
+de.ConfirmUninstall=Möchtest du %1 und alles, was dazugehört, wirklich entfernen?
+de.UninstallOnlyOnWin64=Diese Installation lässt sich nur unter 64-Bit-Windows entfernen.
+de.UninstallStatusLabel=Bitte warte, während %1 von deinem Computer entfernt wird.
+de.UninstalledAll=%1 wurde von deinem Computer entfernt.
+de.UninstalledMost=%1 wurde entfernt.%n%nEinige Teile ließen sich nicht entfernen. Du kannst sie von Hand löschen.
+de.UninstalledAndNeedsRestart=Um %1 ganz zu entfernen, muss dein Computer neu starten.%n%nMöchtest du jetzt neu starten?
+
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 

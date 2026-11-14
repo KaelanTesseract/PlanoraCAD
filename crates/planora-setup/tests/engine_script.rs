@@ -116,3 +116,62 @@ fn update_contract_unchanged() {
             .any(|l| l == "RestartApplications=no")
     );
 }
+
+#[test]
+fn german_messages_use_du() {
+    let messages = section("Messages");
+    // Diese Texte sprechen den Nutzer an (Rückfall-Assistent und Deinstallation) und müssen
+    // für Deutsch überschrieben sein.
+    for key in [
+        "WelcomeLabel2",
+        "LicenseLabel3",
+        "SelectDirBrowseLabel",
+        "ReadyLabel1",
+        "ReadyLabel2a",
+        "ReadyLabel2b",
+        "InstallingLabel",
+        "FinishedLabel",
+        "FinishedLabelNoIcons",
+        "ClickFinish",
+        "ExitSetupMessage",
+        "SetupAppRunningError",
+        "PrivilegesRequiredOverrideText1",
+        "PrivilegesRequiredOverrideCurrentUser",
+        "ConfirmUninstall",
+        "UninstallStatusLabel",
+        "UninstalledAll",
+        "UninstalledMost",
+        "UninstalledAndNeedsRestart",
+        "UninstallAppRunningError",
+        "UninstallOnlyOnWin64",
+    ] {
+        let prefix = format!("de.{key}=");
+        assert!(
+            messages.iter().any(|l| l.starts_with(&prefix)),
+            "[Messages] ohne {prefix}"
+        );
+    }
+    // Nur deutsche Überschreibungen, und keine davon siezt.
+    assert!(!messages.is_empty());
+    for line in &messages {
+        assert!(line.starts_with("de."), "nur Deutsch überschreiben: {line}");
+        // „%n“ ist ein Zeilenumbruch; sonst klebte das „n“ am nächsten Wort.
+        let text = line
+            .split_once('=')
+            .map_or("", |(_, t)| t)
+            .replace("%n", " ");
+        let words: Vec<&str> = text
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+        for word in words {
+            assert!(
+                !matches!(
+                    word,
+                    "Sie" | "Ihr" | "Ihre" | "Ihren" | "Ihrem" | "Ihrer" | "Ihnen"
+                ),
+                "Sie-Form in {line}"
+            );
+        }
+    }
+}
