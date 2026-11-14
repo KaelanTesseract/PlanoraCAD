@@ -149,6 +149,27 @@ pub struct Config {
         deserialize_with = "lenient_bool_true"
     )]
     pub sketch_snap: bool,
+    /// Abgedockte Fenster (Dialoge und Felder als eigene Betriebssystemfenster): Schlüssel →
+    /// letzte Lage und Größe in physischen Pixeln. Kaputte Einträge (kein Objekt, fehlende
+    /// Zahlen, Breite oder Höhe nicht endlich oder höchstens 0) fallen einzeln weg, ein
+    /// falscher Typ des ganzen Felds ergibt „leer“ (siehe [`lenient_detached`]). Ohne
+    /// Einträge wird nichts geschrieben.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "lenient_detached"
+    )]
+    pub detached: BTreeMap<String, DetachedWindow>,
+}
+
+/// Lage und Größe eines abgedockten Fensters in physischen Pixeln. `x` und `y` dürfen negativ
+/// sein (Monitor links vom oder über dem Hauptmonitor).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DetachedWindow {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 /// Voreinstellung des Update-Kanals (Kennung).
@@ -261,6 +282,7 @@ impl Default for Config {
             length_unit: None,
             sketch_grid: true,
             sketch_snap: true,
+            detached: BTreeMap::new(),
         }
     }
 }
@@ -436,6 +458,27 @@ fn lenient_favorites<'de, D: Deserializer<'de>>(
         })
         .unwrap_or_default();
     Ok(clean_favorites(list))
+}
+
+/// Liest `detached` nachsichtig: ein falscher Typ ergibt „leer“, einzelne Einträge ohne vier
+/// endliche Zahlen oder mit Breite/Höhe ≤ 0 werden übergangen.
+fn lenient_detached<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<BTreeMap<String, DetachedWindow>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let Some(map) = value.as_object() else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(map
+        .iter()
+        .filter_map(|(k, v)| {
+            let w: DetachedWindow = serde_json::from_value(v.clone()).ok()?;
+            let ok = [w.x, w.y, w.width, w.height].iter().all(|n| n.is_finite())
+                && w.width > 0.0
+                && w.height > 0.0;
+            ok.then(|| (k.clone(), w))
+        })
+        .collect())
 }
 
 impl Config {

@@ -390,6 +390,7 @@ impl DimensionDialog {
         let mut cards = Vec::new();
         let apply_ok = !read_only && errors.is_empty();
         let response = Dialog::new(tr!("dim-edit-title"), DialogSize::Wide)
+            .dock_key("dimension_edit")
             .open(&mut open)
             .show(ctx, |ui| {
                 let mut measure_card = |ui: &mut egui::Ui| {

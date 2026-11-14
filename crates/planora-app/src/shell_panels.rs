@@ -23,6 +23,8 @@
 use egui::{Vec2, vec2};
 
 use crate::app::{self, CreateKind, PlanoraApp};
+use crate::detach::{self, DetachState, Head, Place, WindowEvent, WindowSpec};
+use crate::dialog::DockButton;
 use crate::keymap::{self, Action};
 use crate::shell::{self, RightTab, ShellMode, ShellRects};
 use crate::state::AppState;
@@ -445,6 +447,22 @@ pub(crate) fn field<R>(
         .inner
 }
 
+/// Welche Plätze gerade im eigenen Fenster liegen. Während eines Bilds liegt der Zustand in
+/// `ctx.data` ([`crate::detach::install`]), sonst (Tests) in `app.ws.detach`. Gefragt wird nur
+/// nach den Plätzen, die der Modus zeigt (Skizze: Skizzenfeld, sonst Baum und rechte Spalte):
+/// So prüft [`crate::detach::is_undocked`] den Monitor beim Wechsel in den Modus neu, nicht
+/// laufend.
+pub fn undocked_places(ctx: &egui::Context, app: &PlanoraApp) -> shell::Undocked {
+    use crate::detach::{DetachState, Place, is_undocked, with_state};
+    let sketch = mode_of(&app.ws.active_tab().state) == ShellMode::Sketch;
+    let of = |s: &DetachState| shell::Undocked {
+        tree: !sketch && is_undocked(ctx, s, Place::Tree),
+        right: !sketch && is_undocked(ctx, s, Place::Right),
+        sketch_side: sketch && is_undocked(ctx, s, Place::SketchSide),
+    };
+    with_state(ctx, |s| of(s)).unwrap_or_else(|| of(&app.ws.detach))
+}
+
 /// Zeichnet alle Felder (Area-basiert) und liefert die freie Fläche; Reihenfolge: Felder vor dem
 /// Viewport-Aufruf des Aufrufers.
 pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
@@ -485,6 +503,7 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
             None => 0.0,
         };
         let top_min = stored(ctx, top_min_key()).unwrap_or(0.0);
+        let undocked = undocked_places(ctx, app);
         let rects = shell::layout_in_mode(
             content,
             mode,
@@ -493,6 +512,7 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
             bottom_w,
             status_w,
             tab.read_only,
+            undocked,
         );
         let mut rects = rects;
         // Das Werkzeugfeld der Zeichnung ist so breit wie sein Inhalt (mittig, höchstens so breit
@@ -507,11 +527,20 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
     top_field(ctx, &rects, app);
     // Im Skizzenmodus zeichnet `sketch_panel::show` Leiste, Skizzenfeld und Fuß an `rects`, im
     // Zeichnungsmodus `drawing_view::show_with` Werkzeug-, Ansichts- und Hinweisfeld.
+    let undocked = undocked_places(ctx, app);
     if rects.strip.is_none() {
-        left_field(ctx, &rects, app);
+        if undocked.tree {
+            tree_window(ctx, &rects, app);
+        } else {
+            left_field(ctx, &rects, app);
+        }
     }
     if rects.strip.is_none() && rects.tool.is_none() {
-        right_field(ctx, &rects, app);
+        if undocked.right {
+            right_window(ctx, &rects, app);
+        } else {
+            right_field(ctx, &rects, app);
+        }
         bottom_field(ctx, &rects, app);
         history_field(ctx, &rects, app);
     } else {
@@ -814,7 +843,111 @@ fn left_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 browser::show_in_panel(ui, state, read_only, percent);
             });
         });
+        detach::with_state(ctx, |s| panel_dock_button(ui, Place::Tree, s, rects.left));
     });
+}
+
+/// Der Baum im eigenen Fenster (abgedockt), sonst wie [`left_field`]; das Fenster ist nicht
+/// durchsichtig (dahinter liegt keine 3D-Ansicht). Rückfragen, die nicht aus dem Baumfenster
+/// kamen, stehen danach im Hauptfenster.
+fn tree_window(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
+    let read_only = app.ws.active_tab().read_only;
+    let title = tr!("tree-header");
+    panel_window(ctx, Place::Tree, &title, rects.left, |ui| {
+        let area = egui::ScrollArea::vertical()
+            .id_salt("planora-field-left-scroll")
+            .max_height(ui.available_height())
+            .auto_shrink([false, true]);
+        theme::scroll_area(ui, area, |ui| {
+            let state = &mut app.ws.active_tab_mut().state;
+            browser::show_in_panel(ui, state, read_only, 0);
+        });
+    });
+    browser::main_window_prompts(ctx, &mut app.ws.active_tab_mut().state);
+}
+
+/// Die rechte Spalte (Eigenschaften | Versionen, aktiver Tab) im eigenen Fenster.
+fn right_window(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
+    let enabled = !app.ws.active_tab().read_only;
+    let title = match app.shell.effective_right_tab() {
+        RightTab::Properties => tr!("tab-properties"),
+        RightTab::Versions => tr!("tab-versions"),
+    };
+    panel_window(ctx, Place::Right, &title, rects.right, |ui| {
+        right_contents(ui, app, enabled);
+    });
+}
+
+/// Symbol „Abdocken“ oben rechts im Feld des Platzes `place` (nur mit eigenen Fenstern, siehe
+/// [`detach::can_detach`]). Ein Klick dockt das Feld ab: Es springt ab dem nächsten Bild an
+/// der Stelle seiner Spalte `rect_points` (Punkte des Hauptfensters) als eigenes Fenster heraus.
+pub fn panel_dock_button(
+    ui: &mut egui::Ui,
+    place: Place,
+    state: &mut DetachState,
+    rect_points: egui::Rect,
+) {
+    let ctx = ui.ctx().clone();
+    if !detach::can_detach(&ctx) {
+        return;
+    }
+    // Innenfläche des Felds (wie im abgedockten Fenster): dort steht das Symbol an derselben
+    // Stelle wie dort „Andocken“.
+    let m = theme::panel_frame(ui.visuals().dark_mode).total_margin();
+    let area = egui::Rect::from_min_max(
+        rect_points.min + vec2(m.left, m.top),
+        rect_points.max - vec2(m.right, m.bottom),
+    );
+    if crate::dialog::corner_dock_icon(ui, area, detach::dock_band(place), DockButton::Undock) {
+        let origin = ctx
+            .input(|i| i.viewport().inner_rect)
+            .map_or(Vec2::ZERO, |r| r.min.to_vec2());
+        let ppp = ctx.pixels_per_point();
+        state.set(
+            place,
+            detach::to_physical(rect_points.translate(origin), ppp),
+        );
+        ctx.request_repaint();
+    }
+}
+
+/// Zeigt den Inhalt des abgedockten Felds `place` im eigenen Fenster (Größe wie gemerkt,
+/// anfangs die Spalte; Höhe und Breite frei änderbar). „Andocken“ und das Schließen durch das
+/// Betriebssystem (Alt+F4) docken es wieder an. Nur aufrufen, solange der Modus das Feld zeigt:
+/// Ohne Aufruf schließt egui das Fenster selbst.
+pub(crate) fn panel_window<R>(
+    ctx: &egui::Context,
+    place: Place,
+    title: &str,
+    column: egui::Rect,
+    add_contents: impl FnMut(&mut egui::Ui) -> R,
+) -> Option<R> {
+    detach::with_state(ctx, |state| {
+        let ppp = ctx.pixels_per_point();
+        let size = state
+            .get(place)
+            .map_or(vec2(theme::PANEL_WIDTH, column.height()), |w| {
+                detach::to_points(w, ppp).size()
+            });
+        let spec = WindowSpec {
+            place,
+            title,
+            inner_size: size,
+            resizable: true,
+            focus_on_open: false,
+            closable: false,
+            head: Head::Overlay {
+                band: detach::dock_band(place),
+            },
+        };
+        let (r, event) = detach::show_window(ctx, state, spec, add_contents);
+        if event != WindowEvent::None {
+            state.undock(place);
+            ctx.request_repaint();
+        }
+        r
+    })
+    .flatten()
 }
 
 /// Umschalter Eigenschaften | Versionen (nur wenn Versionen eingeblendet sind) und darunter der
@@ -827,6 +960,7 @@ fn right_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let margin = f32::from(frame.inner_margin.left);
     field(ctx, right_id(), rects.right.min, frame, |ui| {
         side_column(ui, inner, margin, |ui| right_contents(ui, app, enabled));
+        detach::with_state(ctx, |s| panel_dock_button(ui, Place::Right, s, rects.right));
     });
 }
 

@@ -592,6 +592,7 @@ fn sketch_rects(ctx: &egui::Context) -> ShellRects {
         foot,
         0.0,
         false,
+        crate::shell::Undocked::default(),
     )
 }
 
@@ -937,16 +938,52 @@ fn side_field(
     sf: &mut SketchFeature,
     side: SideInput,
 ) {
+    let place = crate::detach::Place::SketchSide;
+    // Der Platz liegt im eigenen Fenster: dort statt im Hauptfenster (das Layout lässt die
+    // Spalte dann frei). Es erscheint mit der Skizze und verschwindet mit ihr.
+    let undocked = crate::detach::with_state(ctx, |s| crate::detach::is_undocked(ctx, s, place))
+        .unwrap_or(false);
+    let SideInput {
+        panel,
+        scope,
+        show_profiles,
+        palette,
+        fonts,
+    } = side;
+    // Inhalt in einer senkrechten ScrollArea höchstens `max_h` hoch; läuft abgedockt je Bild
+    // eventuell mehrmals (verworfene Durchgänge des Fensters).
+    let mut contents = |ui: &mut egui::Ui, max_h: f32| {
+        let area = egui::ScrollArea::vertical()
+            .id_salt("planora-field-sketch-side-scroll")
+            .max_height(max_h)
+            .auto_shrink([false, true]);
+        let side = SideInput {
+            panel: &mut *panel,
+            scope,
+            show_profiles: &mut *show_profiles,
+            palette: &mut *palette,
+            fonts,
+        };
+        theme::scroll_area(ui, area, |ui| side_contents(ui, &mut *se, &mut *sf, side));
+    };
+    if undocked {
+        let title = tr!("panel-sketch-side");
+        shell_panels::panel_window(ctx, place, &title, rect, |ui| {
+            let max_h = ui.available_height();
+            contents(ui, max_h);
+        });
+        return;
+    }
+    if rect.width() <= 0.0 {
+        return;
+    }
     let frame = theme::panel_frame(dark);
     let inner = shell_panels::inner_size(&frame, rect.size());
     let margin = f32::from(frame.inner_margin.left);
     shell_panels::field(ctx, shell_panels::sketch_side_id(), rect.min, frame, |ui| {
-        shell_panels::side_column(ui, inner, margin, |ui| {
-            let area = egui::ScrollArea::vertical()
-                .id_salt("planora-field-sketch-side-scroll")
-                .max_height(inner.y)
-                .auto_shrink([false, true]);
-            theme::scroll_area(ui, area, |ui| side_contents(ui, se, sf, side));
+        shell_panels::side_column(ui, inner, margin, |ui| contents(ui, inner.y));
+        crate::detach::with_state(ctx, |s| {
+            shell_panels::panel_dock_button(ui, place, s, rect);
         });
     });
 }
@@ -1307,6 +1344,10 @@ fn side_contents(
     ui.horizontal(|ui| {
         ui.strong(&sf.sketch.name);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Ganz rechts steht (mit eigenen Fenstern) das Symbol „Abdocken“/„Andocken“.
+            if crate::detach::can_detach(ui.ctx()) {
+                ui.add_space(crate::dialog::corner_dock_width(ui));
+            }
             ui.checkbox(show_profiles, tr!("sketch-show-profile"));
         });
     });

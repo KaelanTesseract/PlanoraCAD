@@ -324,6 +324,7 @@ impl CreateDialog {
             profile_pick::take_click(state, *sketch, profiles);
         }
         Dialog::new(title, DialogSize::Normal)
+            .dock_key(key)
             .id(egui::Id::new(("create_dialog", key)))
             .open(&mut open)
             .show(ctx, |ui| {

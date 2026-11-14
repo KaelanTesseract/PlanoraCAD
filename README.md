@@ -27,6 +27,7 @@ Du zeichnest zuerst eine flache Skizze mit Maßen und machst daraus einen Körpe
 - **Rückgängig und Wiederholen** für jede Änderung am Dokument.
 - **Tastenkürzel:** Die Bedienung ist an gängige CAD-Programme angelehnt. Jedes Kürzel und die Mausbelegung lassen sich in den Einstellungen ändern.
 - **Hell oder dunkel:** Du wählst das Aussehen selbst.
+- **Fenster abdocken:** Dialoge und die Spalten links und rechts lassen sich über das Symbol in ihrer Kopfzeile in ein eigenes Fenster lösen, zum Beispiel auf einen zweiten Bildschirm. Mit demselben Symbol dockst du sie wieder an. Das Programm merkt sich, was abgedockt war und wo es stand, und stellt es beim nächsten Start wieder so hin. Fehlt der zweite Bildschirm, erscheint das Fenster einfach wieder im Hauptfenster.
 
 Alles mit Einzelheiten, Bedienung und Grenzen steht unter [Funktionen im Detail](docs/funktionen.md).
 

@@ -473,6 +473,7 @@ impl ParameterDialog {
         let live = live_message(&self.draft_errors(state));
         let table_h = (ctx.content_rect().height() - 260.0).clamp(120.0, TABLE_MAX_H);
         let shown = Dialog::new(title(), DialogSize::Wide)
+            .dock_key("parameters")
             .id(egui::Id::new("parameter_dialog"))
             .open(&mut open)
             .show_with_footer(

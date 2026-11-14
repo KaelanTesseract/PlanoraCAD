@@ -38,7 +38,7 @@ pub fn show(ctx: &egui::Context, ws: &mut Workspace) {
 }
 
 /// Mittiges, festes Fenster für eine Rückfrage.
-fn window(ctx: &egui::Context, key: &str, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+fn window(ctx: &egui::Context, key: &str, title: &str, add_contents: impl FnMut(&mut egui::Ui)) {
     Dialog::new(title, DialogSize::Prompt)
         .id(egui::Id::new(("planora_prompt", key)))
         .fixed()
@@ -76,7 +76,7 @@ fn save_changes(ctx: &egui::Context, ws: &mut Workspace, tab: u64, then: After) 
         )
     };
     window(ctx, "save_changes", &title, |ui| {
-        ui.add(egui::Label::new(text).wrap());
+        ui.add(egui::Label::new(text.as_str()).wrap());
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui.button(tr!("common-save")).clicked() {
@@ -357,7 +357,7 @@ fn autosave_offer(ctx: &egui::Context, ws: &mut Workspace, tab: u64) {
     let name = tab_name(ws, tab);
     let mut choice = None;
     window(ctx, "autosave_offer", &tr!("prompt-autosave-title"), |ui| {
-        ui.strong(name);
+        ui.strong(name.as_str());
         ui.label(tr!("prompt-autosave-text"));
         ui.add_space(6.0);
         ui.horizontal(|ui| {

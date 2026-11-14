@@ -15,6 +15,7 @@ pub mod crash;
 pub mod crash_addr;
 pub mod crash_dialog;
 pub mod create_dialog;
+pub mod detach;
 pub mod diag;
 pub mod dialog;
 pub mod dimension_browser;

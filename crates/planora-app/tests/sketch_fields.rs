@@ -718,6 +718,7 @@ fn no_sketch_window_remains() {
         0.0,
         0.0,
         false,
+        shell::Undocked::default(),
     );
     assert_eq!(field(&c, "Leiste").min, r.strip.unwrap().min);
     assert_eq!(field(&c, "Skizze").min, r.right.min);

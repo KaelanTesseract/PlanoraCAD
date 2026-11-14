@@ -143,7 +143,7 @@ fn log_steps_crash_report_and_feedback_file_are_english_under_german() {
 /// Ein Bild mit dem Fenster.
 fn frame_feedback(s: &mut Screen, d: &mut FeedbackDialog) -> Vec<common::Seen> {
     s.frame(vec![], &mut |ctx| {
-        let _ = feedback_dialog::show(ctx, d, true);
+        let _ = feedback_dialog::show(ctx, d, true, false);
     })
 }
 
@@ -188,7 +188,7 @@ fn feedback_window_speaks_english() {
             .rect
             .center();
         s.click(at, &mut |ctx| {
-            let _ = feedback_dialog::show(ctx, &mut d, true);
+            let _ = feedback_dialog::show(ctx, &mut d, true, false);
         });
         assert!(d.sent.is_some(), "abgeschickt");
         let seen = frame_feedback(&mut s, &mut d);

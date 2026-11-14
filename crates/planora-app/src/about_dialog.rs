@@ -66,6 +66,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool) {
         return;
     }
     Dialog::new(title(), DialogSize::Normal)
+        .dock_key("about")
         .open(open)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {

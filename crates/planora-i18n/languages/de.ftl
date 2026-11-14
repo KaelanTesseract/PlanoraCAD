@@ -227,6 +227,11 @@ shortcuts-to-settings = In den Einstellungen ändern
 
 ## Fenster und Dialoge
 dialog-close = Schließen
+dialog-dock = Andocken
+dialog-undock = Abdocken
+
+## Felder (Titel abgedockter Felder)
+panel-sketch-side = Skizzenfeld
 
 ## Tabs
 tab-close = Schließen

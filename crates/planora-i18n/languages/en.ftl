@@ -227,6 +227,11 @@ shortcuts-to-settings = Change in settings
 
 ## Fenster und Dialoge
 dialog-close = Close
+dialog-dock = Dock
+dialog-undock = Undock
+
+## Felder (Titel abgedockter Felder)
+panel-sketch-side = Sketch palette
 
 ## Tabs
 tab-close = Close

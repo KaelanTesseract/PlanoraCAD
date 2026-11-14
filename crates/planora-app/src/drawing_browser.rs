@@ -561,13 +561,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     }
 }
 
-/// Fenster „Umbenennen“ und Rückfrage beim Löschen; jedes Bild, auch bei zugeklapptem Ordner
-/// (die Rückfrage kommt auch aus der Zeichnungsansicht).
-pub(crate) fn windows(ctx: &egui::Context, state: &mut AppState) {
-    rename_window(ctx, state);
-    delete_window(ctx, state);
-}
-
 /// Führt einen Befehl aus einer Zeile aus. Änderungen sind in einer alten Version gesperrt
 /// (die Schaltflächen sind es schon; das hier ist der zweite Riegel).
 fn run(state: &mut AppState, action: Action, read_only: bool) {
@@ -592,7 +585,7 @@ fn run(state: &mut AppState, action: Action, read_only: bool) {
 }
 
 /// Kleines Fenster „Umbenennen“ mit Textfeld und rotem Fehlertext.
-fn rename_window(ctx: &egui::Context, state: &mut AppState) {
+pub(crate) fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     let Some((id, mut name)) = state.rename_drawing_draft.clone() else {
         return;
     };
@@ -604,6 +597,7 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     let (mut apply, mut cancel) = (false, false);
     let mut open = true;
     Dialog::new(tr!("tree-rename"), DialogSize::Prompt)
+        .dock_key("drawing_rename")
         .id(egui::Id::new("planora-rename-drawing"))
         .open(&mut open)
         .show(ctx, |ui| {
@@ -639,13 +633,14 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
 
 /// Rückfrage vor dem Löschen einer Zeichnung oder einer Ansicht mit abgeleiteten Ansichten oder
 /// Maßen.
-fn delete_window(ctx: &egui::Context, state: &mut AppState) {
+pub(crate) fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     let Some(plan) = state.pending_delete_drawing.clone() else {
         return;
     };
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
     Dialog::new(tr!("tree-confirm-title"), DialogSize::Prompt)
+        .dock_key("drawing_delete")
         .id(egui::Id::new("planora-delete-drawing"))
         .open(&mut open)
         .show(ctx, |ui| {

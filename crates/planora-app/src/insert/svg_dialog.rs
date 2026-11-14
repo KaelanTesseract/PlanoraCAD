@@ -451,11 +451,14 @@ impl SvgDialog {
         let loaded = &self.loaded;
         let labels = field_labels();
         let response = Dialog::new(tr!("insert-svg-title"), DialogSize::File)
+            .dock_key("insert_svg")
             .center_on_open()
             .open(&mut open)
             .show_with_footer(
                 ctx,
                 |ui| {
+                    // Abgedockt läuft der Inhalt mehrmals je Aufruf (Durchgänge des Kindfensters): neu sammeln.
+                    field_errors.clear();
                     let dark = ui.visuals().dark_mode;
                     if choosing {
                         ui.strong(tr!("insert-svg-choose"));
@@ -530,6 +533,12 @@ impl SvgDialog {
                     }
                 },
                 |ui| {
+                    // Esc schließt (wie „Abbrechen“), solange kein Feld tippt und Esc nicht eben
+                    // nur einen Griffzug abgebrochen hat; im Fenster des Dialogs gelesen
+                    // (abgedockt auch Esc im Hauptfenster) und verbraucht: Esc wirkt nur hier.
+                    if !esc_taken && crate::dialog::escape_pressed(ui, true) {
+                        close = true;
+                    }
                     if choosing {
                         footer_action = chooser.borrow_mut().show_footer(ui);
                         return;
@@ -589,16 +598,6 @@ impl SvgDialog {
         if let Some(p) = chosen {
             *last_dir = p.parent().map(Path::to_path_buf);
             self.load(p);
-        }
-        // Esc schließt (wie „Abbrechen“), solange kein Feld tippt und Esc nicht eben nur einen
-        // Griffzug abgebrochen hat.
-        if !esc_taken
-            && !crate::viewport::typing(ctx)
-            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        {
-            // Verbraucht: Esc wirkt nur hier, nicht auch noch anderswo.
-            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-            close = true;
         }
         if ok && field_errors.is_empty() && self.insert(state).is_ok() {
             SvgDialog::finish(state);

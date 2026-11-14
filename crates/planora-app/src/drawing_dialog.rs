@@ -183,6 +183,7 @@ impl NewDrawingDialog {
         let (mut projection, mut base) = (self.projection, self.base);
         let (mut scale, mut scale_chosen) = (self.scale, self.scale_chosen);
         let response = Dialog::new(tr!("drawing-new-title"), DialogSize::Wide)
+            .dock_key("drawing_new")
             .open(&mut open)
             .show(ctx, |ui| {
                 let mut sheet_card = |ui: &mut egui::Ui| {

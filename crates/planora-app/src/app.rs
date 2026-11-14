@@ -188,6 +188,16 @@ pub struct PlanoraApp {
     /// (`egui::Context::cumulative_frame_nr`); ist die laufende Nummer größer, ist dieses Bild
     /// auch gezeichnet (eframe zeichnet nach dem Durchlauf, auch nach mehreren Durchgängen).
     first_frame: Option<u64>,
+    /// Tasten aus abgedockten Feldern, die keine Aktion der Tastenbelegung waren (Esc, Enter,
+    /// Entf der Ansichten): Sie gehen im nächsten Bild in die Eingabe des Hauptfensters, als
+    /// hätte es den Fokus gehabt ([`PlanoraApp::shortcuts_from_children`]).
+    keys_for_main: Vec<egui::Event>,
+    /// Ein Teil von `keys_for_main` kam aus dem abgedockten Baum.
+    keys_for_main_from_tree: bool,
+    /// Stand der Rückfragen des Baums, als Tasten aus dem Baumfenster in die Eingabe des
+    /// Hauptfensters gingen ([`PlanoraApp::feed_child_keys`]); was bis zum Ende des Bilds
+    /// aufgeht, erscheint über dem Baumfenster ([`crate::browser::mark_tree_hosted`]).
+    tree_keys_fed: Option<crate::browser::OpenTreePrompts>,
     /// Rückfrage nach einem Absturz oder unerwarteten Ende beim letzten Lauf
     /// ([`crash_dialog`]); wartet, bis nichts anderes ansteht ([`PlanoraApp::crash_notice_tick`]).
     crash_notice: Option<CrashNotice>,
@@ -422,6 +432,9 @@ impl PlanoraApp {
             reverify_gate: None,
             last_window: None,
             first_frame: None,
+            keys_for_main: Vec::new(),
+            keys_for_main_from_tree: false,
+            tree_keys_fed: None,
             crash_notice: None,
             run_marker: None,
             // Tests hängen nie an Systemschriften (Spec G7); das Programm setzt in `new` den
@@ -1246,15 +1259,120 @@ impl PlanoraApp {
         let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
             !is_history_key(a) && !(windows && a.area() != keymap::Area::All)
         });
+        self.run_pressed(ctx, &pressed, true);
+        self.undo_keys(ctx);
+    }
+
+    /// Führt die gedrückten Aktionen in der Reihenfolge der Tabelle aus. `strip_text`: Öffnet
+    /// eine davon ein Fenster mit Textfeld, wird der Text der Taste aus der Eingabe des
+    /// Hauptfensters genommen (er soll nicht im neuen Feld landen).
+    fn run_pressed(&mut self, ctx: &egui::Context, pressed: &[Action], strip_text: bool) {
         for &a in Action::ALL.iter().filter(|a| pressed.contains(a)) {
             let request = commands::run_key(&mut self.ws, a);
-            if matches!(request, MenuRequest::Shortcuts | MenuRequest::Feedback) {
+            if strip_text && matches!(request, MenuRequest::Shortcuts | MenuRequest::Feedback) {
                 // Sicherheitshalber: der Text der Taste soll nicht im neuen Textfeld landen.
                 ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
             }
             self.apply_menu_request(ctx, request);
         }
-        self.undo_keys(ctx);
+    }
+
+    /// Speist die Tasten aus abgedockten Feldern, die im vorigen Bild keine Aktion waren, in die
+    /// Eingabe des Hauptfensters: nach dessen Kürzeln (die Tastenbelegung sah sie schon im
+    /// Feld, nichts wirkt doppelt), vor den Fenstern und Ansichten, die Esc, Enter und Entf fest
+    /// lesen. Nicht, solange im Hauptfenster ein Eingabefeld die Tastatur hat (die Tasten gehörten
+    /// sonst ihm) oder eine Rückfrage offen ist; dann verfallen sie.
+    ///
+    /// Wurde im vorigen Bild in einem abgedockten Fenster geklickt oder getippt, gibt das
+    /// Hauptfenster zuerst seinen Tastaturfokus ab ([`viewport::release_keyboard`]). Während des
+    /// Neustarts nach einem Update verfällt alles (nichts wirkt später veraltet nach).
+    fn feed_child_keys(&mut self, ctx: &egui::Context) {
+        let keys = std::mem::take(&mut self.keys_for_main);
+        let from_tree = std::mem::take(&mut self.keys_for_main_from_tree);
+        let touched = crate::detach::take_child_touched(ctx);
+        if self.restart_locked() {
+            return;
+        }
+        if touched {
+            viewport::release_keyboard(ctx);
+        }
+        if keys.is_empty() || self.ws.prompt.is_some() || viewport::typing(ctx) {
+            return;
+        }
+        if from_tree {
+            self.tree_keys_fed = Some(crate::browser::open_tree_prompts(
+                &self.ws.active_tab().state,
+            ));
+        }
+        ctx.input_mut(|i| i.events.extend(keys));
+    }
+
+    /// Tastenkürzel aus abgedockten Fenstern (Spec „Tastenkürzel aus abgedockten Fenstern“):
+    /// Jedes abgedockte Fenster legt nach seinem Inhalt ab, was der nicht verbraucht hat
+    /// ([`crate::detach::take_child_keys`]); hier, am Ende des Bilds, nachdem alle Fenster
+    /// gezeichnet sind, wirken diese Tasten genau einmal mit denselben Sperren wie im
+    /// Hauptfenster ([`PlanoraApp::shortcuts`]): nichts bei offener Rückfrage oder während ein
+    /// Eingabefeld des Fensters die Tastatur hat; bei offenem Fenster (und in jedem abgedockten
+    /// Dialog) nur die Kürzel mit Bereich „Überall“; Rückgängig und Wiederholen nur ohne offenes
+    /// Fenster und ohne gedrückte Maustaste. Die Tabulatortaste der Skizzenbemaßung gilt nur im
+    /// Hauptfenster (im abgedockten Fenster wandert der Fokus wie gewohnt). Ein Weg je Fenster:
+    /// Das Hauptfenster liest seine eigene Eingabe in [`PlanoraApp::shortcuts`], die abgedockten
+    /// Fenster kommen nur hierher.
+    fn shortcuts_from_children(&mut self, ctx: &egui::Context) {
+        let list = crate::detach::take_child_keys(ctx);
+        if list.is_empty() || self.restart_locked() {
+            return;
+        }
+        let tree = crate::detach::viewport_id(crate::detach::Place::Tree);
+        for mut keys in list {
+            // Je Fenster neu: ein Kürzel des vorigen kann eine Rückfrage geöffnet haben.
+            if self.ws.prompt.is_some() || keys.typing {
+                continue;
+            }
+            // Rückfragen des Baums, die ein Kürzel aus dem Baumfenster öffnet (Entf), gehören
+            // über das Baumfenster wie die aus seinen Zeilen.
+            let from_tree = keys.viewport == tree;
+            let before = crate::browser::open_tree_prompts(&self.ws.active_tab().state);
+            let only_all = keys.dialog || self.windows_open() || self.projects.is_open();
+            let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
+            let pressed = keymap::dispatch::pressed_in(
+                &mut keys.events,
+                keys.focus,
+                &self.ws.keymap,
+                area,
+                |a| !is_history_key(a) && !(only_all && a.area() != keymap::Area::All),
+            );
+            self.run_pressed(ctx, &pressed, false);
+            let history = !self.windows_open() && !keys.pointer_down;
+            if history {
+                let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
+                let pressed = keymap::dispatch::pressed_in(
+                    &mut keys.events,
+                    keys.focus,
+                    &self.ws.keymap,
+                    area,
+                    is_history_key,
+                );
+                for a in [Action::Undo, Action::Redo] {
+                    if pressed.contains(&a) {
+                        commands::run_action(&mut self.ws, a);
+                    }
+                }
+            }
+            // Felder: der Rest (feste Tasten der Ansichten wie Esc, Enter, Entf) gehört dem
+            // Hauptfenster. Dialoge verwerfen ihn (Esc und Enter haben sie selbst gelesen).
+            // Rückgängig und Wiederholen bleiben nur liegen, wenn sie gesperrt waren; dann
+            // wirken sie dort ebensowenig.
+            if from_tree {
+                crate::browser::mark_tree_hosted(ctx, &self.ws.active_tab().state, before);
+            }
+            if !keys.dialog {
+                self.keys_for_main_from_tree |= from_tree && !keys.events.is_empty();
+                self.keys_for_main.append(&mut keys.events);
+            }
+            // Das Bild ist schon gezeichnet: das Ergebnis zeigt das nächste.
+            ctx.request_repaint();
+        }
     }
 
     /// Ist ein Fenster offen, das Rückgängig und die Befehle von Modell, Skizze und Zeichnung
@@ -2833,6 +2951,8 @@ impl eframe::App for PlanoraApp {
     /// (Ohne diesen Aufruf, etwa bei bloßem Fallenlassen, wartet der Arbeiter nur
     /// [`crate::thumbnail_worker::DROP_WAIT`].)
     fn on_exit(&mut self) {
+        // Spec „Speichern“: beim Beenden einmal den letzten Stand der abgedockten Fenster.
+        self.ws.detach.save_if_dirty(&self.ws.config_path);
         self.projects.shutdown(EXIT_WAIT);
         // Sauberes Ende: der Laufmarker geht (ein Absturz lässt ihn liegen).
         if let Some(marker) = self.run_marker.take() {
@@ -2842,6 +2962,9 @@ impl eframe::App for PlanoraApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Der Abdock-Zustand liegt für dieses Bild in `ctx.data`, damit jeder `Dialog` ihn
+        // erreicht; am Ende kommt er zurück nach `ws.detach`.
+        crate::detach::install(&ctx, &mut self.ws.detach);
         let dark = self.ws.active_tab().state.dark;
         if self.applied_dark != Some(dark) {
             theme::apply(&ctx, dark);
@@ -2856,6 +2979,7 @@ impl eframe::App for PlanoraApp {
         if !self.restart_locked() {
             self.shortcuts(&ctx);
         }
+        self.feed_child_keys(&ctx);
         // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
         keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
         feedback_dialog::take_escape(&ctx, &mut self.feedback, self.ws.prompt.is_some());
@@ -3030,7 +3154,9 @@ impl eframe::App for PlanoraApp {
         if self.feedback.hides_for_shot() {
             // Bild vom Fenster: das Fenster „Rückmeldung“ ist auf dem Bild nicht zu sehen.
             ctx.request_repaint();
-        } else if let Some(action) = feedback_dialog::show(&ctx, &mut self.feedback, dark) {
+        } else if let Some(action) =
+            feedback_dialog::show(&ctx, &mut self.feedback, dark, self.ws.prompt.is_some())
+        {
             self.feedback_action(&ctx, action);
         }
         self.ws.refresh_prompts();
@@ -3040,6 +3166,14 @@ impl eframe::App for PlanoraApp {
         self.crash_notice_tick(&ctx, dark);
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
+        // Nach allen Feldern und Dialogen (auch abgedockten): deren unverbrauchte Tasten; vor den
+        // Schritten für Rückgängig, damit eine Änderung im selben Bild ein Schritt wird.
+        self.shortcuts_from_children(&ctx);
+        // Weitergereichte Tasten aus dem Baumfenster (dieses Bild): eine dadurch geöffnete
+        // Rückfrage des Baums erscheint über dem Baumfenster.
+        if let Some(before) = self.tree_keys_fed.take() {
+            crate::browser::mark_tree_hosted(&ctx, &self.ws.active_tab().state, before);
+        }
         if self.restart_locked() {
             // Über allem: sperrt die Bedienung, bis der Installer gestartet ist und sich das Programm
             // beendet (oder der Start scheitert und das Programm weiterläuft).
@@ -3073,5 +3207,9 @@ impl eframe::App for PlanoraApp {
         if self.first_frame.is_none() {
             self.first_frame = Some(ctx.cumulative_frame_nr());
         }
+        crate::detach::uninstall(&ctx, &mut self.ws.detach);
+        // Abdock-Zustand nur bei Änderung schreiben; ein Fehler bricht nichts ab, die Änderung
+        // bleibt aber vorgemerkt.
+        self.ws.detach.save_if_dirty(&self.ws.config_path);
     }
 }
