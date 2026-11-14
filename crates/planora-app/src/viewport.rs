@@ -577,10 +577,38 @@ pub fn remember_keyboard_focus(ctx: &egui::Context) {
     let focused = keyboard_taken(ctx);
     let other = other_field_has_keyboard(ctx);
     let viewport = ctx.viewport_id();
+    let root_frame = ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT);
     ctx.data_mut(|d| {
+        let before = d
+            .get_temp::<bool>(history_focus_id(viewport))
+            .unwrap_or(false);
         d.insert_temp(keyboard_focus_id(viewport), focused);
         d.insert_temp(history_focus_id(viewport), other);
+        if viewport != egui::ViewportId::ROOT {
+            // Tippen im abgedockten Fenster zählt für den Verlauf des Hauptfensters mit
+            // ([`typing_for_history`]); gemerkt mit dem Bild des Hauptfensters, damit ein
+            // geschlossenes Fenster nichts zurücklässt.
+            let list = d.get_temp_mut_or_default::<Vec<(egui::ViewportId, u64)>>(child_typing_id());
+            list.retain(|(v, _)| *v != viewport);
+            if other || before {
+                list.push((viewport, root_frame));
+            }
+        }
     });
+}
+
+fn child_typing_id() -> egui::Id {
+    egui::Id::new("planora-child-typing-for-history")
+}
+
+/// Tippt in einem abgedockten Fenster ein Eingabefeld (in diesem oder im vorigen Bild des
+/// Hauptfensters gemerkt)?
+fn child_typing(ctx: &egui::Context) -> bool {
+    let frame = ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT);
+    ctx.data(|d| {
+        d.get_temp::<Vec<(egui::ViewportId, u64)>>(child_typing_id())
+            .is_some_and(|l| l.iter().any(|(_, f)| f + 1 >= frame))
+    })
 }
 
 /// Hatte im Hauptfenster im vorigen Bild ein Eingabefeld die Tastatur (oder erfassen die
@@ -627,6 +655,7 @@ pub fn typing(ctx: &egui::Context) -> bool {
 /// Geste, sonst wäre ein ganzer Linienzug ein einziger Schritt.
 pub fn typing_for_history(ctx: &egui::Context) -> bool {
     other_field_has_keyboard(ctx)
+        || child_typing(ctx)
         || crate::keymap::settings_ui::is_capturing(ctx)
         || ctx
             .data(|d| d.get_temp::<bool>(history_focus_id(ctx.viewport_id())))

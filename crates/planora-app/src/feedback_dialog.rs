@@ -876,7 +876,15 @@ enum FooterClick {
 
 /// Zeichnet das Fenster, solange `state.open` gilt, und liefert, was die App ausführen soll
 /// (je Bild eine Aktion; „Im Browser öffnen“ liefert Ordner und Adresse nacheinander).
-pub fn show(ctx: &egui::Context, state: &mut FeedbackDialog, dark: bool) -> Option<FeedbackAction> {
+///
+/// `prompt_open`: eine Rückfrage ist offen; dann schließt Esc im abgedockten Fenster nicht (wie
+/// [`take_escape`]).
+pub fn show(
+    ctx: &egui::Context,
+    state: &mut FeedbackDialog,
+    dark: bool,
+    prompt_open: bool,
+) -> Option<FeedbackAction> {
     if !state.open {
         return state.pending.pop_front();
     }
@@ -902,7 +910,7 @@ pub fn show(ctx: &egui::Context, state: &mut FeedbackDialog, dark: bool) -> Opti
             },
             |ui| {
                 // Abgedockt: Esc im eigenen Fenster schließt wie „Abbrechen“.
-                if crate::dialog::in_own_window(ui) && escape_in(ui.ctx()) {
+                if crate::dialog::in_own_window(ui) && !prompt_open && escape_in(ui.ctx()) {
                     click = Some(FooterClick::Cancel);
                 }
                 footer(ui, sent, enough.get(), dark, &mut click);

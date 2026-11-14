@@ -12,11 +12,15 @@ use planora_app::commands;
 use planora_app::detach::{self, Place};
 use planora_app::keymap::Action;
 use planora_app::plane_dialog::PlaneCommand;
+use planora_app::sketch_state::{Item, Tool};
+use planora_app::viewport;
 use planora_app::workspace::{Prompt, Workspace};
 use planora_app::{fonts, theme};
+use planora_feature::{SketchPlane, StandardPlane};
 use planora_math::DVec3;
 use planora_project::config::{Config, DetachedWindow};
 use planora_project::library::Library;
+use planora_render::Pick;
 
 const SIZE: Vec2 = vec2(1920.0, 1080.0);
 
@@ -368,4 +372,161 @@ fn typing_in_undocked_field_does_not_trigger_shortcuts() {
     rig.settle(3);
     rig.press_in(tree, vec![key(Key::N, Modifiers::COMMAND)]);
     assert_eq!(rig.ws().tabs.len(), tabs + 1);
+}
+
+/// Neue Skizze auf XY, offen; das abgedockte Skizzenfeld erscheint.
+fn open_sketch(rig: &mut Rig) -> egui::ViewportId {
+    let s = rig.state();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    rig.settle(3);
+    let side = detach::viewport_id(Place::SketchSide);
+    assert!(rig.screen.child_runs(side) > 0, "Skizzenfeld abgedockt");
+    side
+}
+
+/// Eine Linie in der offenen Skizze.
+fn add_line(rig: &mut Rig) -> planora_sketch::model::CurveId {
+    let (_, sk) = rig.state().session_sketch_mut().unwrap();
+    let a = sk.add_point(-10.0, 0.0).unwrap();
+    let b = sk.add_point(10.0, 0.0).unwrap();
+    sk.add_line(a, b).unwrap()
+}
+
+fn tool(rig: &mut Rig) -> Tool {
+    rig.state().sketch_session.as_ref().unwrap().tool
+}
+
+#[test]
+fn l_in_undocked_sketch_side_starts_line_tool() {
+    let mut rig = Rig::new(&[(Place::SketchSide, window_at(1500.0, 100.0))]);
+    let side = open_sketch(&mut rig);
+    assert_eq!(tool(&mut rig), Tool::Select);
+    rig.press_in(
+        side,
+        vec![key(Key::L, Modifiers::NONE), Event::Text("l".to_string())],
+    );
+    assert_eq!(tool(&mut rig), Tool::Line, "L im Skizzenfeld: Linie");
+}
+
+#[test]
+fn escape_in_undocked_sketch_side_cancels_tool() {
+    let mut rig = Rig::new(&[(Place::SketchSide, window_at(1500.0, 100.0))]);
+    let side = open_sketch(&mut rig);
+    // Bemaßen ohne offenes Maß: Esc beendet das Werkzeug (wie im Hauptfenster).
+    {
+        let (se, sk) = rig.state().session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Dimension);
+    }
+    rig.settle(2);
+    rig.press_in(side, vec![key(Key::Escape, Modifiers::NONE)]);
+    assert_eq!(tool(&mut rig), Tool::Select, "Esc im Skizzenfeld");
+    // Auswahlwerkzeug: Esc leert die Auswahl, genau einmal (die Skizze bleibt offen).
+    let curve = add_line(&mut rig);
+    rig.state().sketch_session.as_mut().unwrap().selection = vec![Item::Curve(curve)];
+    rig.settle(2);
+    rig.press_in(side, vec![key(Key::Escape, Modifiers::NONE)]);
+    assert!(
+        rig.state()
+            .sketch_session
+            .as_ref()
+            .unwrap()
+            .selection
+            .is_empty()
+    );
+    assert!(rig.state().sketch_session.is_some(), "Skizze bleibt offen");
+}
+
+#[test]
+fn delete_in_undocked_sketch_side_deletes_selection() {
+    let mut rig = Rig::new(&[(Place::SketchSide, window_at(1500.0, 100.0))]);
+    let side = open_sketch(&mut rig);
+    let curve = add_line(&mut rig);
+    let other = add_line(&mut rig);
+    rig.state().sketch_session.as_mut().unwrap().selection = vec![Item::Curve(curve)];
+    rig.settle(2);
+    let bodies = rig.bodies();
+    rig.press_in(side, vec![key(Key::Delete, Modifiers::NONE)]);
+    let (_, sk) = rig.state().session_sketch_mut().unwrap();
+    assert!(sk.curve(curve).is_none(), "Entf löscht die Auswahl");
+    assert!(sk.curve(other).is_some(), "nur sie");
+    assert_eq!(rig.bodies(), bodies, "Körper bleiben");
+}
+
+#[test]
+fn typing_in_undocked_sketch_value_field_triggers_nothing() {
+    let mut rig = Rig::new(&[(Place::SketchSide, window_at(1500.0, 100.0))]);
+    let side = open_sketch(&mut rig);
+    let curve = add_line(&mut rig);
+    rig.state().sketch_session.as_mut().unwrap().selection = vec![Item::Curve(curve)];
+    rig.settle(2);
+    // Abschnitt „Lineares Muster“ mit seinen Wertfeldern.
+    let button = center_of(&rig.screen.child_seen(side), "Lineares Muster …");
+    rig.click_child(side, button, PointerButton::Primary);
+    let seen = rig.screen.child_seen(side);
+    let label = find(&seen, "Versatz x")
+        .unwrap_or_else(|| panic!("Versatz x fehlt: {}", join(&seen)))
+        .rect;
+    let field = pos2(label.right() + 30.0, label.center().y);
+    rig.click_child(side, field, PointerButton::Primary);
+    rig.press_in(side, vec![]);
+    // Der Fokus liegt im Wertfeld des Kindfensters.
+    assert!(
+        viewport::typing_for_history(&rig.screen.ctx),
+        "Wertfeld hat die Tastatur"
+    );
+    let curves = rig.state().session_sketch_mut().unwrap().1.curves().count();
+    rig.press_in(
+        side,
+        vec![
+            key(Key::L, Modifiers::NONE),
+            Event::Text("l".to_string()),
+            key(Key::Delete, Modifiers::NONE),
+            key(Key::Escape, Modifiers::NONE),
+        ],
+    );
+    assert_eq!(tool(&mut rig), Tool::Select, "L im Wertfeld: kein Werkzeug");
+    assert_eq!(
+        rig.state().session_sketch_mut().unwrap().1.curves().count(),
+        curves,
+        "Entf im Wertfeld löscht nichts"
+    );
+    assert!(rig.state().sketch_session.is_some());
+}
+
+#[test]
+fn escape_in_undocked_tree_clears_selection() {
+    let mut rig = Rig::new(&[(Place::Tree, window_at(100.0, 100.0))]);
+    let first = rig.state().document.features()[0].id;
+    rig.state().selection = Some(Pick::Plane(first));
+    rig.settle(2);
+    assert!(rig.state().selection.is_some());
+    let tree = detach::viewport_id(Place::Tree);
+    rig.press_in(tree, vec![key(Key::Escape, Modifiers::NONE)]);
+    assert!(
+        rig.state().selection.is_none(),
+        "Esc im Baumfenster hebt die Auswahl auf"
+    );
+}
+
+#[test]
+fn typing_in_undocked_field_counts_for_history() {
+    let rename = Place::Dialog("tree_rename");
+    let mut rig = Rig::new(&[(rename, window_at(200.0, 100.0))]);
+    let first = rig.state().document.features()[0].id;
+    rig.state().rename_draft = Some((first, "Neu".to_string()));
+    rig.settle(3);
+    assert!(!viewport::typing_for_history(&rig.screen.ctx));
+    let child = detach::viewport_id(rename);
+    let field = center_of(&rig.screen.child_seen(child), "Neu");
+    rig.click_child(child, field, PointerButton::Primary);
+    assert!(
+        viewport::typing_for_history(&rig.screen.ctx),
+        "Tippen im abgedockten Feld zählt für den Verlauf"
+    );
+    rig.state().rename_draft = None;
+    rig.settle(3);
+    assert!(!viewport::typing_for_history(&rig.screen.ctx), "Fenster zu");
 }

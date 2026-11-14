@@ -188,6 +188,10 @@ pub struct PlanoraApp {
     /// (`egui::Context::cumulative_frame_nr`); ist die laufende Nummer größer, ist dieses Bild
     /// auch gezeichnet (eframe zeichnet nach dem Durchlauf, auch nach mehreren Durchgängen).
     first_frame: Option<u64>,
+    /// Tasten aus abgedockten Feldern, die keine Aktion der Tastenbelegung waren (Esc, Enter,
+    /// Entf der Ansichten): Sie gehen im nächsten Bild in die Eingabe des Hauptfensters, als
+    /// hätte es den Fokus gehabt ([`PlanoraApp::shortcuts_from_children`]).
+    keys_for_main: Vec<egui::Event>,
     /// Rückfrage nach einem Absturz oder unerwarteten Ende beim letzten Lauf
     /// ([`crash_dialog`]); wartet, bis nichts anderes ansteht ([`PlanoraApp::crash_notice_tick`]).
     crash_notice: Option<CrashNotice>,
@@ -422,6 +426,7 @@ impl PlanoraApp {
             reverify_gate: None,
             last_window: None,
             first_frame: None,
+            keys_for_main: Vec::new(),
             crash_notice: None,
             run_marker: None,
             // Tests hängen nie an Systemschriften (Spec G7); das Programm setzt in `new` den
@@ -1264,6 +1269,19 @@ impl PlanoraApp {
         }
     }
 
+    /// Speist die Tasten aus abgedockten Feldern, die im vorigen Bild keine Aktion waren, in die
+    /// Eingabe des Hauptfensters: nach dessen Kürzeln (die Tastenbelegung sah sie schon im
+    /// Feld, nichts wirkt doppelt), vor den Fenstern und Ansichten, die Esc, Enter und Entf fest
+    /// lesen. Nicht, solange im Hauptfenster ein Eingabefeld die Tastatur hat (die Tasten gehörten
+    /// sonst ihm) oder eine Rückfrage offen ist; dann verfallen sie.
+    fn feed_child_keys(&mut self, ctx: &egui::Context) {
+        let keys = std::mem::take(&mut self.keys_for_main);
+        if keys.is_empty() || self.ws.prompt.is_some() || viewport::typing(ctx) {
+            return;
+        }
+        ctx.input_mut(|i| i.events.extend(keys));
+    }
+
     /// Tastenkürzel aus abgedockten Fenstern (Spec „Tastenkürzel aus abgedockten Fenstern“):
     /// Jedes abgedockte Fenster legt nach seinem Inhalt ab, was der nicht verbraucht hat
     /// ([`crate::detach::take_child_keys`]); hier, am Ende des Bilds, nachdem alle Fenster
@@ -1295,7 +1313,8 @@ impl PlanoraApp {
                 |a| !is_history_key(a) && !(only_all && a.area() != keymap::Area::All),
             );
             self.run_pressed(ctx, &pressed, false);
-            if !self.windows_open() && !keys.pointer_down {
+            let history = !self.windows_open() && !keys.pointer_down;
+            if history {
                 let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
                 let pressed = keymap::dispatch::pressed_in(
                     &mut keys.events,
@@ -1309,6 +1328,13 @@ impl PlanoraApp {
                         commands::run_action(&mut self.ws, a);
                     }
                 }
+            }
+            // Felder: der Rest (feste Tasten der Ansichten wie Esc, Enter, Entf) gehört dem
+            // Hauptfenster. Dialoge verwerfen ihn (Esc und Enter haben sie selbst gelesen).
+            // Rückgängig und Wiederholen bleiben nur liegen, wenn sie gesperrt waren; dann
+            // wirken sie dort ebensowenig.
+            if !keys.dialog {
+                self.keys_for_main.append(&mut keys.events);
             }
             // Das Bild ist schon gezeichnet: das Ergebnis zeigt das nächste.
             ctx.request_repaint();
@@ -2916,6 +2942,7 @@ impl eframe::App for PlanoraApp {
         self.auto_open_update_notice();
         if !self.restart_locked() {
             self.shortcuts(&ctx);
+            self.feed_child_keys(&ctx);
         }
         // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
         keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
@@ -3091,7 +3118,9 @@ impl eframe::App for PlanoraApp {
         if self.feedback.hides_for_shot() {
             // Bild vom Fenster: das Fenster „Rückmeldung“ ist auf dem Bild nicht zu sehen.
             ctx.request_repaint();
-        } else if let Some(action) = feedback_dialog::show(&ctx, &mut self.feedback, dark) {
+        } else if let Some(action) =
+            feedback_dialog::show(&ctx, &mut self.feedback, dark, self.ws.prompt.is_some())
+        {
             self.feedback_action(&ctx, action);
         }
         self.ws.refresh_prompts();
