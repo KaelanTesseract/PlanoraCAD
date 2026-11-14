@@ -748,6 +748,13 @@ fn child_keys_id() -> egui::Id {
 /// Durchgang eines Bilds; herausgenommen zählt jedes höchstens einmal, auch wenn der Inhalt in
 /// einem Bild mehrmals läuft.
 fn collect_keys(ctx: &egui::Context, dialog: bool) {
+    // Eingabe im Kindfenster: Das Hauptfenster hat seine 3D-Ansicht in diesem Bild schon
+    // gezeichnet (Dialoge laufen danach). Ein weiteres Bild gibt den geänderten Wert (Vorschau,
+    // Griffe, Hervorhebung) ohne Mausbewegung im Hauptfenster weiter; mehrfaches Anfordern ist
+    // unschädlich.
+    if ctx.input(|i| !i.events.is_empty()) {
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
+    }
     // Klick oder Taste im Fenster: Das Hauptfenster gibt seinen Tastaturfokus ab, wie es
     // angedockt ein Klick daneben täte (egui zählt einen Klick in einem anderen Fenster nicht
     // als „daneben“); sonst behielte ein Feld dort alle weitergereichten Tasten.
