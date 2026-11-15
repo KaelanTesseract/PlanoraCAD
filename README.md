@@ -1,120 +1,214 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo/planoracad-logo-fuer-dunkel.png">
-    <img src="assets/logo/planoracad-logo-fuer-hell.png" alt="PlanoraCAD" width="280">
+    <img src="assets/logo/planoracad-logo-fuer-hell.png" alt="PlanoraCAD" width="320">
   </picture>
 </p>
 
-# PlanoraCAD
+<p align="center">
+  <b>Kostenloses 3D-CAD für Windows und Ubuntu: Skizzen zeichnen, Körper bauen, technische Zeichnungen erstellen.</b>
+</p>
 
-PlanoraCAD ist ein kostenloses, quelloffenes Programm, mit dem du Bauteile am Computer in 3D konstruierst und technische Zeichnungen davon erstellst.
+<p align="center">
+  <a href="https://github.com/KaelanTesseract/PlanoraCAD/releases"><img alt="Neueste Version" src="https://img.shields.io/github/v/release/KaelanTesseract/PlanoraCAD?include_prereleases&label=Version"></a>
+  <a href="LICENSE"><img alt="Lizenz GPL-3.0" src="https://img.shields.io/badge/Lizenz-GPL--3.0-blue"></a>
+  <img alt="Windows 10/11, 64 Bit" src="https://img.shields.io/badge/Windows-10%20%7C%2011%20(64%20Bit)-0078D6">
+  <img alt="Ubuntu" src="https://img.shields.io/badge/Ubuntu-selbst%20bauen-E95420">
+  <img alt="Geschrieben in Rust" src="https://img.shields.io/badge/Rust-1.88%2B-B7410E">
+</p>
 
-> **Stand:** PlanoraCAD ist noch in einer frühen Entwicklung. Die erste Version zum Ausprobieren ist die Entwicklerversion `0.0.2-dev.1`, nur für Windows (64 Bit). Sie ist noch nicht für den Alltag gedacht. Rechne mit Fehlern und sichere wichtige Projekte zusätzlich.
+<p align="center">
+  <b>Deutsch</b> · <a href="README.en.md">English</a>
+  <br>
+  <a href="https://github.com/KaelanTesseract/PlanoraCAD/releases">Herunterladen</a> ·
+  <a href="https://dennis-guse.de/planoracad/wiki/">Handbuch</a> ·
+  <a href="https://dennis-guse.de/projekte/planoracad.html">Projektseite</a> ·
+  <a href="CHANGELOG.md">Änderungen</a> ·
+  <a href="https://github.com/users/KaelanTesseract/projects/1">Was geplant ist</a>
+</p>
 
-## Was du damit machen kannst
+<p align="center">
+  <img src="docs/bilder/skizze-projizieren.webp" alt="PlanoraCAD mit einer Winkelhalterung: In einer Skizze auf der Grundplatte sind zwei Bohrungen bemaßt, links die Werkzeuge der Skizze, rechts die Abhängigkeiten" width="100%">
+</p>
 
-Du zeichnest zuerst eine flache Skizze mit Maßen und machst daraus einen Körper. Jeder Schritt wird festgehalten. Änderst du später ein Maß, rechnet das Programm alles, was darauf aufbaut, neu.
+PlanoraCAD ist ein freies Programm, mit dem du Bauteile am Computer in 3D konstruierst: Halterungen, Gehäuse, Ersatzteile oder Teile für den 3D-Druck. Du zeichnest eine Skizze mit Maßen, machst daraus einen Körper und leitest davon eine technische Zeichnung ab. Jeder Schritt wird festgehalten. Änderst du später ein Maß, rechnet das Programm alles neu, was darauf aufbaut.
 
-- **Skizzen mit Maßen:** Linien, Rechtecke, Kreise, Bögen, Ellipsen und Kurven zeichnen. Mit Maßen und Regeln wie „waagerecht“, „parallel“ oder „gleich lang“ legst du fest, wie die Skizze aussieht.
-- **Körper:** Eine Skizze herausziehen (extrudieren) oder um eine Achse drehen. Dazu gibt es Quader, Zylinder, Kugel und Kegel.
-- **Körper kombinieren:** zwei Körper vereinigen, einen vom anderen abziehen oder nur die Überschneidung behalten.
-- **Rundungen und Fasen:** Kanten runden oder abschrägen.
-- **Parameter mit Formeln:** Maße bekommen einen Namen, zum Beispiel „Breite = 40“, und andere Maße rechnen damit, etwa „Breite / 4“. Änderst du die Breite, passt sich alles an.
-- **Technische Zeichnungen:** Ansichten von vorne, oben, von der Seite und schräg, Schnittansichten, Maße, Mittellinien, Schriftfeld, Stückliste und Positionsnummern. Ausgabe als PDF, SVG oder DXF.
-- **Austausch mit anderen Programmen:** STEP-Dateien (das übliche Format zwischen CAD-Programmen) lesen und schreiben. Für den 3D-Druck STL und 3MF schreiben, dazu OBJ und glTF. STL- und OBJ-Dateien einlesen.
-- **Projekte und Versionen:** Deine Arbeit liegt in Projekten und Ordnern. Jedes Speichern legt eine neue Version an, ältere bleiben erhalten. Varianten legst du als eigenen Zweig an.
-- **Verlaufsleiste:** Unten im Fenster siehst du die Schritte eines Körpers und kannst zu einem früheren Schritt zurückgehen, ohne etwas zu löschen.
-- **Rückgängig und Wiederholen** für jede Änderung am Dokument.
-- **Tastenkürzel:** Die Bedienung ist an gängige CAD-Programme angelehnt. Jedes Kürzel und die Mausbelegung lassen sich in den Einstellungen ändern.
-- **Hell oder dunkel:** Du wählst das Aussehen selbst.
-- **Fenster abdocken:** Dialoge und die Spalten links und rechts lassen sich über das Symbol in ihrer Kopfzeile in ein eigenes Fenster lösen, zum Beispiel auf einen zweiten Bildschirm. Mit demselben Symbol dockst du sie wieder an. Das Programm merkt sich, was abgedockt war und wo es stand, und stellt es beim nächsten Start wieder so hin. Fehlt der zweite Bildschirm, erscheint das Fenster einfach wieder im Hauptfenster.
+> [!NOTE]
+> **Frühe Testversion.** Die aktuelle Version ist `0.0.2-dev.2` (Entwicklerkanal). Für Windows (64 Bit) gibt es einen fertigen Installer, unter Ubuntu baust du das Programm selbst. Sie ist zum Ausprobieren gedacht, noch nicht für den Alltag. Rechne mit Fehlern und sichere wichtige Projekte zusätzlich. Über jede [Rückmeldung](#fehler-melden-und-wünsche-äußern) freue ich mich.
 
-Alles mit Einzelheiten, Bedienung und Grenzen steht unter [Funktionen im Detail](docs/funktionen.md).
+## Inhalt
 
-## Was du davon hast
+- [Was PlanoraCAD kann](#was-planoracad-kann)
+- [Bilder](#bilder)
+- [Herunterladen und installieren](#herunterladen-und-installieren)
+- [Unter Ubuntu](#unter-ubuntu)
+- [Updates und Sprache](#updates-und-sprache)
+- [Fehler melden und Wünsche äußern](#fehler-melden-und-wünsche-äußern)
+- [Was noch nicht geht](#was-noch-nicht-geht)
+- [Datenschutz](#datenschutz)
+- [Für Entwickler](#für-entwickler)
 
-- **Kostenlos und offen:** Der Quelltext steht hier im Repository. Jeder darf ihn ansehen, verändern und weitergeben (Lizenz GPL-3.0).
-- **Deine Dateien bleiben bei dir:** Du brauchst kein Konto und keine Cloud. Projekte liegen als ganz normale Ordner auf deinem Rechner. Zum Sichern kopierst du sie einfach.
-- **Nichts geht verloren:** Frühere Versionen bleiben beim Speichern erhalten. Alle zwei Minuten sichert das Programm geänderte, schon gespeicherte Dokumente zusätzlich. Nach einem Absturz bietet es diesen Stand beim nächsten Öffnen an.
-- **Maße bleiben änderbar:** Weil jeder Schritt gespeichert ist, kannst du ein Bauteil auch später noch anpassen, statt es neu zu zeichnen.
+## Was PlanoraCAD kann
 
-## Herunterladen und starten
+**Skizzen**
+- Linien, Rechtecke, Kreise, Bögen, Polygone, Langlöcher, Ellipsen, Splines und Kegelschnitte zeichnen, viele davon in mehreren Arten.
+- Maße direkt beim Zeichnen eintippen. Regeln wie „waagerecht“, „parallel“ oder „tangential“ entstehen von selbst.
+- Ecken abrunden, Kurven stutzen, dehnen und versetzen, Teile verschieben, drehen und spiegeln.
+- Muster in Reihen oder im Kreis, die sich später noch ändern lassen.
+- Text im Rahmen oder entlang einer Kurve, mit den Schriften deines Rechners.
+- Kanten eines Körpers in die Skizze projizieren, DXF- und SVG-Dateien einfügen und ein Foto als Vorlage hinterlegen.
+- 3D-Skizzen: Kurven frei im Raum zeichnen, zum Beispiel einen Kabelweg.
+
+**Körper**
+- Skizzen herausziehen (extrudieren) oder um eine Achse drehen. Dazu gibt es Quader, Zylinder, Kugel und Kegel.
+- Körper vereinigen, voneinander abziehen oder nur die Überschneidung behalten.
+- Kanten runden oder abschrägen.
+- Parameter mit Formeln: Maße bekommen einen Namen, etwa „Breite = 40“, und andere Maße rechnen damit.
+- Hilfsebenen für Skizzen an jeder Stelle des Bauteils.
+
+**Zeichnungen**
+- Ansichten von vorne, oben, von der Seite und schräg, dazu Schnitte.
+- Maße, Mittellinien, Schriftfeld, Stückliste und Positionsnummern.
+- Ausgabe als PDF, SVG oder DXF.
+
+**Austausch mit anderen Programmen**
+- STEP lesen und schreiben, das übliche Format zwischen CAD-Programmen.
+- Für den 3D-Druck STL und 3MF schreiben, dazu OBJ und glTF. STL und OBJ lesen.
+
+**Arbeiten und Ordnung halten**
+- Projekte mit Versionen: Jedes Speichern legt eine neue Version an. Du kannst zu einer alten zurückgehen oder davon abzweigen.
+- Eine Verlaufsleiste zeigt alle Schritte eines Bauteils. Du kannst zu jedem Schritt zurückspringen.
+- Rückgängig und Wiederholen für jede Änderung.
+- Tastenkürzel wie in gängigen CAD-Programmen, alle in den Einstellungen änderbar.
+- Hell oder dunkel, Millimeter oder Zoll, Deutsch oder Englisch.
+- Felder und Spalten in eigene Fenster lösen, zum Beispiel auf einen zweiten Bildschirm.
+
+Alles mit Einzelheiten steht im [Handbuch](https://dennis-guse.de/planoracad/wiki/) und unter [Funktionen im Detail](docs/funktionen.md).
+
+**Warum PlanoraCAD?**
+- **Kostenlos und offen:** Jeder darf den Quelltext ansehen, ändern und weitergeben (GPL-3.0).
+- **Deine Dateien bleiben bei dir:** kein Konto, keine Cloud. Projekte sind normale Ordner auf deinem Rechner.
+- **Nichts geht verloren:** Alte Versionen bleiben erhalten. Alle zwei Minuten sichert das Programm zusätzlich, und nach einem Absturz bietet es diesen Stand an.
+- **Maße bleiben änderbar:** Du passt ein Bauteil an, statt es neu zu zeichnen.
+
+## Bilder
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/bilder/skizze-muster.webp" alt="Skizze einer Platte mit Bohrungen, die kreisförmig um die Mitte angeordnet sind"><br><sub>Kreisförmige Anordnung in einer Skizze</sub></td>
+    <td width="50%"><img src="docs/bilder/skizze-text.webp" alt="Der Text „GARTENHAUS 2026“ steht im Bogen auf einer Kurve"><br><sub>Text entlang einer Kurve</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/bilder/skizze-3d.webp" alt="3D-Skizze mit einem Linienzug im Raum und der Triade zum Wechseln der Zeichenebene"><br><sub>3D-Skizze mit Kurven im Raum</sub></td>
+    <td><img src="docs/bilder/leinwand.webp" alt="Ein Foto einer Hausfront liegt halb durchsichtig auf einer Ebene, darauf nachgezeichnete Umrisse"><br><sub>Bild als Vorlage zum Nachzeichnen</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/bilder/zeichnung-uebersicht.webp" alt="Technische Zeichnung der Winkelhalterung mit drei Ansichten, Schnitt A–A, Maßen und Schriftfeld"><br><sub>Technische Zeichnung mit Schnitt und Schriftfeld</sub></td>
+    <td><img src="docs/bilder/projekte-fenster.webp" alt="Fenster „Projekte“ mit den Projekten 3D-Druck, Gartenhaus und Werkstatt"><br><sub>Projekte mit Vorschau und Versionen</sub></td>
+  </tr>
+</table>
+
+Weitere Bilder und Anleitungen Schritt für Schritt findest du im [Handbuch](https://dennis-guse.de/planoracad/wiki/).
+
+## Herunterladen und installieren
+
+**Was du brauchst:** Windows 10 oder 11 (64 Bit) oder Ubuntu, eine Grafikkarte mit aktuellem Treiber und einen Bildschirm mit mindestens 1920 × 1080 Pixeln. Die Schritte hier gelten für Windows. Für Ubuntu siehe [Unter Ubuntu](#unter-ubuntu).
 
 1. Öffne die Seite mit den [Veröffentlichungen](https://github.com/KaelanTesseract/PlanoraCAD/releases).
-2. Such die neueste Version. Klick darunter im Bereich „Assets“ auf `planoracad-setup-x64.exe`. Die Datei wird heruntergeladen.
-3. Doppelklick auf `planoracad-setup-x64.exe`.
-4. Windows zeigt wahrscheinlich ein blaues Fenster „Der Computer wurde durch Windows geschützt“. Klick dort auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“. Die Warnung kommt, weil die Datei nicht digital signiert ist. Lade das Programm deshalb nur von der Seite der Veröffentlichungen hier im Repository.
-5. Zuerst fragt der Installer, für wen das Programm da sein soll: „Nur für mich“ (ohne Administratorrechte) oder „Für alle Benutzer“ (Windows fragt dann nach Administratorrechten).
-6. Auf der Lizenzseite („Lesen Sie bitte die folgenden Lizenzvereinbarungen …“) liest du die Lizenz, wählst „Ich akzeptiere die Vereinbarung“ und klickst auf „Weiter“.
-7. Setz bei Bedarf das Häkchen für die Verknüpfung auf dem Desktop.
-8. Klick dich bis „Fertigstellen“ durch. Das Programm steht danach im Startmenü und startet auf Wunsch gleich.
+2. Klick bei der neuesten Version unter „Assets“ auf `planoracad-setup-x64.exe`.
+3. Starte die Datei mit einem Doppelklick.
+4. Windows zeigt wahrscheinlich „Der Computer wurde durch Windows geschützt“. Klick auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“. Die Warnung kommt, weil die Datei nicht digital signiert ist. Lade das Programm deshalb nur von der Seite der Veröffentlichungen.
+5. Der Installer führt dich durch fünf Schritte: „Willkommen“, „Lizenz“, „Ordner“, „Installieren“ und „Fertig“.
+   - Bei „Lizenz“ setzt du den Haken „Ich stimme der Lizenz zu“.
+   - Bei „Ordner“ wählst du „Nur für mich“ (ohne Administratorrechte, passt meistens) oder „Für alle Benutzer“ (Windows fragt dann nach deiner Erlaubnis). Die Verknüpfung auf dem Desktop ist schon angehakt.
+6. Klick auf „Installieren“ und am Ende auf „Fertig“. PlanoraCAD steht danach im Startmenü und startet auf Wunsch gleich.
 
-Hält dein Virenprogramm die Datei fest oder startet etwas nicht, schau unter [Häufige Probleme](docs/haeufige-probleme.md).
+Hält dein Virenprogramm die Datei fest oder startet etwas nicht, schau unter [Häufige Probleme](docs/haeufige-probleme.md). Dein erstes Bauteil baust du mit der Anleitung [Erste Schritte](https://dennis-guse.de/planoracad/wiki/getting-started.html).
 
-**Deinstallieren**
+<details>
+<summary><b>Deinstallieren und wo deine Daten liegen</b></summary>
 
-1. Öffne die Windows-Einstellungen und geh auf „Apps“.
-2. Such „PlanoraCAD“ in der Liste und wähle „Deinstallieren“.
-3. Deine Projekte, Einstellungen und Protokolle bleiben dabei erhalten (siehe unten).
+**Deinstallieren:** In den Windows-Einstellungen unter „Apps“ nach „PlanoraCAD“ suchen und „Deinstallieren“ wählen. Deine Projekte, Einstellungen und Protokolle bleiben dabei erhalten.
 
-**Wo deine Daten liegen**
-
+**Wo deine Daten liegen:**
 - **Projekte:** im Ordner `Dokumente\PlanoraCAD`. Einen anderen Ordner wählst du unter „Datei → Einstellungen …“ mit „Projektverzeichnis ändern …“.
-- **Einstellungen, Protokoll, Absturzberichte und Rückmeldungen:** im Ordner `%APPDATA%\PlanoraCAD`. Du erreichst ihn, wenn du `%APPDATA%\PlanoraCAD` oben in die Adresszeile des Explorers tippst.
+- **Einstellungen, Protokoll, Absturzberichte und Rückmeldungen:** im Ordner `%APPDATA%\PlanoraCAD`. Tipp den Namen oben in die Adresszeile des Explorers.
 
-Brauchst du die Ordner oben nicht mehr, kannst du sie nach dem Deinstallieren selbst löschen.
+Brauchst du die Ordner nicht mehr, löschst du sie nach dem Deinstallieren selbst.
+</details>
 
-## Sprache
+### Unter Ubuntu
 
-PlanoraCAD gibt es auf Deutsch und Englisch. Beim ersten Start nimmt das Programm die Sprache von Windows, sonst Englisch. Umstellen kannst du sie unter „Datei → Einstellungen …“, Abschnitt „Darstellung“, Auswahl „Sprache“.
+PlanoraCAD läuft auch unter Ubuntu. Jede Änderung wird dort automatisch geprüft. Ein fertiges Paket gibt es noch nicht, du baust das Programm einmal selbst aus dem Quelltext. Das dauert beim ersten Mal einige Minuten.
 
-Du möchtest PlanoraCAD in eine andere Sprache übersetzen? Die Anleitung (auf Englisch) steht in [docs/uebersetzen.md](docs/uebersetzen.md).
+1. Installiere Rust, wie auf [rustup.rs](https://rustup.rs) beschrieben.
+2. Installiere die nötigen Bibliotheken:
 
-## Updates
+   ```sh
+   sudo apt-get update
+   sudo apt-get install -y build-essential pkg-config libclang-dev libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+   ```
 
-- Beim Start schaut das Programm höchstens einmal am Tag nach, ob es eine neuere Version gibt. Zurzeit gibt es nur Entwicklerversionen (Kanal „Dev“).
-- Gibt es eine, zeigt es ein Fenster mit den Änderungen. Du wählst „Jetzt aktualisieren“, „Später“ oder „Diese Version überspringen“.
-- Bei „Jetzt aktualisieren“ lädt das Programm den neuen Installer und prüft ihn. Danach fragt es, ob du ungespeicherte Arbeit speichern willst, und startet erst dann den Installer im Hintergrund. Bei „Für alle Benutzer“ fragt Windows nach Administratorrechten.
-- Lehnst du das ab oder klappt etwas nicht, läuft die bisherige Version weiter. Hilfe steht unter [Häufige Probleme](docs/haeufige-probleme.md).
-- Abschalten oder von Hand suchen: „Datei → Einstellungen …“, Abschnitt „Updates“.
-- Was sich in jeder Version geändert hat, steht in [CHANGELOG.md](CHANGELOG.md). Einzelheiten zu den Updates: [Updates und Versionen](docs/funktionen.md#updates-und-versionen).
+3. Lade den Quelltext und starte das Programm:
+
+   ```sh
+   git clone https://github.com/KaelanTesseract/PlanoraCAD.git
+   cd PlanoraCAD
+   cargo run -p planora-app --release
+   ```
+
+Unterschiede zu Windows:
+- Es gibt keine Updates aus dem Programm. Für eine neue Version holst du den neuen Stand (`git pull`) und startest den Befehl aus Schritt 3 noch einmal.
+- Projekte liegen in `~/Documents/PlanoraCAD`, die Einstellungen in `~/.config/planora-cad`.
+
+## Updates und Sprache
+
+**Updates**
+- Beim Start schaut das Programm unter Windows höchstens einmal am Tag nach einer neuen Version. Zurzeit gibt es nur Entwicklerversionen (Kanal „Dev“). Unter Ubuntu aktualisierst du von Hand (siehe [Unter Ubuntu](#unter-ubuntu)).
+- Gibt es eine, siehst du die Änderungen und wählst „Jetzt aktualisieren“, „Später“ oder „Diese Version überspringen“.
+- Bei „Jetzt aktualisieren“ lädt das Programm den neuen Installer, prüft ihn, fragt nach ungespeicherter Arbeit und aktualisiert sich dann selbst. Danach startet die neue Version von allein.
+- Klappt etwas nicht, läuft die bisherige Version weiter.
+- Abschalten oder von Hand suchen: „Datei → Einstellungen …“, Abschnitt „Updates“. Alle Änderungen stehen in [CHANGELOG.md](CHANGELOG.md).
+
+**Sprache**
+- PlanoraCAD gibt es auf Deutsch und Englisch. Beim ersten Start nimmt es die Sprache von Windows, sonst Englisch.
+- Umstellen: „Datei → Einstellungen …“, Abschnitt „Darstellung“.
+- Du möchtest eine weitere Sprache beisteuern? Die Anleitung (auf Englisch) steht in [docs/uebersetzen.md](docs/uebersetzen.md).
 
 ## Fehler melden und Wünsche äußern
 
-Du hast einen Fehler gefunden, dir fehlt etwas, oder du hast eine Frage? Dann sag es bitte. Zwei Sätze reichen.
+Du hast einen Fehler gefunden, dir fehlt etwas oder du hast eine Frage? Sag es bitte, zwei Sätze reichen.
 
-1. Wähl im Programm „Hilfe → Rückmeldung …“ (oder drück Strg+Umschalt+R).
-2. Wähl, ob es ein Fehler, ein Wunsch oder eine Frage ist, und schreib kurz, was passiert ist. Mit Häkchen entscheidest du, welche Angaben dazukommen.
-3. Klick auf „Im Browser öffnen“, wenn du ein GitHub-Konto hast. Ohne Konto klick auf „Ohne GitHub-Konto senden“; dann öffnet sich ein Formular auf dennis-guse.de.
-4. Prüf im Browser die Angaben und schick das Formular ab.
+1. Wähl im Programm „Hilfe → Rückmeldung …“ (oder Strg+Umschalt+R).
+2. Wähl Fehler, Wunsch oder Frage und schreib kurz, was passiert ist. Mit Häkchen entscheidest du, welche Angaben mitgehen.
+3. Mit GitHub-Konto klickst du auf „Im Browser öffnen“. Ohne Konto klickst du auf „Ohne GitHub-Konto senden“, dann öffnet sich ein Formular auf dennis-guse.de.
+4. Prüf die Angaben im Browser und schick das Formular ab.
 
-Du kannst auch direkt auf GitHub eine [neue Meldung](https://github.com/KaelanTesseract/PlanoraCAD/issues/new/choose) anlegen. Geht beides nicht, zum Beispiel weil sich kein Browser öffnet, schreib eine Mail an info@dennis-guse.de.
+Du kannst auch direkt auf GitHub eine [neue Meldung](https://github.com/KaelanTesseract/PlanoraCAD/issues/new/choose) anlegen. Geht beides nicht, schreib eine Mail an info@dennis-guse.de.
 
-- Schritt für Schritt, mit allen Wegen: [So meldest du etwas](docs/so-meldest-du-etwas.md)
+- Alle Wege Schritt für Schritt: [So meldest du etwas](docs/so-meldest-du-etwas.md)
 - Lösungen für bekannte Fälle: [Häufige Probleme](docs/haeufige-probleme.md)
-- Welche Wünsche geplant sind und woran gerade gearbeitet wird: [Was geplant ist](https://github.com/users/KaelanTesseract/projects/1)
+- Geplante Wünsche und laufende Arbeit: [Was geplant ist](https://github.com/users/KaelanTesseract/projects/1)
 
 Meldungen auf GitHub sind öffentlich. Schreib deshalb nichts Privates hinein.
 
 ## Was noch nicht geht
 
-Die wichtigsten Grenzen:
-
-- Eine fertige Programmdatei gibt es nur für Windows (64 Bit).
-- Baugruppen gibt es noch nicht. Aus STEP-Baugruppen wird jeder Körper einzeln übernommen.
-- Kein Loft und kein Sweep (Formen zwischen zwei Profilen oder entlang einer Bahn). Muster und Spiegeln gibt es nur innerhalb einer Skizze, nicht als Schritt am Körper.
+- Einen fertigen Installer gibt es nur für Windows (64 Bit). Unter Ubuntu baust du das Programm selbst, und es gibt dort keine Updates aus dem Programm.
+- Keine Baugruppen. Aus STEP-Baugruppen wird jeder Körper einzeln übernommen.
+- Kein Loft und kein Sweep. Muster und Spiegeln gibt es nur in der Skizze, nicht am Körper.
 - Drehen geht nur um volle 360 Grad.
-- Rundungen, Fasen und das Kombinieren von Körpern lehnt das Programm in manchen Fällen mit einer Meldung ab. Es liefert lieber kein Ergebnis als ein falsches.
-- Aufwendige Rechnungen, vor allem mit Freiformflächen, können einige Sekunden dauern. In dieser Zeit reagiert das Fenster nicht.
-- Beim Austausch mit anderen Programmen gehen Farben und Materialien nicht mit.
+- Rundungen, Fasen und das Kombinieren von Körpern lehnt das Programm in manchen Fällen ab. Es liefert lieber kein Ergebnis als ein falsches.
+- Aufwendige Rechnungen, vor allem mit Freiformflächen, können einige Sekunden dauern. So lange reagiert das Fenster nicht.
+- Farben und Materialien gehen beim Austausch mit anderen Programmen nicht mit.
 - Zweige lassen sich nicht wieder zusammenführen.
-- Neue Programmversionen speichern teils in einem neueren Dateiformat. Ältere Versionen öffnen solche Dateien dann nicht („zu neu“).
+- Neue Versionen speichern teils in einem neueren Dateiformat. Ältere Versionen öffnen solche Dateien dann nicht.
 
-Die vollständigen Grenzen stehen bei jedem Abschnitt unter [Funktionen im Detail](docs/funktionen.md). Noch ausführlicher, mit Messwerten: [offene Punkte](docs/superpowers/offene-punkte.md).
+Die Grenzen jeder Funktion stehen unter [Funktionen im Detail](docs/funktionen.md).
 
 ## Datenschutz
 
-- **Updates:** Das Programm fragt bei GitHub (`api.github.com`) nach neuen Versionen, höchstens einmal am Tag und nur, solange die Suche eingeschaltet ist. Zum Herunterladen verbindet es sich mit GitHub. Es schickt dabei keine Projekte, keine Namen und keine Kennung deines Rechners. GitHub sieht wie bei jeder Verbindung deine Internetadresse sowie Name und Version des Programms. Schaltest du die Suche ab, verbindet sich das Programm nie von selbst.
+- **Updates:** Das Programm fragt höchstens einmal am Tag bei GitHub (`api.github.com`) nach neuen Versionen, solange die Suche eingeschaltet ist. Zum Herunterladen verbindet es sich mit GitHub. Es schickt dabei keine Projekte, keine Namen und keine Kennung deines Rechners. GitHub sieht wie bei jeder Verbindung deine Internetadresse sowie Name und Version des Programms. Schaltest du die Suche ab, verbindet sich das Programm nie von selbst.
 - **Rückmeldungen:** Das Programm schickt nichts von allein. Was mitgehen soll, siehst du vorher und kannst es abwählen. Benutzername, Projektpfade und Mailadressen entfernt das Programm vorher. Die Angaben stehen in der Adresse des Formulars und gehen deshalb schon beim Öffnen im Browser an GitHub oder an dennis-guse.de (sie können dort im Protokoll des Servers stehen). Gespeichert und gemeldet wird erst, wenn du im Formular auf „Absenden“ klickst.
 - **Absturzberichte:** Stürzt das Programm ab, schreibt es einen Bericht auf deinen Rechner, ohne deinen Benutzernamen. Beim nächsten Start fragt es, ob du ihn schicken willst. Ohne dein Zutun verlässt er den Rechner nicht. Alte Berichte löscht das Programm nach 30 Tagen.
 - **Protokoll:** Die Protokolldatei bleibt auf deinem Rechner. Projektinhalte stehen nicht darin.
@@ -123,29 +217,55 @@ Verantwortlich: Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst. Kontakt: info
 
 ## Für Entwickler
 
-PlanoraCAD ist in Rust geschrieben, mit einem eigenen Geometrie-Kern.
+PlanoraCAD ist in Rust geschrieben (Edition 2024, ab Rust 1.88), mit eigenem Geometrie-Kern. Die Oberfläche läuft mit egui/eframe und wgpu.
 
-### Bauen
+### Bauen und prüfen
 
-    cargo run -p planora-app --release
+```sh
+cargo run -p planora-app --release
+```
 
-Den Installer baust du mit `tools\build-installer.ps1` (nach `cargo build --release -p planora-app`; braucht Inno Setup 6). Er landet im Ordner `dist`.
+```sh
+cargo fmt --all --check   # unter Windows je Crate: cargo fmt -p <crate> --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo deny check
+```
 
-Unter Linux werden zusätzlich die System-Bibliotheken aus `.github/workflows/ci.yml` benötigt.
+Unter Ubuntu braucht es zusätzlich die Bibliotheken aus [Unter Ubuntu](#unter-ubuntu) (dieselben wie in `.github/workflows/ci.yml`). Die CI prüft jede Änderung unter Windows und Ubuntu.
 
-### Entwicklung
+Den Installer baust du nach `cargo build --release -p planora-app` mit `tools\build-installer.ps1`. Er braucht Inno Setup 6.7 oder neuer für den Installationsteil und bettet ihn in die Oberfläche `planora-setup` ein. Das Ergebnis `planoracad-setup-x64.exe` mit Prüfsumme landet im Ordner `dist`.
 
-    cargo fmt --all --check   # unter Windows je Crate: cargo fmt -p <crate> --check
-    cargo clippy --workspace --all-targets -- -D warnings
-    cargo test --workspace
-    cargo deny check
+### Aufbau
+
+Der Workspace besteht aus 16 Crates unter `crates/`:
+
+| Crate | Aufgabe |
+|---|---|
+| `planora-math` | Vektoren, Koordinatensysteme, Toleranzen, NURBS |
+| `planora-kernel` | Geometrie-Kern (B-Rep): Körper, Boolesche Operationen, Rundungen |
+| `planora-mesh` | Körper in Dreiecksnetze zerlegen, Volumen und Schwerpunkt |
+| `planora-exchange` | Netze als STL, 3MF, OBJ und glTF; DXF, SVG und Bilder einlesen |
+| `planora-step` | STEP lesen und schreiben |
+| `planora-sketch` | Skizzen, Abhängigkeiten und Löser |
+| `planora-text` | Schriften lesen und Text in Kurven setzen |
+| `planora-drawing` | Technische Zeichnungen: Ansichten, Blatt, Maße, Ausgabe |
+| `planora-feature` | Feature-Baum, stabile Verweise, Neuberechnung |
+| `planora-project` | Projekte, Versionen, Dateiformat, Einstellungen |
+| `planora-render` | Kamera, Auswahl in der Ansicht, Darstellung mit wgpu |
+| `planora-update` | Neue Versionen finden, laden und prüfen |
+| `planora-i18n` | Sprachdateien (Fluent) und Zahlenformat |
+| `planora-style` | Farben und Schriften für Programm und Installer |
+| `planora-setup` | Installer-Oberfläche, steuert den Inno-Setup-Teil |
+| `planora-app` | Das Programm: Fenster, Werkzeuge, Dialoge |
 
 ### Release und Absturzberichte
 
-- Eine neue Version entsteht mit `tools\release.ps1`, einem Abschnitt in `CHANGELOG.md`, einem grünen Lauf von `ci.yml` und einem Tag. Der Tag startet `.github/workflows/release.yml`; das baut die Windows-Version samt Installer und legt das Release an (Installer `planoracad-setup-x64.exe`, Prüfsumme, `THIRD-PARTY-LICENSES.txt` und die Symboldatei `.pdb`).
+- Eine neue Version entsteht mit `tools\release.ps1`, einem Abschnitt in `CHANGELOG.md`, einem grünen Lauf von `ci.yml` und einem Tag. Der Tag startet `.github/workflows/release.yml`. Das baut die Windows-Version samt Installer und legt das Release an (Installer `planoracad-setup-x64.exe`, Prüfsumme, `THIRD-PARTY-LICENSES.txt` und die Symboldatei `.pdb`).
 - Absturzberichte von Testern löst `tools\symbolize.ps1` mit der `.pdb` des Releases auf.
 - Alle Schritte: [Updates und Versionen](docs/funktionen.md#updates-und-versionen). Rückmeldungen und Protokoll: [Rückmeldung, Absturzberichte und Protokoll](docs/funktionen.md#rückmeldung-absturzberichte-und-protokoll).
 - Die Projekttafel einrichten: [Projekttafel einrichten](docs/projekttafel-einrichten.md).
+- Offene Punkte mit Messwerten: [docs/superpowers/offene-punkte.md](docs/superpowers/offene-punkte.md).
 
 ### Drittanbieter
 
@@ -154,4 +274,4 @@ Unter Linux werden zusätzlich die System-Bibliotheken aus `.github/workflows/ci
 
 ### Lizenz
 
-GPL-3.0-only, siehe [LICENSE](LICENSE).
+PlanoraCAD steht unter der GPL-3.0-only, siehe [LICENSE](LICENSE). Die Lizenzen aller Bibliotheken liegen jedem Release als `THIRD-PARTY-LICENSES.txt` bei.
