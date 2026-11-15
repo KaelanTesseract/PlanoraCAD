@@ -3,6 +3,7 @@ use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintKind as K, LineOrPoints};
 use planora_sketch::model::{PointId, Sketch};
 use planora_sketch::solver::{Drag, SolveStatus};
+use planora_sketch::sparse::SolverPath;
 
 fn sketch() -> Sketch {
     Sketch::new(Frame::WORLD, "S", Tolerance::default())
@@ -223,6 +224,10 @@ fn dragging_one_group_does_not_touch_an_unrelated_conflicting_group() {
 #[test]
 fn an_untouched_group_is_not_solved_again() {
     let mut s = sketch();
+    // Kleine Gruppen rechnen dicht (Ruling F12: Weg ausdrücklich). Auf dem dünnen Weg rechnet
+    // das Lösen nach dem Ziehen die Analyse neu (A10, `drag_analysis.rs`), dort gälte das
+    // letzte `group_solves == 0` nicht.
+    s.set_solver_path(SolverPath::Dense);
     let unrelated = unrelated_groups(&mut s);
     let a = s.add_point(0.0, 0.0).unwrap();
     let b = s.add_point(4.0, 0.0).unwrap();

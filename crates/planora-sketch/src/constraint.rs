@@ -418,7 +418,7 @@ impl<'a> Ctx<'a> {
         Ctx {
             sk,
             x,
-            locals: RefCell::new(Vec::new()),
+            locals: RefCell::new(Vec::with_capacity(16)),
             collecting: true,
         }
     }

@@ -92,6 +92,9 @@ fn perf_200_chained_3d() {
     println!("PERF3D Aufteilung lösen: {}", split(&solve_split));
     println!("PERF3D Aufteilung Zugschritt: {}", split(&drag_split));
     assert_eq!(rep.status, SolveStatus::Solved, "{rep:?}");
+    // Messziele A10 (Skizzen 11a, Task 3).
+    assert!(solve <= 0.5, "{solve}");
+    assert!(drag <= 0.05, "{drag}");
 }
 
 /// 200 verkettete ebene Linien und Bögen (100 + 100) mit Coincident und Tangent: dieselbe Kette
@@ -125,4 +128,53 @@ fn perf_200_chained_2d() {
     println!("PERF2D-KETTE Aufteilung lösen: {}", split(&solve_split));
     println!("PERF2D-KETTE Aufteilung Zugschritt: {}", split(&drag_split));
     assert_eq!(rep.status, SolveStatus::Solved, "{rep:?}");
+}
+
+/// Schwelle `SPARSE_MIN_VARS` (Skizzen 11a, Task 3): `chain_2d` mit 1 bis 16 Stücken (je 10
+/// Variablen in einer Gruppe) einmal dicht und einmal dünn lösen und danach einen Zugschritt
+/// rechnen, je der Median aus 21 Läufen. Die Schwelle ist die kleinste Größe, ab der der dünne
+/// Weg beim Lösen und beim Zugschritt schneller ist, auf die nächste Zehnerzahl aufgerundet.
+#[test]
+#[ignore = "Messtest, nur im Release-Build sinnvoll"]
+fn sparse_threshold_crossover() {
+    use planora_sketch::sparse::SolverPath;
+    let median = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2] * 1e3
+    };
+    let run = |segments: usize, path: SolverPath| {
+        let (mut solve, mut drag) = (Vec::new(), Vec::new());
+        for _ in 0..21 {
+            let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+            let (last, _) = chain_2d(&mut s, segments);
+            s.set_solver_path(path);
+            let t = Instant::now();
+            s.solve();
+            solve.push(t.elapsed().as_secs_f64());
+            let at = s.point_xy(last).unwrap();
+            let t = Instant::now();
+            s.drag(&[Drag {
+                point: last,
+                target: DVec3::new(at.x + 0.1, at.y + 0.1, 0.0),
+                plane: None,
+            }])
+            .unwrap();
+            drag.push(t.elapsed().as_secs_f64());
+        }
+        (median(solve), median(drag))
+    };
+    for segments in 1..=16 {
+        let (ds, dd) = run(segments, SolverPath::Dense);
+        let (ss, sd) = run(segments, SolverPath::Sparse);
+        println!(
+            "SCHWELLE {:3} Variablen: lösen dicht {ds:7.3} / dünn {ss:7.3} ms, \
+             Zug dicht {dd:7.3} / dünn {sd:7.3} ms{}",
+            segments * 10,
+            if ss < ds && sd < dd {
+                "  dünn schneller"
+            } else {
+                ""
+            }
+        );
+    }
 }

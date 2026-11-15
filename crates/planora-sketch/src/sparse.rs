@@ -12,8 +12,9 @@ use std::collections::VecDeque;
 use std::sync::OnceLock;
 
 /// Ab so vielen Variablen einer Gruppe rechnet der Löser im Weg [`SolverPath::Auto`] dünn;
-/// darunter dicht (bitgleich zu früher). Startwert, endgültig nach Task 3.
-pub const SPARSE_MIN_VARS: usize = 60;
+/// darunter dicht (bitgleich zu früher). Gemessen in Task 3 (`sparse_threshold_crossover`):
+/// In `chain_2d` ist der dünne Weg ab 30 Variablen beim Lösen und beim Zugschritt schneller.
+pub const SPARSE_MIN_VARS: usize = 30;
 
 /// Welchen Weg der Löser je Gruppe nimmt.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -339,4 +340,428 @@ pub fn envelope_cholesky_solve(a: &Envelope, b: &[f64]) -> Option<Vec<f64>> {
         }
     }
     x.iter().all(|v| v.is_finite()).then_some(x)
+}
+
+/// Ergebnis der dünnen Rangprüfung ([`analyze_rows_sparse`]); Spalten in der ursprünglichen
+/// Nummerierung.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SparseRowSpace {
+    /// Je Zeile: `true`, wenn sie vom Zeilenraum der früheren Zeilen unabhängig ist.
+    pub independent: Vec<bool>,
+    pub rank: usize,
+    /// Je Spalte: `true`, wenn der Nullraum sie bewegt (`‖P_N e_c‖ > free_tol`).
+    pub free: Vec<bool>,
+}
+
+/// Rang, abhängige Zeilen und freie Spalten wie [`crate::linalg::analyze_rows`] samt der
+/// Freiheitsprüfung des Lösers (`‖P_N e_c‖ > free_tol`), aber dünn.
+///
+/// **Unabhängige Zeilen:** Der Test von `analyze_rows` ist Gram-Schmidt in Zeilenreihenfolge:
+/// Zeile `i` ist unabhängig, wenn ihr Rest gegen den Raum der früheren unabhängigen Zeilen
+/// länger als `rel_tol · ‖a_i‖` ist. Dieser Rest ist die Diagonale `L_ii` der Cholesky-Zerlegung
+/// von `A·Aᵀ` in Zeilenreihenfolge, in der abhängige Zeilen übersprungen werden (`A = L·Q`).
+/// `A·Aᵀ` ist dünn (zwei Zeilen koppeln nur über gemeinsame Spalten), die Zerlegung bleibt in
+/// ihrer Hülle. Weil `A·Aᵀ` die Kondition quadriert, rechnet sie doppelt genau (zwei `f64` je
+/// Zahl, Dekker/Knuth): Der Rest `L_ii²` wird so bis weit unter `rel_tol²` genau. Der Rest
+/// einer Givens-Elimination gegen ein `R` wäre nicht derselbe Wert (die Zeilen von `R` sind nicht
+/// orthonormal) und entschiede an fast abhängigen Stellen anders.
+///
+/// **Freie Spalten:** `‖P_N e_c‖² = 1 − ‖L⁻¹ a_c‖²` (`a_c` die Spalte `c` der unabhängigen
+/// Zeilen), genau mit dem doppelt genauen `L` durch Vorwärtseinsetzen; sobald die Summe
+/// `‖L⁻¹ a_c‖²` die Grenze erreicht, steht „nicht frei“ fest. Weil das für jede Spalte bis ans
+/// Ende laufen kann, gibt es einen Kurzweg für „frei“: eine inkrementelle Givens-QR der
+/// unabhängigen Zeilen, Spalten in der Ordnung `perm` (neu → alt, etwa RCM), `R` als Hülle (je
+/// Pivotspalte `k` eine Zeile ab `k`). Je Spalte `f` ohne Pivot liefert Rückwärtseinsetzen einen
+/// Nullraumvektor `z_f` (`z_f[f] = 1`, null an den übrigen Spalten ohne Pivot). Er zählt nur, wenn
+/// `A·z_f` wirklich verschwindet (`R` kann an Stellen mit sehr kleinem Pivot ungenau sein); dann
+/// ist jede Spalte `c` mit `|z_f[c]| / ‖z_f‖` deutlich über `free_tol` frei
+/// (`‖P_N e_c‖ ≥ |z_f[c]| / ‖z_f‖`). Alle übrigen Spalten prüft der genaue Weg.
+pub fn analyze_rows_sparse(
+    rows: &SparseRows,
+    perm: &[usize],
+    rel_tol: f64,
+    free_tol: f64,
+) -> SparseRowSpace {
+    let n = rows.cols;
+    assert_eq!(perm.len(), n);
+    let chol = RowCholesky::new(rows, rel_tol);
+    let rank = chol.independent.iter().filter(|&&b| b).count();
+    let mut free = vec![false; n];
+    if rank < n {
+        for (c, &f) in null_space_shortcut(rows, perm, &chol.independent, free_tol)
+            .iter()
+            .enumerate()
+        {
+            free[c] = f;
+        }
+        let by_col = columns(rows, &chol.independent);
+        for c in 0..n {
+            if !free[c] {
+                free[c] = chol.column_free(&by_col[c], free_tol);
+            }
+        }
+    }
+    SparseRowSpace {
+        independent: chol.independent,
+        rank,
+        free,
+    }
+}
+
+/// Zahl mit doppelter Genauigkeit: `hi + lo`, `|lo| ≤ ulp(hi) / 2`.
+#[derive(Clone, Copy, Debug, Default)]
+struct Dd {
+    hi: f64,
+    lo: f64,
+}
+
+/// `a + b` exakt als Summe und Rundungsrest (Knuth).
+#[inline]
+fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let s = a + b;
+    let bb = s - a;
+    (s, (a - (s - bb)) + (b - bb))
+}
+
+/// `a + b` exakt, wenn `|a| ≥ |b|`.
+#[inline]
+fn quick_two_sum(a: f64, b: f64) -> Dd {
+    let s = a + b;
+    Dd {
+        hi: s,
+        lo: b - (s - a),
+    }
+}
+
+/// Teilt `a` in zwei Hälften mit je 26 Bit (Dekker).
+#[inline]
+fn split(a: f64) -> (f64, f64) {
+    let t = 134_217_729.0 * a;
+    let hi = t - (t - a);
+    (hi, a - hi)
+}
+
+/// `a · b` exakt als Produkt und Rundungsrest (Dekker, ohne FMA).
+#[inline]
+fn two_prod(a: f64, b: f64) -> Dd {
+    let p = a * b;
+    let (ah, al) = split(a);
+    let (bh, bl) = split(b);
+    Dd {
+        hi: p,
+        lo: ((ah * bh - p) + ah * bl + al * bh) + al * bl,
+    }
+}
+
+impl Dd {
+    const ONE: Dd = Dd { hi: 1.0, lo: 0.0 };
+
+    fn of(v: f64) -> Dd {
+        Dd { hi: v, lo: 0.0 }
+    }
+
+    fn value(self) -> f64 {
+        self.hi + self.lo
+    }
+
+    #[inline]
+    fn add(self, o: Dd) -> Dd {
+        let (s, e) = two_sum(self.hi, o.hi);
+        quick_two_sum(s, e + self.lo + o.lo)
+    }
+
+    #[inline]
+    fn sub(self, o: Dd) -> Dd {
+        self.add(Dd {
+            hi: -o.hi,
+            lo: -o.lo,
+        })
+    }
+
+    #[inline]
+    fn mul(self, o: Dd) -> Dd {
+        let p = two_prod(self.hi, o.hi);
+        quick_two_sum(p.hi, p.lo + self.hi * o.lo + self.lo * o.hi)
+    }
+
+    fn div(self, o: Dd) -> Dd {
+        let q1 = self.hi / o.hi;
+        let r = self.sub(o.mul(Dd::of(q1)));
+        let q2 = r.hi / o.hi;
+        let r = r.sub(o.mul(Dd::of(q2)));
+        let q3 = r.hi / o.hi;
+        quick_two_sum(q1, q2).add(Dd::of(q3))
+    }
+
+    fn sqrt(self) -> Dd {
+        let s = self.hi.sqrt();
+        let rest = self.sub(two_prod(s, s));
+        quick_two_sum(s, rest.hi / (2.0 * s))
+    }
+}
+
+/// Cholesky-Zerlegung von `A·Aᵀ` in Zeilenreihenfolge, doppelt genau, abhängige Zeilen
+/// übersprungen (siehe [`analyze_rows_sparse`]).
+struct RowCholesky {
+    independent: Vec<bool>,
+    /// Zeile `i` koppelt höchstens mit den Zeilen `first[i]..i` (Hülle von `A·Aᵀ`).
+    first: Vec<usize>,
+    /// `l[i][k - first[i]]` ist `L_ik`; abhängige Zeilen bleiben leer.
+    l: Vec<Vec<Dd>>,
+}
+
+impl RowCholesky {
+    fn new(rows: &SparseRows, rel_tol: f64) -> RowCholesky {
+        let m = rows.rows();
+        let mut col_first = vec![usize::MAX; rows.cols];
+        let mut first = vec![0; m];
+        for (i, f) in first.iter_mut().enumerate() {
+            let (cols, _) = rows.row(i);
+            *f = i;
+            for &c in cols {
+                if col_first[c] == usize::MAX {
+                    col_first[c] = i;
+                }
+                *f = (*f).min(col_first[c]);
+            }
+        }
+        let mut l: Vec<Vec<Dd>> = vec![Vec::new(); m];
+        let mut independent = vec![false; m];
+        let mut x = vec![0.0; rows.cols];
+        for i in 0..m {
+            let (cols, vals) = rows.row(i);
+            let norm0 = vals.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if norm0.is_nan() || norm0 <= 0.0 || !norm0.is_finite() {
+                continue;
+            }
+            for (&c, &v) in cols.iter().zip(vals) {
+                x[c] = v;
+            }
+            let fi = first[i];
+            let mut li = vec![Dd::default(); i - fi + 1];
+            // `d2 = ‖a_i‖² − Σ_k L_ik²`, der quadrierte Gram-Schmidt-Rest.
+            let mut d2 = Dd::default();
+            for &v in vals {
+                d2 = d2.add(two_prod(v, v));
+            }
+            for k in fi..i {
+                if !independent[k] {
+                    continue;
+                }
+                let (kc, kv) = rows.row(k);
+                let mut s = Dd::default();
+                for (&c, &v) in kc.iter().zip(kv) {
+                    if x[c] != 0.0 {
+                        s = s.add(two_prod(v, x[c]));
+                    }
+                }
+                let fk = first[k];
+                let lk = &l[k];
+                for j in fi.max(fk)..k {
+                    let (a, b) = (li[j - fi], lk[j - fk]);
+                    if a.hi != 0.0 && b.hi != 0.0 {
+                        s = s.sub(a.mul(b));
+                    }
+                }
+                let lik = s.div(lk[k - fk]);
+                li[k - fi] = lik;
+                d2 = d2.sub(lik.mul(lik));
+            }
+            for &c in cols {
+                x[c] = 0.0;
+            }
+            let tol = rel_tol * norm0;
+            if d2.value() > tol * tol {
+                li[i - fi] = d2.sqrt();
+                l[i] = li;
+                independent[i] = true;
+            }
+        }
+        RowCholesky {
+            independent,
+            first,
+            l,
+        }
+    }
+
+    /// Ist `‖P_N e_c‖ > free_tol`? `col` ist die Spalte `c` als `(Zeile, Wert)` über die
+    /// unabhängigen Zeilen, aufsteigend. `P_N e_c = e_c − Qᵀ Q e_c` mit `Q = L⁻¹ A`, also
+    /// `‖P_N e_c‖² = 1 − ‖w‖²`, `L·w = a_c`.
+    fn column_free(&self, col: &[(usize, f64)], free_tol: f64) -> bool {
+        let Some(&(r0, _)) = col.first() else {
+            // Keine Zeile liest die Spalte: Sie bewegt sich frei.
+            return true;
+        };
+        let limit = Dd::ONE.sub(two_prod(free_tol, free_tol));
+        let m = self.l.len();
+        let mut w = vec![Dd::default(); m - r0];
+        let mut sum = Dd::default();
+        let mut next = 0;
+        for k in r0..m {
+            if !self.independent[k] {
+                continue;
+            }
+            let mut s = Dd::default();
+            if next < col.len() && col[next].0 == k {
+                s = Dd::of(col[next].1);
+                next += 1;
+            }
+            let fk = self.first[k];
+            let lk = &self.l[k];
+            for j in fk.max(r0)..k {
+                let (a, b) = (lk[j - fk], w[j - r0]);
+                if a.hi != 0.0 && b.hi != 0.0 {
+                    s = s.sub(a.mul(b));
+                }
+            }
+            if s.hi == 0.0 {
+                continue;
+            }
+            let wk = s.div(lk[k - fk]);
+            w[k - r0] = wk;
+            sum = sum.add(wk.mul(wk));
+            // Die Summe wächst nur: Ab hier steht „nicht frei“ fest.
+            if sum.value() >= limit.value() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Die Spalten der unabhängigen Zeilen: je Spalte `(Zeile, Wert)`, Zeilen aufsteigend.
+fn columns(rows: &SparseRows, independent: &[bool]) -> Vec<Vec<(usize, f64)>> {
+    let mut by_col: Vec<Vec<(usize, f64)>> = vec![Vec::new(); rows.cols];
+    for i in (0..rows.rows()).filter(|&i| independent[i]) {
+        let (cols, vals) = rows.row(i);
+        for (&c, &v) in cols.iter().zip(vals) {
+            by_col[c].push((i, v));
+        }
+    }
+    by_col
+}
+
+/// Kurzweg für „frei“ (siehe [`analyze_rows_sparse`]): Givens-QR der unabhängigen Zeilen,
+/// Nullraumvektoren durch Rückwärtseinsetzen, nur geprüfte Vektoren zählen. Je Spalte
+/// (ursprüngliche Nummerierung) `true`, wenn sie damit sicher frei ist; `false` heißt „offen“.
+fn null_space_shortcut(
+    rows: &SparseRows,
+    perm: &[usize],
+    independent: &[bool],
+    free_tol: f64,
+) -> Vec<bool> {
+    // Ein Rest bis zu diesem Anteil von `‖a_i‖ · ‖z‖` gilt als Rundung.
+    const NULL_RESIDUAL: f64 = 1e-10;
+    // So weit über `free_tol` muss der Anteil liegen, damit der Kurzweg entscheidet.
+    const MARGIN: f64 = 1e4;
+    let n = rows.cols;
+    let mut inv = vec![0; n];
+    for (new, &old) in perm.iter().enumerate() {
+        inv[old] = new;
+    }
+    let r = givens_r(rows, &inv, independent);
+    let mut free = vec![false; n];
+    let norms: Vec<f64> = (0..rows.rows())
+        .map(|i| rows.row(i).1.iter().map(|v| v * v).sum::<f64>().sqrt())
+        .collect();
+    for f in (0..n).filter(|&k| r[k].is_empty()) {
+        let z = null_vector(&r, f);
+        let len = z[..=f].iter().map(|x| x * x).sum::<f64>().sqrt();
+        if !len.is_finite() {
+            continue;
+        }
+        let genuine = (0..rows.rows()).filter(|&i| independent[i]).all(|i| {
+            let (cols, vals) = rows.row(i);
+            let dot: f64 = cols.iter().zip(vals).map(|(&c, v)| v * z[inv[c]]).sum();
+            dot.abs() <= NULL_RESIDUAL * norms[i] * len
+        });
+        if !genuine {
+            continue;
+        }
+        for (new, x) in z[..=f].iter().enumerate() {
+            if x.abs() > MARGIN * free_tol * len {
+                free[perm[new]] = true;
+            }
+        }
+    }
+    free
+}
+
+/// Givens-QR der unabhängigen Zeilen in der Spaltenordnung `inv` (alt → neu): Zeile `k` von `R`
+/// ab Spalte `k`, leer ohne Pivot. Zeilen nach ihrer vordersten Spalte (George/Heath, weniger
+/// Auffüllen). Einträge an Spalten ohne Pivot bis `GIVENS_DROP · ‖Zeile‖` gelten als Rundung
+/// und fallen weg; ob `R` stimmt, prüft der Aufrufer an den Nullraumvektoren.
+fn givens_r(rows: &SparseRows, inv: &[usize], independent: &[bool]) -> Vec<Vec<f64>> {
+    const GIVENS_DROP: f64 = 1e-10;
+    let n = rows.cols;
+    let mut order: Vec<(usize, usize)> = (0..rows.rows())
+        .filter(|&i| independent[i])
+        .map(|i| (rows.row(i).0.iter().map(|&c| inv[c]).min().unwrap_or(n), i))
+        .collect();
+    order.sort_unstable();
+    let mut r: Vec<Vec<f64>> = vec![Vec::new(); n];
+    let mut w = vec![0.0; n];
+    for (_, i) in order {
+        let (cols, vals) = rows.row(i);
+        let norm0 = vals.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let (mut lo, mut hi) = (n, 0);
+        for (&c, &v) in cols.iter().zip(vals) {
+            let k = inv[c];
+            w[k] += v;
+            lo = lo.min(k);
+            hi = hi.max(k);
+        }
+        let (first, drop) = (lo, GIVENS_DROP * norm0);
+        let mut j = lo;
+        while j <= hi {
+            let b = w[j];
+            if b != 0.0 {
+                if !r[j].is_empty() {
+                    let row = &mut r[j];
+                    let end = j + row.len() - 1;
+                    if hi > end {
+                        row.resize(hi - j + 1, 0.0);
+                    }
+                    hi = hi.max(end);
+                    let a = row[0];
+                    let h = a.hypot(b);
+                    let (cs, sn) = (a / h, b / h);
+                    row[0] = h;
+                    w[j] = 0.0;
+                    for t in j + 1..=hi {
+                        let (x, y) = (row[t - j], w[t]);
+                        row[t - j] = cs * x + sn * y;
+                        w[t] = cs * y - sn * x;
+                    }
+                } else if b.abs() > drop {
+                    r[j] = w[j..=hi].to_vec();
+                    break;
+                } else {
+                    w[j] = 0.0;
+                }
+            }
+            j += 1;
+        }
+        for x in &mut w[first..=hi] {
+            *x = 0.0;
+        }
+    }
+    r
+}
+
+/// Der Nullraumvektor `z_f` zur Spalte `f` ohne Pivot (siehe [`analyze_rows_sparse`]); nur die
+/// Einträge bis `f` können von null verschieden sein.
+fn null_vector(r: &[Vec<f64>], f: usize) -> Vec<f64> {
+    let mut v = vec![0.0; r.len()];
+    v[f] = 1.0;
+    for k in (0..f).rev() {
+        let row = &r[k];
+        if row.is_empty() {
+            continue;
+        }
+        let end = (k + row.len()).min(f + 1);
+        let s: f64 = (k + 1..end).map(|t| row[t - k] * v[t]).sum();
+        v[k] = -s / row[0];
+    }
+    v
 }

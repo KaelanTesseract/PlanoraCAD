@@ -1,26 +1,121 @@
 //! Zahlen mit Gradient (Vorwärts-Ableitung): Jede Rechnung liefert den Wert und die exakten
 //! partiellen Ableitungen nach den lokalen Variablen.
 
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Sub};
 
 /// Untere Schranke für die Wurzel im Nenner der Ableitung von `sqrt` (Nullabstände).
 const MIN_ROOT: f64 = 1e-12;
+
+/// So viele Ableitungen hält ein [`Grad`] ohne eigenen Speicher auf dem Heap.
+const INLINE: usize = 16;
+
+/// Gradient: die partiellen Ableitungen nach den lokalen Variablen. Bis [`INLINE`] Einträge
+/// liegen sie im Wert selbst, darüber in einem `Vec` (Skizzen 11a: Jede Rechnung mit `Dual`
+/// legte sonst einen neuen `Vec` an, das kostete beim Ziehen großer Gruppen die meiste Zeit).
+/// Die Zahlen sind dieselben wie mit `Vec<f64>`.
+#[derive(Clone)]
+pub enum Grad {
+    /// Leer (Konstante), ohne die Einträge anzulegen.
+    Empty,
+    Inline(usize, [f64; INLINE]),
+    Heap(Vec<f64>),
+}
+
+impl Grad {
+    /// Leer (Konstante).
+    pub fn new() -> Grad {
+        Grad::Empty
+    }
+
+    /// `n` Nullen.
+    pub fn zeros(n: usize) -> Grad {
+        if n <= INLINE {
+            Grad::Inline(n, [0.0; INLINE])
+        } else {
+            Grad::Heap(vec![0.0; n])
+        }
+    }
+}
+
+impl Default for Grad {
+    fn default() -> Grad {
+        Grad::new()
+    }
+}
+
+impl Deref for Grad {
+    type Target = [f64];
+    fn deref(&self) -> &[f64] {
+        match self {
+            Grad::Empty => &[],
+            Grad::Inline(n, a) => &a[..*n],
+            Grad::Heap(v) => v,
+        }
+    }
+}
+
+impl DerefMut for Grad {
+    fn deref_mut(&mut self) -> &mut [f64] {
+        match self {
+            Grad::Empty => &mut [],
+            Grad::Inline(n, a) => &mut a[..*n],
+            Grad::Heap(v) => v,
+        }
+    }
+}
+
+impl FromIterator<f64> for Grad {
+    fn from_iter<I: IntoIterator<Item = f64>>(iter: I) -> Grad {
+        let iter = iter.into_iter();
+        match iter.size_hint() {
+            (_, Some(0)) => Grad::Empty,
+            (_, Some(hi)) if hi <= INLINE => {
+                let mut a = [0.0; INLINE];
+                let mut n = 0;
+                for (slot, v) in a.iter_mut().zip(iter) {
+                    *slot = v;
+                    n += 1;
+                }
+                Grad::Inline(n, a)
+            }
+            _ => Grad::Heap(iter.collect()),
+        }
+    }
+}
+
+impl From<Vec<f64>> for Grad {
+    fn from(v: Vec<f64>) -> Grad {
+        Grad::Heap(v)
+    }
+}
+
+impl PartialEq for Grad {
+    fn eq(&self, other: &Grad) -> bool {
+        **self == **other
+    }
+}
+
+impl std::fmt::Debug for Grad {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (**self).fmt(f)
+    }
+}
 
 /// Wert mit Gradient. Ein leerer Gradient bedeutet „Konstante“ (alle Ableitungen null).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dual {
     pub v: f64,
-    pub d: Vec<f64>,
+    pub d: Grad,
 }
 
 impl Dual {
     pub fn constant(v: f64) -> Dual {
-        Dual { v, d: Vec::new() }
+        Dual { v, d: Grad::new() }
     }
 
     /// Variable Nummer `index` von insgesamt `n` lokalen Variablen.
     pub fn variable(v: f64, index: usize, n: usize) -> Dual {
-        let mut d = vec![0.0; n];
+        let mut d = Grad::zeros(n);
         d[index] = 1.0;
         Dual { v, d }
     }
@@ -71,6 +166,20 @@ impl Dual {
 /// `ca·a + cb·b` im Gradienten, Wert `v`.
 fn lin(a: &Dual, ca: f64, b: &Dual, cb: f64, v: f64) -> Dual {
     let n = a.d.len().max(b.d.len());
+    if n == 0 {
+        return Dual { v, d: Grad::Empty };
+    }
+    if n <= INLINE {
+        // Dieselbe Rechnung wie unten, ohne Umweg über einen Iterator.
+        let mut out = [0.0; INLINE];
+        for (i, o) in out[..n].iter_mut().enumerate() {
+            *o = ca * a.grad(i) + cb * b.grad(i);
+        }
+        return Dual {
+            v,
+            d: Grad::Inline(n, out),
+        };
+    }
     Dual {
         v,
         d: (0..n).map(|i| ca * a.grad(i) + cb * b.grad(i)).collect(),

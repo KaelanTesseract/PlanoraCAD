@@ -27,10 +27,11 @@ use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use crate::pattern::{PATTERN_ROUNDS, PatternId};
-use crate::sparse::{Envelope, SparseRows, envelope_cholesky_solve, rcm_order};
+use crate::sparse::{
+    Envelope, SparseRows, analyze_rows_sparse, envelope_cholesky_solve, rcm_order,
+};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3};
-use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -49,6 +50,8 @@ pub struct SolveTimings {
     pub rank: Duration,
     /// Der ganze Aufruf.
     pub total: Duration,
+    /// Zahl der Gruppen, die auf dem dünnen Weg gerechnet wurden (Skizzen 11a).
+    pub sparse_groups: usize,
 }
 
 thread_local! {
@@ -84,6 +87,16 @@ fn timed<T>(part: fn(&mut SolveTimings) -> &mut Duration, f: impl FnOnce() -> T)
     out
 }
 
+/// Zählt eine dünn gerechnete Gruppe, wenn gerade gemessen wird.
+fn count_sparse_group() {
+    TIMINGS.with(|c| {
+        if let Some(mut t) = c.get() {
+            t.sparse_groups += 1;
+            c.set(Some(t));
+        }
+    });
+}
+
 /// Misst den Aufruf `f` und liefert dessen Ergebnis mit der Aufteilung der Zeit.
 fn measure<T>(f: impl FnOnce() -> T) -> (T, SolveTimings) {
     TIMINGS.with(|c| c.set(Some(SolveTimings::default())));
@@ -101,6 +114,9 @@ fn measure<T>(f: impl FnOnce() -> T) -> (T, SolveTimings) {
 /// ein Lösen der Gruppe; bei mehr Abhängigkeiten meldet der Solver „nicht lösbar“ mit den
 /// Abhängigkeiten, deren Residuum am Ende des gescheiterten Laufs zu groß ist.
 const MAX_DIAGNOSE_RUNS: usize = 48;
+
+/// Zeilen einer Gruppe und die Abhängigkeit (Index in `Group::constraints`) je Zeile.
+type RowsPart = (Vec<(f64, Vec<(usize, f64)>)>, Vec<usize>);
 
 /// Höchstzahl der Levenberg-Marquardt-Schritte je Lauf.
 const MAX_ITERATIONS: usize = 100;
@@ -202,6 +218,8 @@ enum Outcome {
         dof: usize,
         redundant: Vec<ConstraintId>,
         free_vars: Vec<usize>,
+        /// Analyse vom Zugbeginn übernommen (dünner Weg), nicht an diesen Werten gerechnet.
+        carried: bool,
     },
     Failed {
         conflict: bool,
@@ -226,16 +244,37 @@ impl SolveCache {
 
     /// Nimmt den Eintrag der Gruppe heraus, wenn er zu ihren Lesevariablen und deren Werten in
     /// `x` passt. Ein Eintrag, der nicht passt, ist ohnehin überholt (der alte Speicher wird
-    /// nach dem Lauf verworfen).
+    /// nach dem Lauf verworfen). Gerufen nur für Gruppen ohne Zug: Ein Eintrag mit übernommener
+    /// Analyse (`carried`) passt dann nie, die Analyse wird an der neuen Lage neu gerechnet.
     fn take(&mut self, g: &Group, x: &[f64]) -> Option<CachedGroup> {
         let hit = self.groups.remove(&g.constraints)?;
-        (hit.reads == g.reads
+        let carried = matches!(hit.outcome, Outcome::Solved { carried: true, .. });
+        (!carried
+            && hit.reads == g.reads
             && hit
                 .reads
                 .iter()
                 .zip(&hit.values)
                 .all(|(&v, &bits)| x[v].to_bits() == bits))
         .then_some(hit)
+    }
+
+    /// Analyse eines gelösten Eintrags mit den Abhängigkeiten `constraints`, ohne Blick auf die
+    /// Werte (Zug auf dem dünnen Weg: Rang und freie Teile gelten vom Zugbeginn an weiter).
+    fn analysis_for(&self, constraints: &[ConstraintId]) -> Option<Analysis> {
+        match &self.groups.get(constraints)?.outcome {
+            Outcome::Solved {
+                dof,
+                redundant,
+                free_vars,
+                ..
+            } => Some(Analysis {
+                dof: *dof,
+                redundant: redundant.clone(),
+                free_vars: free_vars.clone(),
+            }),
+            Outcome::Failed { .. } => None,
+        }
     }
 
     /// Übernimmt einen passenden Eintrag aus [`take`](Self::take) unverändert: Lesevariablen
@@ -346,13 +385,13 @@ enum Jacobian {
     Sparse(SparseRows),
 }
 
-impl Jacobian {
-    /// Die Matrix dicht (die Rangprüfung rechnet noch dicht).
-    fn dense(&self) -> Cow<'_, Matrix> {
-        match self {
-            Jacobian::Dense(m) => Cow::Borrowed(m),
-            Jacobian::Sparse(m) => Cow::Owned(m.to_dense()),
-        }
+impl Group {
+    /// Die RCM-Ordnung des dünnen Wegs. Dünne Zeilen baut `assemble` nur, wenn `order` gesetzt
+    /// ist; wer eine [`Jacobian::Sparse`] der Gruppe hat, hat also auch die Ordnung.
+    fn sparse_order(&self) -> &[usize] {
+        self.order
+            .as_deref()
+            .expect("dünne Jacobi-Matrix nur mit RCM-Ordnung der Gruppe")
     }
 }
 
@@ -719,34 +758,7 @@ impl Sketch {
 
     /// Der Aufbau selbst, siehe [`assemble`](Self::assemble).
     fn assemble_rows(&self, g: &Group, x: &[f64], soft: &[Soft], which: Rows) -> Assembled {
-        let mut rows: Vec<(f64, Vec<(usize, f64)>)> = Vec::new();
-        let mut owner = Vec::new();
-        for (ci, &id) in g.constraints.iter().enumerate() {
-            let mut target = 0.0;
-            match which {
-                Rows::Without(skip) if skip == id => continue,
-                Rows::Keeping(kept) => {
-                    if let Some(&(_, rest)) = kept.iter().find(|(c, _)| *c == id) {
-                        target = rest;
-                    }
-                }
-                _ => {}
-            }
-            // Die Gruppe enthält nur lebende Abhängigkeiten; `None` kann nicht auftreten.
-            let Some(ev) = self.evaluate(id, x) else {
-                continue;
-            };
-            for res in &ev.residuals {
-                let entries = ev
-                    .locals
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(k, v)| g.column(*v).map(|c| (c, res.grad(k))))
-                    .collect();
-                rows.push((res.v - target, entries));
-                owner.push(ci);
-            }
-        }
+        let (mut rows, owner) = self.constraint_rows(g, x, which);
         let hard_rows = rows.len();
         for s in soft {
             if let Some(c) = g.column(s.var) {
@@ -775,6 +787,40 @@ impl Sketch {
             hard_rows,
             owner,
         }
+    }
+
+    /// Zeilen der Abhängigkeiten der Gruppe an der Stelle `x`, je Zeile Wert und Einträge
+    /// `(Spalte, Ableitung)`, dazu der Index der Abhängigkeit in `g.constraints`.
+    fn constraint_rows(&self, g: &Group, x: &[f64], which: Rows) -> RowsPart {
+        let mut rows: Vec<(f64, Vec<(usize, f64)>)> = Vec::new();
+        let mut owner = Vec::new();
+        for (ci, &id) in g.constraints.iter().enumerate() {
+            let mut target = 0.0;
+            match which {
+                Rows::Without(skip) if skip == id => continue,
+                Rows::Keeping(kept) => {
+                    if let Some(&(_, rest)) = kept.iter().find(|(c, _)| *c == id) {
+                        target = rest;
+                    }
+                }
+                _ => {}
+            }
+            // Die Gruppe enthält nur lebende Abhängigkeiten; `None` kann nicht auftreten.
+            let Some(ev) = self.evaluate(id, x) else {
+                continue;
+            };
+            let cols: Vec<Option<usize>> = ev.locals.iter().map(|v| g.column(*v)).collect();
+            for res in &ev.residuals {
+                let entries = cols
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, c)| c.map(|c| (c, res.grad(k))))
+                    .collect();
+                rows.push((res.v - target, entries));
+                owner.push(ci);
+            }
+        }
+        (rows, owner)
     }
 
     /// Levenberg-Marquardt mit einheitlicher Dämpfung `λ · max_k (JᵀJ)_kk · I` (siehe
@@ -818,8 +864,7 @@ impl Sketch {
                 || match &a.j {
                     Jacobian::Dense(j) => (j.transpose_mul_vec(&a.r), Normal::Dense(j.gram())),
                     Jacobian::Sparse(j) => {
-                        // Dünne Zeilen baut `assemble` nur mit `order`.
-                        let order = g.order.as_deref().unwrap_or_default();
+                        let order = g.sparse_order();
                         let env = Envelope::gram(j, order);
                         (j.transpose_mul_vec(&a.r), Normal::Sparse(env, order))
                     }
@@ -916,9 +961,25 @@ impl Sketch {
     /// Wie [`analyze`](Self::analyze) mit den schon gebauten Zeilen `a` (alle Abhängigkeiten,
     /// ohne weiche Bedingungen) an der gelösten Stelle.
     fn analyze_assembled(&self, g: &Group, a: &Assembled) -> Analysis {
-        let space = timed(|t| &mut t.rank, || analyze_rows(&a.j.dense(), RANK_REL_TOL));
+        let (independent, rank, free) = timed(
+            |t| &mut t.rank,
+            || match &a.j {
+                Jacobian::Dense(j) => {
+                    let space = analyze_rows(j, RANK_REL_TOL);
+                    let free: Vec<bool> = (0..g.vars.len())
+                        .map(|c| space.null_space.iter().any(|v| v[c].abs() > FREE_COMPONENT))
+                        .collect();
+                    (space.independent, space.rank, free)
+                }
+                Jacobian::Sparse(j) => {
+                    let space =
+                        analyze_rows_sparse(j, g.sparse_order(), RANK_REL_TOL, FREE_COMPONENT);
+                    (space.independent, space.rank, space.free)
+                }
+            },
+        );
         let mut redundant = Vec::new();
-        for (row, independent) in space.independent.iter().enumerate() {
+        for (row, independent) in independent.iter().enumerate() {
             let id = g.constraints[a.owner[row]];
             if !independent && !self.constraints[id].internal && !redundant.contains(&id) {
                 redundant.push(id);
@@ -927,17 +988,12 @@ impl Sketch {
         let free_vars = g
             .vars
             .iter()
-            .enumerate()
-            .filter(|(c, _)| {
-                space
-                    .null_space
-                    .iter()
-                    .any(|v| v[*c].abs() > FREE_COMPONENT)
-            })
-            .map(|(_, &v)| v)
+            .zip(&free)
+            .filter(|(_, f)| **f)
+            .map(|(&v, _)| v)
             .collect();
         Analysis {
-            dof: g.vars.len().saturating_sub(space.rank),
+            dof: g.vars.len().saturating_sub(rank),
             redundant,
             free_vars,
         }
@@ -1427,6 +1483,7 @@ impl Sketch {
                         dof: d,
                         redundant: red,
                         free_vars: fv,
+                        ..
                     } => {
                         dof += d;
                         free_vars.extend(fv.iter().copied());
@@ -1459,6 +1516,9 @@ impl Sketch {
                 continue;
             }
             group_solves += 1;
+            if g.order.is_some() {
+                count_sparse_group();
+            }
             // Schon am Start erfüllt und ohne Zug (etwa jeder Punkt mit `Fixed` nach dem
             // Auflösen eines Textes): Levenberg-Marquardt bräche vor dem ersten Schritt ab, mit
             // 0 Schritten, konvergiert und `x` gleich dem Start. Das wird hier ohne Kopie des
@@ -1532,6 +1592,11 @@ impl Sketch {
                 Vec::new()
             };
             if lm.converged && outside.is_empty() && !self.degenerate(&g.curves, x) {
+                // Zug auf dem dünnen Weg (Ruling F7): Rang und freie Teile vom Zugbeginn
+                // übernehmen, statt sie in jedem Zugschritt neu zu rechnen; das Lösen beim
+                // Loslassen rechnet sie neu (siehe `SolveCache::take`). Gruppen, die nur für
+                // diesen Lauf gehaltene Werte lesen, rechnen wie bisher.
+                let carried = !group_soft.is_empty() && g.order.is_some() && !only_this_run(&g);
                 let analysis = match &ready {
                     Some(Ready::FixedPoint) => {
                         let analysis = Analysis {
@@ -1546,6 +1611,9 @@ impl Sketch {
                         analysis
                     }
                     Some(Ready::Assembled(a)) => self.analyze_assembled(&g, a),
+                    None if carried => old_cache
+                        .analysis_for(&g.constraints)
+                        .unwrap_or_else(|| self.analyze(&g, x)),
                     None => self.analyze(&g, x),
                 };
                 dof += analysis.dof;
@@ -1566,6 +1634,7 @@ impl Sketch {
                             dof: analysis.dof,
                             redundant: analysis.redundant,
                             free_vars: analysis.free_vars,
+                            carried,
                         },
                     );
                 }
