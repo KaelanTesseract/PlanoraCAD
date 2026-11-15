@@ -29,7 +29,70 @@ use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use crate::pattern::{PATTERN_ROUNDS, PatternId};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
+
+/// Zeit eines gemessenen Lösungslaufs, aufgeteilt nach den Teilen der Rechnung (nur zum Messen,
+/// siehe [`Sketch::solve_timed`]). `normal` ist `JᵀJ` samt Gradient, `rank` die Rangbestimmung.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SolveTimings {
+    /// Aufbau von Residuen und Jacobi-Matrix.
+    pub assemble: Duration,
+    /// Normalgleichungen: `JᵀJ` und Gradient.
+    pub normal: Duration,
+    /// Cholesky-Zerlegung und Lösen des Schritts.
+    pub cholesky: Duration,
+    /// Rang, Redundanz und freie Variablen.
+    pub rank: Duration,
+    /// Der ganze Aufruf.
+    pub total: Duration,
+}
+
+thread_local! {
+    /// Zähler des laufenden `*_timed`-Aufrufs. Ohne einen solchen ist er `None`; dann läuft kein
+    /// `Instant::now()`, der normale Weg kostet nur das Lesen dieses Wertes.
+    static TIMINGS: Cell<Option<SolveTimings>> = const { Cell::new(None) };
+}
+
+/// Setzt den Zähler beim Verlassen (auch bei einem Panic) wieder auf `None`.
+struct TimingsGuard;
+
+impl Drop for TimingsGuard {
+    fn drop(&mut self) {
+        TIMINGS.with(|c| c.set(None));
+    }
+}
+
+/// Führt `f` aus und rechnet die Zeit dem Teil `part` zu, wenn gerade gemessen wird.
+#[inline]
+fn timed<T>(part: fn(&mut SolveTimings) -> &mut Duration, f: impl FnOnce() -> T) -> T {
+    if TIMINGS.with(|c| c.get().is_none()) {
+        return f();
+    }
+    let start = Instant::now();
+    let out = f();
+    let spent = start.elapsed();
+    TIMINGS.with(|c| {
+        if let Some(mut t) = c.get() {
+            *part(&mut t) += spent;
+            c.set(Some(t));
+        }
+    });
+    out
+}
+
+/// Misst den Aufruf `f` und liefert dessen Ergebnis mit der Aufteilung der Zeit.
+fn measure<T>(f: impl FnOnce() -> T) -> (T, SolveTimings) {
+    TIMINGS.with(|c| c.set(Some(SolveTimings::default())));
+    let _guard = TimingsGuard;
+    let start = Instant::now();
+    let out = f();
+    let total = start.elapsed();
+    let mut t = TIMINGS.with(|c| c.get()).unwrap_or_default();
+    t.total = total;
+    (out, t)
+}
 
 /// Höchstzahl nutzererzeugter Abhängigkeiten einer Gruppe, für die die Widerspruchsdiagnose
 /// je Abhängigkeit einen eigenen Lauf rechnet (Entscheidung D4). Jeder Lauf kostet so viel wie
@@ -390,6 +453,13 @@ impl Sketch {
         self.solve_with_soft(&[])
     }
 
+    /// Wie [`solve`](Self::solve), mit der Aufteilung der Zeit (nur zum Messen). Das Ergebnis ist
+    /// bitgleich zu dem von `solve`.
+    #[doc(hidden)]
+    pub fn solve_timed(&mut self) -> (SolveReport, SolveTimings) {
+        measure(|| self.solve())
+    }
+
     /// Löst bei festgehaltenen Punkten `hold`, ohne dass sie sich auch nur im letzten Bit bewegen:
     /// auf einer Kopie mit vorübergehendem `Fixed`. Gelöst: Die Werte werden übernommen, `true`.
     /// Sonst `false`, und die Skizze bleibt, wie sie ist.
@@ -577,6 +647,14 @@ impl Sketch {
 
     /// Baut Residuen und Jacobi-Matrix der Gruppe an der Stelle `x`, je nach `which` (alle, ohne eine Abhängigkeit, oder mit Restwerten für Tangenten).
     fn assemble(&self, g: &Group, x: &[f64], soft: &[Soft], which: Rows) -> Assembled {
+        timed(
+            |t| &mut t.assemble,
+            || self.assemble_rows(g, x, soft, which),
+        )
+    }
+
+    /// Der Aufbau selbst, siehe [`assemble`](Self::assemble).
+    fn assemble_rows(&self, g: &Group, x: &[f64], soft: &[Soft], which: Rows) -> Assembled {
         let mut rows: Vec<(f64, Vec<(usize, f64)>)> = Vec::new();
         let mut owner = Vec::new();
         for (ci, &id) in g.constraints.iter().enumerate() {
@@ -663,8 +741,10 @@ impl Sketch {
                 break;
             }
             iterations += 1;
-            let gradient = a.j.transpose_mul_vec(&a.r);
-            let gram = a.j.gram();
+            let (gradient, gram) = timed(
+                |t| &mut t.normal,
+                || (a.j.transpose_mul_vec(&a.r), a.j.gram()),
+            );
             let rhs: Vec<f64> = gradient.iter().map(|v| -v).collect();
             // Maßstab der Dämpfung, siehe `MIN_DIAG`.
             let scale = (0..gram.rows())
@@ -677,7 +757,7 @@ impl Sketch {
                 for i in 0..m.rows() {
                     m.add_to(i, i, lambda * scale);
                 }
-                if let Some(step) = cholesky_solve(&m, &rhs) {
+                if let Some(step) = timed(|t| &mut t.cholesky, || cholesky_solve(&m, &rhs)) {
                     let mut trial = x.to_vec();
                     for (c, &v) in g.vars.iter().enumerate() {
                         trial[v] += step[c];
@@ -762,7 +842,7 @@ impl Sketch {
     /// Wie [`analyze`](Self::analyze) mit den schon gebauten Zeilen `a` (alle Abhängigkeiten,
     /// ohne weiche Bedingungen) an der gelösten Stelle.
     fn analyze_assembled(&self, g: &Group, a: &Assembled) -> Analysis {
-        let space = analyze_rows(&a.j, RANK_REL_TOL);
+        let space = timed(|t| &mut t.rank, || analyze_rows(&a.j, RANK_REL_TOL));
         let mut redundant = Vec::new();
         for (row, independent) in space.independent.iter().enumerate() {
             let id = g.constraints[a.owner[row]];
@@ -1505,6 +1585,16 @@ impl Sketch {
     /// Umkehrung der Lage des Exemplars, **Annahme**).
     pub fn drag(&mut self, drags: &[Drag]) -> Result<SolveReport, SketchError> {
         self.drag_holding(drags, &[])
+    }
+
+    /// Wie [`drag`](Self::drag), mit der Aufteilung der Zeit (nur zum Messen).
+    #[doc(hidden)]
+    pub fn drag_timed(
+        &mut self,
+        drags: &[Drag],
+    ) -> Result<(SolveReport, SolveTimings), SketchError> {
+        let (r, t) = measure(|| self.drag(drags));
+        Ok((r?, t))
     }
 
     /// Wie [`drag`](Self::drag), aber die Punkte `hold` stehen für den Löser fest wie Exemplare eines

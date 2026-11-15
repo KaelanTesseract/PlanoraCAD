@@ -44,13 +44,15 @@ Vom Ausführenden in Task 1 und Task 3 auszufüllen (Release, dieselbe Maschine,
 
 | Messung | vor dem Zweig | nach Task 3 | Ziel |
 |---|---|---|---|
-| `perf_200_chained_3d` lösen | – | – | ≤ 0,5 s |
-| `perf_200_chained_3d` Zugschritt | – | – | ≤ 50 ms |
-| Aufteilung 3D: Jacobi / Normalgl. / Cholesky / Rang | – | – | – |
-| `perf_200_chained_2d` lösen / Zugschritt | – | – | ≤ +5 % |
-| `perf_2d_unchanged` einfügen / Zugschritt | – | – | ≤ +5 % (große Gruppe: schneller) |
-| `import_perf` (alle `--ignored`) | – | – | ≤ +5 % |
+| `perf_200_chained_3d` lösen | 8,64 s | – | ≤ 0,5 s |
+| `perf_200_chained_3d` Zugschritt | 36,1 s | – | ≤ 50 ms |
+| Aufteilung 3D: Jacobi / Normalgl. / Cholesky / Rang | lösen 27 / 72 / 2 105 / 5 780 ms (Summe 8,0 s); Zugschritt 290 / 1 025 / 24 735 / 5 064 ms (Summe 31,1 s) | – | – |
+| `perf_200_chained_2d` lösen / Zugschritt | 1,97 s / 12,26 s (Aufteilung lösen: Jacobi 12 / Normalgl. 23 / Cholesky 619 / Rang 1 205 ms; Zugschritt 142 / 329 / 9 360 / 1 331 ms) | – | ≤ +5 % |
+| `perf_2d_unchanged` einfügen / Zugschritt | 9,79 s / 16,02 s | – | ≤ +5 % (große Gruppe: schneller) |
+| `import_perf` (alle `--ignored`) | 100 Bögen 0,060 s / 0,205 s; 250 Bögen 1,03 s / 1,65 s; 500 Bögen 12,2 s / 19,1 s; 1000 Bögen 78,3 s / 131,8 s (einfügen / Zugschritt); 10 000 Linien 0,008 s; Profile 100 000 Linien 32,9 s | – | ≤ +5 % |
 | Schwelle `SPARSE_MIN_VARS` | 60 (Start) | – | Kreuzungspunkt dicht/dünn |
+
+Stand Task 1: Release, Median aus 3 Läufen, Messung auf dem Zweig ohne Lösercode-Änderung (Spalte „vor dem Zweig“, ohne Zeitzähler); Cholesky und Rang (Dichte `analyze_rows`) tragen fast die ganze Zeit, Jacobi und Normalgleichungen sind klein. Mit eingebauten Zeitzählern (im normalen Weg inaktiv) lösen 2D 1,85 s, 3D 8,04 s, Zugschritt 11,4 s / 31,7 s, also kein Mehraufwand.
 
 ---
 

@@ -69,7 +69,7 @@ pub use profile_ref::LegacyMigration;
 pub use shapes::{ArcSlotIds, CenterRectIds, PolygonIds, SlotIds, SlotStyle};
 pub use snap::{AlignHit, Snap, SnapHit, SnapIndex};
 pub use solid::{extrude_profile, revolve_profile};
-pub use solver::{Drag, SolveReport, SolveStatus};
+pub use solver::{Drag, SolveReport, SolveStatus, SolveTimings};
 pub use spline_handles::{NodeCurvature, NodeHandle, Nodes, hermite_nodes};
 pub use text::{
     HAlign, ReshapeReport, ShapedCache, TextData, TextId, TextKindEdit, TextParams, TextPlacement,
