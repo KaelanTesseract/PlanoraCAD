@@ -955,8 +955,8 @@ fn pairing_needs_quarter_and_middle_points() {
         raw.faces[3].loops[0][0].forward,
         "Richtung der Kopie gekippt"
     );
-    for f in 0..3 {
-        assert_eq!(raw.faces[f].loops[0][0].edge, f);
+    for (f, face) in raw.faces.iter().take(3).enumerate() {
+        assert_eq!(face.loops[0][0].edge, f);
     }
 }
 
