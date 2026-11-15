@@ -24,8 +24,8 @@ use planora_render::Pick;
 
 const SIZE: Vec2 = vec2(1920.0, 1080.0);
 
-/// Lage auf dem Hauptmonitor (unter Windows auf einem vorhandenen Monitor, sonst bliebe das
-/// Fenster angedockt).
+/// Lage auf dem nachgebildeten Hauptmonitor (`Screen::with_viewports`), sonst bliebe das
+/// Fenster angedockt.
 fn window_at(x: f32, y: f32) -> DetachedWindow {
     DetachedWindow {
         x,

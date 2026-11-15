@@ -190,6 +190,13 @@ impl Screen {
     pub fn with_viewports(w: f32, h: f32) -> Screen {
         let mut s = Screen::new(w, h);
         s.ctx.set_embed_viewports(false);
+        // Feste Monitore statt der echten (sonst hinge „abgedockt“ vom Bildschirm des Rechners
+        // ab, etwa am kleinen Bildschirm der CI): Hauptmonitor 5120×1440 bei (0, 0) und links
+        // daneben einer mit 2560×1440. Lagen wie (-100000, …) liegen auf keinem („Monitor fehlt“).
+        planora_app::detach::set_test_monitors(Some(vec![
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(5120.0, 1440.0)),
+            egui::Rect::from_min_size(egui::pos2(-2560.0, 0.0), egui::vec2(2560.0, 1440.0)),
+        ]));
         let children = Rc::new(RefCell::new(Children::default()));
         let shared = Rc::clone(&children);
         egui::Context::set_immediate_viewport_renderer(move |ctx, viewport| {

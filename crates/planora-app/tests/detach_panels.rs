@@ -20,8 +20,8 @@ use planora_project::library::Library;
 
 const SIZE: Vec2 = vec2(1920.0, 1080.0);
 
-/// Lage der abgedockten Felder auf dem Hauptmonitor (unter Windows auf einem vorhandenen
-/// Monitor, sonst bliebe das Feld angedockt).
+/// Lage der abgedockten Felder auf dem nachgebildeten Hauptmonitor (`Screen::with_viewports`),
+/// sonst bliebe das Feld angedockt.
 fn window_at(x: f32, y: f32) -> DetachedWindow {
     DetachedWindow {
         x,

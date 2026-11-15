@@ -369,7 +369,7 @@ impl DialogTest {
     }
 }
 
-/// Gemerkte Lage auf dem Hauptmonitor (unter Windows auf einem vorhandenen Monitor).
+/// Gemerkte Lage auf dem nachgebildeten Hauptmonitor (`Screen::with_viewports`).
 fn on_main_monitor() -> DetachedWindow {
     DetachedWindow {
         x: 200.0,
