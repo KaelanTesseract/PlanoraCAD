@@ -405,6 +405,10 @@ impl Installer {
                 }
                 Ok(Msg::Done(result)) => {
                     self.rx = None;
+                    // Der Thread hat sein Ergebnis geschickt und meldet nur noch ein neues Bild
+                    // (`request_repaint`, das unter Last auf die Kontext-Sperre warten kann).
+                    // Er gilt als fertig, sonst meldete „Erneut versuchen“ „wird noch beendet“.
+                    self.handle = None;
                     self.state = match result {
                         Ok(hex) => {
                             self.verified = Some(hex);
@@ -418,6 +422,8 @@ impl Installer {
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => {
                     self.rx = None;
+                    // Ohne Sender ist der Thread schon am Ende (wie bei `Msg::Done`).
+                    self.handle = None;
                     self.state = InstallState::Failed(FailReason::DownloadAborted);
                     return;
                 }

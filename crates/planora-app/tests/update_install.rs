@@ -27,7 +27,7 @@ use planora_update::install::{
     DownloadPaths, Downloader, InstallError, STALL_TIMEOUT, copy_limited,
 };
 use planora_update::sha256::hex_digest;
-use planora_update::{REPO, SETUP_NAME, SHA256_NAME, Version};
+use planora_update::{AssetRef, REPO, Release, SETUP_NAME, SHA256_NAME, Update, Version};
 use serde_json::{Value, json};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -1794,4 +1794,77 @@ fn update_exit_leaves_no_run_marker() {
     let (own, finding) = planora_app::crash::start_run(&data, 4_000_000_012);
     assert_eq!(finding, planora_app::crash::StartFinding::Clean);
     own.unwrap().finish();
+}
+
+/// „Erneut versuchen“ gleich nach einem Fehler lädt noch einmal, auch wenn der Thread des ersten
+/// Downloads nach dem Ergebnis noch beim Melden des neuen Bilds steckt (`request_repaint` wartet
+/// auf die Schreibsperre des Kontexts, etwa unter Last). Früher kam dann „wird noch beendet“.
+#[test]
+fn retry_right_after_a_failure_loads_again_while_the_old_thread_still_pings() {
+    let (_ws, _cfg, paths) = workspace("planora-install-retry-sofort");
+    let asset = |name: &str| AssetRef {
+        name: name.into(),
+        url: format!("https://github.com/{REPO}/releases/download/{TAG}/{name}"),
+        size: NEW_SETUP.len() as u64,
+    };
+    let update = Update {
+        latest: Release {
+            version: v(TARGET),
+            tag: TAG.into(),
+            notes: String::new(),
+            setup: asset(SETUP_NAME),
+            sha256: asset(SHA256_NAME),
+            licenses: None,
+        },
+        notes_between: Vec::new(),
+        truncated: false,
+    };
+    let ctx = egui::Context::default();
+    let mut installer = Installer::default();
+    installer.set_repaint(&ctx);
+    // Scheitert vor dem ersten Fortschritt: Das einzige `request_repaint` kommt nach dem Ergebnis.
+    let downloader = FakeDownloader::failing(InstallError::Io("Platte voll".into()));
+
+    // Ein Leser hält den Kontext, bis der Test ihn freigibt.
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (held_tx, held_rx) = mpsc::channel();
+    let holder = {
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            ctx.data(|_| {
+                held_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            });
+        })
+    };
+    held_rx.recv().unwrap();
+
+    let until_failed = |installer: &mut Installer| {
+        let start = Instant::now();
+        while !matches!(installer.state(), InstallState::Failed(_)) {
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "{:?}",
+                installer.state()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+            installer.poll();
+        }
+    };
+    installer.start(&update, paths.clone(), downloader.clone());
+    until_failed(&mut installer);
+    assert_eq!(downloader.calls(), 2);
+    // Der Thread des ersten Downloads steckt jetzt sicher in `request_repaint`: Der Leser oben
+    // hält den Kontext noch.
+
+    installer.start(&update, paths.clone(), downloader.clone());
+    let state = installer.state().clone();
+    drop(release_tx);
+    holder.join().unwrap();
+    assert!(
+        matches!(state, InstallState::Downloading { .. }),
+        "{state:?}"
+    );
+    until_failed(&mut installer);
+    assert_eq!(downloader.calls(), 4, "noch einmal geladen");
 }

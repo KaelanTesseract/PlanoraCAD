@@ -660,10 +660,13 @@ fn hover_plane_click(state: &mut AppState, hit: Option<crate::plane_dialog::Plan
 pub fn typing(ctx: &egui::Context) -> bool {
     keyboard_taken(ctx)
         || crate::keymap::settings_ui::is_capturing(ctx)
-        || (ctx.memory(|m| m.focused()).is_none()
-            && ctx
-                .data(|d| d.get_temp::<bool>(keyboard_focus_id(ctx.viewport_id())))
-                .unwrap_or(false))
+        || (ctx.memory(|m| m.focused()).is_none() && {
+            // Fensterkennung vor `data` holen: Eine zweite Lesesperre auf den Kontext innerhalb
+            // der ersten hängt, sobald ein anderer Thread (etwa die Update-Prüfung mit
+            // `request_repaint`) auf die Schreibsperre wartet; siehe Test `kontext_sperre`.
+            let id = keyboard_focus_id(ctx.viewport_id());
+            ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false)
+        })
 }
 
 /// Wie [`typing`], aber ein Feld am Zeiger zählt nicht: Für den Verlauf ist Tippen dort keine
@@ -672,9 +675,11 @@ pub fn typing_for_history(ctx: &egui::Context) -> bool {
     other_field_has_keyboard(ctx)
         || child_typing(ctx)
         || crate::keymap::settings_ui::is_capturing(ctx)
-        || ctx
-            .data(|d| d.get_temp::<bool>(history_focus_id(ctx.viewport_id())))
-            .unwrap_or(false)
+        || {
+            // Wie bei [`typing`]: keine verschachtelte Lesesperre auf den Kontext.
+            let id = history_focus_id(ctx.viewport_id());
+            ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false)
+        }
 }
 
 /// Profil der Skizze aus `state.profile_pick` unter dem Bildschirmpunkt `p` der Ansicht `rect`:
