@@ -223,7 +223,9 @@ fn rich_document() -> Document {
             && let Ok(e) = EdgeRef::from_edge(&solid, id, &tol)
         {
             copy = Some(EdgeCopy {
-                curve: c,
+                target: planora_feature::CopyTarget::Curve(c),
+                piece: 0,
+                of: 1,
                 source: planora_feature::CopySource::Edge(e),
             });
             break;

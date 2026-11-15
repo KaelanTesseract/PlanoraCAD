@@ -872,3 +872,21 @@ fn from_data_rejects_bad_rho() {
         );
     }
 }
+
+/// Skizzen 10, Task 12: Ein Kegelschnitt mit 3D-Punkten prüft den Scheitel im Raum. In der Ebene
+/// YZ läge der Scheitel in der Draufsicht auf der Sehne, im Raum nicht.
+#[test]
+fn conic_apex_is_checked_in_3d() {
+    use planora_math::DVec3;
+    let mut s = sketch();
+    let a = s.add_point3(DVec3::new(0.0, 0.0, 0.0)).unwrap();
+    let b = s.add_point3(DVec3::new(0.0, 10.0, 0.0)).unwrap();
+    let apex = s.add_point3(DVec3::new(0.0, 5.0, 8.0)).unwrap();
+    let on = s.add_point3(DVec3::new(0.0, 5.0, 0.0)).unwrap();
+    assert!(matches!(
+        s.add_conic(a, b, on, 0.5),
+        Err(SketchError::Degenerate(_))
+    ));
+    let c = s.add_conic(a, b, apex, 0.5).unwrap();
+    assert!(s.is_3d_curve(c));
+}

@@ -279,7 +279,7 @@ fn a_copied_edge_keeps_its_length_relation_after_a_resize() {
         s.document
             .sketch_of(id)
             .unwrap()
-            .line_length(def.copies[0].curve)
+            .line_length(def.copies[0].curve().unwrap())
             .unwrap()
     };
     let before = copy_length(&s);
@@ -345,7 +345,9 @@ fn a_rejected_draft_keeps_the_sketch_open() {
         .unwrap()
         .copies
         .push(planora_feature::EdgeCopy {
-            curve,
+            target: planora_feature::CopyTarget::Curve(curve),
+            piece: 0,
+            of: 1,
             source: planora_feature::CopySource::Edge(edge),
         });
     let e = s.try_close_sketch().unwrap_err();

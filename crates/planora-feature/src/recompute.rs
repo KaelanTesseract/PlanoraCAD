@@ -340,6 +340,18 @@ impl Document {
         if Self::reads_visible(&f.kind) {
             key.extend(visible.iter().map(|r| self.result_version(r.feature)));
         }
+        // Lose Verweise (Quellskizzen, Spec 10) mit ihrem Ergebnisstand, nur wenn sie vor der
+        // Skizze stehen; gelöscht oder dahinter geschoben zählt 0 (verlorener Bezug).
+        if let FeatureKind::Sketch(s) = &f.kind {
+            for c in &s.copies {
+                key.extend(c.source.loose_origins().into_iter().map(
+                    |id| match self.index_of(id) {
+                        Some(i) if i < idx => self.result_version(id),
+                        _ => 0,
+                    },
+                ));
+            }
+        }
         key
     }
 

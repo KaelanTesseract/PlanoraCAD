@@ -34,8 +34,8 @@ pub use sew::sew;
 pub use split::{Region, split_face};
 pub use surfsurf::{SurfaceIntersection, intersect_surfaces, surface_label, surface_name};
 pub use uv::{
-    Containment, FaceGeom, face_geom, loop_points, oriented_area, point_in_face, points_to_uv,
-    points_to_uv_indexed, winding,
+    Containment, FaceGeom, face_geom, face_polys, loop_points, oriented_area, point_in_face,
+    point_in_face_at, points_to_uv, points_to_uv_indexed, winding,
 };
 
 use crate::geometry::{Curve, Surface};

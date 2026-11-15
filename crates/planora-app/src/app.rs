@@ -1222,7 +1222,13 @@ impl PlanoraApp {
     /// Wiederholen zuletzt; sie sind zusätzlich gesperrt, solange eine Maustaste gedrückt ist
     /// ([`PlanoraApp::undo_keys`]).
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if self.ws.prompt.is_some() || ctx.current_pass_index() != 0 {
+        if ctx.current_pass_index() != 0 {
+            return;
+        }
+        // Skizzen 10: Alt allein und Pfeil hoch gehalten (die Triade der 3D-Skizze); der Verfolger
+        // muss jedes Bild sehen, auch wenn sonst gesperrt ist.
+        self.triad_keys(ctx);
+        if self.ws.prompt.is_some() {
             return;
         }
         if viewport::typing(ctx) {
@@ -1256,9 +1262,19 @@ impl PlanoraApp {
             se.toggle_dimension_preview(sk);
         }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
+        // Tab gehört der Triade nur, wenn sie zu sehen ist (3D-Skizze und Zeichenwerkzeug); sonst
+        // bleibt er, wie er war (Gesamtprüfung).
+        let triad_shown = self.triad_shown();
         let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
-            !is_history_key(a) && !(windows && a.area() != keymap::Area::All)
+            !is_history_key(a)
+                && a != Action::SketchLockZ
+                && (!is_triad_cycle(a) || triad_shown)
+                && !(windows && a.area() != keymap::Area::All)
         });
+        if pressed.contains(&Action::SketchTriadCycleHandle) {
+            // Tab gehört der Triade, nicht dem Wechsel des Fokus (wie bei der Skizzenbemaßung).
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
         self.run_pressed(ctx, &pressed, true);
         self.undo_keys(ctx);
     }
@@ -1335,12 +1351,22 @@ impl PlanoraApp {
             let before = crate::browser::open_tree_prompts(&self.ws.active_tab().state);
             let only_all = keys.dialog || self.windows_open() || self.projects.is_open();
             let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
+            let triad_shown = self.triad_shown();
             let pressed = keymap::dispatch::pressed_in(
                 &mut keys.events,
                 keys.focus,
                 &self.ws.keymap,
                 area,
-                |a| !is_history_key(a) && !(only_all && a.area() != keymap::Area::All),
+                // Die Tasten der Triade (Skizzen 10) gelten nur im Hauptfenster: Z sperren
+                // wirkt nur gehalten ([`PlanoraApp::triad_keys`]), Tab wandert im abgedockten
+                // Fenster wie gewohnt mit dem Fokus.
+                |a| {
+                    !is_history_key(a)
+                        && a != Action::SketchLockZ
+                        && a != Action::SketchTriadCycleHandle
+                        && (a != Action::SketchTriadCyclePlane || triad_shown)
+                        && !(only_all && a.area() != keymap::Area::All)
+                },
             );
             self.run_pressed(ctx, &pressed, false);
             let history = !self.windows_open() && !keys.pointer_down;
@@ -1372,6 +1398,50 @@ impl PlanoraApp {
             }
             // Das Bild ist schon gezeichnet: das Ergebnis zeigt das nächste.
             ctx.request_repaint();
+        }
+    }
+
+    /// Die Tasten der Triade der 3D-Skizze (Skizzen 10): Alt allein (oder was belegt ist) löst
+    /// beim Loslassen seine Aktion aus ([`keymap::dispatch::tapped`]; Alt mit Ziehen, Rad oder
+    /// Taste nicht), und „Z sperren“ gilt, solange seine Taste gehalten wird
+    /// ([`keymap::dispatch::held`]). Beides nur bei offener Skizze und ohne Rückfrage, Fenster
+    /// oder Eingabefeld; sonst fällt die Sperre. Die Felder am Zeiger (Länge, Winkel, Z-Abstand)
+    /// sperren die Triade nicht: Sie haben beim Zeichnen fast immer die Tastatur (Task 11).
+    fn triad_keys(&mut self, ctx: &egui::Context) {
+        let triad_shown = self.triad_shown();
+        let tap = keymap::dispatch::tapped(ctx);
+        let free = self.ws.prompt.is_none()
+            && (!viewport::typing(ctx) || viewport::draw_field_has_keyboard(ctx))
+            && !self.windows_open()
+            && !self.projects.is_open();
+        let km = &self.ws.keymap;
+        let held =
+            free && keymap::dispatch::held(ctx, km, keymap::Area::Sketch, Action::SketchLockZ);
+        let actions = match tap {
+            Some(m) if free => keymap::dispatch::tap_actions(km, keymap::Area::Sketch, m),
+            _ => Vec::new(),
+        };
+        let Some(se) = self.ws.active_tab_mut().state.sketch_session.as_mut() else {
+            return;
+        };
+        se.triad.lock_z = held && actions.is_empty();
+        // Ebene und Griff der Triade wechseln nur, wenn sie zu sehen ist; sonst geschieht nichts,
+        // auch kein Eintrag in „Letzte Schritte“ (Gesamtprüfung).
+        for a in actions
+            .into_iter()
+            .filter(|&a| !is_triad_cycle(a) || triad_shown)
+        {
+            commands::run_action(&mut self.ws, a);
+        }
+    }
+
+    /// Ist die Triade der 3D-Skizze im aktiven Tab zu sehen (3D-Skizze und Zeichenwerkzeug,
+    /// [`crate::sketch_triad::triad_visible`])? Nur dann gehören ihr Tab und Alt.
+    fn triad_shown(&self) -> bool {
+        let state = &self.ws.active_tab().state;
+        match (state.sketch_session.as_ref(), state.session_sketch()) {
+            (Some(se), Some(sk)) => crate::sketch_triad::triad_visible(se, sk),
+            _ => false,
         }
     }
 
@@ -1439,6 +1509,14 @@ impl PlanoraApp {
             }
         }
     }
+}
+
+/// Wechselt `a` Ebene oder Griff der Triade (Skizzen 10)?
+fn is_triad_cycle(a: Action) -> bool {
+    matches!(
+        a,
+        Action::SketchTriadCyclePlane | Action::SketchTriadCycleHandle
+    )
 }
 
 /// Rückgängig oder Wiederholen: deren Tasten prüft [`PlanoraApp::undo_keys`] mit eigenen Sperren.
@@ -3113,6 +3191,8 @@ impl eframe::App for PlanoraApp {
         {
             tab.plane_dialog = Some(dialog);
         }
+        // Skizzen 10: „Auf Fläche projizieren“ und „Schnittkurve“ der offenen Skizze.
+        crate::surface_project_dialog::show_open(&ctx, &mut tab.state);
         // Die Fenster „DXF einfügen“ und „SVG einfügen“ nutzen denselben Wahlmodus (sie zeichnen
         // erst danach).
         if tab.plane_dialog.is_none()

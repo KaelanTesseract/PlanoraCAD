@@ -416,7 +416,7 @@ struct Cand {
 
 impl Sketch {
     fn fillet_side(&self, pick: CurvePick) -> Option<Side> {
-        if !pick.at.is_finite() {
+        if !pick.at.is_finite() || self.is_3d_curve(pick.curve) {
             return None;
         }
         let g = self.geom(pick.curve)?;
@@ -444,11 +444,9 @@ impl Sketch {
         let pinned = matches!(self.curve(pick.curve)?.kind, CurveKind::FixedSpline { .. });
         let is_fixed = |p: PointId| {
             pinned
-                || self.constraints().any(|(_, d)| {
-                    d.enabled
-                        && !d.driven
-                        && matches!(d.kind, ConstraintKind::Fixed(q, ..) if q == p)
-                })
+                || self
+                    .constraints()
+                    .any(|(_, d)| d.enabled && !d.driven && d.kind.fixed_point() == Some(p))
         };
         let fixed = ends.map_or([false; 2], |e| [is_fixed(e[0]), is_fixed(e[1])]);
         let exact = matches!(
@@ -841,6 +839,7 @@ impl Sketch {
                 center,
                 ax,
                 ay,
+                az,
                 minor,
                 start,
                 end,
@@ -848,6 +847,7 @@ impl Sketch {
                 center,
                 ax,
                 ay,
+                az,
                 minor,
                 start: swap(start),
                 end: swap(end),
@@ -981,6 +981,7 @@ impl Sketch {
                 s.check_curve(c)?;
             }
             s.refuse_text_parts(&curves, || tr!("sketch-text-no-fillet"))?;
+            s.refuse_3d(&curves)?;
             s.dissolve_patterns_at(&curves);
             if let Some(f0) = equal_to
                 && s.radius(f0)
@@ -1107,6 +1108,7 @@ impl Sketch {
                 s.check_curve(c)?;
             }
             s.refuse_text_parts(&curves, || tr!("sketch-text-no-chamfer"))?;
+            s.refuse_3d(&curves)?;
             s.dissolve_patterns_at(&curves);
             let touch = [
                 s.add_point(plan.touch[0].x, plan.touch[0].y)?,

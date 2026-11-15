@@ -378,7 +378,8 @@ pub fn describe_sketch_change_beside(
     let open_snap = |k: &ConstraintKind| match k {
         ConstraintKind::PointOnCurve(p, _)
         | ConstraintKind::Midpoint(p, _)
-        | ConstraintKind::Fixed(p, ..) => open.contains(p),
+        | ConstraintKind::Fixed(p, ..)
+        | ConstraintKind::Fixed3(p, ..) => open.contains(p),
         _ => false,
     };
     let new_constraints: Vec<&ConstraintKind> = as_

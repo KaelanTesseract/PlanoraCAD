@@ -198,6 +198,8 @@ pub enum PatternProblem {
     FixedSpline,
     /// Eine erzeugte Kurve eines Textes soll Vorlage sein (Spec E).
     Text,
+    /// Eine Vorlage oder Richtungslinie ist eine 3D-Kurve (Skizzen 10).
+    NotIn3d,
 }
 
 impl PatternProblem {
@@ -217,6 +219,7 @@ impl PatternProblem {
             PatternProblem::InstanceOnly => tr!("sketch-pattern-instance-only"),
             PatternProblem::FixedSpline => tr!("sketch-fixed-spline-no-copy"),
             PatternProblem::Text => tr!("sketch-text-no-pattern"),
+            PatternProblem::NotIn3d => tr!("sketch-err-tool-not-in-3d"),
         }
     }
 
@@ -667,6 +670,24 @@ impl Sketch {
         };
         if self.has_glyph(&plan.sources) || glyph_ref {
             return Err(PatternProblem::Text);
+        }
+        let dir_lines: Vec<CurveId> = match plan.kind {
+            PatternKind::Rect { dirs, .. } => dirs
+                .iter()
+                .filter_map(|d| match d {
+                    PatternDir::Line(l) => Some(*l),
+                    _ => None,
+                })
+                .collect(),
+            PatternKind::Circular { .. } => Vec::new(),
+        };
+        if plan
+            .sources
+            .iter()
+            .chain(&dir_lines)
+            .any(|&c| self.is_3d_curve(c))
+        {
+            return Err(PatternProblem::NotIn3d);
         }
         let mut curves: HashSet<CurveId> = HashSet::new();
         let mut points: HashSet<PointId> = HashSet::new();

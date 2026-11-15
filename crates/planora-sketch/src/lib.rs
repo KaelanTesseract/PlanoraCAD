@@ -2,6 +2,7 @@
 
 pub(crate) mod arrangement;
 pub mod constraint;
+pub(crate) mod constraint3d;
 pub(crate) mod curves;
 pub mod data;
 pub mod dimension;
@@ -40,7 +41,7 @@ pub mod transform;
 pub mod triangulate;
 
 pub use constraint::{
-    ConstraintData, ConstraintId, ConstraintKind, Evaluation, FixToggle, LineOrPoints,
+    Axis3, ConstraintData, ConstraintId, ConstraintKind, Evaluation, FixToggle, LineOrPoints,
 };
 pub use curves::{
     conic_apex_ok, conic_nurbs, conic_rho_at, conic_rho_ok, conic_shoulder, control_spline_nurbs,

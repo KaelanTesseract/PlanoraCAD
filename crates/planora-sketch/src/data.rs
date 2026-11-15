@@ -18,13 +18,15 @@ use crate::text_shape::{MAX_TEXT_CHARS, MAX_TEXT_CURVES, TextStyle};
 use planora_i18n::tr;
 use planora_kernel::Arena;
 use planora_math::nurbs::NurbsCurve;
-use planora_math::{DVec2, DVec3, Frame, Tolerance};
+use planora_math::{DVec3, Frame, Tolerance};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PointRecord {
     pub x: usize,
     pub y: usize,
+    /// Index der z-Variable eines 3D-Punkts (Skizzen 10), `None` bei einem 2D-Punkt.
+    pub z: Option<usize>,
     pub construction: bool,
     pub alive: bool,
 }
@@ -36,6 +38,9 @@ pub struct CurveRecord {
     pub centerline: bool,
     /// Kontrollpunktrahmen (ab Format 19, Skizzen 9): nur an Kurven mit Kontrollpolygon.
     pub show_frame: bool,
+    /// Normale einer ebenen Kurve außerhalb der Skizzenebene (Skizzen 10), normiert; `None` in
+    /// der Skizzenebene.
+    pub normal: Option<DVec3>,
     pub alive: bool,
 }
 
@@ -74,6 +79,8 @@ pub struct TextRecord {
     pub flip_h: bool,
     pub flip_v: bool,
     pub placement: TextPlacement,
+    /// Normale der Ebene eines Textes in 3D (Skizzen 10), siehe [`TextData::normal`].
+    pub normal: Option<DVec3>,
     pub curves: Vec<CurveId>,
     pub points: Vec<PointId>,
     pub alive: bool,
@@ -92,6 +99,8 @@ pub struct SketchData {
     pub patterns: Vec<PatternRecord>,
     /// Texte, auch gelöschte (Skizzen 8); leer in Skizzen ohne Text.
     pub texts: Vec<TextRecord>,
+    /// Haken „3D-Skizze“ (Skizzen 10).
+    pub three_d: bool,
 }
 
 /// Größter Grad eines Splines mit Kontrollpunkten in einer Datei (im Skizzenfeld wählbar: 3, 5).
@@ -119,6 +128,37 @@ impl Sketch {
         self.constraints.iter().map(|(_, c)| &c.kind)
     }
 
+    /// Steht 3D-Geometrie in der Skizze (Skizzen 10), auch in einem gelöschten Eintrag: ein
+    /// 3D-Punkt, ein Text in 3D, eine Kurve mit Normale (Ellipsen dazu mit `az`), eine
+    /// Freiformkurve im Raum, eine der Abhängigkeiten `AlongZ`, `Fixed3`, `InPlane`,
+    /// `EllipseAxes3` oder der Haken „3D-Skizze“? Dann braucht die Datei Format 20.
+    pub fn has_3d_entry(&self) -> bool {
+        self.three_d
+            || self.points.iter().any(|(_, p)| p.z.is_some())
+            || self.texts.iter().any(|(_, t)| t.normal.is_some())
+            || self.curves.iter().any(|(_, c)| {
+                c.normal.is_some()
+                    || match &c.kind {
+                        CurveKind::Ellipse { az, .. } | CurveKind::EllipticArc { az, .. } => {
+                            az.is_some()
+                        }
+                        CurveKind::FixedSpline { curve, .. } => {
+                            curve.control_points().iter().any(|q| q.z != 0.0)
+                        }
+                        _ => false,
+                    }
+            })
+            || self.constraint_entries().any(|k| {
+                matches!(
+                    k,
+                    ConstraintKind::AlongZ(_)
+                        | ConstraintKind::Fixed3(..)
+                        | ConstraintKind::InPlane(_)
+                        | ConstraintKind::EllipseAxes3(..)
+                )
+            })
+    }
+
     pub fn to_data(&self) -> SketchData {
         SketchData {
             name: self.name.clone(),
@@ -131,6 +171,7 @@ impl Sketch {
                 .map(|(_, p)| PointRecord {
                     x: p.x,
                     y: p.y,
+                    z: p.z,
                     construction: p.construction,
                     alive: p.alive,
                 })
@@ -143,6 +184,7 @@ impl Sketch {
                     construction: c.construction,
                     centerline: c.centerline,
                     show_frame: c.show_frame,
+                    normal: c.normal,
                     alive: c.alive,
                 })
                 .collect(),
@@ -182,11 +224,13 @@ impl Sketch {
                     flip_h: t.flip_h,
                     flip_v: t.flip_v,
                     placement: t.placement,
+                    normal: t.normal,
                     curves: t.curves.clone(),
                     points: t.points.clone(),
                     alive: t.alive,
                 })
                 .collect(),
+            three_d: self.three_d,
         }
     }
 
@@ -230,7 +274,7 @@ impl Sketch {
         let curve_alive = |c: CurveId| d.curves[c.index()].alive;
 
         for p in &d.points {
-            if !var_ok(p.x) || !var_ok(p.y) {
+            if !var_ok(p.x) || !var_ok(p.y) || p.z.is_some_and(|z| !var_ok(z)) {
                 return Err(bad(tr!("sketch-err-data-point-value")));
             }
         }
@@ -253,14 +297,37 @@ impl Sketch {
             {
                 return Err(bad(tr!("sketch-err-data-show-frame")));
             }
+            check_curve_normal(c)?;
+            // Eine lebende Kurve mit eigener Ebene liegt ganz im Raum: Ein 2D-Punkt (z = 0) und
+            // die gekippte Ebene überbestimmten sie (Skizzen 10).
+            if c.alive && c.normal.is_some() && pts.iter().any(|p| d.points[p.index()].z.is_none())
+            {
+                return Err(bad(tr!("sketch-err-data-curve-normal")));
+            }
+            // Umgekehrt hat ein lebender Bogen oder Ellipsenbogen an einem 3D-Punkt eine eigene
+            // Ebene; ohne sie löste er sich vom Punkt (Gesamtprüfung I1). Kreis und Ellipse hängen
+            // nur an ihrer Mitte und liegen ohne Normale parallel zur Skizzenebene durch sie.
+            let arc = matches!(
+                c.kind,
+                CurveKind::Arc { .. } | CurveKind::EllipticArc { .. }
+            );
+            if c.alive
+                && arc
+                && c.normal.is_none()
+                && pts.iter().any(|p| d.points[p.index()].z.is_some())
+            {
+                return Err(bad(tr!("sketch-err-data-curve-normal")));
+            }
             match &c.kind {
                 CurveKind::Circle { radius, .. } if !var_ok(*radius) => {
                     return Err(bad(tr!("sketch-err-data-circle-value")));
                 }
-                CurveKind::Ellipse { ax, ay, minor, .. }
-                | CurveKind::EllipticArc { ax, ay, minor, .. }
-                    if !(var_ok(*ax) && var_ok(*ay) && var_ok(*minor)) =>
-                {
+                CurveKind::Ellipse {
+                    ax, ay, az, minor, ..
+                }
+                | CurveKind::EllipticArc {
+                    ax, ay, az, minor, ..
+                } if !(var_ok(*ax) && var_ok(*ay) && var_ok(*minor) && az.is_none_or(var_ok)) => {
                     return Err(bad(tr!("sketch-err-data-ellipse-value")));
                 }
                 CurveKind::Spline { points, .. }
@@ -286,8 +353,10 @@ impl Sketch {
                 }
                 // Knoten, Gewichte und Zahlen hat `NurbsCurve::new` schon geprüft.
                 CurveKind::FixedSpline { start, end, curve } => {
+                    // Höhe nur mit 3D-Enden (Skizzen 10: einbezogene Freiformkurven).
                     let flat = curve.control_points().iter().all(|q| q.z == 0.0);
-                    if !flat || (start == end && !curve.is_closed(d.tolerance.linear)) {
+                    let raised = [start, end].iter().all(|p| d.points[p.index()].z.is_some());
+                    if !(flat || raised) || (start == end && !curve.is_closed(d.tolerance.linear)) {
                         return Err(bad(tr!("sketch-err-data-fixed-spline")));
                     }
                     // Eine lebende Kurve: Die Enden liegen auf ihr und sind fest (A3).
@@ -295,13 +364,14 @@ impl Sketch {
                         let (lo, hi) = curve.domain();
                         let holds = |p: PointId, t: f64| {
                             let r = &d.points[p.index()];
-                            let at = DVec2::new(d.vars[r.x], d.vars[r.y]);
-                            at.distance(curve.point(t).truncate()) <= d.tolerance.linear
+                            let z = r.z.map_or(0.0, |i| d.vars[i]);
+                            let at = DVec3::new(d.vars[r.x], d.vars[r.y], z);
+                            at.distance(curve.point(t)) <= d.tolerance.linear
                                 && d.constraints.iter().any(|k| {
                                     k.alive
                                         && k.enabled
                                         && !k.driven
-                                        && matches!(k.kind, ConstraintKind::Fixed(q, ..) if q == p)
+                                        && k.kind.fixed_point() == Some(p)
                                 })
                         };
                         if !(holds(*start, lo) && holds(*end, hi)) {
@@ -346,6 +416,7 @@ impl Sketch {
                 return Err(bad(tr!("sketch-err-data-constraint-deleted")));
             }
         }
+        check_planes(&d)?;
         check_patterns(&d)?;
         check_texts(&d)?;
 
@@ -354,6 +425,7 @@ impl Sketch {
             points.push(PointData {
                 x: p.x,
                 y: p.y,
+                z: p.z,
                 construction: p.construction,
                 alive: p.alive,
             });
@@ -365,6 +437,7 @@ impl Sketch {
                 construction: c.construction,
                 centerline: c.centerline,
                 show_frame: c.show_frame,
+                normal: c.normal,
                 alive: c.alive,
             });
         }
@@ -402,6 +475,7 @@ impl Sketch {
                 flip_h: t.flip_h,
                 flip_v: t.flip_v,
                 placement: t.placement,
+                normal: t.normal,
                 curves: t.curves,
                 points: t.points,
                 alive: t.alive,
@@ -417,6 +491,7 @@ impl Sketch {
         s.constraints = constraints;
         s.patterns = patterns;
         s.texts = texts;
+        s.three_d = d.three_d;
         s.solve_cache = SolveCache::default();
         s.touch_structure();
         // Typen und Entartungen aller Abhängigkeiten (auch gelöschter) wie bei add_constraint
@@ -430,6 +505,7 @@ impl Sketch {
             }
             s.check_types(&c.kind)?;
             if c.alive {
+                check_3d_kind(&s, &c.kind)?;
                 if c.extra.is_none() && s.needs_extra(&c.kind) {
                     return Err(bad(tr!("sketch-err-data-constraint-extra")));
                 }
@@ -446,6 +522,104 @@ impl Sketch {
         Ok((s, dissolved))
     }
 }
+
+/// Eine lebende Abhängigkeit an 3D-Geometrie (Skizzen 10) wie beim Setzen: `AlongZ` nur an
+/// 3D-Geometrie, `Fixed3` an einem 2D-Punkt nur mit z = 0, sonst nur die Arten aus der
+/// Fusion-Liste ([`ConstraintKind::allowed_in_3d`]).
+fn check_3d_kind(s: &Sketch, kind: &ConstraintKind) -> Result<(), SketchError> {
+    let is_3d = s.constraint_is_3d(kind);
+    match kind {
+        ConstraintKind::AlongZ(_) if !is_3d => Err(bad(tr!("sketch-err-along-z-flat"))),
+        ConstraintKind::Fixed3(p, _, _, z) if !s.is_3d_point(*p) && *z != 0.0 => {
+            Err(bad(tr!("sketch-err-z-on-2d-point")))
+        }
+        _ if is_3d && !kind.allowed_in_3d() => Err(bad(tr!("sketch-err-not-in-3d"))),
+        _ => Ok(()),
+    }
+}
+
+/// Prüft die internen `InPlane`-Einträge (Skizzen 10): Jeder lebende ist intern, wirksam und
+/// steht an einem Bogen, einer Ellipse oder einem Ellipsenbogen mit Normale oder an den
+/// Rahmenlinien 0 bis 2 eines lebenden Textes in 3D (Task 13); jede lebende solche Kurve hat
+/// genau einen. Ein lebender Eintrag ohne Normale gäbe leere Zeilen, ein fehlender
+/// ließe die Kurve aus ihrer Ebene. Indizes und Leben der Kurven hat die Prüfung der
+/// Abhängigkeiten schon gesehen.
+fn check_planes(d: &SketchData) -> Result<(), SketchError> {
+    let wrong = || bad(tr!("sketch-err-data-in-plane"));
+    // Rahmenlinien 0 bis 2 lebender Texte in 3D (Task 13): Sie halten die Ecken in der Textebene.
+    let frame_rows: HashSet<CurveId> = d
+        .texts
+        .iter()
+        .filter(|t| t.alive && t.normal.is_some())
+        .filter_map(|t| match t.placement {
+            TextPlacement::Box { lines, .. } => Some(lines),
+            TextPlacement::Path { .. } => None,
+        })
+        .flat_map(|lines| lines[..3].to_vec())
+        .filter(|c| c.index() < d.curves.len())
+        .collect();
+    let wants_plane = |i: CurveId| {
+        let c = &d.curves[i.index()];
+        frame_rows.contains(&i)
+            || (c.normal.is_some()
+                && matches!(
+                    c.kind,
+                    CurveKind::Arc { .. }
+                        | CurveKind::Ellipse { .. }
+                        | CurveKind::EllipticArc { .. }
+                ))
+    };
+    let mut rows: HashSet<CurveId> = HashSet::new();
+    for k in d.constraints.iter().filter(|k| k.alive) {
+        if let ConstraintKind::InPlane(c) = k.kind
+            && (!k.internal || !k.enabled || k.driven || !wants_plane(c) || !rows.insert(c))
+        {
+            return Err(wrong());
+        }
+    }
+    for (i, c) in d.curves.iter().enumerate() {
+        let id = CurveId::from_index(i);
+        if c.alive && wants_plane(id) && !rows.contains(&id) {
+            return Err(wrong());
+        }
+    }
+    Ok(())
+}
+
+/// Prüft die Normale einer Kurve (Skizzen 10): nur an Kreis, Bogen, Ellipse und Ellipsenbogen,
+/// endlich und normiert. Eine Ellipse hat `az` genau dann, wenn sie eine Normale hat.
+fn check_curve_normal(c: &CurveRecord) -> Result<(), SketchError> {
+    let wrong = || bad(tr!("sketch-err-data-curve-normal"));
+    let az = match c.kind {
+        CurveKind::Ellipse { az, .. } | CurveKind::EllipticArc { az, .. } => az,
+        _ => None,
+    };
+    let Some(n) = c.normal else {
+        return if az.is_some() { Err(wrong()) } else { Ok(()) };
+    };
+    let planar = matches!(
+        c.kind,
+        CurveKind::Circle { .. }
+            | CurveKind::Arc { .. }
+            | CurveKind::Ellipse { .. }
+            | CurveKind::EllipticArc { .. }
+    );
+    let ellipse = matches!(
+        c.kind,
+        CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. }
+    );
+    if !planar
+        || !n.is_finite()
+        || (n.length() - 1.0).abs() > NORMAL_UNIT_TOL
+        || ellipse != az.is_some()
+    {
+        return Err(wrong());
+    }
+    Ok(())
+}
+
+/// Spielraum für `|n| = 1` einer gespeicherten Normale (Rundung beim Normieren und Laden).
+const NORMAL_UNIT_TOL: f64 = 1e-9;
 
 /// Prüft die Griffe aller Splines, auch gelöschter Einträge: am Stützpunkt, je Stützpunkt einer, die
 /// Spitze kein Stützpunkt, die Griff-Linie eine Konstruktionslinie von `at` nach `tip`, die nur diesem
@@ -783,6 +957,19 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
         if !alive {
             return Err(bad_text("sketch-err-text-data-deleted"));
         }
+        // Erzeugte Punkte eines Textes in der Skizzenebene bleiben dort (Skizzen 10): Der Text
+        // setzt sie dort. Ein Text in 3D liegt ganz in seiner Ebene: Rahmen und Buchstaben aus
+        // 3D-Punkten in der Ebene durch Ecke 0 mit seiner Normale.
+        match t.normal {
+            None if t.points.iter().any(|p| d.points[p.index()].z.is_some()) => {
+                return Err(bad_text("sketch-err-text-data-3d"));
+            }
+            None => {}
+            Some(n) if !text_in_plane(d, t, n) => {
+                return Err(bad_text("sketch-err-text-data-plane"));
+            }
+            Some(_) => {}
+        }
         let glyph_kinds = t.curves.iter().all(|c| match &d.curves[c.index()].kind {
             CurveKind::Line { .. } => true,
             CurveKind::Conic { rho, .. } => *rho == 0.5,
@@ -840,6 +1027,31 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
     Ok(())
 }
 
+/// Liegt der Text `t` in 3D ganz in seiner Ebene (Skizzen 10)? Die Normale `n` ist endlich und
+/// normiert, der Text steht im Rahmen, und alle Ecken und erzeugten Punkte sind 3D-Punkte in der
+/// Ebene durch Ecke 0 mit der Normale `n` (bis auf die Toleranz der Skizze).
+fn text_in_plane(d: &SketchData, t: &TextRecord, n: DVec3) -> bool {
+    if !(n.is_finite() && (n.length() - 1.0).abs() <= NORMAL_UNIT_TOL) {
+        return false;
+    }
+    let TextPlacement::Box { corners, .. } = t.placement else {
+        return false;
+    };
+    let var = |i: usize| d.vars.get(i).copied();
+    let at = |p: PointId| -> Option<DVec3> {
+        let r = &d.points[p.index()];
+        Some(DVec3::new(var(r.x)?, var(r.y)?, var(r.z?)?))
+    };
+    let Some(origin) = at(corners[0]) else {
+        return false;
+    };
+    let tol = d.tolerance.linear;
+    corners
+        .iter()
+        .chain(&t.points)
+        .all(|&p| at(p).is_some_and(|q| q.is_finite() && (q - origin).dot(n).abs() <= tol))
+}
+
 /// Kurven und Punkte lebender Muster: Vorlagen, Exemplare, Richtungslinien und Mitten.
 fn pattern_parts(d: &SketchData) -> (HashSet<CurveId>, HashSet<PointId>) {
     let mut curves: HashSet<CurveId> = HashSet::new();
@@ -872,6 +1084,8 @@ fn constraint_numbers_ok(k: &ConstraintKind) -> bool {
     let ok = |v: f64| v.is_finite() && v.abs() <= MAX_COORD;
     match k {
         Fixed(_, x, y) => ok(*x) && ok(*y),
+        Fixed3(_, x, y, z) => ok(*x) && ok(*y) && ok(*z),
+        EllipseAxes3(_, x, y, z, m) => ok(*x) && ok(*y) && ok(*z) && ok(*m),
         Distance(_, _, v)
         | DistancePointLine(_, _, v)
         | Radius(_, v)

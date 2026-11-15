@@ -420,7 +420,8 @@ fn smooth_over_a_dense_drag_grid_never_makes_a_cusp() {
             let r = s
                 .drag(&[Drag {
                     point: inner,
-                    target,
+                    target: target.extend(0.0),
+                    plane: None,
                 }])
                 .unwrap();
             assert_eq!(r.status, SolveStatus::Solved, "{target}: {r:?}");

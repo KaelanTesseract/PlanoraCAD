@@ -77,6 +77,16 @@ impl NurbsCurve {
             .fold(f64::INFINITY, f64::min)
     }
 
+    /// Abstand von `p` zur Kurve über Newton vom Parameter `u` aus: immer der Abstand zu einem
+    /// echten Kurvenpunkt, also eine obere Schranke des wahren Abstands. Für lokale Prüfungen
+    /// mit gutem Startwert; ohne Startwert [`NurbsCurve::distance_to`].
+    pub fn distance_near(&self, p: DVec3, u: f64) -> f64 {
+        if !p.is_finite() || !u.is_finite() {
+            return f64::NAN;
+        }
+        self.newton_distance(u, p)
+    }
+
     /// Abstand von `p` zum nächsten Kurvenpunkt, den Newton von `u` aus findet (höchstens
     /// `DISTANCE_NEWTON_STEPS` Schritte); immer der Abstand zu einem echten Kurvenpunkt, also
     /// nie kleiner als der wahre Abstand.

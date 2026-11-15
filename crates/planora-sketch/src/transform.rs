@@ -25,7 +25,7 @@ use crate::model::{CurveId, CurveKind, HandleCurvature, MAX_COORD, PointId, Sket
 use crate::offset::ends_of;
 use crate::text::{TextData, TextId, TextPlacement};
 use planora_i18n::tr;
-use planora_math::DVec2;
+use planora_math::{DQuat, DVec2, DVec3, Tolerance};
 use std::collections::{HashMap, HashSet};
 
 /// Ähnlichkeit: um `base` drehen und strecken, dann um `offset` verschieben.
@@ -61,6 +61,13 @@ impl Similarity {
             && (self.factor - 1.0).abs() <= tol
     }
 
+    /// Eine Richtung im Raum (etwa die Normale eines Textes in 3D) um die z-Achse gedreht, ohne
+    /// Maßstab (Skizzen 10).
+    pub(crate) fn turn(&self, n: DVec3) -> DVec3 {
+        let (sin, cos) = self.angle.sin_cos();
+        DVec3::new(n.x * cos - n.y * sin, n.x * sin + n.y * cos, n.z)
+    }
+
     /// Der Anteil ohne Verschiebung, für Vektoren wie die große Halbachse.
     pub(crate) fn linear(&self, v: DVec2) -> DVec2 {
         let (sin, cos) = self.angle.sin_cos();
@@ -72,6 +79,100 @@ impl Similarity {
             && self.offset.is_finite()
             && self.angle.is_finite()
             && self.factor.is_finite()
+    }
+}
+
+/// Starre Bewegung im Raum der Skizze (Skizzen 10, Verschieben aus der Ebene, Spec Entwurf 8): um
+/// `pivot` mit `rot` drehen, dann um `shift` verschieben. Ohne z-Anteil und ohne Drehung um X
+/// oder Y ist sie eine [`Similarity`] ohne Maßstab ([`Rigid3::planar`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rigid3 {
+    pub rot: DQuat,
+    pub shift: DVec3,
+    pub pivot: DVec3,
+}
+
+impl Rigid3 {
+    /// Die Bewegung, die nichts bewegt, mit dem Drehpunkt `pivot`.
+    pub fn identity(pivot: DVec3) -> Rigid3 {
+        Rigid3 {
+            rot: DQuat::IDENTITY,
+            shift: DVec3::ZERO,
+            pivot,
+        }
+    }
+
+    pub fn apply(&self, p: DVec3) -> DVec3 {
+        self.pivot + self.rot * (p - self.pivot) + self.shift
+    }
+
+    /// Eine Richtung (Normale, Halbachse) gedreht, ohne Verschiebung.
+    pub fn turn(&self, n: DVec3) -> DVec3 {
+        self.rot * n
+    }
+
+    fn is_finite(&self) -> bool {
+        self.rot.is_finite() && self.shift.is_finite() && self.pivot.is_finite()
+    }
+
+    /// Dreht sie um mehr als `tol.angular`?
+    fn rotates(&self, tol: &Tolerance) -> bool {
+        [DVec3::X, DVec3::Y, DVec3::Z]
+            .iter()
+            .any(|&a| (self.rot * a - a).length() > tol.angular)
+    }
+
+    /// Die Bewegung als Ähnlichkeit in der Skizzenebene, wenn sie weder anhebt (|z| bis
+    /// `tol.linear`) noch um X oder Y dreht (bis `tol.angular`); sonst `None`. Der Bezugspunkt
+    /// ist `pivot` in der Draufsicht, der Winkel die Drehung um Z.
+    pub fn planar(&self, tol: &Tolerance) -> Option<Similarity> {
+        let rot = self.rot.normalize();
+        if self.shift.z.abs() > tol.linear || (rot * DVec3::Z - DVec3::Z).length() > tol.angular {
+            return None;
+        }
+        // Reine Drehung um Z: der Winkel unmittelbar aus dem Quaternion (die Einheit ergibt 0).
+        let angle = if rot.x == 0.0 && rot.y == 0.0 {
+            2.0 * rot.z.atan2(rot.w)
+        } else {
+            let x = rot * DVec3::X;
+            x.y.atan2(x.x)
+        };
+        Some(Similarity {
+            base: self.pivot.truncate(),
+            offset: self.shift.truncate(),
+            angle,
+            factor: 1.0,
+        })
+    }
+}
+
+/// Was [`Sketch::move_rigid3`] an den Abhängigkeiten geändert hat.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct MoveReport {
+    /// Entfallene Abhängigkeiten und Maße (2D-only an 3D-Geometrie, nach der Bewegung verletzt,
+    /// Tangenten zwischen gekippten Ebenen); interne zählen nicht.
+    pub removed_constraints: usize,
+    /// 2D-Maße an bewegter Geometrie, die nun in ihrer 3D-Fassung rechnen.
+    pub converted_dimensions: usize,
+    /// Getrennte Ecken wie [`TransformReport::split`].
+    pub split: usize,
+    /// Original und Kopie beim Kopieren.
+    pub copy: Option<CopyMap>,
+}
+
+/// Der Grund, warum eine Bewegung nicht geht, als Fehler mit den Meldungen der Oberfläche.
+pub fn block_error(block: TransformBlock) -> SketchError {
+    match block {
+        TransformBlock::FixedInSet(_) | TransformBlock::BoundToFixed(_) => {
+            SketchError::InvalidInput(tr!("sketch-move-fixed"))
+        }
+        TransformBlock::NothingToDo => SketchError::InvalidInput(tr!("sketch-move-nothing")),
+        TransformBlock::Degenerate => SketchError::Degenerate(tr!("sketch-move-degenerate")),
+        TransformBlock::PatternInstance => {
+            SketchError::InvalidInput(tr!("sketch-move-pattern-instance"))
+        }
+        TransformBlock::TextOnPath => SketchError::InvalidInput(tr!("sketch-text-path-follows")),
+        TransformBlock::NotIn3d => SketchError::InvalidInput(tr!("sketch-err-tool-not-in-3d")),
     }
 }
 
@@ -101,6 +202,9 @@ pub enum TransformBlock {
     /// In der Menge ist Text auf einem Pfad, der Pfad aber nicht: Der Text folgt seinem Pfad
     /// (Spec E, Meldung `sketch-text-path-follows`).
     TextOnPath,
+    /// Skalieren geht nicht mit 3D-Kurven oder 3D-Punkten in der Menge (Skizzen 10, Meldung
+    /// `sketch-err-tool-not-in-3d`); Verschieben und Drehen bleiben, wie sie sind.
+    NotIn3d,
 }
 
 /// Was eine Bewegung an den Abhängigkeiten geändert hat.
@@ -141,11 +245,13 @@ fn map_ids(
         PointOnCurve(a, x) => PointOnCurve(p(*a), c(*x)),
         Horizontal(l) => Horizontal(lp(l)),
         Vertical(l) => Vertical(lp(l)),
+        AlongZ(l) => AlongZ(lp(l)),
         Parallel(a, b) => Parallel(c(*a), c(*b)),
         Perpendicular(a, b) => Perpendicular(c(*a), c(*b)),
         Tangent(a, b) => Tangent(c(*a), c(*b)),
         Equal(a, b) => Equal(c(*a), c(*b)),
         Fixed(a, x, y) => Fixed(p(*a), *x, *y),
+        Fixed3(a, x, y, z) => Fixed3(p(*a), *x, *y, *z),
         Symmetric(a, b, x) => Symmetric(p(*a), p(*b), c(*x)),
         Midpoint(a, x) => Midpoint(p(*a), c(*x)),
         Distance(a, b, v) => Distance(p(*a), p(*b), *v),
@@ -159,6 +265,8 @@ fn map_ids(
         EllipseMinor(x, v) => EllipseMinor(c(*x), *v),
         EllipseAngle(x, v) => EllipseAngle(c(*x), *v),
         EllipticArcEnds(x) => EllipticArcEnds(c(*x)),
+        InPlane(x) => InPlane(c(*x)),
+        EllipseAxes3(x, ax, ay, az, m) => EllipseAxes3(c(*x), *ax, *ay, *az, *m),
         Collinear(a, b) => Collinear(c(*a), c(*b)),
         Smooth(a, pa, b, pb) => Smooth(c(*a), p(*pa), c(*b), p(*pb)),
         DistanceX(a, b, v) => DistanceX(p(*a), p(*b), *v),
@@ -243,9 +351,12 @@ fn is_active(d: &ConstraintData) -> bool {
 fn size_vars(kind: &CurveKind) -> Vec<usize> {
     match *kind {
         CurveKind::Circle { radius, .. } => vec![radius],
-        CurveKind::Ellipse { ax, ay, minor, .. } | CurveKind::EllipticArc { ax, ay, minor, .. } => {
-            vec![ax, ay, minor]
+        CurveKind::Ellipse {
+            ax, ay, az, minor, ..
         }
+        | CurveKind::EllipticArc {
+            ax, ay, az, minor, ..
+        } => [ax, ay, minor].into_iter().chain(az).collect(),
         _ => vec![],
     }
 }
@@ -271,11 +382,13 @@ pub(crate) fn map_curve(
             center,
             ax,
             ay,
+            az,
             minor,
         } => CurveKind::Ellipse {
             center: p(*center),
             ax: v(*ax),
             ay: v(*ay),
+            az: az.map(&v),
             minor: v(*minor),
         },
         CurveKind::Spline { points, handles } => CurveKind::Spline {
@@ -326,6 +439,7 @@ pub(crate) fn map_curve(
             center,
             ax,
             ay,
+            az,
             minor,
             start,
             end,
@@ -333,6 +447,7 @@ pub(crate) fn map_curve(
             center: p(*center),
             ax: v(*ax),
             ay: v(*ay),
+            az: az.map(&v),
             minor: v(*minor),
             start: p(*start),
             end: p(*end),
@@ -434,7 +549,7 @@ impl Sketch {
             .map(|(p, _)| p)
             .collect();
         for d in &active {
-            if let ConstraintKind::Fixed(p, ..) = d.kind {
+            if let ConstraintKind::Fixed(p, ..) | ConstraintKind::Fixed3(p, ..) = d.kind {
                 points.remove(&p);
             }
         }
@@ -764,6 +879,13 @@ impl Sketch {
         self.transform_set(&curves, &points)
     }
 
+    /// Würde die Ähnlichkeit eine 3D-Kurve oder einen 3D-Punkt der Menge skalieren?
+    fn scales_3d(&self, set: &TransformSet, s: &Similarity) -> bool {
+        (s.factor - 1.0).abs() > self.tol.linear
+            && (set.curves.iter().any(|&c| self.is_3d_curve(c))
+                || set.points.iter().any(|&p| self.is_3d_point(p)))
+    }
+
     /// Geht die Bewegung? Dieselbe Rechnung wie [`Sketch::apply_transform`].
     pub fn check_transform(
         &self,
@@ -825,6 +947,9 @@ impl Sketch {
         if set.points.is_empty() {
             return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
         }
+        if self.scales_3d(&set, s) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-tool-not-in-3d")));
+        }
         let texts = self.texts_in_set(&set);
         if self.text_off_its_path(&set, &texts) {
             return Err(SketchError::InvalidInput(tr!("sketch-text-path-follows")));
@@ -854,6 +979,357 @@ impl Sketch {
         })
     }
 
+    /// Verschiebt oder kopiert die Menge starr im Raum (Skizzen 10, Spec Entwurf 8). Ohne z-Anteil
+    /// und ohne Drehung um X oder Y ([`Rigid3::planar`]) ist das genau
+    /// [`Sketch::apply_transform`] bzw. [`Sketch::copy_transformed`]. Sonst:
+    ///
+    /// - Bewegte Punkte werden 3D-Punkte (beim Drehen auch alle Punkte der Kreise, Bögen und
+    ///   Ellipsen der Menge), und Kreise, Bögen, Ellipsen und Text bekommen ihre gedrehte Normale.
+    ///   Linien und Splines folgen ihren Punkten. Was 3D ist, bleibt 3D, auch zurück in der Ebene.
+    /// - Abhängigkeiten, die es an 3D-Geometrie nicht gibt, entfallen (wie beim Einbeziehen, auch
+    ///   waagerechte und senkrechte Maße), ebenso, was danach nicht mehr gilt und nach außen bindet
+    ///   oder vorher galt, und Tangenten zwischen nun gekippten Ebenen. Sie zählen in
+    ///   `removed_constraints`. Abstand, Radius, Durchmesser und Winkel rechnen danach in ihrer
+    ///   3D-Fassung (`converted_dimensions`).
+    /// - Kopieren legt erst eine Kopie an Ort und Stelle an (mit den inneren Abhängigkeiten) und
+    ///   bewegt dann sie; das Original bleibt, wie es ist.
+    ///
+    /// Kein Solver. Bei einem Fehler bleibt die Skizze unverändert.
+    pub fn move_rigid3(
+        &mut self,
+        set: &TransformSet,
+        m: &Rigid3,
+        copy: bool,
+    ) -> Result<MoveReport, SketchError> {
+        if !m.is_finite() || m.rot.length() <= f64::EPSILON {
+            return Err(SketchError::Degenerate(tr!("sketch-err-value-finite")));
+        }
+        if let Some(s) = m.planar(&self.tol) {
+            if copy {
+                let map = self.copy_transformed(set, &s)?;
+                return Ok(MoveReport {
+                    copy: Some(map),
+                    ..MoveReport::default()
+                });
+            }
+            let report = self.apply_transform(set, &s).map_err(block_error)?;
+            return Ok(MoveReport {
+                removed_constraints: report.dropped.len(),
+                split: report.split,
+                ..MoveReport::default()
+            });
+        }
+        let m = Rigid3 {
+            rot: m.rot.normalize(),
+            ..*m
+        };
+        let mut out = self.clone();
+        let mut copied = None;
+        let set = if copy {
+            let full = self.transform_set(&set.curves, &set.points);
+            let map = out.copy_transformed(&full, &Similarity::identity(m.pivot.truncate()))?;
+            let moving = TransformSet {
+                points: full
+                    .points
+                    .iter()
+                    .filter_map(|p| map.points.get(p))
+                    .copied()
+                    .collect(),
+                curves: full
+                    .curves
+                    .iter()
+                    .filter_map(|c| map.curves.get(c))
+                    .copied()
+                    .collect(),
+            };
+            copied = Some(map);
+            moving
+        } else {
+            set.clone()
+        };
+        let mut report = out.move_3d(&set, &m)?;
+        report.copy = copied;
+        *self = out;
+        Ok(report)
+    }
+
+    /// Der Hauptteil von [`Sketch::move_rigid3`] außerhalb der Ebene, auf einer Kopie der Skizze
+    /// (die Aufrufer übernehmen sie nur bei `Ok`).
+    fn move_3d(&mut self, set: &TransformSet, m: &Rigid3) -> Result<MoveReport, SketchError> {
+        use ConstraintKind::*;
+        let fixed = || SketchError::InvalidInput(tr!("sketch-move-fixed"));
+        let far = || SketchError::Degenerate(tr!("sketch-move-degenerate"));
+        let set = self.transform_set(&set.curves, &set.points);
+        if set.points.is_empty() {
+            return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
+        }
+        let (instance_curves, instance_points) = self.instance_parts();
+        if set.curves.iter().any(|c| instance_curves.contains(c))
+            || set.points.iter().any(|p| instance_points.contains(p))
+        {
+            return Err(block_error(TransformBlock::PatternInstance));
+        }
+        let texts = self.texts_in_set(&set);
+        // Text auf einem Pfad bleibt in der Skizzenebene (Task 13).
+        if texts
+            .iter()
+            .any(|&t| matches!(self.texts[t].placement, TextPlacement::Path { .. }))
+        {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-text-path-3d")));
+        }
+        let glyph_points: HashSet<PointId> = texts
+            .iter()
+            .flat_map(|&t| self.texts[t].points.iter().copied())
+            .collect();
+        let glyphs = self.glyph_curves();
+        let rotating = m.rotates(&self.tol);
+        let held = self.held_points();
+        let planar: Vec<CurveId> = set
+            .curves
+            .iter()
+            .copied()
+            .filter(|&c| {
+                !glyphs.contains(&c) && crate::constraint3d::is_planar_kind(&self.curves[c].kind)
+            })
+            .collect();
+        // Feste Kurven drehen ihre Ebene nicht: festgehaltene und einbezogene (deren Halbachsen
+        // `EllipseAxes3` hält).
+        let pinned_axes = |c: CurveId| {
+            self.internal_constraints()
+                .any(|(_, d)| matches!(d.kind, EllipseAxes3(x, ..) if x == c))
+        };
+        for &c in &set.curves {
+            if matches!(self.curves[c].kind, CurveKind::FixedSpline { .. })
+                || (rotating
+                    && planar.contains(&c)
+                    && (self.is_held_curve(c, &held) || pinned_axes(c)))
+            {
+                return Err(fixed());
+            }
+        }
+        let mut targets = Vec::with_capacity(set.points.len());
+        for &p in &set.points {
+            if glyph_points.contains(&p) {
+                continue;
+            }
+            let (from, to) = (self.pos3(p), m.apply(self.pos3(p)));
+            if held.contains(&p) {
+                if from.distance(to) > self.tol.linear {
+                    return Err(fixed());
+                }
+            } else if from != to {
+                if !to.is_finite() || to.abs().max_element() > MAX_COORD {
+                    return Err(far());
+                }
+                targets.push((p, to));
+            }
+        }
+        // Die Buchstabenpunkte gehen starr mit (Gesamtprüfung I2): Das Neusetzen schreibt sie
+        // danach an dieselbe Stelle; ein Text ohne gesetzte Form (Schrift fehlt) oder ohne Lage
+        // bleibt so trotzdem ganz in seiner Ebene.
+        let mut glyph_targets = Vec::with_capacity(glyph_points.len());
+        for &p in &glyph_points {
+            let to = m.apply(self.pos3(p));
+            if !to.is_finite() || to.abs().max_element() > MAX_COORD {
+                return Err(far());
+            }
+            glyph_targets.push((p, to));
+        }
+        if targets.is_empty() && !(rotating && !(planar.is_empty() && texts.is_empty())) {
+            return Err(block_error(TransformBlock::NothingToDo));
+        }
+        let scope = Scope {
+            points: set.points.iter().copied().collect(),
+            curves: set.curves.iter().copied().collect(),
+            moved: targets.iter().map(|t| t.0).collect(),
+        };
+        let severed = self.severed_copy_bindings(&scope);
+        let held_before: HashSet<ConstraintId> = self
+            .constraints()
+            .filter(|&(id, d)| scope.touches(&d.kind) && self.satisfied(id, SETTLE_FACTOR))
+            .map(|(id, _)| id)
+            .collect();
+        // Maße mit 3D-Fassung, die bisher in der Ebene rechnen.
+        let flat_dims: Vec<ConstraintId> = self
+            .constraints()
+            .filter(|(_, d)| {
+                matches!(d.kind, Distance(..) | Radius(..) | Diameter(..) | Angle(..))
+                    && scope.touches(&d.kind)
+                    && !self.constraint_is_3d(&d.kind)
+            })
+            .map(|(id, _)| id)
+            .collect();
+        let mut report = MoveReport {
+            split: self.split_from_outsiders(&scope).map_err(block_error)?,
+            ..MoveReport::default()
+        };
+        // Anheben: die bewegten Punkte, beim Drehen auch die Punkte der ebenen Kurven (sie
+        // bekommen eine eigene Ebene). Die Punkte der Buchstaben folgen unten starr.
+        let mut seeds: Vec<PointId> = targets.iter().map(|t| t.0).collect();
+        if rotating {
+            for &c in &planar {
+                seeds.extend(self.curves[c].kind.points());
+            }
+            for &t in &texts {
+                if let TextPlacement::Box { corners, .. } = self.texts[t].placement {
+                    seeds.extend(corners);
+                }
+            }
+        }
+        seeds.retain(|p| !glyph_points.contains(p));
+        report.removed_constraints += self.lift_for_include(&seeds, None)?;
+        for &(p, to) in &targets {
+            let d = &self.points[p];
+            let (x, y, z) = (d.x, d.y, d.z.ok_or_else(far)?);
+            self.vars[x] = to.x;
+            self.vars[y] = to.y;
+            self.vars[z] = to.z;
+        }
+        for &(p, to) in &glyph_targets {
+            self.promote_to_3d(p);
+            let d = &self.points[p];
+            let (x, y, z) = (d.x, d.y, d.z.ok_or_else(far)?);
+            self.vars[x] = to.x;
+            self.vars[y] = to.y;
+            self.vars[z] = to.z;
+        }
+        if rotating {
+            self.turn_planes(&planar, m);
+        }
+        self.move_texts3(&texts, m, rotating);
+        self.refresh_patterns();
+        self.refresh_texts();
+        // Die Abhängigkeiten an Bewegtem; nur anzeigende und ausgeschaltete bleiben.
+        let touched: Vec<ConstraintId> = self
+            .constraints()
+            .filter(|(_, d)| scope.touches(&d.kind))
+            .map(|(id, _)| id)
+            .collect();
+        for id in touched {
+            let kind = self.constraints[id].kind.clone();
+            let inner = scope.holds_all(&kind);
+            if !inner
+                && self.needs_extra(&kind)
+                && let (Some(var), Some(t)) = (self.constraints[id].extra, self.extra_start(&kind))
+            {
+                self.vars[var] = t;
+            }
+            if !is_active(&self.constraints[id]) {
+                continue;
+            }
+            if severed.contains(&id) || self.tangent_planes_apart(&kind) {
+                self.drop_constraint(id);
+                report.removed_constraints += 1;
+                continue;
+            }
+            if self.satisfied(id, SETTLE_FACTOR) {
+                continue;
+            }
+            if is_position_binding(&kind) && self.binds_to_held(&kind, &held) {
+                return Err(fixed());
+            }
+            if inner && !held_before.contains(&id) {
+                continue;
+            }
+            self.drop_constraint(id);
+            report.removed_constraints += 1;
+        }
+        report.converted_dimensions = flat_dims
+            .iter()
+            .filter(|&&id| {
+                self.constraint(id)
+                    .is_some_and(|d| self.constraint_is_3d(&d.kind))
+            })
+            .count();
+        self.touch_structure();
+        Ok(report)
+    }
+
+    /// Dreht die Ebenen der (angehobenen) Kreise, Bögen und Ellipsen `curves` mit `m`: Normale
+    /// und große Halbachse (geteilte Halbachsen nur einmal). Ohne eigene Normale galt die
+    /// Skizzennormale; Bögen und Ellipsen bekommen dann ihr `InPlane`, Ellipsen ihr `az`.
+    fn turn_planes(&mut self, curves: &[CurveId], m: &Rigid3) {
+        let mut axes: HashMap<usize, usize> = HashMap::new();
+        for &c in curves {
+            let n = self.curves[c].normal.unwrap_or(DVec3::Z);
+            let had_plane = self.curves[c].normal.is_some();
+            let mut kind = self.curves[c].kind.clone();
+            if let CurveKind::Ellipse { ax, ay, az, .. }
+            | CurveKind::EllipticArc { ax, ay, az, .. } = &mut kind
+            {
+                match axes.get(ax) {
+                    Some(&z) => *az = Some(z),
+                    None => {
+                        let a = DVec3::new(
+                            self.vars[*ax],
+                            self.vars[*ay],
+                            az.map_or(0.0, |i| self.vars[i]),
+                        );
+                        let b = m.turn(a);
+                        let z = match *az {
+                            Some(i) => i,
+                            None => self.new_var(0.0),
+                        };
+                        self.vars[*ax] = b.x;
+                        self.vars[*ay] = b.y;
+                        self.vars[z] = b.z;
+                        *az = Some(z);
+                        axes.insert(*ax, z);
+                    }
+                }
+            }
+            if kind != self.curves[c].kind {
+                self.set_curve_kind(c, kind);
+            }
+            self.curves[c].normal = Some(m.turn(n).normalize());
+            let wants_plane = !matches!(self.curves[c].kind, CurveKind::Circle { .. });
+            let has_plane = self
+                .internal_constraints()
+                .any(|(_, d)| d.kind == ConstraintKind::InPlane(c));
+            if wants_plane && !had_plane && !has_plane {
+                self.push_internal(ConstraintKind::InPlane(c));
+            }
+        }
+        self.touch_structure();
+    }
+
+    /// Die Texte `texts` nach einer Bewegung im Raum: Ein Text in der Skizzenebene bekommt die
+    /// Skizzennormale als eigene Ebene samt `InPlane` an den Rahmenlinien (wie
+    /// [`Sketch::add_text_box3`]), beim Drehen dreht die Normale mit. Ein internes Waagerecht,
+    /// Senkrecht oder Entlang Z des Rahmens, das danach nicht mehr gilt, entfällt (wie beim
+    /// Drehen in der Ebene).
+    fn move_texts3(&mut self, texts: &[TextId], m: &Rigid3, rotating: bool) {
+        for &t in texts {
+            let TextPlacement::Box { lines, .. } = self.texts[t].placement else {
+                continue;
+            };
+            let old = self.texts[t].normal;
+            let n = old.unwrap_or(DVec3::Z);
+            let n = if rotating { m.turn(n).normalize() } else { n };
+            self.texts[t].normal = Some(n);
+            if old.is_none() {
+                for &line in &lines[..3] {
+                    self.push_internal(ConstraintKind::InPlane(line));
+                }
+            }
+            let level: Vec<ConstraintId> = self
+                .internal_constraints()
+                .filter(|(_, k)| {
+                    matches!(k.kind, ConstraintKind::Horizontal(LineOrPoints::Line(l))
+                        | ConstraintKind::Vertical(LineOrPoints::Line(l))
+                        | ConstraintKind::AlongZ(LineOrPoints::Line(l)) if lines.contains(&l))
+                })
+                .map(|(id, _)| id)
+                .collect();
+            for id in level {
+                if !self.satisfied(id, SETTLE_FACTOR) {
+                    self.drop_constraint(id);
+                }
+            }
+            self.touch_structure();
+        }
+    }
+
     /// Eine Kopie der Kurve `c` auf den abgebildeten Punkten. `sizes` bildet die Variablen der
     /// Größe ab, damit Bögen derselben Ellipse auch in der Kopie dieselben Halbachsen teilen.
     fn copy_curve_transformed(
@@ -864,14 +1340,19 @@ impl Sketch {
         s: &Similarity,
     ) -> Result<CurveId, SketchError> {
         let (construction, centerline) = (self.curves[c].construction, self.curves[c].centerline);
+        // Eine Kurve in 3D behält ihre Ebene, um z mitgedreht (Skizzen 10).
+        let normal = self.curves[c].normal.map(|n| s.turn(n));
         let id = match self.curves[c].kind.clone() {
             CurveKind::Line { a, b } => self.add_line(points[&a], points[&b])?,
             CurveKind::Circle { center, radius } => {
-                self.add_circle(points[&center], self.vars[radius] * s.factor)?
+                let id = self.add_circle(points[&center], self.vars[radius] * s.factor)?;
+                self.curves[id].normal = normal;
+                id
             }
-            CurveKind::Arc { center, start, end } => {
-                self.add_arc(points[&center], points[&start], points[&end])?
-            }
+            CurveKind::Arc { center, start, end } => match normal {
+                Some(n) => self.add_arc3(points[&center], points[&start], points[&end], n)?,
+                None => self.add_arc(points[&center], points[&start], points[&end])?,
+            },
             CurveKind::Spline { points: list, .. } => {
                 let mapped: Vec<PointId> = list.iter().map(|p| points[p]).collect();
                 self.add_spline(&mapped)?
@@ -893,29 +1374,56 @@ impl Sketch {
             CurveKind::FixedSpline { .. } => {
                 return Err(SketchError::WrongType(tr!("sketch-fixed-spline-no-copy")));
             }
-            ref kind @ (CurveKind::Ellipse { ax, ay, minor, .. }
-            | CurveKind::EllipticArc { ax, ay, minor, .. }) => {
+            ref kind @ (CurveKind::Ellipse {
+                ax, ay, az, minor, ..
+            }
+            | CurveKind::EllipticArc {
+                ax, ay, az, minor, ..
+            }) => {
                 if !sizes.contains_key(&ax) {
                     let (major, small) = self.scaled_axes(ax, ay, minor, s)?;
                     sizes.insert(ax, self.new_var(major.x));
                     sizes.insert(ay, self.new_var(major.y));
                     sizes.insert(minor, self.new_var(small));
                 }
-                let mapped = map_curve(kind, |p| points[&p], |v| sizes[&v]);
-                match mapped {
+                // Ohne Normale entsteht die Kopie in der Skizzenebene, also ohne `az`; mit Normale
+                // behält sie ihren z-Anteil (Drehen um z ändert ihn nicht, Skalieren geht in 3D
+                // nicht).
+                let mut flat = kind.clone();
+                match az {
+                    Some(z) if normal.is_some() => {
+                        let value = self.vars[z];
+                        sizes.entry(z).or_insert_with(|| self.new_var(value));
+                    }
+                    _ => {
+                        if let CurveKind::Ellipse { az, .. } | CurveKind::EllipticArc { az, .. } =
+                            &mut flat
+                        {
+                            *az = None;
+                        }
+                    }
+                }
+                let mapped = map_curve(&flat, |p| points[&p], |v| sizes[&v]);
+                let id = match mapped {
                     CurveKind::EllipticArc {
                         center,
                         ax,
                         ay,
+                        az,
                         minor,
                         start,
                         end,
                     } => {
-                        self.add_elliptic_arc_vars(center, ax, ay, minor, start, end)
+                        self.add_elliptic_arc_vars(center, (ax, ay, az), minor, start, end)?
                             .0
                     }
                     other => self.push_curve(other),
+                };
+                if normal.is_some() {
+                    self.curves[id].normal = normal;
+                    self.push_internal(ConstraintKind::InPlane(id));
                 }
+                id
             }
         };
         self.curves[id].construction = construction;
@@ -1003,6 +1511,7 @@ impl Sketch {
             let copy = TextData {
                 height,
                 placement,
+                normal: d.normal.map(|n| s.turn(n)),
                 curves: d.curves.iter().map(curve).collect::<Result<_, _>>()?,
                 points: d.points.iter().map(point).collect::<Result<_, _>>()?,
                 ..d
@@ -1051,7 +1560,9 @@ impl Sketch {
                 // Musterwerte gehören zum Muster, nicht zur Geometrie: Kopien sind lose.
                 !matches!(
                     d.kind,
-                    ConstraintKind::Fixed(..) | ConstraintKind::PatternValue(..)
+                    ConstraintKind::Fixed(..)
+                        | ConstraintKind::Fixed3(..)
+                        | ConstraintKind::PatternValue(..)
                 ) && d.kind.points().iter().all(|p| points.contains_key(p))
                     && d.kind.curves().iter().all(|c| curves.contains_key(c))
             })
@@ -1099,6 +1610,10 @@ impl Sketch {
                 CurveKind::Ellipse { ax, ay, .. } | CurveKind::EllipticArc { ax, ay, .. } => {
                     DVec2::new(self.vars[ax], self.vars[ay]).length()
                 }
+                // Ein Kreis mit eigener Ebene (Skizzen 10) dreht um seine Mitte mit.
+                CurveKind::Circle { radius, .. } if self.curves[c].normal.is_some() => {
+                    self.vars[radius]
+                }
                 _ => 0.0,
             })
             .fold(0.0, f64::max);
@@ -1129,6 +1644,9 @@ impl Sketch {
             || set.points.iter().any(|p| instance_points.contains(p))
         {
             return Err(TransformBlock::PatternInstance);
+        }
+        if self.scales_3d(&set, s) {
+            return Err(TransformBlock::NotIn3d);
         }
         let texts = self.texts_in_set(&set);
         if self.text_off_its_path(&set, &texts) {
@@ -1177,8 +1695,10 @@ impl Sketch {
                 targets.push((p, to));
             }
         }
+        // Eine Kurve mit eigener Ebene (Skizzen 10) dreht beim Drehen ihre Normale, auch wenn ihre
+        // Mitte stehen bleibt.
         let resizes = set.curves.iter().any(|&c| match self.curves[c].kind {
-            CurveKind::Circle { .. } => stretching,
+            CurveKind::Circle { .. } => stretching || (turning && self.curves[c].normal.is_some()),
             CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => stretching || turning,
             _ => false,
         });
@@ -1200,6 +1720,14 @@ impl Sketch {
         let mut out = self.clone();
         let split = out.split_from_outsiders(&scope)?;
         out.write_positions(&set.curves, &targets, s)?;
+        // Kurven in 3D (Skizzen 10): Ihre Ebene dreht mit, die Normale um z.
+        if turning {
+            for &c in &set.curves {
+                if let Some(n) = out.curves[c].normal {
+                    out.curves[c].normal = Some(s.turn(n));
+                }
+            }
+        }
         // Muster: Abstände mit dem Maßstab, wenn die ganze Vorlage samt Richtungslinien mitgeht;
         // dann die Exemplare an die neue Lage, damit Bindungen an ihnen richtig geprüft werden.
         let mut scaled_spacings = Vec::new();
@@ -1245,6 +1773,10 @@ impl Sketch {
                 return Err(TransformBlock::Degenerate);
             }
             self.texts[t].height = height;
+            // Ein Text in 3D: Die Ebene dreht mit (die internen `InPlane` lesen die Normale).
+            if let Some(n) = self.texts[t].normal {
+                self.texts[t].normal = Some(s.turn(n));
+            }
             let TextPlacement::Box { lines, .. } = self.texts[t].placement else {
                 continue;
             };
@@ -1254,7 +1786,8 @@ impl Sketch {
             let level: Vec<ConstraintId> = self
                 .internal_constraints()
                 .filter(|(_, k)| {
-                    matches!(k.kind, ConstraintKind::Horizontal(LineOrPoints::Line(l)) if l == lines[0])
+                    matches!(k.kind, ConstraintKind::Horizontal(LineOrPoints::Line(l))
+                        | ConstraintKind::Vertical(LineOrPoints::Line(l)) if l == lines[0])
                 })
                 .map(|(id, _)| id)
                 .collect();
@@ -1410,7 +1943,12 @@ impl Sketch {
             if !is_active(&self.constraints[id]) {
                 continue;
             }
-            if severed.contains(&id) || (turning && is_axis_binding(&kind)) {
+            // Eine Tangente zweier Bögen ohne gemeinsames Ende gibt es nur in parallelen Ebenen
+            // (Skizzen 10); dreht eine Normale weg, entfällt sie.
+            if severed.contains(&id)
+                || (turning && is_axis_binding(&kind))
+                || self.tangent_planes_apart(&kind)
+            {
                 self.drop_constraint(id);
                 report.dropped.push(id);
                 continue;
@@ -1436,7 +1974,7 @@ impl Sketch {
         self.constraints()
             .filter(|(_, d)| is_active(d))
             .filter_map(|(_, d)| match d.kind {
-                ConstraintKind::Fixed(p, ..) => Some(p),
+                ConstraintKind::Fixed(p, ..) | ConstraintKind::Fixed3(p, ..) => Some(p),
                 _ => None,
             })
             .collect()
@@ -1476,7 +2014,8 @@ impl Sketch {
     /// Ist die Kurve unter die Toleranz geschrumpft?
     fn collapsed(&self, c: CurveId) -> bool {
         let tol = self.tol.linear;
-        let close = |a: PointId, b: PointId| self.pos(a).distance(self.pos(b)) <= tol;
+        // Im Raum gemessen: Eine Linie entlang Z ist in der Draufsicht kurz, aber nicht entartet.
+        let close = |a: PointId, b: PointId| self.pos3(a).distance(self.pos3(b)) <= tol;
         match self.curves[c].kind {
             CurveKind::Line { a, b } => close(a, b),
             CurveKind::Circle { radius, .. } => self.vars[radius] <= tol,
@@ -1489,6 +2028,7 @@ impl Sketch {
                 minor,
                 start,
                 end,
+                ..
             } => self.axes_collapsed(ax, ay, minor) || close(center, start) || close(center, end),
             CurveKind::Spline { ref points, .. } => points.windows(2).any(|w| close(w[0], w[1])),
             // Kontrollpunkte dürfen zusammenfallen; entartet ist erst die ganze Kurve in einem Punkt.

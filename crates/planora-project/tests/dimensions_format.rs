@@ -343,7 +343,7 @@ fn old_format_4_files_stay_byte_for_byte() {
 
 #[test]
 fn format_5_only_with_dimensions_or_centerlines() {
-    assert_eq!(FORMAT_VERSION, 19); // seit Skizzen 9 (Leinwand)
+    assert_eq!(FORMAT_VERSION, 20); // seit Skizzen 10 (3D-Skizze)
     let (mut d, z) = fixture_document();
     assert_eq!(required_format(&d.snapshot()), 4);
     // Eine einzige Ansicht mit Mittellinien reicht für Format 5; dann trägt jede Ansicht das
@@ -852,15 +852,15 @@ fn centerlines_default_is_false_for_old_files() {
 #[test]
 fn newer_format_is_refused_with_the_clear_text() {
     let good = good();
-    let e = bad(&good.replacen("\"format\": 5", "\"format\": 20", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 20, .. }), "{e:?}");
+    let e = bad(&good.replacen("\"format\": 5", "\"format\": 21", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 21, .. }), "{e:?}");
     let msg = e.to_string();
     assert!(
-        msg.contains("neueren Programmversion") && msg.contains("Format 20"),
+        msg.contains("neueren Programmversion") && msg.contains("Format 21"),
         "{msg}"
     );
-    let e = bad("{\"format\": 20, \"zeichnungen\": [{\"masse\": \"ganz anders\"}]}");
-    assert!(matches!(e, ProjectError::TooNew { found: 20, .. }), "{e:?}");
+    let e = bad("{\"format\": 21, \"zeichnungen\": [{\"masse\": \"ganz anders\"}]}");
+    assert!(matches!(e, ProjectError::TooNew { found: 21, .. }), "{e:?}");
 }
 
 // ---- (h) Versionsspeicher und Autosave ---------------------------------------------------

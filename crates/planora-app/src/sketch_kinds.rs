@@ -72,6 +72,16 @@ pub enum ToolKind {
     /// Fusion „Silhouette“ (Skizzen 6): Umriss einer Fläche in Blickrichtung der Skizzenebene,
     /// über [`crate::state::AppState::silhouette_into_sketch`].
     Silhouette,
+    /// Fusion „3D-Geometrie einbeziehen“ (Skizzen 10, Spec 5): Kanten, Flächen, Ecken,
+    /// Konstruktionsgeometrie und Kurven früherer Skizzen als verknüpfte 3D-Geometrie, über
+    /// [`crate::state::AppState::include_into_sketch`].
+    Include3d,
+    /// Fusion „Auf Fläche projizieren“ (Skizzen 10, Spec 6): Dialog
+    /// [`crate::surface_project_dialog::SurfaceProjectDialog`]; Klicks füllen seine Felder.
+    ProjectToSurface,
+    /// Fusion „Schnittkurve“ (Skizzen 10, Spec 7): Dialog
+    /// [`crate::surface_project_dialog::IntersectionCurveDialog`].
+    IntersectionCurve,
     /// Fusion „Spline durch Stützpunkte“ (Skizzen 7): der bisherige Spline, über `click_spline`.
     SplineFit,
     /// Fusion „Spline mit Kontrollpunkten“ (Skizzen 7): dieselben Klicks, Grad aus
@@ -112,6 +122,9 @@ impl ToolKind {
         ToolKind::Project,
         ToolKind::Intersect,
         ToolKind::Silhouette,
+        ToolKind::Include3d,
+        ToolKind::ProjectToSurface,
+        ToolKind::IntersectionCurve,
         ToolKind::SplineFit,
         ToolKind::SplineControl,
         ToolKind::Conic,
@@ -129,7 +142,9 @@ impl ToolKind {
             | SlotCenterPointArc => Tool::Slot,
             Fillet | ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => Tool::Fillet,
             PatternRect | PatternCircular => Tool::Pattern,
-            Project | Intersect | Silhouette => Tool::ProjectEdge,
+            Project | Intersect | Silhouette | Include3d | ProjectToSurface | IntersectionCurve => {
+                Tool::ProjectEdge
+            }
             SplineFit | SplineControl | Conic => Tool::Spline,
         }
     }
@@ -145,8 +160,8 @@ impl ToolKind {
             Tool::Slot => &all[14..19],
             Tool::Fillet => &all[19..23],
             Tool::Pattern => &all[23..25],
-            Tool::ProjectEdge => &all[25..28],
-            Tool::Spline => &all[28..31],
+            Tool::ProjectEdge => &all[25..31],
+            Tool::Spline => &all[31..34],
             _ => &[],
         }
     }
@@ -175,6 +190,21 @@ impl ToolKind {
         self.tool() == Tool::ProjectEdge
     }
 
+    /// Eine Art mit eigenem Dialog („Auf Fläche projizieren“, „Schnittkurve“, Skizzen 10)? Ihre
+    /// Klicks füllen die Felder des Dialogs ([`crate::surface_project_dialog`]), erst OK legt an.
+    pub fn has_dialog(self) -> bool {
+        matches!(
+            self,
+            ToolKind::ProjectToSurface | ToolKind::IntersectionCurve
+        )
+    }
+
+    /// Wählt die Art in der 3D-Szene wie „3D-Geometrie einbeziehen“ (Ecken, Kanten, Flächen,
+    /// Ebenen, Achsen und Kurven früherer Skizzen)?
+    pub fn picks_like_include(self) -> bool {
+        self == ToolKind::Include3d || self.has_dialog()
+    }
+
     /// Felder je Stufe (Index = Stufe, die letzte Stufe schließt ab, Stufe 0 hat nie welche).
     pub fn stages(self) -> &'static [&'static [FieldKind]] {
         use FieldKind as F;
@@ -199,7 +229,9 @@ impl ToolKind {
             ChamferTwoDistances => &[&[], &[], &[F::Distance, F::Distance2]],
             // Die Muster haben ihren eigenen Ablauf (`sketch_pattern::pattern_fields`).
             PatternRect | PatternCircular => &[&[]],
-            Project | Intersect | Silhouette => &[&[]],
+            Project | Intersect | Silhouette | Include3d | ProjectToSurface | IntersectionCurve => {
+                &[&[]]
+            }
             // Die Klicks sammelt `click_spline`, Eingabe oder Doppelklick schließt ab.
             SplineFit | SplineControl => &[&[]],
             Conic => &[&[], &[], &[], &[F::Rho]],
@@ -243,6 +275,9 @@ impl ToolKind {
             Project => tr!("sketch-tool-project-edge-hint"),
             Intersect => tr!("sketch-kind-intersect-hint"),
             Silhouette => tr!("sketch-kind-silhouette-hint"),
+            Include3d => tr!("sketch-kind-include-3d-hint"),
+            ProjectToSurface => tr!("sketch-kind-project-to-surface-hint"),
+            IntersectionCurve => tr!("sketch-kind-intersection-curve-hint"),
             SplineFit => tr!("sketch-kind-spline-fit-hint"),
             SplineControl => tr!("sketch-kind-spline-control-hint"),
             Conic => tr!("sketch-kind-conic-hint"),
@@ -281,6 +316,9 @@ impl ToolKind {
             Project => Action::SketchProjectEdge,
             Intersect => Action::SketchIntersect,
             Silhouette => Action::SketchSilhouette,
+            Include3d => Action::SketchInclude3d,
+            ProjectToSurface => Action::SketchProjectToSurface,
+            IntersectionCurve => Action::SketchIntersectionCurve,
             SplineFit => Action::SketchSplineFit,
             SplineControl => Action::SketchSplineControl,
             Conic => Action::SketchConic,
@@ -293,7 +331,7 @@ impl ToolKind {
     }
 
     /// Die Meldung, wenn aus den Lagen keine Form wird.
-    fn refusal(self) -> Msg {
+    pub(crate) fn refusal(self) -> Msg {
         use ToolKind::*;
         match self {
             Rect2P | Rect3P | RectCenter => crate::msg!("sketch-err-rect-size"),
@@ -316,6 +354,9 @@ impl ToolKind {
             Project => crate::msg!("sketch-pick-project"),
             Intersect => crate::msg!("sketch-pick-intersect"),
             Silhouette => crate::msg!("sketch-pick-silhouette"),
+            Include3d => crate::msg!("sketch-pick-include-3d"),
+            ProjectToSurface => crate::msg!("sketch-pick-project-to-surface"),
+            IntersectionCurve => crate::msg!("sketch-pick-intersection-curve"),
             SplineFit | SplineControl => crate::msg!("sketch-spline-min"),
             Conic => crate::msg!("sketch-err-conic-apex"),
         }
@@ -327,7 +368,7 @@ impl ToolKind {
     }
 
     /// Ein gerades Langloch?
-    fn is_straight_slot(self) -> bool {
+    pub(crate) fn is_straight_slot(self) -> bool {
         matches!(
             self,
             ToolKind::SlotCenterToCenter | ToolKind::SlotOverall | ToolKind::SlotCenterPoint
@@ -335,7 +376,7 @@ impl ToolKind {
     }
 
     /// Ein Bogenlangloch?
-    fn is_arc_slot(self) -> bool {
+    pub(crate) fn is_arc_slot(self) -> bool {
         matches!(
             self,
             ToolKind::SlotThreePointArc | ToolKind::SlotCenterPointArc
@@ -354,7 +395,7 @@ pub struct ToolKinds {
     pub fillet: ToolKind,
     /// Rechteckige oder Kreisförmige Anordnung (Skizzen 5).
     pub pattern: ToolKind,
-    /// Projizieren, Schneiden oder Silhouette (Skizzen 6).
+    /// Projizieren, Schneiden, Silhouette (Skizzen 6) oder 3D-Geometrie einbeziehen (Skizzen 10).
     pub project: ToolKind,
     /// Art am Spline-Knopf: durch Stützpunkte, mit Kontrollpunkten oder Kegelschnitt (Skizzen 7).
     pub spline: ToolKind,
@@ -395,7 +436,7 @@ impl ToolKinds {
 }
 
 /// Taugt die Kurve für diese Art? Sonst die Meldung dazu.
-fn check_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
+pub(crate) fn check_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
     // Tangential an Buchstaben bände an sie (Spec E).
     if sk.text_of_curve(c).is_some() {
         return Err(crate::msg!("sketch-text-no-dimension"));
@@ -554,7 +595,7 @@ fn through_at_sweep(start: DVec2, end: DVec2, sweep: f64, pointer: DVec2) -> Opt
 /// Mittelbogen eines Bogenlanglochs aus den ersten beiden Lagen und der dritten: `SlotThreePointArc`
 /// Start, Ende, Durchgang; `SlotCenterPointArc` Mitte, Start, Richtung des Endes (gegen den
 /// Uhrzeigersinn).
-fn slot_axis(kind: ToolKind, a: DVec2, b: DVec2, c: DVec2, tol: f64) -> Option<ArcPlan> {
+pub(crate) fn slot_axis(kind: ToolKind, a: DVec2, b: DVec2, c: DVec2, tol: f64) -> Option<ArcPlan> {
     if kind == ToolKind::SlotThreePointArc {
         return shapes::arc_through(a, b, c, tol);
     }
@@ -1204,7 +1245,7 @@ impl SketchSession {
     }
 
     /// Rho des laufenden Kegelschnitts: das getippte, sonst das vorgeschlagene.
-    fn current_rho(&self) -> f64 {
+    pub(crate) fn current_rho(&self) -> f64 {
         self.input.locked(FieldKind::Rho).unwrap_or(self.conic_rho)
     }
 

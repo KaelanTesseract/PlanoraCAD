@@ -1848,6 +1848,20 @@ impl Workspace {
         written
     }
 
+    /// Stellt „Ebenen anzeigen“ und „Drehgriffe anzeigen“ der Triade der 3D-Skizze ein und
+    /// speichert beide gleich in [`Workspace::config_path`] (Felder `show_triad_planes`,
+    /// `show_triad_handles`); `true`, wenn geschrieben wurde. Sonst gilt die Wahl für die
+    /// Sitzung. Die Tabs bekommen den Stand über [`Workspace::sync_triad_view`].
+    pub fn set_triad_view(&mut self, planes: bool, handles: bool) -> bool {
+        self.config.show_triad_planes = planes;
+        self.config.show_triad_handles = handles;
+        Config::update_at(&self.config_path, |c| {
+            c.show_triad_planes = planes;
+            c.show_triad_handles = handles;
+        })
+        .is_ok()
+    }
+
     /// Die Schalter von Skizzenraster und Fang, wenn sie zum Schreiben vorgemerkt sind.
     fn pending_sketch_grid(&self) -> Option<(bool, bool)> {
         self.sketch_grid_pending
@@ -1923,6 +1937,32 @@ impl Workspace {
             let state = &mut self.active_tab_mut().state;
             state.sketch_show_grid = grid;
             state.sketch_snap_grid = snap;
+        }
+    }
+
+    /// Je Bild wie [`Workspace::sync_sketch_grid`] für „Ebenen anzeigen“ und „Drehgriffe
+    /// anzeigen“ der Triade: Hat ein Tab einen Haken im Menü betätigt
+    /// ([`AppState::triad_view_changed`]), wird der Stand gespeichert und in alle Tabs kopiert;
+    /// sonst bekommt der aktive Tab den Stand der Konfiguration.
+    pub fn sync_triad_view(&mut self) {
+        let changed = self.tabs.iter_mut().find_map(|t| {
+            std::mem::take(&mut t.state.triad_view_changed)
+                .then_some((t.state.triad_planes, t.state.triad_handles))
+        });
+        if let Some((planes, handles)) = changed {
+            self.set_triad_view(planes, handles);
+            for tab in &mut self.tabs {
+                tab.state.triad_planes = planes;
+                tab.state.triad_handles = handles;
+            }
+        } else {
+            let (planes, handles) = (
+                self.config.show_triad_planes,
+                self.config.show_triad_handles,
+            );
+            let state = &mut self.active_tab_mut().state;
+            state.triad_planes = planes;
+            state.triad_handles = handles;
         }
     }
 

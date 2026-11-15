@@ -186,7 +186,11 @@ impl Sketch {
         let tol = *self.tolerance();
         let mut out = ExtractedProfiles::default();
         let mut input: Vec<(CurveId, Geom)> = Vec::new();
-        for (id, _) in self.curves().filter(|(_, c)| !c.construction) {
+        // 3D-Kurven ergeben kein Profil, auch wenn sie in der Ebene liegen (Skizzen 10, Spec 3).
+        for (id, _) in self
+            .curves()
+            .filter(|(id, c)| !c.construction && !self.is_3d_curve(*id))
+        {
             match self.arrangement_geom(id) {
                 Ok(Some(g)) => input.push((id, g)),
                 Ok(None) => {}

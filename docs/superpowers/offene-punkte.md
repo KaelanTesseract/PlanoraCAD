@@ -2862,3 +2862,92 @@ Aufbau: Hauptmonitor 5120 × 1440 (Hauptfenster 1920 × 1080), Monitor 2 mit 256
 - **Bestanden:** 3 (Entf, Strg+Z genau einmal, S; 3D-Ansicht zieht sofort nach), 4, 5, 6 (simuliert über eine Lage außerhalb aller Monitore: Baum angedockt, Eintrag bleibt), 8 (Lage auf Monitor 2 nach Loslassen gemerkt), 10 (Umbenennen erscheint mittig über dem Baumfenster, Enter übernimmt), 12 (L, Entf im abgedockten Skizzenfeld), 14, 17 (Strg+Z direkt nach dem Ziehen). Dazu: Verschiebung durch das System wird gemerkt; Alt+F4 dockt ein Feld an bzw. schließt einen Dialog, das Programm läuft weiter; ein abgedockt geschlossener Dialog öffnet wieder abgedockt; Auswahl im abgedockten Baum zeigt Eigenschaften in der abgedockten rechten Spalte.
 - **Nicht geprüft:** 1 (Vorschau mit Griffen, keine Extrusion angelegt), 7 (125 % bräuchte eine Änderung der Windows-Anzeigeeinstellung), 9, 11, 13, 15, 16.
 - **Kein Fehler des Abdockens, aber schon auf master so (Abweichung von Fusion prüfen):** Quader-Dialog reagiert weder angedockt noch abgedockt auf Esc oder Enter; Esc ohne gesetzten Punkt beendet das Linienwerkzeug nicht; das Namensfeld beim Umbenennen bekommt beim Öffnen keinen Tastaturfokus.
+
+## Teilprojekt Skizzen 10 (3D-Skizze)
+
+Stand 2026-11-14 auf dem Zweig `feature/skizzen-3d` (Spec `specs/2026-11-13-skizzen-3d-design.md`, Plan `plans/2026-11-13-skizzen-3d.md`). Tasks 1 bis 20 fertig und einzeln geprüft (Commits ec33609 bis be59793), dazu die Handtest-Runden H (Etappe 2) und H3 (Etappe 3) und der Merge von `master` mit den abdockbaren Dialogen. Doku mit Task 21. Gesamtprüfung des Zweigs, voller Lauf unter Windows und WSL und der Handtest von Etappe 4 stehen noch aus.
+
+### Stand und Geliefertes
+- **Modell und Löser** (Tasks 1 bis 7, `planora-sketch`): Punkte bekommen nur außerhalb der Skizzenebene eine z-Variable, ebene Kurven außerhalb der Ebene eine feste Normale. Die zehn Fusion-Abhängigkeiten und die Maße Abstand, Länge, Radius, Durchmesser und Winkel haben eine 3D-Fassung (`constraint3d.rs`). Profile lassen 3D-Kurven weg; Stutzen, Dehnen, Brechen, Rundung, Fase, Versatz, Muster, Spiegeln und Skalieren lehnen 3D-Kurven ab. Dateiformat 20 nur für Skizzen mit 3D-Inhalt oder Haken „3D-Skizze“.
+- **Triade und Zeichnen** (Tasks 8 bis 14, H): Haken „3D-Skizze“ in der Skizzenpalette, Triade mit Ebenen, Achsen und Drehbögen (`sketch_triad.rs`), Zeichnen aller Arten von Linie, Bogen, Spline, Rechteck, Kreis, Ellipse, Punkt, Text, Kegelschnitt, Polygon und Langloch in der Triadenebene (`sketch_draw3.rs`), Fang, Auswahl und Ziehen in 3D, Anzeige fertiger 3D-Skizzen.
+- **Einbeziehen, Auf Fläche projizieren, Schnittkurve** (Tasks 15 bis 19, H3): `include.rs`, `plane_rect.rs` und `surface_project.rs` in `planora-feature`, Dialog `surface_project_dialog.rs`; Projizieren und Schneiden nehmen 3D-Skizzenkurven als Quelle. Herkunft mit mehreren Stücken als Gruppe.
+- **Verschieben aus der Ebene** (Task 20): Z-Abstand, X- und Y-Winkel mit Z-Pfeil und Drehbögen im Werkzeug „Verschieben/Kopieren“.
+
+### Annahmen der Spec (aus dem Gedächtnis oder aus Foren, nicht in der Fusion-Hilfe belegt)
+- **A1:** Verschieben in Z oder Drehen um X/Y macht Skizzengeometrie zu 3D-Geometrie. Ohne Haken „3D-Skizze“ sind diese Felder und Griffe verborgen.
+- **A2:** Bemaßen in 3D: ausgerichteter Abstand, Länge, Radius, Durchmesser, Winkel zwischen Linien. Waagerechte und senkrechte Maße gibt es an 3D-Geometrie nicht.
+- **A3:** Horizontal/Vertikal macht eine 3D-Linie parallel zur nächstgelegenen Achse X, Y oder Z der Skizze. Für Z gibt es die neue Abhängigkeit „Parallel zu Z“ (`AlongZ`, Datei `entlang_z`); den Namen in Fusion prüfen.
+- **A4:** Eingebezogene Geometrie und „Auf Fläche projizieren“ sind verknüpft wie „Projizieren“ (lila, folgen dem Körper), bei verlorenem Bezug gibt es eine Warnung.
+- **A5:** Stutzen, Dehnen, Brechen, Rundung, Fase, Versatz, Muster, Spiegeln und Skalieren gehen nicht an 3D-Geometrie; ein Hinweis am Zeiger nennt den Grund.
+- **A6:** Der Haken „3D-Skizze“ gehört zur Skizze und wird mit ihr gespeichert. Fällt er, bleibt gezeichnete 3D-Geometrie.
+- **A7:** Fang in 3D an Skizzenpunkten, Kurvenmitten und Körperecken; Fang an einer Körperecke legt einen eingebezogenen, verknüpften Punkt an.
+- **A8:** Der Löser dreht nie die Ebene einer Kurve; nur Drehen (Triade, Verschieben aus der Ebene) ändert die Normale.
+- **A9:** Abhängigkeiten zu Körpergeometrie laufen nur über eingebezogene Kopien. Eine echte Abhängigkeit „Punkt auf Fläche“ gibt es nicht.
+- **Deutsche Namen** „3D-Skizze“, „3D-Geometrie einbeziehen“, „Auf Fläche projizieren“, „Schnittkurve“, „Nächster Punkt“, „Entlang Vektor“, „Triadenausrichtung zurücksetzen“, „Drehgriffe anzeigen“, „Ebenen anzeigen“ sind angenommen.
+
+### Weitere Festlegungen beim Bauen
+- **H/V in 3D heißt achsparallel im Raum** (z-Anteil 0). Eine Rechteckecke mit H/V lässt sich deshalb nicht allein anheben; der Löser meldet den Widerspruch. Wäre Fusion lockerer („parallel in der Draufsicht“), müsste die 3D-Form gelockert werden.
+- **H/V/Parallel zu Z beim Zeichnen** entstehen nur, wenn die Triadenachse mit einer Skizzenachse zusammenfällt (Triade unverdreht oder um Vielfache von 90° gedreht). Winkelfang der Drehbögen 15° (Fangweite 3°), sonst ganze Grad, Strg schaltet den Fang aus.
+- **Tangential Bogen–Bogen ohne gemeinsames Ende** bei nicht parallelen Ebenen wird abgelehnt (falsche Lösungen wären schlimmer).
+- **Ebene Kurve bleibt 2D,** wenn die Triadenebene in der Skizzenebene liegt (Normale ±Z, z ≈ 0), auch um Z gedreht.
+- **Text in 3D:** Rahmen und Schrift liegen in der Triadenebene; „oben“ richtet sich nach der Basis der Ebene (`plane_basis`), nicht nach −Z der Welt. „Text auf Pfad“ nur in 2D.
+- **3D-Rechteck** besteht aus freien Linien ohne Ebenenbindung und kann beim Ziehen kippen.
+- **Bogen „Mittelpunkt“ in 3D** folgt der Zugrichtung wie in Fusion.
+- **Ziehen eines 2D-Punkts** bleibt immer in der Skizzenebene, auch wenn eine Zugebene mitkommt.
+- **Tasten der Triade:** Alt (allein), Tab und Pfeil hoch sind belegbar. „Modifier allein“ (etwa nur Alt) lässt sich nur für die Triadenaktionen erfassen, andere Aktionen lehnen das ab. Tab und Alt gehören der Triade nur, wenn sie zu sehen ist (3D-Skizze und Zeichenwerkzeug); sonst wirken sie wie in 2D und stehen nicht in „Letzte Schritte“.
+- **Konstruktionsebenen als Ziel** von „Auf Fläche projizieren“ und „Schnittkurve“ gelten als unbegrenzt.
+- **Schnittkurve:** Quelle und Ziele sind nur 2D-Skizzenkurven (Fusion: „2D sketch curves“); 3D-Kurven lehnt der Dialog ab.
+- **Annäherungstoleranz** der abgeleiteten 3D-Kurven wurde nicht gelockert; die Beschleunigung reichte.
+- **Kein Treffer beim Neuberechnen** ergibt „Bezug passt nicht mehr“ (die Quelle gibt es ja noch), nicht „verloren“.
+- **Gelöschte Stücke einer Gruppe** bleiben gelöscht, die übrigen folgen nach Index; „Bezug passt nicht mehr“ nur bei anderer Stückzahl.
+- **Eingezogene Ebene:** Mitte wie die Anzeige, Größe aus den Körpern vor der Skizze (damit Neuberechnen dasselbe ergibt).
+- **Drehreihenfolge beim Verschieben aus der Ebene:** erst X, dann Y, dann Z (Rz·Ry·Rx). Die Drehbögen drehen um die schon gedrehten Achsen, damit ein Zug genau seinen Feldwinkel ändert. Gegen Fusion prüfen.
+
+### Grenzen
+- **Ebene Formen in 3D ohne Felder am Zeiger** (außer Rho beim Kegelschnitt); Maße setzt man danach. Das Polygon nimmt in 3D die zuletzt benutzte Seitenzahl, sie lässt sich dort nicht tippen.
+- **2D-Bogen „Mittelpunkt“** läuft immer gegen den Uhrzeigersinn und folgt nicht der Zugrichtung. Alte Abweichung von Fusion aus der Zeit vor Skizzen 10.
+- **Langsames Ziehen bei langen 3D-Ketten:** Der Löser rechnet je Gruppe mit dichten Matrizen (siehe Zahlen).
+- **Neuberechnen:** Die 2-s-Grenze gilt je Gruppe; viele Gruppen können beim Laden im schlimmsten Fall n × 2 s dauern.
+- **Schnittkurve:** Kurven, die sich nur berühren, findet das 64er-Raster der Nullstellensuche womöglich nicht.
+- **Ebenen-Rechteck:** Die Anzeige zählt auch spätere Körper und nutzt die Sehnentoleranz der Einstellungen; das Einbeziehen nimmt nur Körper vor der Skizze und fest 0,01 mm. Die eingezogenen Linien können darum kleiner sein als die angezeigte Ebene.
+- **Konstruktionspunkte** lassen sich nicht einbeziehen und nicht auf Flächen projizieren (es gibt keine Punkt-Features); sie werden angenommen und dann mit Meldung abgelehnt.
+- **Ursprung, Grundebenen und Achsen** lassen sich zum Einbeziehen nur in der Ansicht wählen, nicht im Baum.
+- **Tab bei fokussiertem Feld** wechselt die Felder, nicht den Drehgriff.
+- **Triaden-Tasten** wirken nicht aus abgedockten Fenstern.
+- **Keine Nutzung durch Features:** Sweep, Rohr und Loft gibt es noch nicht; 3D-Kurven sind Bezug, Hilfe und Quelle für „Projizieren“. Isoparametrische Kurve und Gedrehtes Profil fehlen (Skizzen 11).
+
+### Zahlen
+Release-Build:
+- **2D unverändert** (Task 4, Messtest aus `import_perf.rs` gegen `master` 774d393): Einfügen −1,0 %, Ziehen −3,0 % (Ziel: höchstens 5 % langsamer).
+- **3D, 200 verkettete Linien und Bögen mit Abhängigkeiten** (Task 4): Lösen etwa 8,6 s (8,4–8,8 s), Ziehen etwa 35 s (35–37 s). Grund ist die dichte Matrix je Gruppe; bekannt.
+- **Schnittkurve aus zwei Skizzen** (Task 19): 0,055 s (vor der Beschleunigung 3,17 s).
+- **Auf Zylinder projizieren** (Task 19): „Nächster Punkt“ 0,037 s (vorher 0,19 s), „Entlang Vektor“ 0,068 s (vorher 0,48 s).
+- Voller Lauf unter Windows und WSL: steht noch aus.
+
+### In den Einzelprüfungen zurückgestellt (klein)
+- **Löser und Abhängigkeiten:** Winkel-Gradient bei 0° und 180°; Zeilenwahl in `perp2` kann springen; fast parallele Normalen knapp über der Winkeltoleranz ergeben eine fast leere Tangentenzeile; Normale (0,0,−1) an 2D-Punkten hebt den Mittelpunkt auf 3D.
+- **Zeichnen und Fang:** Achsverlängerung erscheint auch bei Punkt- und Ursprungsfang; Klick auf die Triadenachse nahe der Mitte; Fang an einem 3D-Punkt mit z ≈ 0 hebt einen Bogen an (seit der Gesamtprüfung nur noch, wenn die anderen Punkte angehoben werden dürfen); beim 3D-Zug fehlen Anker, Rücksetzen und Griffe; Maßvorschau nur beim Abstand; Doppelklick wählt 3D nur ohne 2D-Treffer.
+- **Einbeziehen:** Eckzuordnung per Heuristik; Achsen und Skizzenkurven ohne Verdeckung vor Flächen; keine Vorab-Markierung; doppeltes Einbeziehen ohne Meldung; zwei getrennte Einbeziehungen derselben Quelle werden eine Gruppe; Netz je Aufruf neu (Leistung bei großen Körpern); entfallene Abhängigkeiten beim Wiederherstellen nicht gezählt.
+- **Auf Fläche und Schnittkurve:** über 2000 Abtastpunkte möglich durch Verfeinern; schmale Rippen können verloren gehen; viele Ausreißer machen die Rechnung wieder quadratisch; Testhilfe `slow_fit_for_tests` ist im Release mitkompiliert; Richtung aus Kante oder Fläche liest den aktuellen Körper.
+- **Verschieben aus der Ebene:** vier Skizzenkopien je Bild; eine angehobene Mustervorlage löst das Muster ohne Meldung auf; der 2D-Pfeilzug rechnet auf z = 0.
+- **Code und Tests:** `sketch_draw3.rs` und `surface_project.rs` sind groß (aufteilen); mehrere Testlücken (Kegelschnitt und feste Splines in 3D, flacher Fall −Z, zusammengesetzte Drehung, Rundlauf Text in ZX) und veraltete Doc-Kommentare.
+
+### Nach der Gesamtprüfung (Festlegungen und bewusst so gelassen)
+- **Ebene Kurve an einem vorhandenen 2D-Punkt** (Kreis, Bogen, Ellipse, Ellipsenbogen in einer eigenen Ebene, auch der 2D-Bogen an einem gefangenen 3D-Punkt): Der Punkt wird angehoben wie über „Deckungsgleich“, samt den ebenen 2D-Kurven an ihm (sie bekommen die Skizzennormale und `InPlane`). Hängen am Punkt 2D-only-Abhängigkeiten (etwa ein waagerechtes Maß), ein Muster oder Griffe, wird abgelehnt („Der Punkt kann nicht 3D werden …“), nichts entsteht. Ein Kreis in der Ebene YZ um eine waagerecht bemaßte Rechteckecke geht also nicht; das Werkzeug bleibt im Zustand vor dem Klick, der Hinweis steht am Zeiger. Beim Laden gilt umgekehrt: Ein Bogen oder Ellipsenbogen an einem 3D-Punkt hat eine Normale.
+- **Nachbar-Startwert beim Projizieren:** Auf Freiformflächen und Auszügen nimmt „Auf Fläche projizieren“ den Treffer, den Newton vom Nachbarpunkt aus findet, und sucht nicht weiter. Das Ergebnis folgt damit einem Blatt; „der nächste Treffer“ (Spec 6) gilt also nicht wörtlich, wenn ein anderes Blatt näher läge. Dialog und Neuberechnung rechnen gleich. Die Naht einer geschlossenen Quelle wird nur verbunden, wenn die Treffer dort zusammenhängen.
+- **Verlorener Bezug einer 3D-Kopie (`restore_copy`):** Die Kurve behält ihre Skizzenkoordinaten und wandert mit der Skizzenebene, wie `restore_projected_curve` bei den ebenen Arten seit Skizzen 6. Die Raumlage zu halten wäre eine zweite Regel für denselben Fall.
+- **Eingezogene Konstruktionsebene, Kante oder Fläche** steht in `dependencies()`: Löschen der Ebene löscht die Skizze, die sie einbezieht, mit (wie bei projizierten Kanten). Fusion würde warnen und die Geometrie stehen lassen; gleicher Folgepunkt wie bei Skizzen 6.
+- **Quellskizze hinter einer Rückrollstelle:** `source_sketch` prüft den Status nicht; eine zurückgerollte Quellskizze würde mit ihrem alten Stand gelesen. Ob das vorkommen kann, hängt an der Rückroll-Logik (Bestand); nicht verfolgt.
+- **Projektion mit Kanten und Ecken als Quelle** rechnet beim Neuberechnen einmal (eine Gruppe); nur eine Skizzenkurve als Herkunft trennt nach Projizieren und Schneiden.
+
+### Handliste für den Nutzer (Prüfung von Hand im echten Fenster, noch offen)
+Release-Build, Fenster 1920 × 1080, mit `tools/gui-drive.ps1`, APPDATA und USERPROFILE auf einen Testordner umgeleitet. Nur nach Dennis’ Go. Etappe 2 und 3 sind zum größten Teil geprüft (siehe Ledger); offen:
+- [ ] 1. **Verschieben aus der Ebene:** Rechteck wählen, „Verschieben/Kopieren“, Z-Abstand 20, X-Winkel 30: Vorschau und Ergebnis stimmen, der Drehbogen ändert genau seinen Feldwinkel, ein Rückgängig-Schritt. Ohne Haken „3D-Skizze“ fehlen die Felder.
+- [ ] 2. **Kopie erstellen in 3D:** innere Abhängigkeiten kommen mit, eine Meldung nennt entfallene.
+- [ ] 3. **Pfeil hoch:** Linie zeichnen, Pfeil hoch halten: der Punkt geht nur noch entlang der Ebenennormale, das Feld zeigt die Höhe.
+- [ ] 4. **Text in 3D:** Text in der Ebene YZ, lesbar und richtig herum?
+- [ ] 5. **Auf Zylinder projizieren** (beide Arten), **Fläche mit Loch**, **Schnittkurve aus zwei Skizzen**, **Quellskizze löschen** (Warnung, Kurve bleibt).
+- [ ] 6. **Abgedockte Dialoge:** Enter und Esc in „Auf Fläche projizieren“ und „Schnittkurve“.
+- [ ] 7. **Kreis „Mittelpunkt“ in 3D** und Bogen „Mittelpunkt“ in beide Richtungen.
+- [ ] 8. **Speichern und Laden** einer 3D-Skizze: alles steht wieder da; eine 2D-Datei bleibt im alten Format.
+- [ ] 9. **2D-Griffe bei hoher Geometrie** in schräger Ansicht: folgen sie dem Zeiger?

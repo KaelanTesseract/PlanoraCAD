@@ -337,7 +337,8 @@ fn dragging_a_polygon_corner_keeps_it_regular() {
         let r = s
             .drag(&[Drag {
                 point: p.points[0],
-                target,
+                target: target.extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert!(!r.drag_failed, "n = {n}: {r:?}");

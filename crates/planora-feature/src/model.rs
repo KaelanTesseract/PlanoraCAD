@@ -2,11 +2,12 @@
 
 use crate::refs::{EdgeRef, FaceRef};
 use crate::step_bodies::{StepShape, StepShapeId};
+use crate::surface_project::{IntersectionSpec, SurfaceProjection};
 use planora_exchange::{ExchangeMesh, MeshTransform};
 use planora_i18n::tr;
 use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
 use planora_math::{DQuat, DVec3, Frame};
-use planora_sketch::{ConstraintId, CurveId, ProfileRef, Sketch};
+use planora_sketch::{ConstraintId, CurveId, PointId, ProfileRef, Sketch};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -76,44 +77,245 @@ pub enum SketchPlane {
     OnPlane(FeatureId),
 }
 
-/// Herkunft einer projizierten Skizzenkurve: eine Körperkante, das `index`-te Stück des Schnitts
-/// der Skizzenebene mit einer Fläche oder das `index`-te Stück des Umrisses einer Fläche (je in
-/// der Reihenfolge des Kernels, siehe [`planora_kernel::section_by_plane`] und
-/// [`planora_kernel::silhouette`]).
+/// Herkunft einer projizierten oder einbezogenen Skizzengeometrie: eine Körperkante, das
+/// `index`-te Stück des Schnitts der Skizzenebene mit einer Fläche oder das `index`-te Stück des
+/// Umrisses einer Fläche (je in der Reihenfolge des Kernels, siehe
+/// [`planora_kernel::section_by_plane`] und [`planora_kernel::silhouette`]); dazu ab Skizzen 10
+/// (Format 20) eingezogene 3D-Geometrie, eine Kurve einer früheren Skizze als Quelle von
+/// Projizieren (Kurve als Ziel) oder Schneiden (Punkte als Ziel), die Projektion auf Flächen und
+/// die Schnittkurve. Quellen mit mehreren Stücken (Flächenrand, Ebene, Schnittpunkte) werden als
+/// Gruppe gespeichert: Alle Kopien der Gruppe tragen dieselbe Herkunft und je einen Stückindex
+/// ([`EdgeCopy::piece`], Spec 10).
 #[derive(Clone, Debug, PartialEq)]
 pub enum CopySource {
     Edge(EdgeRef),
-    Section { face: FaceRef, index: usize },
-    Silhouette { face: FaceRef, index: usize },
+    Section {
+        face: FaceRef,
+        index: usize,
+    },
+    Silhouette {
+        face: FaceRef,
+        index: usize,
+    },
+    /// 3D-Geometrie einbeziehen (Skizzen 10, Spec 5).
+    Include(IncludeRef),
+    /// Kurve einer früheren Skizze: projiziert (Ziel ist eine Kurve, ein Stück) oder geschnitten
+    /// mit der Skizzenebene (Ziele sind Punkte, ein Stück je Schnittpunkt).
+    SketchCurve {
+        sketch: FeatureId,
+        curve: CurveId,
+    },
+    /// Auf Fläche projizieren (Skizzen 10, Spec 6; Rechnung in [`crate::project_to_surface`]).
+    OnSurface(SurfaceProjection),
+    /// Schnittkurve (Skizzen 10, Spec 7; Rechnung in [`crate::intersection_curve`]).
+    Intersection(IntersectionSpec),
+}
+
+/// Ecke eines Körpers: Anfang (`end == false`) oder Ende einer Kante (wie
+/// [`crate::planes::PointRef::EdgeEnd`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VertexRef {
+    pub edge: EdgeRef,
+    pub end: bool,
+}
+
+/// Ebene als Quelle: eine Grundebene oder eine Konstruktionsebene (Feature).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlaneId {
+    Standard(StandardPlane),
+    Feature(FeatureId),
+}
+
+/// Achse als Quelle. Konstruktionsachsen als eigene Features gibt es noch nicht; wählbar sind die
+/// Achsen des Ursprungs.
+pub type AxisId = crate::planes::StdAxis;
+
+/// Konstruktionspunkt als Quelle: das Feature des Punkts. Konstruktionspunkte als eigene
+/// Features gibt es noch nicht; ein solcher Verweis ist darum immer ein verlorener Bezug
+/// (Platzhalter, damit Format 20 die Art schon kennt).
+pub type PointRefId = FeatureId;
+
+/// Was „3D-Geometrie einbeziehen“ einzieht (Skizzen 10, Spec 5).
+#[derive(Clone, Debug, PartialEq)]
+pub enum IncludeRef {
+    /// Eine Körperkante (ein Stück).
+    Edge(EdgeRef),
+    /// Alle Randkanten einer Fläche, äußere Schleife zuerst, je Kante ein Stück.
+    FaceBoundary(FaceRef),
+    /// Eine Körperecke (ein Punkt).
+    Vertex(VertexRef),
+    /// Die vier Randlinien des Rechtecks der Ebene (siehe [`include_plane_half`]).
+    Plane(PlaneId),
+    /// Eine Achse des Ursprungs als Linie (Länge wie bei der Ebene).
+    Axis(AxisId),
+    /// Ein Konstruktionspunkt (Platzhalter, siehe [`PointRefId`]).
+    ConstructionPoint(PointRefId),
+    /// Der Ursprung (ein Punkt).
+    Origin,
+    /// Eine Kurve einer früheren Skizze, in Raumlage.
+    SketchCurve { sketch: FeatureId, curve: CurveId },
+}
+
+/// Halbe Kantenlänge des Rechtecks einer einbezogenen Ebene und halbe Länge einer einbezogenen
+/// Achse: dieselbe Regel wie die gezeichnete Konstruktionsebene der App
+/// ([`crate::plane_rect::plane_half_for_bounds`]), gemessen an den Netzen der Körper `solids`
+/// (feste Sehnentoleranz, damit auch Zylinder und Kugeln passen). *(Annahme: die Randlinien des
+/// angezeigten Rechtecks, Spec 5.)*
+pub fn include_plane_half(solids: &[&Solid]) -> f64 {
+    crate::plane_rect::plane_half_for_bounds(
+        solids
+            .iter()
+            .filter_map(|s| crate::plane_rect::solid_bounds(s)),
+    )
+}
+
+impl IncludeRef {
+    /// Features, aus denen der Verweis stammt und die vor der Skizze stehen müssen (feste
+    /// Verweise wie bei Kanten). Quellskizzen und Konstruktionspunkte sind lose Verweise
+    /// ([`IncludeRef::loose_origin`]).
+    fn origins(&self, out: &mut Vec<FeatureId>) {
+        match self {
+            IncludeRef::Edge(e) | IncludeRef::Vertex(VertexRef { edge: e, .. }) => {
+                out.push(FeatureId(e.a.origin));
+                out.push(FeatureId(e.b.origin));
+            }
+            IncludeRef::FaceBoundary(f) => out.push(FeatureId(f.origin)),
+            IncludeRef::Plane(PlaneId::Feature(id)) => out.push(*id),
+            IncludeRef::Plane(PlaneId::Standard(_))
+            | IncludeRef::Axis(_)
+            | IncludeRef::ConstructionPoint(_)
+            | IncludeRef::Origin
+            | IncludeRef::SketchCurve { .. } => {}
+        }
+    }
+
+    /// Lose Verweise: Quellskizze oder Konstruktionspunkt. Sie stehen nicht in
+    /// [`FeatureKind::dependencies`]: Gelöscht oder hinter die Skizze geschoben ist der Bezug
+    /// verloren (Warnung, Kurve bleibt, Spec 10), kein Fehler.
+    fn loose_origin(&self) -> Option<FeatureId> {
+        match self {
+            IncludeRef::SketchCurve { sketch, .. } => Some(*sketch),
+            IncludeRef::ConstructionPoint(id) => Some(*id),
+            _ => None,
+        }
+    }
 }
 
 impl CopySource {
-    /// Features, aus denen die Herkunft stammt (Marken der Flächen).
+    /// Features, aus denen die Herkunft stammt (Marken der Flächen, Konstruktionsebenen); ohne
+    /// die losen Verweise ([`CopySource::loose_origins`]).
     pub fn origins(&self) -> Vec<FeatureId> {
         match self {
             CopySource::Edge(e) => vec![FeatureId(e.a.origin), FeatureId(e.b.origin)],
             CopySource::Section { face, .. } | CopySource::Silhouette { face, .. } => {
                 vec![FeatureId(face.origin)]
             }
+            CopySource::Include(r) => {
+                let mut out = Vec::new();
+                r.origins(&mut out);
+                out
+            }
+            CopySource::SketchCurve { .. } => Vec::new(),
+            CopySource::OnSurface(p) => {
+                let mut out = Vec::new();
+                p.origins(&mut out);
+                out
+            }
+            CopySource::Intersection(p) => {
+                let mut out = Vec::new();
+                p.origins(&mut out);
+                out
+            }
         }
+    }
+
+    /// Lose Verweise der Herkunft: Quellskizzen (und Konstruktionspunkte). Nur Skizzen vor der
+    /// Skizze im Verlauf gelten ([`sketch_source_allowed`]); sonst ist der Bezug verloren.
+    pub fn loose_origins(&self) -> Vec<FeatureId> {
+        match self {
+            CopySource::Edge(_) | CopySource::Section { .. } | CopySource::Silhouette { .. } => {
+                Vec::new()
+            }
+            CopySource::Include(r) => r.loose_origin().into_iter().collect(),
+            CopySource::SketchCurve { sketch, .. } => vec![*sketch],
+            CopySource::OnSurface(p) => p.loose_origins(),
+            CopySource::Intersection(p) => p.loose_origins(),
+        }
+    }
+
+    /// Eine der Arten aus Skizzen 10 (Format 20)?
+    pub fn is_3d_kind(&self) -> bool {
+        !matches!(
+            self,
+            CopySource::Edge(_) | CopySource::Section { .. } | CopySource::Silhouette { .. }
+        )
     }
 }
 
-/// Projizierte Skizzenkurve mit ihrer Herkunft; die Kurve folgt ihr bei jeder Neuberechnung.
-/// Geht der Bezug verloren, bleibt die Kurve wie gespeichert, und das Skizzen-Feature bekommt
-/// eine Warnung (Skizzen 6, wie Fusion).
+/// Darf die Skizze `source` Quelle der aktiven Skizze `active` sein (Spec 10)? Nur eine Skizze,
+/// die im Verlauf vor der aktiven steht; damit sind gegenseitige Bezüge ausgeschlossen.
+pub fn sketch_source_allowed(doc: &Document, active: FeatureId, source: FeatureId) -> bool {
+    let (Some(a), Some(s)) = (doc.index_of(active), doc.index_of(source)) else {
+        return false;
+    };
+    s < a && matches!(doc.features[s].kind, FeatureKind::Sketch(_))
+}
+
+/// Ziel einer Kopie: eine Skizzenkurve oder (bei Ecken, Konstruktionspunkten, dem Ursprung und
+/// Schnittpunkten) ein fester Skizzenpunkt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyTarget {
+    Curve(CurveId),
+    Point(PointId),
+}
+
+/// Projizierte oder einbezogene Skizzengeometrie mit ihrer Herkunft; sie folgt ihr bei jeder
+/// Neuberechnung. Geht der Bezug verloren, bleibt sie wie gespeichert, und das Skizzen-Feature
+/// bekommt eine Warnung (Skizzen 6, wie Fusion). `piece` ist der Stückindex in einer Gruppe mit
+/// derselben Herkunft (0 bei allen alten Arten, in der Datei dann weggelassen), `of` die beim
+/// Anlegen gespeicherte Stückzahl der Gruppe (1 bei Einzelstücken und allen alten Arten, in der
+/// Datei dann weggelassen). Vom Benutzer gelöschte Stücke fehlen in der Gruppe, zählen aber zu
+/// `of`: Nur eine andere neue Stückzahl ergibt „Bezug passt nicht mehr“.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EdgeCopy {
-    pub curve: CurveId,
+    pub target: CopyTarget,
     pub source: CopySource,
+    pub piece: u32,
+    pub of: u32,
 }
 
 impl EdgeCopy {
+    /// Kopie auf die Kurve `curve` (Stück 0).
+    pub fn new(curve: CurveId, source: CopySource) -> EdgeCopy {
+        EdgeCopy {
+            target: CopyTarget::Curve(curve),
+            source,
+            piece: 0,
+            of: 1,
+        }
+    }
+
+    /// Die Zielkurve; `None` bei einem Punkt als Ziel.
+    pub fn curve(&self) -> Option<CurveId> {
+        match self.target {
+            CopyTarget::Curve(c) => Some(c),
+            CopyTarget::Point(_) => None,
+        }
+    }
+
+    /// Der Zielpunkt; `None` bei einer Kurve als Ziel.
+    pub fn point(&self) -> Option<PointId> {
+        match self.target {
+            CopyTarget::Point(p) => Some(p),
+            CopyTarget::Curve(_) => None,
+        }
+    }
+
     /// Die Kante, wenn die Herkunft eine Kante ist.
     pub fn edge(&self) -> Option<&EdgeRef> {
         match &self.source {
             CopySource::Edge(e) => Some(e),
-            CopySource::Section { .. } | CopySource::Silhouette { .. } => None,
+            _ => None,
         }
     }
 }
@@ -151,7 +353,7 @@ impl SketchFeature {
     /// dem Körper nicht mehr, ihre `Fixed`-Werte bleiben. `true`, wenn es einen Eintrag gab.
     pub fn break_link(&mut self, curve: CurveId) -> bool {
         let before = self.copies.len();
-        self.copies.retain(|c| c.curve != curve);
+        self.copies.retain(|c| c.target != CopyTarget::Curve(curve));
         self.copies.len() != before
     }
 
@@ -160,7 +362,10 @@ impl SketchFeature {
     pub fn prune_copies(&mut self) -> bool {
         let before = self.copies.len();
         let sketch = &self.sketch;
-        self.copies.retain(|c| sketch.curve(c.curve).is_some());
+        self.copies.retain(|c| match c.target {
+            CopyTarget::Curve(id) => sketch.curve(id).is_some(),
+            CopyTarget::Point(id) => sketch.point_xyz(id).is_ok(),
+        });
         self.copies.len() != before
     }
 }

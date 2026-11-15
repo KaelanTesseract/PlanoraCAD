@@ -5,9 +5,10 @@
 //! deckungsgleiche Projektionen nur einmal angelegt (auch gegen schon vorhandene Projektionen).
 
 use crate::sketch_state::{SketchSession, err};
+use planora_feature::CopyTarget;
 use planora_kernel::Curve;
 use planora_math::DVec2;
-use planora_sketch::helpers::ProjectStyle;
+use planora_sketch::helpers::{Included, ProjectStyle};
 use planora_sketch::model::{CurveId, CurveKind, Sketch};
 use std::f64::consts::{FRAC_PI_2, TAU};
 
@@ -105,6 +106,32 @@ impl SketchSession {
             if !out.added.is_empty() {
                 se.solve_checked(sk, prior)?;
             }
+            Ok(out)
+        })
+    }
+}
+
+impl SketchSession {
+    /// Legt die einbezogenen Stücke `pieces` (Skizzen 10, Spec 5) als feste, verknüpfbare
+    /// Geometrie in die Skizze ([`Sketch::add_included`]), alles in einem Schritt; liefert je
+    /// Stück sein Ziel (Kurve oder Punkt) in derselben Reihenfolge. Lehnt die Skizze ein Stück ab,
+    /// bleibt sie unverändert, und die Meldung nennt den Grund.
+    pub fn include_pieces(
+        &mut self,
+        sk: &mut Sketch,
+        pieces: &[Included],
+    ) -> Result<Vec<CopyTarget>, String> {
+        self.atomic(sk, |se, sk, prior| {
+            let mut out = Vec::with_capacity(pieces.len());
+            for g in pieces {
+                let ids = sk.add_included(g).map_err(err)?;
+                match (ids.curves.as_slice(), ids.points.as_slice()) {
+                    ([c], []) => out.push(CopyTarget::Curve(*c)),
+                    ([], [p]) => out.push(CopyTarget::Point(*p)),
+                    _ => return Err(crate::msg!("sketch-include-failed")),
+                }
+            }
+            se.solve_checked(sk, prior)?;
             Ok(out)
         })
     }

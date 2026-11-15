@@ -613,7 +613,8 @@ fn dragging_an_instance_point_moves_the_source_by_the_same_offset() {
     let r = s
         .drag(&[Drag {
             point: q,
-            target: q0 + shift,
+            target: (q0 + shift).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert!(!r.drag_failed, "{r:?}");
@@ -634,7 +635,8 @@ fn dragging_an_instance_point_moves_the_source_by_the_same_offset() {
     // Exemplar um 90° gedreht: Zug nach +x am Exemplar ist Zug nach −y an der Vorlage.
     s.drag(&[Drag {
         point: q,
-        target: at(&s, q) + v(2.0, 0.0),
+        target: (at(&s, q) + v(2.0, 0.0)).extend(0.0),
+        plane: None,
     }])
     .unwrap();
     assert!(close(at(&s, p), p0 + v(0.0, -2.0), 1e-6), "{:?}", at(&s, p));
@@ -1038,7 +1040,12 @@ fn dragging_an_instance_point_of_a_deleted_source_point_moves_the_point_itself()
     let (p, q) = (data.source_points[0], data.instances[0].points[0]);
     s.remove_point(p).unwrap();
     let target = at(&s, q) + v(1.0, 2.0);
-    s.drag(&[Drag { point: q, target }]).unwrap();
+    s.drag(&[Drag {
+        point: q,
+        target: target.extend(0.0),
+        plane: None,
+    }])
+    .unwrap();
     assert!(close(at(&s, q), target, 1e-9), "{:?}", at(&s, q));
 }
 

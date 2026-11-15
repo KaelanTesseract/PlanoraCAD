@@ -1075,6 +1075,15 @@ pub enum HandIcon {
     SketchIntersect,
     /// Silhouette (Skizzen 6): eine Kugel mit dünnem Äquator, ihr Umriss kräftig.
     SketchSilhouette,
+    /// 3D-Geometrie einbeziehen (Skizzen 10): ein Würfel dünn, eine Kante kräftig mit ihren
+    /// Enden als Punkte (sie kommt in die Skizze).
+    SketchInclude3d,
+    /// Auf Fläche projizieren (Skizzen 10): eine gewölbte Fläche dünn, darüber eine dünne
+    /// Strecke mit zwei Pfeilen nach unten; die Kurve auf der Fläche kräftig.
+    SketchProjectToSurface,
+    /// Schnittkurve (Skizzen 10): zwei sich kreuzende Flächen als dünne Vierecke, ihr Schnitt
+    /// kräftig mit den Enden als Punkte.
+    SketchIntersectionCurve,
     /// Spline mit Kontrollpunkten (Skizzen 7): die Kurve kräftig, ihr Kontrollpolygon dünn, die
     /// Kontrollpunkte als Punkte.
     SketchSplineControl,
@@ -1118,6 +1127,9 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::SketchDimension,
     HandIcon::SketchIntersect,
     HandIcon::SketchSilhouette,
+    HandIcon::SketchInclude3d,
+    HandIcon::SketchProjectToSurface,
+    HandIcon::SketchIntersectionCurve,
     HandIcon::SketchSplineControl,
     HandIcon::SketchConic,
     HandIcon::Text,
@@ -1441,6 +1453,75 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             ));
             painter.circle_stroke(c, r, stroke);
         }
+        HandIcon::SketchInclude3d => {
+            // Würfel schräg: Vorder- und Rückseite dünn, verbunden; die obere Vorderkante kräftig.
+            let thin = Stroke::new(1.0, color);
+            let (s, o) = (r * 0.65, vec2(r * 0.35, -r * 0.35));
+            let front = [
+                c + vec2(-s, -s) - o * 0.5,
+                c + vec2(s, -s) - o * 0.5,
+                c + vec2(s, s) - o * 0.5,
+                c + vec2(-s, s) - o * 0.5,
+            ];
+            for k in 0..4 {
+                let (a, b) = (front[k], front[(k + 1) % 4]);
+                seg(painter, [a + o, b + o], thin);
+                seg(painter, [a, a + o], thin);
+                if k != 0 {
+                    seg(painter, [a, b], thin);
+                }
+            }
+            seg(painter, [front[0], front[1]], stroke);
+            painter.circle_filled(front[0], 1.6, color);
+            painter.circle_filled(front[1], 1.6, color);
+        }
+        HandIcon::SketchProjectToSurface => {
+            // Oben die Quelle dünn mit zwei Pfeilen nach unten, unten die Fläche als flacher
+            // Bogen dünn und die aufgelegte Kurve kräftig.
+            let thin = Stroke::new(1.0, color);
+            let arc = |k: i32, lift: f32| {
+                let t = k as f32 / 16.0 * 2.0 - 1.0;
+                c + vec2(t * r * 1.1, r * 0.75 - lift - (1.0 - t * t) * r * 0.45)
+            };
+            let surface: Vec<Pos2> = (0..=16).map(|k| arc(k, 0.0)).collect();
+            painter.add(egui::Shape::line(surface, thin));
+            let on: Vec<Pos2> = (3..=13).map(|k| arc(k, r * 0.2)).collect();
+            painter.add(egui::Shape::line(on, stroke));
+            let y = -r * 0.9;
+            seg(painter, [c + vec2(-r * 0.6, y), c + vec2(r * 0.6, y)], thin);
+            for x in [-r * 0.4, r * 0.4] {
+                let (top, tip) = (c + vec2(x, y + r * 0.2), c + vec2(x, -r * 0.05));
+                seg(painter, [top, tip], thin);
+                seg(painter, [tip, tip + vec2(-r * 0.15, -r * 0.18)], thin);
+                seg(painter, [tip, tip + vec2(r * 0.15, -r * 0.18)], thin);
+            }
+        }
+        HandIcon::SketchIntersectionCurve => {
+            // Zwei schräge Flächen als dünne Vierecke, die sich in der Mitte kreuzen; ihr Schnitt
+            // kräftig.
+            let thin = Stroke::new(1.0, color);
+            let quad = |pts: [Pos2; 4]| {
+                for k in 0..4 {
+                    seg(painter, [pts[k], pts[(k + 1) % 4]], thin);
+                }
+            };
+            quad([
+                c + vec2(-r, -r * 0.2),
+                c + vec2(r * 0.2, -r),
+                c + vec2(r, r * 0.2),
+                c + vec2(-r * 0.2, r),
+            ]);
+            quad([
+                c + vec2(-r, r * 0.35),
+                c + vec2(-r * 0.35, -r * 0.6),
+                c + vec2(r, -r * 0.35),
+                c + vec2(r * 0.35, r * 0.6),
+            ]);
+            let (a, b) = (c + vec2(-r * 0.55, r * 0.05), c + vec2(r * 0.55, -r * 0.05));
+            seg(painter, [a, b], stroke);
+            painter.circle_filled(a, 1.6, color);
+            painter.circle_filled(b, 1.6, color);
+        }
         HandIcon::SketchSplineControl => {
             // Bézier-Stück über vier Kontrollpunkte, dünn verbunden.
             let thin = Stroke::new(1.0, color);
@@ -1661,6 +1742,9 @@ pub fn sketch_kind_icon(kind: crate::sketch_kinds::ToolKind) -> IconSource {
         K::PatternCircular => IconSource::Hand(HandIcon::PatternCircular),
         K::Intersect => IconSource::Hand(HandIcon::SketchIntersect),
         K::Silhouette => IconSource::Hand(HandIcon::SketchSilhouette),
+        K::Include3d => IconSource::Hand(HandIcon::SketchInclude3d),
+        K::ProjectToSurface => IconSource::Hand(HandIcon::SketchProjectToSurface),
+        K::IntersectionCurve => IconSource::Hand(HandIcon::SketchIntersectionCurve),
         K::SplineControl => IconSource::Hand(HandIcon::SketchSplineControl),
         K::Conic => IconSource::Hand(HandIcon::SketchConic),
         _ => sketch_tool_icon(kind.tool()),

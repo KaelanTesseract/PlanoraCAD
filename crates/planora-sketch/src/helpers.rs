@@ -75,6 +75,58 @@ enum Projected {
     },
 }
 
+/// Was [`Sketch::add_included`] angelegt hat: die Kurven und (bei [`Included::Point`]) die
+/// festen Punkte, für die Neuberechnung über [`Sketch::update_included`] und
+/// [`Sketch::update_included_point`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IncludedIds {
+    pub curves: Vec<CurveId>,
+    pub points: Vec<PointId>,
+}
+
+/// Ein einbezogenes Kurvenstück im Raum (Skizzen 10, Spec 5), in Skizzenkoordinaten (also schon
+/// mit `frame.to_local`). Ebene Kurven tragen ihre normierte Normale `n`; Bögen und Ellipsenbögen
+/// laufen gegen den Uhrzeigersinn um `n` von `start` nach `end`. [`include_curve`] dreht eine
+/// Normale mit negativem z-Anteil um (und tauscht dabei die Enden), damit Geometrie in der
+/// Skizzenebene die Skizzennormale hat.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Included {
+    Point(DVec3),
+    Line(DVec3, DVec3),
+    Circle {
+        c: DVec3,
+        r: f64,
+        n: DVec3,
+    },
+    Arc {
+        c: DVec3,
+        start: DVec3,
+        end: DVec3,
+        n: DVec3,
+    },
+    /// Große Halbachse als Vektor (senkrecht zu `n`), kleine Halbachse als Länge; die kleine
+    /// liegt bei `n × â`.
+    Ellipse {
+        c: DVec3,
+        major: DVec3,
+        minor: f64,
+        n: DVec3,
+    },
+    /// Ellipsenbogen wie `Ellipse`, gegen den Uhrzeigersinn um `n` von `start` nach `end`.
+    EllipticArc {
+        c: DVec3,
+        major: DVec3,
+        minor: f64,
+        start: DVec3,
+        end: DVec3,
+        n: DVec3,
+    },
+    /// Freiformkurve im Raum. Fallen Anfang und Ende zusammen, ist sie geschlossen.
+    Spline {
+        curve: NurbsCurve,
+    },
+}
+
 /// Was von einem projizierten Freiformstück übrig bleibt (Spec F2).
 enum FlatNurbs {
     /// Alle Kontrollpunkte auf einer Stelle.
@@ -220,6 +272,36 @@ fn edge_on_line(c: &NurbsCurve, origin: DVec2, dir: DVec2) -> (DVec2, DVec2) {
     }
 }
 
+/// Ein Freiformstück in der Skizzenebene (`z = 0`) als projizierte Kurve: Ein Stück auf einer
+/// Stelle wird abgelehnt, eines auf einer Geraden wird eine Linie, sonst ein fester Spline.
+fn flat_piece(piece: NurbsCurve, tol: f64) -> Result<Projected, SketchError> {
+    match flat_nurbs(&piece, tol) {
+        FlatNurbs::Point => Err(unsupported(tr!("sketch-err-curve-perpendicular"))),
+        FlatNurbs::Line { origin, dir } => {
+            let (p0, p1) = edge_on_line(&piece, origin, dir);
+            if p0.distance(p1) <= tol {
+                return Err(unsupported(tr!("sketch-err-curve-perpendicular")));
+            }
+            Ok(Projected::Line(p0, p1))
+        }
+        FlatNurbs::Free => {
+            let (lo, hi) = piece.domain();
+            let start = piece.point(lo).truncate();
+            let end = piece.point(hi).truncate();
+            Ok(Projected::Spline {
+                start,
+                // Geschlossen heißt in der Skizze: genau ein Punkt.
+                end: if start.distance(end) <= tol {
+                    start
+                } else {
+                    end
+                },
+                curve: piece,
+            })
+        }
+    }
+}
+
 /// Wie [`Sketch::copy_curve`] kopiert: verschoben (lineares Muster), gespiegelt an einer Achse mit
 /// normierter Richtung, oder an die Lage eines Exemplars (Muster aus `pattern.rs`).
 #[derive(Clone, Copy, Debug)]
@@ -273,6 +355,15 @@ impl Sketch {
     }
 
     /// Ein fester Spline ändert sich nicht und hat keine Kopie (Spec E); alle anderen Kurven gehen.
+    /// Lehnt ab, wenn eine der Kurven eine 3D-Kurve ist: Stutzen, Dehnen, Brechen, Runden, Fasen,
+    /// Versatz, Muster, Skalieren und Spiegeln kennen nur die Ebene (Skizzen 10, Spec 3).
+    pub(crate) fn refuse_3d(&self, curves: &[CurveId]) -> Result<(), SketchError> {
+        if curves.iter().any(|&c| self.is_3d_curve(c)) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-tool-not-in-3d")));
+        }
+        Ok(())
+    }
+
     pub(crate) fn refuse_fixed_spline(&self, c: CurveId) -> Result<(), SketchError> {
         if matches!(self.curves[c].kind, CurveKind::FixedSpline { .. }) {
             return Err(SketchError::WrongType(tr!("sketch-fixed-spline-no-copy")));
@@ -349,6 +440,7 @@ impl Sketch {
                 minor,
                 start,
                 end,
+                ..
             } => {
                 let a = DVec2::new(self.vars[ax], self.vars[ay]);
                 // Spiegeln kehrt den Umlaufsinn um; die gespiegelte Ellipse ist dieselbe Menge
@@ -365,6 +457,7 @@ impl Sketch {
                 ax,
                 ay,
                 minor,
+                ..
             } if matches!(how, CopyHow::Pattern(_)) => {
                 let CopyHow::Pattern(t) = how else {
                     unreachable!()
@@ -402,13 +495,17 @@ impl Sketch {
         Ok(id)
     }
 
-    /// Neuer Punkt an `xy` mit der Konstruktionseigenschaft von `like`.
+    /// Neuer Punkt an `xy` mit der Konstruktionseigenschaft von `like`. Ist `like` ein
+    /// 3D-Punkt, wird auch der neue einer, mit dem z von `like` (Kopieren, Muster, Spiegeln).
     pub(crate) fn add_point_like(
         &mut self,
         like: PointId,
         xy: DVec2,
     ) -> Result<PointId, SketchError> {
-        let p = self.add_point(xy.x, xy.y)?;
+        let p = match self.points[like].z {
+            Some(zi) => self.add_point3(xy.extend(self.vars[zi]))?,
+            None => self.add_point(xy.x, xy.y)?,
+        };
         self.points[p].construction = self.points[like].construction;
         Ok(p)
     }
@@ -433,6 +530,8 @@ impl Sketch {
             return Err(SketchError::WrongType(tr!("sketch-err-mirror-line")));
         };
         self.check_copy_sources(curves, || tr!("sketch-text-no-mirror"))?;
+        self.refuse_3d(curves)?;
+        self.refuse_3d(&[axis])?;
         // Auch an einer Buchstabenkurve spiegelt nichts: Die Spiegelung bände an sie.
         self.refuse_text_curves(&[axis], || tr!("sketch-text-no-mirror"))?;
         let all = self.with_handle_family(curves);
@@ -669,6 +768,7 @@ impl Sketch {
                         center: m,
                         ax,
                         ay,
+                        az: None,
                         minor: mi,
                         start: a,
                         end: b,
@@ -778,6 +878,7 @@ impl Sketch {
                 ax,
                 ay,
                 minor,
+                ..
             } => Projected::Ellipse {
                 center: from.pos(center),
                 axis: DVec2::new(from.vars[ax], from.vars[ay]),
@@ -790,6 +891,7 @@ impl Sketch {
                 minor,
                 start,
                 end,
+                ..
             } => Projected::EllipticArc {
                 center: from.pos(center),
                 axis: DVec2::new(from.vars[ax], from.vars[ay]),
@@ -854,6 +956,7 @@ impl Sketch {
                         ax,
                         ay,
                         minor: mi,
+                        ..
                     },
                 ) => {
                     ellipse_values = Some(s.set_ellipse_axes((ax, ay, mi), axis, minor)?);
@@ -874,6 +977,7 @@ impl Sketch {
                         minor: mi,
                         start: a,
                         end: b,
+                        ..
                     },
                 ) => {
                     ellipse_values = Some(s.set_ellipse_axes((ax, ay, mi), axis, minor)?);
@@ -906,45 +1010,448 @@ impl Sketch {
                 }
                 _ => return Err(unsupported(tr!("sketch-err-edge-type-changed"))),
             }
-            // Die Fixwerte und Maße, die `add_projected` angelegt hat, mitführen.
-            let points = s.curves[curve].kind.points();
-            let ids: Vec<_> = s
-                .constraints
-                .iter()
-                .filter(|(_, c)| c.alive)
-                .map(|(id, _)| id)
-                .collect();
-            for id in ids {
-                let new_kind = match s.constraints[id].kind {
-                    ConstraintKind::Fixed(p, ..) if points.contains(&p) => {
-                        let xy = s.pos(p);
-                        Some(ConstraintKind::Fixed(p, xy.x, xy.y))
-                    }
-                    ConstraintKind::Radius(c, _) if c == curve => {
-                        radius_value.map(|r| ConstraintKind::Radius(c, r))
-                    }
-                    ConstraintKind::EllipseMajor(c, _) if c == curve => {
-                        ellipse_values.map(|(l, ..)| ConstraintKind::EllipseMajor(c, l))
-                    }
-                    ConstraintKind::EllipseMinor(c, _) if c == curve => {
-                        ellipse_values.map(|(_, m, _)| ConstraintKind::EllipseMinor(c, m))
-                    }
-                    ConstraintKind::EllipseAngle(c, _) if c == curve => {
-                        ellipse_values.map(|(.., a)| ConstraintKind::EllipseAngle(c, a))
-                    }
-                    _ => None,
-                };
-                if let Some(k) = new_kind {
-                    s.constraints[id].kind = k;
-                }
-            }
-            s.touch_structure();
-            s.refresh_shared_signs(Some(curve));
-            if new_shape {
-                s.reseed_extras(curve);
-            }
+            s.refresh_copy_values(curve, radius_value, ellipse_values, new_shape);
             Ok(())
         })
+    }
+
+    /// Führt nach dem Nachführen der Kurve `curve` die Fixwerte und Maße mit, die
+    /// `add_projected` bzw. `add_included` angelegt haben: `Fixed`/`Fixed3` an ihren Punkten
+    /// auf die neue Lage, `Radius` und `Ellipse…` auf die neuen Werte (falls `Some`). Mit
+    /// `new_shape` (neue Freiformkurve) werden die Zusatzvariablen neu gesetzt.
+    fn refresh_copy_values(
+        &mut self,
+        curve: CurveId,
+        radius_value: Option<f64>,
+        ellipse_values: Option<(f64, f64, f64)>,
+        new_shape: bool,
+    ) {
+        let points = self.curves[curve].kind.points();
+        let ids: Vec<_> = self
+            .constraints
+            .iter()
+            .filter(|(_, c)| c.alive)
+            .map(|(id, _)| id)
+            .collect();
+        for id in ids {
+            let new_kind = match self.constraints[id].kind {
+                ConstraintKind::Fixed(p, ..) if points.contains(&p) => {
+                    let xy = self.pos(p);
+                    Some(ConstraintKind::Fixed(p, xy.x, xy.y))
+                }
+                ConstraintKind::Fixed3(p, ..) if points.contains(&p) => {
+                    let at = self.pos3(p);
+                    Some(ConstraintKind::Fixed3(p, at.x, at.y, at.z))
+                }
+                ConstraintKind::Radius(c, _) if c == curve => {
+                    radius_value.map(|r| ConstraintKind::Radius(c, r))
+                }
+                ConstraintKind::EllipseMajor(c, _) if c == curve => {
+                    ellipse_values.map(|(l, ..)| ConstraintKind::EllipseMajor(c, l))
+                }
+                ConstraintKind::EllipseMinor(c, _) if c == curve => {
+                    ellipse_values.map(|(_, m, _)| ConstraintKind::EllipseMinor(c, m))
+                }
+                ConstraintKind::EllipseAngle(c, _) if c == curve => {
+                    ellipse_values.map(|(.., a)| ConstraintKind::EllipseAngle(c, a))
+                }
+                ConstraintKind::EllipseAxes3(c, ..) if c == curve => self.axes3_of(c),
+                _ => None,
+            };
+            if let Some(k) = new_kind {
+                self.constraints[id].kind = k;
+            }
+        }
+        self.touch_structure();
+        self.refresh_shared_signs(Some(curve));
+        if new_shape {
+            self.reseed_extras(curve);
+        }
+    }
+
+    /// Legt das einbezogene Stück `g` (siehe [`include_curve`]) als feste, verknüpfte Geometrie
+    /// an (Skizzen 10, Spec 5): keine Konstruktion, alle Punkte mit `Fixed3`. Linien werden
+    /// Linien mit 3D-Punkten, Kreise, Bögen, Ellipsen und Ellipsenbögen bekommen ihre Normale
+    /// (Kreise dazu `Radius`), Freiformkurven werden feste Splines im Raum (geschlossen: ein
+    /// Punkt für beide Enden). Liegt alles in der Skizzenebene (z und Normale innerhalb der
+    /// Toleranz), entsteht genau dieselbe 2D-Geometrie wie bei [`Sketch::add_projected_curve`]
+    /// mit `construction: false`. Ein Punkt ergibt einen festen Punkt (in `points`, keine
+    /// Kurve; in der Skizzenebene ein 2D-Punkt mit `Fixed`), Kurven stehen in `curves`. Ellipsen
+    /// und Ellipsenbögen im Raum bekommen die interne Abhängigkeit `EllipseAxes3`, damit sie wie
+    /// eingezogene 2D-Geometrie ganz bestimmt sind. Bei einem Fehler bleibt die Skizze
+    /// unverändert.
+    pub fn add_included(&mut self, g: &Included) -> Result<IncludedIds, SketchError> {
+        if let Included::Point(p) = *g {
+            let linear = self.tolerance().linear;
+            return self.atomically(|s| {
+                let id = if p.z.abs() <= linear {
+                    s.add_fixed_point(p.truncate(), false)?
+                } else {
+                    s.add_fixed_point3(p)?
+                };
+                Ok(IncludedIds {
+                    curves: Vec::new(),
+                    points: vec![id],
+                })
+            });
+        }
+        let curves = |c: CurveId| IncludedIds {
+            curves: vec![c],
+            points: Vec::new(),
+        };
+        if let Some(projected) = self.included_flat(g)? {
+            let style = ProjectStyle {
+                construction: false,
+            };
+            return Ok(curves(self.add_projected(projected, style)?));
+        }
+        let linear = self.tolerance().linear;
+        self.atomically(|s| {
+            let c = match g {
+                Included::Point(_) => unreachable!("handled above"),
+                Included::Line(p0, p1) => {
+                    let a = s.add_fixed_point3(*p0)?;
+                    let b = s.add_fixed_point3(*p1)?;
+                    s.add_line(a, b)?
+                }
+                Included::Circle { c, r, n } => {
+                    let m = s.add_fixed_point3(*c)?;
+                    let id = s.add_circle3(m, *r, *n)?;
+                    s.add_constraint(ConstraintKind::Radius(id, *r))?;
+                    id
+                }
+                Included::Arc { c, start, end, n } => {
+                    let m = s.add_fixed_point3(*c)?;
+                    let a = s.add_fixed_point3(*start)?;
+                    let b = s.add_fixed_point3(*end)?;
+                    s.add_arc3(m, a, b, *n)?
+                }
+                Included::Ellipse { c, major, minor, n } => {
+                    let m = s.add_fixed_point3(*c)?;
+                    let e = s.add_ellipse3(m, *major, *minor, *n)?;
+                    s.pin_axes3(e);
+                    e
+                }
+                Included::EllipticArc {
+                    c,
+                    major,
+                    minor,
+                    start,
+                    end,
+                    n,
+                } => {
+                    let m = s.add_fixed_point3(*c)?;
+                    let a = s.add_fixed_point3(*start)?;
+                    let b = s.add_fixed_point3(*end)?;
+                    let e = s.add_elliptic_arc3(m, *major, *minor, a, b, *n)?;
+                    s.pin_axes3(e);
+                    e
+                }
+                Included::Spline { curve } => {
+                    let first = curve.control_points()[0];
+                    if curve
+                        .control_points()
+                        .iter()
+                        .all(|q| q.distance(first) <= linear)
+                    {
+                        return Err(SketchError::Degenerate(tr!("sketch-err-edge-no-range")));
+                    }
+                    let (lo, hi) = curve.domain();
+                    let (p0, p1) = (curve.point(lo), curve.point(hi));
+                    let a = s.add_fixed_point3(p0)?;
+                    // Geschlossen: ein fester Punkt.
+                    let b = if p0.distance(p1) <= linear {
+                        a
+                    } else {
+                        s.add_fixed_point3(p1)?
+                    };
+                    s.push_curve(CurveKind::FixedSpline {
+                        start: a,
+                        end: b,
+                        curve: Arc::new(curve.clone()),
+                    })
+                }
+            };
+            Ok(curves(c))
+        })
+    }
+
+    /// Führt den einbezogenen Punkt `p` (siehe [`Sketch::add_included`]) an die Lage `at`
+    /// (Skizzenkoordinaten) nach: Ein 2D-Punkt bleibt 2D, solange `at` in der Skizzenebene liegt,
+    /// sonst wird er 3D (`Fixed` wird `Fixed3`); ein 3D-Punkt bleibt 3D. Seine `Fixed`-/`Fixed3`-
+    /// Werte folgen. Beim Anheben entfallen an 3D-Geometrie gesperrte Abhängigkeiten am Punkt
+    /// und an seinen Kurven; geliefert wird ihre Zahl (für eine Warnung, siehe
+    /// [`Sketch::update_included`]). Ein Punkt, den ein Text hält, wird abgelehnt. Bei einem
+    /// Fehler bleibt die Skizze unverändert.
+    pub fn update_included_point(&mut self, p: PointId, at: DVec3) -> Result<usize, SketchError> {
+        self.check_point(p)?;
+        let linear = self.tolerance().linear;
+        self.atomically(|s| {
+            let mut removed = 0;
+            if s.is_3d_point(p) || at.z.abs() > linear {
+                removed = s.lift_for_include(&[p], None)?;
+                s.set_point_xyz(p, at)?;
+            } else {
+                s.set_point_xy(p, at.x, at.y)?;
+            }
+            let pins: Vec<_> = s
+                .constraints
+                .iter()
+                .filter(|(_, d)| d.alive && d.kind.fixed_point() == Some(p))
+                .map(|(id, _)| id)
+                .collect();
+            for id in pins {
+                s.constraints[id].kind = match s.constraints[id].kind {
+                    ConstraintKind::Fixed(..) => {
+                        let xy = s.pos(p);
+                        ConstraintKind::Fixed(p, xy.x, xy.y)
+                    }
+                    _ => {
+                        let q = s.pos3(p);
+                        ConstraintKind::Fixed3(p, q.x, q.y, q.z)
+                    }
+                };
+            }
+            s.touch_structure();
+            Ok(removed)
+        })
+    }
+
+    /// `EllipseAxes3` mit den jetzigen Halbachsen der Ellipse oder des Ellipsenbogens `e`;
+    /// `None` für andere Arten.
+    fn axes3_of(&self, e: CurveId) -> Option<ConstraintKind> {
+        let (CurveKind::Ellipse {
+            ax, ay, az, minor, ..
+        }
+        | CurveKind::EllipticArc {
+            ax, ay, az, minor, ..
+        }) = self.curves[e].kind
+        else {
+            return None;
+        };
+        let z = az.map_or(0.0, |i| self.vars[i]);
+        Some(ConstraintKind::EllipseAxes3(
+            e,
+            self.vars[ax],
+            self.vars[ay],
+            z,
+            self.vars[minor],
+        ))
+    }
+
+    /// Hält die Halbachsen der (geprüften) Ellipse `e` im Raum fest (interne `EllipseAxes3`),
+    /// falls sie noch nicht festgehalten sind.
+    fn pin_axes3(&mut self, e: CurveId) {
+        let pinned = self
+            .internal_constraints()
+            .any(|(_, d)| matches!(d.kind, ConstraintKind::EllipseAxes3(c, ..) if c == e));
+        if !pinned && let Some(k) = self.axes3_of(e) {
+            self.push_internal(k);
+        }
+    }
+
+    /// Führt die einbezogene Kurve `curve` nach (Neuberechnung, Skizzen 10): Sie bekommt Lage,
+    /// Normale und Maße von `g`, behält ihre Id, ihren Stil und alle Abhängigkeiten; die
+    /// `Fixed3`-/`Fixed`- und `Radius`-Werte werden mitgeführt. Eine 2D-Kurve, deren Quelle in
+    /// der Skizzenebene bleibt, wird wie bei [`Sketch::reproject_curve`] nachgeführt; verlässt
+    /// die Quelle die Ebene, werden ihre Punkte 3D (samt den Punkten ebener Kurven an ihnen).
+    /// Dabei ersetzt `EllipseAxes3` die `Ellipse…`-Maße aus der Projektion, Muster an den Punkten
+    /// werden aufgelöst, und vom Benutzer gesetzte Abhängigkeiten, die an 3D-Geometrie gesperrt
+    /// sind, entfallen (Ruling Fix-Runde Task 5); geliefert wird deren Zahl, damit die
+    /// Neuberechnung warnen kann (sonst 0). Eine 3D-Kurve bleibt 3D. Ändert sich die Art (auch
+    /// offen ↔ geschlossen), gibt es `sketch-err-edge-type-changed`; bei jedem Fehler bleibt die
+    /// Skizze unverändert.
+    pub fn update_included(&mut self, curve: CurveId, g: &Included) -> Result<usize, SketchError> {
+        self.check_curve(curve)?;
+        if !self.is_3d_curve(curve)
+            && let Some(projected) = self.included_flat(g)?
+        {
+            self.reproject(curve, projected)?;
+            return Ok(0);
+        }
+        self.atomically(|s| s.update_included_3d(curve, g))
+    }
+
+    /// Der Hauptteil von [`Sketch::update_included`] für Geometrie im Raum.
+    fn update_included_3d(&mut self, curve: CurveId, g: &Included) -> Result<usize, SketchError> {
+        let kind = self.curves[curve].kind.clone();
+        let linear = self.tolerance().linear;
+        let fits = match (g, &kind) {
+            (Included::Line(..), CurveKind::Line { .. })
+            | (Included::Circle { .. }, CurveKind::Circle { .. })
+            | (Included::Arc { .. }, CurveKind::Arc { .. })
+            | (Included::Ellipse { .. }, CurveKind::Ellipse { .. })
+            | (Included::EllipticArc { .. }, CurveKind::EllipticArc { .. }) => true,
+            // Offen ↔ geschlossen zählt als Artänderung (wie bei `reproject`).
+            (Included::Spline { curve: new }, CurveKind::FixedSpline { start, end, .. }) => {
+                let (lo, hi) = new.domain();
+                (new.point(lo).distance(new.point(hi)) <= linear) == (start == end)
+            }
+            _ => false,
+        };
+        if !fits {
+            return Err(unsupported(tr!("sketch-err-edge-type-changed")));
+        }
+        let removed = self.lift_for_include(&kind.points(), Some(curve))?;
+        let mut radius_value = None;
+        let mut new_shape = false;
+        match (g, kind) {
+            (Included::Line(p0, p1), CurveKind::Line { a, b }) => {
+                self.set_point_xyz(a, *p0)?;
+                self.set_point_xyz(b, *p1)?;
+            }
+            (Included::Circle { c, r, n }, CurveKind::Circle { center, radius }) => {
+                finite(*r, || tr!("sketch-err-what-radius"))?;
+                if *r <= linear {
+                    return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
+                }
+                self.set_curve_normal(curve, *n)?;
+                self.set_point_xyz(center, *c)?;
+                self.vars[radius] = *r;
+                radius_value = Some(*r);
+            }
+            (Included::Arc { c, start, end, n }, CurveKind::Arc { .. }) => {
+                self.set_curve_normal(curve, *n)?;
+                let CurveKind::Arc {
+                    center,
+                    start: a,
+                    end: b,
+                } = self.curves[curve].kind
+                else {
+                    unreachable!("type was checked")
+                };
+                self.set_point_xyz(center, *c)?;
+                self.set_point_xyz(a, *start)?;
+                self.set_point_xyz(b, *end)?;
+            }
+            (
+                Included::Ellipse { c, major, minor, n }
+                | Included::EllipticArc {
+                    c, major, minor, n, ..
+                },
+                _,
+            ) => {
+                self.set_curve_normal(curve, *n)?;
+                let unit = self.curve_normal(curve);
+                let a = self.ellipse_axis_in_plane(*major, *minor, unit)?;
+                // `set_curve_normal` hat der großen Halbachse ihr `az` gegeben.
+                let (CurveKind::Ellipse {
+                    center,
+                    ax,
+                    ay,
+                    az: Some(az),
+                    minor: mi,
+                }
+                | CurveKind::EllipticArc {
+                    center,
+                    ax,
+                    ay,
+                    az: Some(az),
+                    minor: mi,
+                    ..
+                }) = self.curves[curve].kind
+                else {
+                    unreachable!("a 3D ellipse has az")
+                };
+                (self.vars[ax], self.vars[ay], self.vars[az], self.vars[mi]) =
+                    (a.x, a.y, a.z, *minor);
+                self.set_point_xyz(center, *c)?;
+                if let (
+                    Included::EllipticArc { start, end, .. },
+                    CurveKind::EllipticArc {
+                        start: p, end: q, ..
+                    },
+                ) = (g, &self.curves[curve].kind)
+                {
+                    let (p, q) = (*p, *q);
+                    self.set_point_xyz(p, *start)?;
+                    self.set_point_xyz(q, *end)?;
+                }
+                // Eine angehobene 2D-Ellipse wird ganz bestimmt wie eine eingezogene.
+                self.pin_axes3(curve);
+            }
+            (Included::Spline { curve: new }, CurveKind::FixedSpline { start, end, .. }) => {
+                let (lo, hi) = new.domain();
+                self.set_point_xyz(start, new.point(lo))?;
+                if start != end {
+                    self.set_point_xyz(end, new.point(hi))?;
+                }
+                self.curves[curve].kind = CurveKind::FixedSpline {
+                    start,
+                    end,
+                    curve: Arc::new(new.clone()),
+                };
+                new_shape = true;
+            }
+            _ => return Err(unsupported(tr!("sketch-err-edge-type-changed"))),
+        }
+        self.refresh_copy_values(curve, radius_value, None, new_shape);
+        Ok(removed)
+    }
+
+    /// Das einbezogene Stück `g` als projizierte 2D-Kurve, wenn es ganz in der Skizzenebene
+    /// liegt (z und bei ebenen Kurven die Normale innerhalb der Toleranz); sonst `None`. Ein
+    /// flaches Freiformstück wird eingeordnet wie bei der Projektion (Linie oder fester Spline,
+    /// ein Punkt ist ein Fehler).
+    fn included_flat(&self, g: &Included) -> Result<Option<Projected>, SketchError> {
+        let tol = *self.tolerance();
+        let flat = |p: &DVec3| p.z.abs() <= tol.linear;
+        let up = |n: &DVec3| {
+            let n = n.normalize_or_zero();
+            n.z > 0.0 && n.x.abs() <= tol.angular && n.y.abs() <= tol.angular
+        };
+        let xy = |p: &DVec3| p.truncate();
+        Ok(Some(match g {
+            Included::Line(a, b) if flat(a) && flat(b) => Projected::Line(xy(a), xy(b)),
+            Included::Circle { c, r, n } if flat(c) && up(n) => Projected::Circle {
+                center: xy(c),
+                radius: *r,
+            },
+            Included::Arc { c, start, end, n } if flat(c) && flat(start) && flat(end) && up(n) => {
+                Projected::Arc {
+                    center: xy(c),
+                    start: xy(start),
+                    end: xy(end),
+                }
+            }
+            Included::Ellipse { c, major, minor, n } if flat(c) && flat(major) && up(n) => {
+                Projected::Ellipse {
+                    center: xy(c),
+                    axis: xy(major),
+                    minor: *minor,
+                }
+            }
+            Included::EllipticArc {
+                c,
+                major,
+                minor,
+                start,
+                end,
+                n,
+            } if flat(c) && flat(major) && flat(start) && flat(end) && up(n) => {
+                Projected::EllipticArc {
+                    center: xy(c),
+                    axis: xy(major),
+                    minor: *minor,
+                    start: xy(start),
+                    end: xy(end),
+                }
+            }
+            Included::Spline { curve } if curve.control_points().iter().all(flat) => {
+                let piece = curve
+                    .transformed(|p| p.truncate().extend(0.0))
+                    .map_err(freeform_failed)?;
+                flat_piece(piece, tol.linear)?
+            }
+            _ => return Ok(None),
+        }))
+    }
+
+    /// Neuer 3D-Punkt an `p` mit `Fixed3` (keine Konstruktion).
+    fn add_fixed_point3(&mut self, p: DVec3) -> Result<PointId, SketchError> {
+        let id = self.add_point3(p)?;
+        self.add_constraint(ConstraintKind::Fixed3(id, p.x, p.y, p.z))?;
+        Ok(id)
     }
 
     /// Setzt die Halbachsen-Variablen `(ax, ay, minor)` einer Ellipse oder eines
@@ -1061,34 +1568,7 @@ impl Sketch {
                 major,
                 minor,
             } => self.project_ellipse_piece(curve, (cf, *major, *minor), t0, t1, full),
-            Curve::Nurbs(c) => {
-                let piece = self.project_nurbs(c, t0, t1)?;
-                match flat_nurbs(&piece, tol.linear) {
-                    FlatNurbs::Point => Err(unsupported(tr!("sketch-err-curve-perpendicular"))),
-                    FlatNurbs::Line { origin, dir } => {
-                        let (p0, p1) = edge_on_line(&piece, origin, dir);
-                        if p0.distance(p1) <= tol.linear {
-                            return Err(unsupported(tr!("sketch-err-curve-perpendicular")));
-                        }
-                        Ok(Projected::Line(p0, p1))
-                    }
-                    FlatNurbs::Free => {
-                        let (lo, hi) = piece.domain();
-                        let start = piece.point(lo).truncate();
-                        let end = piece.point(hi).truncate();
-                        Ok(Projected::Spline {
-                            start,
-                            // Geschlossen heißt in der Skizze: genau ein Punkt.
-                            end: if start.distance(end) <= tol.linear {
-                                start
-                            } else {
-                                end
-                            },
-                            curve: piece,
-                        })
-                    }
-                }
-            }
+            Curve::Nurbs(c) => flat_piece(self.project_nurbs(c, t0, t1)?, tol.linear),
         }
     }
 
@@ -1245,6 +1725,99 @@ impl Sketch {
         self.add_constraint(ConstraintKind::Fixed(p, xy.x, xy.y))?;
         Ok(p)
     }
+}
+
+/// Das Kurvenstück `c(t0 … t1)` für „3D-Geometrie einbeziehen“ (Skizzen 10, Spec 5) in den
+/// Skizzenkoordinaten von `frame`, ohne Projektion: Gerade → Linie, Kreis → Kreis oder Bogen,
+/// Ellipse → Ellipse oder Ellipsenbogen (jeweils mit Normale), Freiformkurve → Spline. Ein Stück
+/// ab `2π − Winkeltoleranz` ist ganz. Toleranzen sind die von [`Tolerance::default`]
+/// (wie bei der Skizze). Fehler bei leerem oder nicht endlichem Bereich und bei
+/// Freiformkurven, die sich nicht zerlegen lassen.
+///
+/// [`Tolerance::default`]: planora_math::Tolerance::default
+pub fn include_curve(frame: &Frame, c: &Curve, t0: f64, t1: f64) -> Result<Included, SketchError> {
+    let tol = planora_math::Tolerance::default();
+    if !(t0.is_finite() && t1.is_finite()) || (t1 - t0).abs() <= tol.angular {
+        return Err(SketchError::Degenerate(tr!("sketch-err-edge-no-range")));
+    }
+    let local = |p: DVec3| frame.to_local(p);
+    let dir = |v: DVec3| DVec3::new(v.dot(frame.x), v.dot(frame.y), v.dot(frame.z));
+    let full = (t1 - t0).abs() >= TAU - tol.angular;
+    // Enden gegen den Uhrzeigersinn um `n` (bei wachsendem `t` läuft der Kreis um seine z-Achse),
+    // eine nach unten zeigende Normale umgedreht.
+    let ends = |n: DVec3| {
+        let (p0, p1) = (local(c.point(t0)), local(c.point(t1)));
+        let (start, end) = if t1 > t0 { (p0, p1) } else { (p1, p0) };
+        if n.z < 0.0 {
+            (end, start, -n)
+        } else {
+            (start, end, n)
+        }
+    };
+    let up = |n: DVec3| if n.z < 0.0 { -n } else { n };
+    Ok(match c {
+        Curve::Line { .. } => Included::Line(local(c.point(t0)), local(c.point(t1))),
+        Curve::Circle { frame: cf, radius } => {
+            let (center, n) = (local(cf.origin), dir(cf.z));
+            if full {
+                Included::Circle {
+                    c: center,
+                    r: *radius,
+                    n: up(n),
+                }
+            } else {
+                let (start, end, n) = ends(n);
+                Included::Arc {
+                    c: center,
+                    start,
+                    end,
+                    n,
+                }
+            }
+        }
+        Curve::Ellipse {
+            frame: cf,
+            major,
+            minor,
+        } => {
+            // Die längere Halbachse ist die große (wie bei der Projektion).
+            let (axis, short) = if major >= minor {
+                (dir(cf.x) * *major, *minor)
+            } else {
+                (dir(cf.y) * *minor, *major)
+            };
+            let (center, n) = (local(cf.origin), dir(cf.z));
+            if full {
+                Included::Ellipse {
+                    c: center,
+                    major: axis,
+                    minor: short,
+                    n: up(n),
+                }
+            } else {
+                let (start, end, n) = ends(n);
+                Included::EllipticArc {
+                    c: center,
+                    major: axis,
+                    minor: short,
+                    start,
+                    end,
+                    n,
+                }
+            }
+        }
+        Curve::Nurbs(curve) => {
+            let piece = nurbs_range(curve, t0.min(t1), t0.max(t1), tol.linear)?;
+            let piece = if t1 < t0 {
+                piece.reversed().map_err(freeform_failed)?
+            } else {
+                piece
+            };
+            Included::Spline {
+                curve: piece.transformed(local).map_err(freeform_failed)?,
+            }
+        }
+    })
 }
 
 /// Ebene einer ebenen Fläche: Ursprung der Flächenebene, `z` = nach außen zeigende Normale.

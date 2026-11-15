@@ -11,9 +11,9 @@ use crate::sketch_input::{Created, DrawInput, FieldKind};
 use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKind, ToolKinds};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use planora_sketch::SketchError;
-use planora_sketch::constraint::{ConstraintId, ConstraintKind, FixToggle, LineOrPoints};
+use planora_sketch::constraint::{Axis3, ConstraintId, ConstraintKind, FixToggle, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
 use planora_sketch::offset::{OffsetPlan, OffsetProblem};
@@ -139,6 +139,12 @@ pub struct TransformState {
     pub offset: DVec2,
     pub angle: f64,
     pub factor: f64,
+    /// Verschieben in 3D (Skizzen 10): Höhe des Bezugspunkts, Z-Abstand und die Drehungen um X
+    /// und Y in Radiant; ohne „3D-Skizze“ immer null.
+    pub base_z: f64,
+    pub shift_z: f64,
+    pub angle_x: f64,
+    pub angle_y: f64,
     pub copy: bool,
     pub whole: bool,
     /// Die Auswahl vor dem Befehl: Abbrechen stellt sie wieder her.
@@ -156,6 +162,10 @@ impl Default for TransformState {
             offset: DVec2::ZERO,
             angle: 0.0,
             factor: 1.0,
+            base_z: 0.0,
+            shift_z: 0.0,
+            angle_x: 0.0,
+            angle_y: 0.0,
             copy: false,
             whole: false,
             selection_before: Vec::new(),
@@ -452,6 +462,9 @@ pub struct LineArcDrag {
     pub prev: CurveId,
 }
 
+// Ebene und Achse der Triade (Skizzen 10) liegen mit der Triade in `sketch_triad`.
+pub use crate::sketch_triad::{TriadAxis, TriadPlane};
+
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
 pub struct SketchSession {
@@ -509,6 +522,13 @@ pub struct SketchSession {
     pub dragging: Option<PointId>,
     /// Laufender Zug an einer Kurve; gegriffene Punkte stehen in [`dragging`](Self::dragging).
     pub curve_drag: Option<CurveDrag>,
+    /// Laufender Zug an 3D-Geometrie in der Ebene parallel zum Bildschirm (Skizzen 10,
+    /// [`crate::sketch_drag3`]).
+    pub drag3: Option<crate::sketch_drag3::Drag3>,
+    /// 3D-Punkt oder 3D-Kurve unter dem Zeiger über den Bildschirmabstand, je Bild von der Ansicht
+    /// gesetzt (nur, wenn dort kein 2D-Punkt fängt): Bemaßung und Abhängigkeitsbefehl wählen
+    /// damit 3D-Geometrie (Skizzen 10).
+    pub pick3: Option<Item>,
     /// Laufender Auswahlrahmen.
     pub box_select: Option<BoxSelect>,
     /// Die rechte Taste hat den Rahmen abgebrochen: Bis alle Maustasten los sind, ist kein Klick
@@ -527,6 +547,42 @@ pub struct SketchSession {
     /// Name des nächsten Schritts für Rückgängig, wenn ein Werkzeug ihn besser kennt als der
     /// Vergleich der Stände (Stutzen, Dehnen, Brechen); der Verlauf nimmt und leert ihn.
     pub edit_label: Option<Msg>,
+    /// Triade der 3D-Skizze (Skizzen 10; gehört nicht zum Dokument und nicht zum Rückgängig):
+    /// Lage, Drehung, aktive Ebene, aktiver Drehgriff (Tab) und „Z sperren“ (Pfeil hoch gehalten,
+    /// setzt die Oberfläche je Bild aus der Taste, [`crate::keymap::dispatch::held`]).
+    pub triad: crate::sketch_triad::Triad,
+    /// Bedienzustand der Triade in der Ansicht (Bild, Zug, Menü, Winkelfeld).
+    pub triad_ui: crate::sketch_triad::TriadUi,
+    /// Zeiger beim Zeichnen in 3D (Skizzen 10, [`crate::sketch_draw3`]); `None` außerhalb des
+    /// 3D-Wegs und bei streifendem Blick auf die Ebene der Triade.
+    pub cursor3: Option<crate::sketch_draw3::Cursor3>,
+    /// Körperecken vor der Skizze, an denen das Zeichnen in 3D fängt (A7, Task 16); setzt die App
+    /// beim Öffnen der Skizze.
+    pub body_vertices: Vec<crate::sketch_draw3::BodyVertex>,
+    /// Beim Fang an einer Körperecke eingezogene Punkte (Punkt, Index in
+    /// [`body_vertices`](Self::body_vertices)), deren Verknüpfung noch nicht im Entwurf steht: Sie
+    /// kommt dazu, sobald der Befehl ein Rückgängig-Schritt wird
+    /// ([`crate::state::AppState::observe_sketch`]).
+    pub included_vertices: Vec<(PointId, usize)>,
+    /// Zeichnet das Werkzeug in diesem Bild in 3D ([`SketchSession::draws_in_3d`], je Bild
+    /// gesetzt)? Danach richten sich die Felder am Zeiger.
+    pub draw3: bool,
+    /// Hat die Skizze den Haken „3D-Skizze“ (bei [`SketchSession::sync_input`] gesetzt)? Dann hat
+    /// Verschieben/Kopieren die Felder und Griffe für 3D (Skizzen 10, A1).
+    pub move3: bool,
+    /// Z-Sperre: die Stelle beim Drücken von Pfeil hoch, von der aus der Punkt entlang der Normale
+    /// der Ebene läuft.
+    pub lock_from: Option<DVec3>,
+    /// Gesetzte Lagen einer ebenen Form in 3D (Kreis „2 Punkte“, Bogen „3 Punkte“, Rechteck
+    /// „2 Punkte“, Ellipse, Kegelschnitt; Skizzen 10, [`crate::sketch_draw3`]). Bis zum letzten
+    /// Klick bleibt die Skizze unverändert.
+    pub pending3: Vec<crate::sketch_draw3::Hit3>,
+    /// Ebene der laufenden ebenen Form in 3D, beim ersten Klick aus der Triade genommen.
+    pub plane3: Option<crate::sketch_draw3::Plane3>,
+    /// Bogen „Mittelpunkt“ in 3D nach dem Start (Task H, Fix-Runde 1): letzter Winkel des Zeigers
+    /// zum Start und der seitdem gezogene Winkel (mit Vorzeichen, gegen den Uhrzeigersinn um die
+    /// Normale der Ebene positiv). Das Vorzeichen gibt die Richtung des Bogens wie der Zug.
+    pub arc_sweep3: Option<(f64, f64)>,
     /// Letzte Stelle beim Stutzen durch Ziehen (`None`: kein Zug läuft).
     pub trim_drag: Option<DVec2>,
     /// Zählt die gelungenen Änderungen durch Stutzen, Dehnen und Brechen, mit dem Werkzeug der
@@ -549,6 +605,8 @@ pub struct SketchSession {
     pub transform: TransformState,
     /// Laufender Zug an einem Griff.
     pub grip_drag: Option<GripDrag>,
+    /// Dazu bei einem Griff für 3D (Skizzen 10) die gefasste Stelle im Raum und der Stand davor.
+    pub grip_drag3: Option<crate::sketch_grips::GripDrag3>,
     /// Skizzenbemaßung.
     pub dim: DimToolState,
     /// Rechteckige und Kreisförmige Anordnung.
@@ -637,7 +695,7 @@ fn text_refusal(r: TextRemoval) -> Msg {
     }
 }
 
-fn status_ok(r: &SolveReport) -> bool {
+pub(crate) fn status_ok(r: &SolveReport) -> bool {
     r.status == SolveStatus::Solved
 }
 
@@ -685,12 +743,25 @@ impl SketchSession {
             message: None,
             dragging: None,
             curve_drag: None,
+            drag3: None,
+            pick3: None,
             box_select: None,
             box_aborted: false,
             click_after_flyout: false,
             history_jumps: 0,
             hover_preview: None,
             edit_label: None,
+            triad: Default::default(),
+            triad_ui: Default::default(),
+            cursor3: None,
+            body_vertices: Vec::new(),
+            included_vertices: Vec::new(),
+            draw3: false,
+            move3: false,
+            lock_from: None,
+            pending3: Vec::new(),
+            plane3: None,
+            arc_sweep3: None,
             trim_drag: None,
             modify_edits: (0, None),
             fillet_run: None,
@@ -700,6 +771,7 @@ impl SketchSession {
             pick_radius: 0.0,
             transform: TransformState::default(),
             grip_drag: None,
+            grip_drag3: None,
             dim: DimToolState::default(),
             pattern: Default::default(),
             project: ProjectState::default(),
@@ -782,6 +854,9 @@ impl SketchSession {
         self.line_chain = None;
         self.auto_tangent = None;
         self.pick_points.clear();
+        self.pending3.clear();
+        self.plane3 = None;
+        self.arc_sweep3 = None;
         self.input = DrawInput::default();
         // Bemaßen: Wahl und gesetztes Maß (sein Feld schließt) entfallen, nichts bleibt.
         self.dim = DimToolState::default();
@@ -806,9 +881,74 @@ impl SketchSession {
                     let _ = sk.remove_point(p);
                 }
             }
+            // Ein eingezogener Eckpunkt (A7), dessen offener Punkt eben wegfiel, fällt mit.
+            for &(q, _) in &self.included_vertices {
+                let new = open.before.point_xy(q).is_err() && sk.point_xy(q).is_ok();
+                let held = sk
+                    .constraints()
+                    .any(|(_, c)| c.kind.fixed_point() != Some(q) && c.kind.points().contains(&q));
+                if new && !held && !sk.curves().any(|(_, c)| c.kind.points().contains(&q)) {
+                    let _ = sk.remove_point(q);
+                }
+            }
         }
+        self.included_vertices
+            .retain(|&(q, _)| sk.point_xy(q).is_ok());
         self.last_report = Some(sk.clone().solve());
         self.forget_removed(sk);
+    }
+
+    /// Setzt den Haken „3D-Skizze“ ([`Sketch::three_d`]) als ein Rückgängig-Schritt (Name
+    /// „3D-Skizze umschalten“). Ist der Stand schon so, geschieht nichts. Beim Ausschalten bleibt
+    /// die gezeichnete 3D-Geometrie; die Triade verliert Griff und Sperre.
+    pub fn set_three_d(&mut self, sk: &mut Sketch, on: bool) {
+        if sk.three_d == on {
+            return;
+        }
+        sk.set_three_d(on);
+        self.edit_label = Some(crate::msg!("sketch-edit-three-d"));
+        if !on {
+            self.triad_ui.abort(&mut self.triad);
+            self.triad.handle = None;
+            self.triad.lock_z = false;
+            // Eine ebene Form in 3D hat die Skizze noch nicht geändert; ihre Lagen verfallen.
+            self.pending3.clear();
+            self.plane3 = None;
+            self.arc_sweep3 = None;
+        }
+    }
+
+    /// Die aktive Ebene der Triade (Skizzen 10).
+    pub fn triad_plane(&self) -> TriadPlane {
+        self.triad.active
+    }
+
+    /// Der aktive Drehgriff der Triade; `None`: keiner.
+    pub fn triad_handle(&self) -> Option<TriadAxis> {
+        self.triad.handle
+    }
+
+    /// Alt allein (Aktion „Triadenebene wechseln“): schaltet die aktive Ebene reihum. Nur wenn die
+    /// Triade zu sehen ist (3D-Skizze und Zeichenwerkzeug,
+    /// [`crate::sketch_triad::triad_visible`]); `false`, wenn nichts geschah. Gehört nicht zum
+    /// Rückgängig.
+    pub fn cycle_triad_plane(&mut self, sk: &Sketch) -> bool {
+        if !crate::sketch_triad::triad_visible(self, sk) {
+            return false;
+        }
+        self.triad.cycle_plane();
+        true
+    }
+
+    /// Tab (Aktion „Triadengriff wechseln“): macht reihum einen Drehgriff aktiv. Nur wenn die
+    /// Triade zu sehen ist (wie [`cycle_triad_plane`](Self::cycle_triad_plane)); `false`, wenn
+    /// nichts geschah.
+    pub fn cycle_triad_handle(&mut self, sk: &Sketch) -> bool {
+        if !crate::sketch_triad::triad_visible(self, sk) {
+            return false;
+        }
+        self.triad.cycle_handle();
+        true
     }
 
     /// Wählt `tool` wie der Klick auf seinen Knopf in der Leiste (und sein Tastenkürzel): ist
@@ -827,11 +967,13 @@ impl SketchSession {
     /// selbst (und sein Stand) unverändert bleibt. Werkzeug und Mauszeiger bleiben.
     pub fn after_history_jump(&mut self, sk: &Sketch) {
         self.clear_pending();
+        self.included_vertices.clear();
         self.draw_cursor = None;
         self.selection.clear();
         self.drop_curve_picks();
         self.dragging = None;
         self.curve_drag = None;
+        self.drag3 = None;
         self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
@@ -848,6 +990,10 @@ impl SketchSession {
         } else if self.tool == Tool::Text {
             self.begin_text();
         }
+        // Ein laufender Zug an der Triade gehört zum alten Stand: Die Drehung kommt zurück, und das
+        // Loslassen danach ist kein Klick (Korrektur Task 10).
+        self.triad_ui.end_drag(&mut self.triad);
+        self.lock_from = None;
         self.edit_label = None;
         self.message = None;
         self.last_report = Some(sk.clone().solve());
@@ -1011,12 +1157,21 @@ impl SketchSession {
         self.created = None;
         self.pick_radius = radius;
         let cur = self.resolve_cursor(sk, at, radius);
-        // Stand vor dem ersten Klick eines Befehls (siehe `open_start`): beim ersten offenen Punkt
-        // der vor diesem Klick, danach der gemerkte.
+        self.with_open_start(sk, |se, sk| se.click_tool(sk, at, radius, extend, &cur))
+    }
+
+    /// Führt den Klick `f` des aktiven Werkzeugs aus und führt dabei den Stand vor dem ersten Klick
+    /// eines Befehls (siehe `open_start`): beim ersten offenen Punkt der vor diesem Klick, danach
+    /// der gemerkte. Gemeinsam für den Klick in der Ebene und in 3D ([`crate::sketch_draw3`]).
+    pub(crate) fn with_open_start<T>(
+        &mut self,
+        sk: &mut Sketch,
+        f: impl FnOnce(&mut Self, &mut Sketch) -> Result<T, String>,
+    ) -> Result<T, String> {
         let open = self.open_start.take();
         let fresh = (open.is_none() && self.pending.is_empty() && self.is_drawing_tool())
             .then(|| sk.clone());
-        let result = self.click_tool(sk, at, radius, extend, &cur);
+        let result = f(self, sk);
         if result.is_err() {
             self.open_start = open;
             return result;
@@ -1035,6 +1190,27 @@ impl SketchSession {
             _ => None,
         };
         result
+    }
+
+    /// Klick, bei dem der Sehstrahl die Skizzenebene nicht trifft (Skizzen 10): In der Bemaßung
+    /// und im Abhängigkeitsbefehl wählt er die 3D-Geometrie unter dem Zeiger (`pick3`) allein, ohne
+    /// eine Lage in der Ebene anzunehmen. Sonst und ohne 3D-Treffer tut er nichts. Atomar wie
+    /// [`click`](Self::click).
+    pub fn click_off_plane(&mut self, sk: &mut Sketch) -> Result<(), String> {
+        if self.pick3.is_none() {
+            return Ok(());
+        }
+        self.created = None;
+        match self.tool {
+            Tool::Dimension => self.atomic(sk, |se, sk, _| {
+                se.click_dimension_at(sk, None, 0.0);
+                Ok(())
+            }),
+            Tool::Constraint(action) => {
+                self.atomic(sk, |se, sk, _| se.click_constraint(sk, action, None, 0.0))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Der Klick mit dem aktiven Werkzeug selbst ([`click`](Self::click)).
@@ -1081,7 +1257,7 @@ impl SketchSession {
                     se.click_pattern(sk, cur);
                     Ok(())
                 }
-                Tool::Constraint(action) => se.click_constraint(sk, action, at, radius),
+                Tool::Constraint(action) => se.click_constraint(sk, action, Some(at), radius),
                 Tool::InsertControlPoint => se.click_insert_control_point(sk, at, radius, prior),
                 Tool::Text => se.click_text(sk, cur, at, radius),
             }
@@ -1345,12 +1521,25 @@ impl SketchSession {
         if self.handle_grip_at(sk, at, radius).is_some() {
             return;
         }
-        self.forget_stale_picks();
         let item = match self.snap(sk, at, radius) {
             Snap::Point(p) => Some(Item::Point(p)),
             Snap::Curve(c) => Some(Item::Curve(c)),
             _ => None,
         };
+        self.select_item(sk, item, Some(at), extend);
+    }
+
+    /// Klick im Auswahlwerkzeug auf `item`, das die Ansicht über den Bildschirmabstand getroffen
+    /// hat (3D-Punkte und 3D-Kurven, Skizzen 10): wählt wie ein Klick an seiner Stelle, ohne
+    /// Klicklage. `extend` schaltet um.
+    pub fn select_clicked(&mut self, sk: &Sketch, item: Item, extend: bool) {
+        self.message = None;
+        self.select_item(sk, Some(item), None, extend);
+    }
+
+    /// Auswahl nach einem Klick auf `item` (`None`: ins Leere) an der Stelle `at`.
+    fn select_item(&mut self, sk: &Sketch, item: Option<Item>, at: Option<DVec2>, extend: bool) {
+        self.forget_stale_picks();
         // Ein Buchstabe (oder einer seiner Punkte) wählt den ganzen Text (Spec B9).
         if let Some(t) = item.and_then(|i| crate::sketch_text::text_of_item(sk, i)) {
             self.select_text(sk, t, extend);
@@ -1368,8 +1557,8 @@ impl SketchSession {
             (None, true) => {}
             (None, false) => self.selection.clear(),
         }
-        match item {
-            Some(Item::Curve(c)) => self.note_curve_pick(c, at),
+        match (item, at) {
+            (Some(Item::Curve(c)), Some(at)) => self.note_curve_pick(c, at),
             _ => self.sync_picks(),
         }
     }
@@ -1431,9 +1620,20 @@ impl SketchSession {
         if cur.point(sk.tolerance().linear).is_some() {
             return Ok(());
         }
-        self.attach(sk, None, cur)?;
+        let p = self.attach(sk, None, cur)?;
         self.solve_checked(sk, prior)?;
+        self.follow_triad(sk, p);
         Ok(())
+    }
+
+    /// Die Triade einer 3D-Skizze springt auf den eben gesetzten Punkt `p` (Spec Abschnitt 4); in
+    /// einer 2D-Skizze geschieht nichts.
+    pub(crate) fn follow_triad(&mut self, sk: &Sketch, p: PointId) {
+        if sk.three_d
+            && let Ok(at) = sk.point_xyz(p)
+        {
+            self.triad.moved_to(at);
+        }
     }
 
     fn click_line(&mut self, sk: &mut Sketch, cur: &DrawCursor, prior: &Sketch) -> Result<(), Msg> {
@@ -1441,6 +1641,7 @@ impl SketchSession {
         let Some(&start) = self.pending.first() else {
             self.pending = vec![p];
             self.solve_checked(sk, prior)?;
+            self.follow_triad(sk, p);
             return Ok(());
         };
         let line = sk.add_line(start, p).map_err(err)?;
@@ -1452,6 +1653,7 @@ impl SketchSession {
         self.line_after_arc = None;
         self.pending = vec![p];
         self.created = Some(Created::Line(line));
+        self.follow_triad(sk, p);
         Ok(())
     }
 
@@ -1468,9 +1670,10 @@ impl SketchSession {
         };
         let report = attempt.solve();
         let limit = 10.0 * sk.tolerance().linear;
+        // Im Raum gemessen: Ein 2D-Punkt hat z = 0, für ihn ist das dasselbe wie in der Ebene.
         let moved = sk
             .points()
-            .any(|(p, _)| match (sk.point_xy(p), attempt.point_xy(p)) {
+            .any(|(p, _)| match (sk.point_xyz(p), attempt.point_xyz(p)) {
                 (Ok(a), Ok(b)) => a.distance(b) > limit,
                 _ => true,
             });
@@ -1660,6 +1863,7 @@ impl SketchSession {
         }
         self.pending.push(p);
         self.solve_checked(sk, prior)?;
+        self.follow_triad(sk, p);
         Ok(())
     }
 
@@ -1838,6 +2042,14 @@ impl SketchSession {
         }
     }
 
+    /// Wie [`end_box`](Self::end_box) mit einer Abbildung von Skizzenkoordinaten mit z
+    /// ([`select_rect3`](Self::select_rect3)).
+    pub fn end_box3(&mut self, sk: &Sketch, project: &dyn Fn(DVec3) -> Option<DVec2>) {
+        if let Some(b) = self.box_select.take() {
+            self.select_rect3(sk, b.start, b.current, b.extend, project);
+        }
+    }
+
     /// Bricht den Rahmen oder den Zug auf dem letzten Punkt mit der rechten Taste ab, siehe
     /// [`box_aborted`](Self::box_aborted).
     pub fn abort_box(&mut self) {
@@ -1860,13 +2072,33 @@ impl SketchSession {
         extend: bool,
         project: &dyn Fn(DVec2) -> Option<DVec2>,
     ) {
+        self.select_rect3(sk, a, b, extend, &|p: DVec3| project(p.truncate()));
+    }
+
+    /// Wie [`select_rect`](Self::select_rect), aber `project` bildet Skizzenkoordinaten mit z ab
+    /// (Skizzen 10): 3D-Kurven und 3D-Punkte zählen mit ihrer projizierten Raumlage
+    /// ([`curve_points3`](crate::sketch_view::curve_points3)), alles andere mit z = 0.
+    pub fn select_rect3(
+        &mut self,
+        sk: &Sketch,
+        a: DVec2,
+        b: DVec2,
+        extend: bool,
+        project: &dyn Fn(DVec3) -> Option<DVec2>,
+    ) {
         let window = a.x <= b.x;
         let (lo, hi) = (a.min(b), a.max(b));
-        let on_screen = |p: DVec2| project(p).filter(|q| q.is_finite());
+        let on_screen = |p: DVec3| project(p).filter(|q| q.is_finite());
         let mut found = Vec::new();
         let hidden = self.hidden_handles(sk);
         for (c, _) in sk.curves().filter(|(c, _)| !hidden.curves.contains(c)) {
-            let Some(line) = sk.curve_polyline(c, BOX_STEPS_PER_TURN) else {
+            let line = if sk.is_3d_curve(c) {
+                crate::sketch_view::curve_points3(sk, c)
+            } else {
+                sk.curve_polyline(c, BOX_STEPS_PER_TURN)
+                    .map(|pl| pl.into_iter().map(|p| p.extend(0.0)).collect())
+            };
+            let Some(line) = line else {
                 continue;
             };
             let line: Vec<Option<DVec2>> = line.into_iter().map(on_screen).collect();
@@ -1885,7 +2117,7 @@ impl SketchSession {
         let on_curves: BTreeSet<PointId> = sk.curves().flat_map(|(_, c)| c.kind.points()).collect();
         for (p, _) in sk.points().filter(|(p, _)| !on_curves.contains(p)) {
             if sk
-                .point_xy(p)
+                .point_xyz(p)
                 .ok()
                 .and_then(on_screen)
                 .is_some_and(|q| in_rect(q, lo, hi))
@@ -1955,7 +2187,7 @@ impl SketchSession {
 
     /// Läuft ein Zug an einem Punkt oder einer Kurve?
     pub fn is_dragging(&self) -> bool {
-        self.dragging.is_some() || self.curve_drag.is_some()
+        self.dragging.is_some() || self.curve_drag.is_some() || self.drag3.is_some()
     }
 
     /// Beginnt im Auswahlwerkzeug den Zug an dem, was unter `at` liegt: Punkt vor Kurve
@@ -1967,6 +2199,7 @@ impl SketchSession {
         }
         self.dragging = None;
         self.curve_drag = None;
+        self.drag3 = None;
         // Griffe gehen über die Kurve, auf der sie liegen; den Punkt prüft der Griff selbst.
         if self.begin_grip_drag(sk, at, radius) {
             return self.is_dragging();
@@ -2031,7 +2264,11 @@ impl SketchSession {
             return;
         };
         self.cursor = Some(at);
-        match sk.drag(&[Drag { point, target: at }]) {
+        match sk.drag(&[Drag {
+            point,
+            target: at.extend(0.0),
+            plane: None,
+        }]) {
             Ok(report) => {
                 self.message = (!status_ok(&report)).then(|| crate::msg!("sketch-drag-blocked"));
                 self.last_report = Some(report);
@@ -2068,7 +2305,8 @@ impl SketchSession {
                     .iter()
                     .map(|&(point, from)| Drag {
                         point,
-                        target: from + delta,
+                        target: (from + delta).extend(0.0),
+                        plane: None,
                     })
                     .collect();
                 // Zug am freien Ende eines Krümmungsbogens mit freiem Radius: erst den Radius suchen,
@@ -2076,7 +2314,7 @@ impl SketchSession {
                 // Lösen allein nicht hin (zweiter Handtest Skizzen 7).
                 if let (Some((c, at)), [only]) = (drag.aim, drags.as_slice()) {
                     // Scheitert die Suche, zieht der Zug wie sonst.
-                    let _ = sk.aim_curvature_arc(c, at, only.target);
+                    let _ = sk.aim_curvature_arc(c, at, only.target.truncate());
                 }
                 sk.drag_holding(&drags, &drag.anchors)
             }
@@ -2128,6 +2366,7 @@ impl SketchSession {
         if self.dragging.take().is_some() {
             self.last_report = Some(sk.solve());
         }
+        self.end_drag3(sk);
     }
 
     // ---- Abhängigkeiten -----------------------------------------------------------------
@@ -2139,6 +2378,12 @@ impl SketchSession {
     /// Abhängigkeiten, die zur aktuellen Auswahl passen.
     pub fn available_actions(&self, sk: &Sketch) -> Vec<ConstraintAction> {
         actions_for(sk, &self.selection)
+    }
+
+    /// Ist `action` für die aktuelle Auswahl gesperrt, weil 3D-Geometrie dabei ist (Spec
+    /// Entwurf 2)? Dann ist ihr Knopf gedämpft, und der Hinweis nennt den Grund.
+    pub fn blocked_in_3d(&self, sk: &Sketch, action: ConstraintAction) -> bool {
+        !action_allowed_in_3d(action) && has_3d(sk, &self.selection)
     }
 
     /// Knopf (oder Taste) einer Abhängigkeit im Skizzenfeld. Passt die Auswahl, entsteht sie
@@ -2202,17 +2447,23 @@ impl SketchSession {
     /// Was ein Klick im Abhängigkeitsbefehl an der Stelle `at` wählen würde: `Ok(None)`, wenn dort
     /// nichts liegt; `Err` mit der Meldung, wenn dort nichts passt. Punkt vor Kurve; passt der
     /// Punkt nicht, aber die Kurve, die Kurve. Ein schon gewählter Bezug zählt (er wird abgewählt).
+    /// Ohne Lage in der Ebene (`None`) zählt nur die 3D-Geometrie unter dem Zeiger (`pick3`).
     fn constraint_target(
         &self,
         sk: &Sketch,
         action: ConstraintAction,
-        at: DVec2,
+        at: Option<DVec2>,
         radius: f64,
     ) -> Result<Option<Item>, Msg> {
         let selection = geometry_of(sk, &self.selection);
+        // 3D-Geometrie unter dem Zeiger (Bildschirmabstand, von der Ansicht gesetzt) nach den
+        // 2D-Punkten und vor den 2D-Kurven, wie beim Wählen.
         let candidates: Vec<Item> = [
-            self.shown_point(sk, at, radius).map(Item::Point),
-            self.shown_curve(sk, at, radius).map(Item::Curve),
+            at.and_then(|a| self.shown_point(sk, a, radius))
+                .map(Item::Point),
+            self.pick3.filter(|&i| geometry_of(sk, &[i]).len() == 1),
+            at.and_then(|a| self.shown_curve(sk, a, radius))
+                .map(Item::Curve),
         ]
         .into_iter()
         .flatten()
@@ -2256,7 +2507,7 @@ impl SketchSession {
         let Tool::Constraint(action) = self.tool else {
             return None;
         };
-        self.constraint_target(sk, action, at, radius)
+        self.constraint_target(sk, action, Some(at), radius)
             .ok()
             .flatten()
     }
@@ -2269,7 +2520,7 @@ impl SketchSession {
         let Tool::Constraint(action) = self.tool else {
             return false;
         };
-        match self.constraint_target(sk, action, at, radius) {
+        match self.constraint_target(sk, action, Some(at), radius) {
             Ok(Some(item)) => self.constraint_last != Some(item),
             Ok(None) => false,
             Err(_) => true,
@@ -2287,7 +2538,7 @@ impl SketchSession {
         &mut self,
         sk: &mut Sketch,
         action: ConstraintAction,
-        at: DVec2,
+        at: Option<DVec2>,
         radius: f64,
     ) -> Result<(), Msg> {
         self.forget_stale_picks();
@@ -2307,8 +2558,8 @@ impl SketchSession {
             return Ok(());
         }
         self.selection.push(item);
-        match item {
-            Item::Curve(c) => self.note_curve_pick(c, at),
+        match (item, at) {
+            (Item::Curve(c), Some(at)) => self.note_curve_pick(c, at),
             _ => self.sync_picks(),
         }
         if constraint_fit(sk, action, &self.selection) == Fit::Complete {
@@ -2365,6 +2616,10 @@ impl SketchSession {
                 } else {
                     LineOrPoints::Line(c[0])
                 };
+                // An 3D-Geometrie wählt H wie V die nächstgelegene Skizzenachse (Spec 10).
+                if has_3d(sk, &self.selection) {
+                    return Ok(along_nearest_axis(sk, lp));
+                }
                 if action == A::Horizontal {
                     K::Horizontal(lp)
                 } else {
@@ -2491,7 +2746,7 @@ impl SketchSession {
             }
             let fixed_ids = |sk: &Sketch| -> Vec<ConstraintId> {
                 sk.constraints()
-                    .filter(|(_, c)| matches!(c.kind, ConstraintKind::Fixed(..)))
+                    .filter(|(_, c)| c.kind.fixed_point().is_some())
                     .map(|(i, _)| i)
                     .collect()
             };
@@ -2920,10 +3175,9 @@ impl SketchSession {
             // Ein Fest-Wert zuletzt: Ist sein fester Spline mit gewählt, ist der dann fort und er geht mit.
             let mut items = std::mem::take(&mut se.selection);
             items.sort_by_key(|item| {
-                matches!(item, Item::Constraint(c) if matches!(
-                    sk.constraint(*c).map(|d| &d.kind),
-                    Some(ConstraintKind::Fixed(..))
-                ))
+                matches!(item, Item::Constraint(c) if sk
+                    .constraint(*c)
+                    .is_some_and(|d| d.kind.fixed_point().is_some()))
             });
             for item in items {
                 // Ein Exemplar eines Musters wird abgewählt, das Muster bleibt (Entscheidung 6 des
@@ -2937,10 +3191,10 @@ impl SketchSession {
                 match item {
                     Item::Constraint(c) => {
                         if let Err(e) = sk.remove_constraint(c)
-                            && matches!(
-                                sk.constraint(c).map(|d| &d.kind),
-                                Some(ConstraintKind::PatternValue(..) | ConstraintKind::Fixed(..))
-                            )
+                            && sk.constraint(c).is_some_and(|d| {
+                                matches!(d.kind, ConstraintKind::PatternValue(..))
+                                    || d.kind.fixed_point().is_some()
+                            })
                         {
                             return Err(err(e));
                         }
@@ -2985,6 +3239,7 @@ impl SketchSession {
                 se.dragging = None;
             }
             se.curve_drag = None;
+            se.drag3 = None;
             se.last_report = Some(sk.solve());
             if dropped > 0 {
                 se.add_note(crate::msg!("sketch-pattern-instance-dropped", n = dropped));
@@ -3012,7 +3267,7 @@ impl SketchSession {
     pub fn selected_projections(&self, sf: &SketchFeature) -> Vec<CurveId> {
         self.selected_curves()
             .into_iter()
-            .filter(|c| sf.copies.iter().any(|copy| copy.curve == *c))
+            .filter(|c| sf.copies.iter().any(|copy| copy.curve() == Some(*c)))
             .collect()
     }
 
@@ -3217,6 +3472,7 @@ fn offset_problem_message(problem: OffsetProblem) -> Msg {
         OffsetProblem::Cusp => crate::msg!("sketch-offset-cusp"),
         OffsetProblem::ClosedKink => crate::msg!("sketch-offset-closed-kink"),
         OffsetProblem::Text => crate::msg!("sketch-text-no-offset"),
+        OffsetProblem::NotIn3d => crate::msg!("sketch-err-tool-not-in-3d"),
         OffsetProblem::Degenerate => crate::msg!("sketch-field-rejected"),
     }
 }
@@ -3284,6 +3540,11 @@ fn actions_for(sk: &Sketch, items: &[Item]) -> Vec<ConstraintAction> {
         (2, 1, 0, 0) => vec![Symmetric],
         _ => Vec::new(),
     };
+    // An 3D-Geometrie nur die Arten mit 3D-Fassung (Spec Entwurf 2).
+    let three_d = has_3d(sk, items);
+    if three_d {
+        found.retain(|&a| action_allowed_in_3d(a));
+    }
     // Fest gilt für jede Auswahl aus Punkten und Kurven (Fixieren/Lösen, Skizzen 9).
     if !found.contains(&Fixed) && !(s.points.is_empty() && s.curves.is_empty()) {
         found.push(Fixed);
@@ -3294,7 +3555,7 @@ fn actions_for(sk: &Sketch, items: &[Item]) -> Vec<ConstraintAction> {
         if round_center(sk, a).is_some() && round_center(sk, b).is_some() {
             found.push(Concentric);
         }
-        if sk.smooth_kinds_fit(a, b) {
+        if !three_d && sk.smooth_kinds_fit(a, b) {
             found.push(Smooth);
         }
     }
@@ -3335,7 +3596,7 @@ fn constraint_forms(action: ConstraintAction) -> &'static [[usize; 4]] {
 /// haben keinen Befehl).
 fn constraint_fit(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Fit {
     use ConstraintAction::*;
-    if action.is_dimension() {
+    if action.is_dimension() || (!action_allowed_in_3d(action) && has_3d(sk, items)) {
         return Fit::No;
     }
     if actions_for(sk, items).contains(&action) {
@@ -3377,8 +3638,12 @@ fn constraint_mismatch(sk: &Sketch, action: ConstraintAction, items: &[Item]) ->
         .unwrap_or_else(|| crate::msg!("sketch-action-mismatch", action = action.label_msg()))
 }
 
-/// Bei Konzentrisch und Glatt mit Kurven der falschen Art die Meldung, welche gehen.
+/// Bei Konzentrisch und Glatt mit Kurven der falschen Art die Meldung, welche gehen; an
+/// 3D-Geometrie für eine Art ohne 3D-Fassung der Hinweis darauf (Spec Entwurf 2).
 fn kinds_refusal(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Option<Msg> {
+    if !action_allowed_in_3d(action) && has_3d(sk, items) {
+        return Some(crate::msg!("sketch-not-in-3d-hint"));
+    }
     let curves_only = sort_items(sk, items).filter(|s| s.points.is_empty() && !s.curves.is_empty());
     let wrong_kind = |ok: &dyn Fn(CurveId) -> bool| {
         curves_only
@@ -3420,6 +3685,46 @@ fn need_msg(action: ConstraintAction) -> Msg {
         Collinear => crate::msg!("sketch-command-collinear-need"),
         Smooth => crate::msg!("sketch-command-smooth-need"),
         Distance | DistancePointLine | Radius | Diameter | Angle => action.label_msg(),
+    }
+}
+
+/// Gibt es die Abhängigkeit oder das Maß `action` an 3D-Geometrie (Spec Entwurf 2, wie
+/// [`ConstraintKind::allowed_in_3d`])? Symmetrisch, Glatt und der Abstand Punkt–Linie nicht.
+pub fn action_allowed_in_3d(action: ConstraintAction) -> bool {
+    use ConstraintAction::*;
+    !matches!(action, Symmetric | Smooth | DistancePointLine)
+}
+
+/// Gehört zu `items` 3D-Geometrie: ein 3D-Punkt oder eine 3D-Kurve (Skizzen 10)?
+pub(crate) fn has_3d(sk: &Sketch, items: &[Item]) -> bool {
+    items.iter().any(|&i| match i {
+        Item::Point(p) => sk.is_3d_point(p),
+        Item::Curve(c) => sk.is_3d_curve(c),
+        Item::Constraint(_) => false,
+    })
+}
+
+/// H/V an 3D-Geometrie (Spec 10, Annahme A3): parallel zur nächstgelegenen Skizzenachse; X wird
+/// `Horizontal`, Y `Vertical`, Z `AlongZ`.
+fn along_nearest_axis(sk: &Sketch, lp: LineOrPoints) -> ConstraintKind {
+    let axis = match lp {
+        LineOrPoints::Line(c) => sk.nearest_axis(c),
+        LineOrPoints::Points(a, b) => {
+            let at = |p| sk.point_xyz(p).unwrap_or(DVec3::ZERO);
+            let d = (at(b) - at(a)).abs();
+            if d.x >= d.y && d.x >= d.z {
+                Axis3::X
+            } else if d.y >= d.z {
+                Axis3::Y
+            } else {
+                Axis3::Z
+            }
+        }
+    };
+    match axis {
+        Axis3::X => ConstraintKind::Horizontal(lp),
+        Axis3::Y => ConstraintKind::Vertical(lp),
+        Axis3::Z => ConstraintKind::AlongZ(lp),
     }
 }
 

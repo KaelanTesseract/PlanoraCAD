@@ -216,7 +216,9 @@ fn redefine_reprojects_copies() {
                 sketch: sk,
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![EdgeCopy {
-                    curve,
+                    target: planora_feature::CopyTarget::Curve(curve),
+                    piece: 0,
+                    of: 1,
                     source: CopySource::Edge(edge),
                 }],
                 formulas: Default::default(),

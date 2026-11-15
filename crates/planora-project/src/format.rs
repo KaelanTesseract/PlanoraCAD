@@ -701,17 +701,129 @@ pub struct FaceIndexDto {
     pub index: usize,
 }
 
-/// Projizierte Skizzenkurve mit genau einer Herkunft: Kante (alle Formate), Schnitt oder
-/// Silhouette (ab Format 16). Alte Dateien haben nur `kante` und schreiben sich gleich.
+/// Projizierte oder einbezogene Skizzengeometrie mit genau einem Ziel (`kurve` oder, ab Format
+/// 20, `punkt`) und genau einer Herkunft: Kante (alle Formate), Schnitt oder Silhouette (ab
+/// Format 16), dazu ab Format 20 `einbezug`, `skizzenkurve`, `auf_flaeche` und `schnittkurve`.
+/// `stueck` ist der Stückindex in einer Gruppe gleicher Herkunft (weggelassen, wenn 0), `stuecke`
+/// deren gespeicherte Stückzahl (weggelassen, wenn höchstens 1). Alte
+/// Dateien haben nur `kurve` und `kante` (oder `schnitt`/`silhouette`) und schreiben sich gleich.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct EdgeCopyDto {
-    pub kurve: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kurve: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub punkt: Option<usize>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub stueck: u32,
+    /// Stückzahl der Gruppe; fehlt sie, ist sie 1 (weggelassen, wenn höchstens 1).
+    #[serde(default = "one_u32", skip_serializing_if = "at_most_one")]
+    pub stuecke: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kante: Option<EdgeRefDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schnitt: Option<FaceIndexDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silhouette: Option<FaceIndexDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub einbezug: Option<EinbezugDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skizzenkurve: Option<SkizzenkurveDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auf_flaeche: Option<AufFlaecheDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schnittkurve: Option<SchnittkurveDto>,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+fn one_u32() -> u32 {
+    1
+}
+
+fn at_most_one(v: &u32) -> bool {
+    *v <= 1
+}
+
+/// Kurve (Kurvennummer) einer anderen Skizze (ab Format 20).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SkizzenkurveDto {
+    pub skizze: u64,
+    pub kurve: usize,
+}
+
+/// Was „3D-Geometrie einbeziehen“ einzieht (ab Format 20): Kante, Rand einer Fläche, Ecke
+/// (Anfang oder Ende einer Kante), Grund- oder Konstruktionsebene, Ursprungsachse (`x`, `y`,
+/// `z`), Konstruktionspunkt (Feature), Ursprung oder Kurve einer anderen Skizze.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum EinbezugDto {
+    Kante { kante: EdgeRefDto },
+    Flaechenrand { flaeche: FaceRefDto },
+    Ecke { kante: EdgeRefDto, ende: bool },
+    Ebene { ebene: PlaneDto },
+    Achse { achse: String },
+    Konstruktionspunkt { feature: u64 },
+    Ursprung,
+    Skizzenkurve { skizze: u64, kurve: usize },
+}
+
+/// „Auf Fläche projizieren“ (ab Format 20): Quellkurven, Zielflächen und Projektionsart.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AufFlaecheDto {
+    #[serde(default)]
+    pub quellen: Vec<KurvenquelleDto>,
+    #[serde(default)]
+    pub flaechen: Vec<FlaechenzielDto>,
+    pub art: ProjektionsartDto,
+}
+
+/// Quelle von „Auf Fläche projizieren“ (ab Format 20): Kurve einer anderen Skizze, Körperkante,
+/// Ecke (Anfang oder Ende einer Kante) oder Konstruktionspunkt (Feature).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum KurvenquelleDto {
+    Skizzenkurve { skizze: u64, kurve: usize },
+    Kante { kante: EdgeRefDto },
+    Ecke { kante: EdgeRefDto, ende: bool },
+    Konstruktionspunkt { feature: u64 },
+}
+
+/// Zielfläche von „Auf Fläche projizieren“ (ab Format 20): Körperfläche oder Grund- bzw.
+/// Konstruktionsebene.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum FlaechenzielDto {
+    Flaeche { flaeche: FaceRefDto },
+    Ebene { ebene: PlaneDto },
+}
+
+/// Projektionsart (ab Format 20): nächster Punkt oder entlang einer Richtung (Weltkoordinaten).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum ProjektionsartDto {
+    NaechsterPunkt,
+    EntlangVektor { richtung: V3 },
+}
+
+/// „Schnittkurve“ (ab Format 20): Kurven fertiger Skizzen und ihre Ziele.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct SchnittkurveDto {
+    #[serde(default)]
+    pub kurven: Vec<KurvenquelleDto>,
+    #[serde(default)]
+    pub ziele: Vec<SchnittzielDto>,
+}
+
+/// Ziel der „Schnittkurve“ (ab Format 20): Körperfläche, Grund- bzw. Konstruktionsebene oder
+/// Kurve einer anderen Skizze.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum SchnittzielDto {
+    Flaeche { flaeche: FaceRefDto },
+    Ebene { ebene: PlaneDto },
+    Skizzenkurve { skizze: u64, kurve: usize },
 }
 
 /// Drehachse einer Ebene unter Winkel (ab Format 16): Ursprungsachse (`x`, `y`, `z`), gerade
@@ -776,6 +888,9 @@ pub struct FrameDto {
 pub struct PointDto {
     pub x: usize,
     pub y: usize,
+    /// Ab Format 20: Index der z-Variable eines 3D-Punkts; fehlt bei einem 2D-Punkt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z: Option<usize>,
     pub konstruktion: bool,
     pub aktiv: bool,
 }
@@ -800,6 +915,9 @@ pub enum CurveKindDto {
         mitte: usize,
         ax: usize,
         ay: usize,
+        /// Ab Format 20: z-Anteil der großen Halbachse einer Ellipse mit Normale.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        az: Option<usize>,
         klein: usize,
     },
     Spline {
@@ -813,6 +931,9 @@ pub enum CurveKindDto {
         mitte: usize,
         ax: usize,
         ay: usize,
+        /// Ab Format 20: wie bei [`CurveKindDto::Ellipse`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        az: Option<usize>,
         klein: usize,
         start: usize,
         ende: usize,
@@ -839,6 +960,10 @@ pub enum CurveKindDto {
         knoten: Vec<f64>,
         punkte: Vec<[f64; 2]>,
         gewichte: Vec<f64>,
+        /// Ab Format 20: z der Kontrollpunkte einer Freiformkurve im Raum; fehlt, wenn alle
+        /// null sind.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        hoehen: Vec<f64>,
     },
 }
 
@@ -883,6 +1008,10 @@ pub struct CurveDto {
     /// Kontrollpunktrahmen (ab Format 19); fehlt, wenn aus.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rahmen: bool,
+    /// Ab Format 20: Normale einer ebenen Kurve außerhalb der Skizzenebene; fehlt in der
+    /// Skizzenebene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normale: Option<V3>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -1030,6 +1159,31 @@ pub enum ConstraintKindDto {
         feld: MusterFeldDto,
         wert: f64,
     },
+    /// Ab Format 20: Linie oder zwei Punkte parallel zur z-Achse der Skizze.
+    EntlangZ {
+        ziel: LineOrPointsDto,
+    },
+    /// Ab Format 20: fester Punkt im Raum.
+    #[serde(rename = "fest3")]
+    Fest3 {
+        punkt: usize,
+        x: f64,
+        y: f64,
+        z: f64,
+    },
+    /// Ab Format 20, intern: Eine Kurve mit Normale bleibt in ihrer Ebene.
+    InEbene {
+        kurve: usize,
+    },
+    /// Ab Format 20, intern: große Halbachse (x, y, z) und kleine Halbachse einer einbezogenen
+    /// Ellipse im Raum.
+    Ellipsenachsen3 {
+        kurve: usize,
+        x: f64,
+        y: f64,
+        z: f64,
+        klein: f64,
+    },
 }
 
 /// Feld eines Musterwerts.
@@ -1071,6 +1225,9 @@ pub struct SketchDto {
     /// Texte (ab Format 18), auch gelöschte; fehlt in Skizzen ohne Text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texte: Vec<TextDto>,
+    /// Haken „3D-Skizze“ (ab Format 20); fehlt, wenn aus.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drei_d: bool,
 }
 
 /// Waagerechte Ausrichtung eines Textes (ab Format 18).
@@ -1129,6 +1286,9 @@ pub struct TextDto {
     pub umkehren_waagerecht: bool,
     pub umkehren_senkrecht: bool,
     pub lage: TextLageDto,
+    /// Ab Format 20: Normale der Ebene eines Textes in 3D; fehlt in der Skizzenebene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normale: Option<V3>,
     pub kurven: Vec<usize>,
     pub punkte: Vec<usize>,
     pub lebt: bool,

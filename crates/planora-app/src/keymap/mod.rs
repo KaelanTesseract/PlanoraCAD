@@ -75,12 +75,24 @@ pub enum Gesture {
     },
 }
 
-/// Eine Belegung: Taste oder Mausgeste. Tasten und Gesten sind nie gleich, zählen also nie
-/// gegeneinander als Doppelbelegung.
+/// Eine Umschalttaste, die allein belegt werden kann ([`Binding::Modifier`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ModKey {
+    Ctrl,
+    Shift,
+    Alt,
+}
+
+/// Eine Belegung: Taste, Mausgeste oder eine Umschalttaste allein. Die drei Arten sind nie
+/// gleich, zählen also nie gegeneinander als Doppelbelegung.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Binding {
     Key(KeyChord),
     Mouse(Gesture),
+    /// Eine Umschalttaste allein gedrückt und wieder losgelassen (ohne dass dazwischen eine
+    /// Taste, Maustaste oder das Rad etwas getan hat), z. B. Fusions Alt für die Triade. Der
+    /// Verteiler erkennt das über [`dispatch::ModTap`].
+    Modifier(ModKey),
 }
 
 /// Ergebnis von [`Keymap::set`].
@@ -253,6 +265,9 @@ impl Keymap {
             let mut list = Vec::new();
             for t in texts {
                 match text::parse_binding(t) {
+                    Some(b) if Keymap::unsupported_text(a, &b).is_some() => {
+                        notes.push(Keymap::unsupported_text(a, &b).unwrap_or_default())
+                    }
                     Some(b) if Keymap::fixed_key_text(a, &b).is_some() => {
                         notes.push(planora_i18n::tr!(
                             "keymap-note-fixed",
@@ -317,6 +332,19 @@ impl Keymap {
         (km, notes)
     }
 
+    /// Hinweistext, wenn `b` für `a` nicht auswertbar ist: „Umschalttaste allein“ gibt es nur bei
+    /// den Aktionen, die sie auswerten ([`Action::accepts_modifier`]). `None`: in Ordnung.
+    pub fn unsupported_text(a: Action, b: &Binding) -> Option<String> {
+        match b {
+            Binding::Modifier(_) if !a.accepts_modifier() => Some(planora_i18n::tr!(
+                "keymap-modifier-unsupported",
+                binding = text::binding_text(b),
+                action = a.label()
+            )),
+            _ => None,
+        }
+    }
+
     /// Ist `b` für `a` eine Taste, die eine Ansicht fest braucht (Eingabe und Entf in der Skizze,
     /// Entf in der Zeichnung, Tab zum Wechseln des Fokus, Pfeil links/rechts an der
     /// Verlaufsleiste für Aktionen des Modells)? Dann der Hinweis „„Entf“ ist in der Skizze fest
@@ -332,7 +360,11 @@ impl Keymap {
                 planora_i18n::tr!("keymap-fixed-sketch")
             }
             (egui::Key::Delete, Area::Drawing) => planora_i18n::tr!("keymap-fixed-drawing"),
-            (egui::Key::Tab, _) if plain => planora_i18n::tr!("keymap-fixed-tab"),
+            // Die Aktion „Triadengriff wechseln“ (Skizzen 10) hat Tab von Fusion; ihr Verteiler
+            // nimmt das Ziehen des Fokus selbst zurück.
+            (egui::Key::Tab, _) if plain && a != Action::SketchTriadCycleHandle => {
+                planora_i18n::tr!("keymap-fixed-tab")
+            }
             (egui::Key::ArrowLeft | egui::Key::ArrowRight, Area::Model) if plain && !c.shift => {
                 planora_i18n::tr!("keymap-fixed-history-bar")
             }
@@ -388,6 +420,7 @@ pub fn shortcut_hint(km: &Keymap, a: Action) -> String {
         .iter()
         .find_map(|b| match b {
             Binding::Key(c) => Some(text::chord_text(c)),
+            Binding::Modifier(m) => Some(text::modifier_tap_text(*m)),
             Binding::Mouse(_) => None,
         })
         .unwrap_or_default()

@@ -121,7 +121,8 @@ pub(crate) fn carry_frame(
     let mut trial = sk.clone();
     let probe = trial.drag(&[Drag {
         point: fit,
-        target: from + delta,
+        target: (from + delta).extend(0.0),
+        plane: None,
     }])?;
     if probe.drag_failed {
         return Ok(probe);
@@ -138,7 +139,8 @@ pub(crate) fn carry_frame(
         .iter()
         .map(|&(point, at)| Drag {
             point,
-            target: at + made,
+            target: (at + made).extend(0.0),
+            plane: None,
         })
         .collect();
     sk.drag(&drags)
@@ -302,14 +304,21 @@ impl SketchSession {
         hidden_handles_of(sk, &self.selection)
     }
 
-    /// Der nächste Punkt im Radius, ohne unsichtbare Griffe.
+    /// Der nächste Punkt im Radius, ohne unsichtbare Griffe. 3D-Punkte (Skizzen 10) stehen nicht
+    /// in der Draufsicht: Sie trifft die Ansicht über den Bildschirmabstand
+    /// ([`crate::sketch_view`]), hier nie.
     pub(crate) fn shown_point(&self, sk: &Sketch, at: DVec2, radius: f64) -> Option<PointId> {
-        sk.pick_point_skipping(at, radius, &self.hidden_handles(sk).points)
+        let mut skip = self.hidden_handles(sk).points;
+        skip.extend(sk.points().map(|(p, _)| p).filter(|&p| sk.is_3d_point(p)));
+        sk.pick_point_skipping(at, radius, &skip)
     }
 
-    /// Die nächste Kurve im Radius, ohne unsichtbare Griffe.
+    /// Die nächste Kurve im Radius, ohne unsichtbare Griffe. 3D-Kurven (Skizzen 10) trifft wie
+    /// 3D-Punkte nur die Ansicht über den Bildschirmabstand.
     pub(crate) fn shown_curve(&self, sk: &Sketch, at: DVec2, radius: f64) -> Option<CurveId> {
-        sk.pick_curve_skipping(at, radius, &self.hidden_handles(sk).curves)
+        let mut skip = self.hidden_handles(sk).curves;
+        skip.extend(sk.curves().map(|(c, _)| c).filter(|&c| sk.is_3d_curve(c)));
+        sk.pick_curve_skipping(at, radius, &skip)
     }
 
     /// Griffe auf den Schulterpunkten der gewählten Kegelschnitte (D4), im Auswahlwerkzeug.

@@ -358,7 +358,8 @@ fn refresh_200_chars_under_20ms() {
             let t0 = Instant::now();
             s.drag(&[Drag {
                 point: corners[0],
-                target,
+                target: target.extend(0.0),
+                plane: None,
             }])
             .unwrap();
             t0.elapsed().as_secs_f64() * 1e3
@@ -415,7 +416,12 @@ fn explode_200_chars_then_solve_and_drag_under_20ms() {
 
         let target = v(30.0 + k as f64, -25.0);
         let t0 = Instant::now();
-        s.drag(&[Drag { point: b, target }]).unwrap();
+        s.drag(&[Drag {
+            point: b,
+            target: target.extend(0.0),
+            plane: None,
+        }])
+        .unwrap();
         drag.push(t0.elapsed().as_secs_f64() * 1e3);
         assert!(s.point_xy(b).unwrap().distance(target) < 1e-6);
         // Die Buchstaben bleiben, wo sie waren.

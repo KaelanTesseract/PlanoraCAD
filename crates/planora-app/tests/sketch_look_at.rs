@@ -257,14 +257,15 @@ fn twist(rig: &mut Rig) {
 #[test]
 fn the_button_sits_in_the_palette_row_and_looks_at_the_sketch() {
     let mut rig = Rig::new();
-    let row = rig.text("Skizzenraster").expect("Skizzenraster");
-    let snap = rig.text("Fang").expect("Fang");
+    // Seit Task H3 steht das Symbol in der Namenszeile rechts neben „3D-Skizze“.
+    let (_, row) = sketch_panel::sketch_name_label(&rig.ctx).expect("Namenszeile");
+    let three_d = rig.text("3D-Skizze").expect("3D-Skizze");
     let look = sketch_panel::look_at_button(&rig.ctx).expect("Knopf „Blick auf“");
     assert!(
         (look.center().y - row.center().y).abs() < 8.0,
         "gleiche Zeile: {look:?} / {row:?}"
     );
-    assert!(look.min.x > snap.max.x, "rechts neben Fang");
+    assert!(look.min.x > three_d.max.x, "rechts neben 3D-Skizze");
     assert!(look.max.x < SIZE.x, "im Fenster");
     twist(&mut rig);
     let dist = rig.st().camera.distance;

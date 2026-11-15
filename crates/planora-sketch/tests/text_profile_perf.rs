@@ -180,7 +180,8 @@ fn path_text_on_dragged_spline_under_20ms() {
             let r = s
                 .drag(&[Drag {
                     point: grip,
-                    target,
+                    target: target.extend(0.0),
+                    plane: None,
                 }])
                 .unwrap();
             let dt = t0.elapsed().as_secs_f64() * 1e3;

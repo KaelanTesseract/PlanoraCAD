@@ -420,7 +420,13 @@ fn dragging_a_point_beyond_the_spline_end_keeps_it_on_the_drawn_spline() {
         DVec2::new(14.0, -6.0),
         DVec2::new(-8.0, 1.0),
     ] {
-        let rep = s.drag(&[Drag { point: q, target }]).unwrap();
+        let rep = s
+            .drag(&[Drag {
+                point: q,
+                target: target.extend(0.0),
+                plane: None,
+            }])
+            .unwrap();
         // gewählte Semantik: Der Punkt bleibt auf dem gezeichneten Spline (am Ende oder an
         // seiner letzten gültigen Lage); nichts wird als Widerspruch gemeldet.
         assert_eq!(rep.status, SolveStatus::Solved, "{target:?}: {rep:?}");

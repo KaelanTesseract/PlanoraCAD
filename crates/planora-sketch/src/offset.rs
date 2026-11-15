@@ -175,6 +175,8 @@ pub enum OffsetProblem {
     ClosedKink,
     /// Eine Kurve ist eine erzeugte Kurve eines Textes (Spec E, Meldung `sketch-text-no-offset`).
     Text,
+    /// Eine Kurve ist eine 3D-Kurve (Skizzen 10, Meldung `sketch-err-tool-not-in-3d`).
+    NotIn3d,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1568,6 +1570,9 @@ impl Sketch {
         if self.has_glyph(&ids) {
             return Err(OffsetProblem::Text);
         }
+        if ids.iter().any(|&c| self.is_3d_curve(c)) {
+            return Err(OffsetProblem::NotIn3d);
+        }
         let mut nodes = Nodes::new(tol);
         let mut links: Vec<Option<[usize; 2]>> = Vec::with_capacity(ids.len());
         for &c in &ids {
@@ -1728,6 +1733,9 @@ impl Sketch {
             let sources: Vec<CurveId> = chain.items.iter().map(|&(c, _)| c).collect();
             if self.has_glyph(&sources) {
                 return Err(OffsetProblem::Text);
+            }
+            if sources.iter().any(|&c| self.is_3d_curve(c)) {
+                return Err(OffsetProblem::NotIn3d);
             }
             if let [(c, against)] = chain.items[..]
                 && chain.closed
@@ -1981,7 +1989,7 @@ impl Sketch {
     fn curve_has_fixed_point(&self, c: CurveId) -> bool {
         let points = self.curves[c].kind.points();
         self.constraints()
-            .any(|(_, d)| matches!(d.kind, ConstraintKind::Fixed(p, ..) if points.contains(&p)))
+            .any(|(_, d)| d.kind.fixed_point().is_some_and(|p| points.contains(&p)))
     }
 
     /// Der Punkt der Vorlage `source`, um den der Rollkreis läuft. Am Kreis ein neuer
@@ -2111,6 +2119,7 @@ impl Sketch {
                 for piece in &l.pieces {
                     s.check_curve(piece.source)?;
                     s.refuse_text_curves(&[piece.source], || tr!("sketch-text-no-offset"))?;
+                    s.refuse_3d(&[piece.source])?;
                 }
                 if tied {
                     s.seed_bridge_joints(l, plan.distance.abs(), &mut joints)?;

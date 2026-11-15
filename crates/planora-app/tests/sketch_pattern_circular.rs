@@ -712,7 +712,8 @@ fn clicking_an_instance_suppresses_it_and_moving_the_centre_later_moves_the_inst
     let (_, sk) = s.session_sketch_mut().unwrap();
     sk.drag(&[Drag {
         point: c,
-        target: v(10.0, 0.0),
+        target: v(10.0, 0.0).extend(0.0),
+        plane: None,
     }])
     .unwrap();
     sk.solve();

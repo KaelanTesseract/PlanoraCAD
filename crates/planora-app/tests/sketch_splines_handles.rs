@@ -914,7 +914,8 @@ fn the_grid_snap_does_not_bind_a_hidden_tip() {
     let (se_, sk_) = s.session_sketch_mut().unwrap();
     sk_.drag(&[planora_sketch::solver::Drag {
         point: tip,
-        target: node,
+        target: node.extend(0.0),
+        plane: None,
     }])
     .unwrap();
     se_.set_tool(sk_, Tool::Line);

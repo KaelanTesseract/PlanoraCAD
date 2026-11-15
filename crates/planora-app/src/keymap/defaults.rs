@@ -5,7 +5,7 @@
 //! Bereich, Voreinstellung. Daraus entstehen [`Action`], [`Action::ALL`] und die
 //! Voreinstellung von [`super::Keymap::defaults`].
 
-use super::{Area, Binding, Gesture, KeyChord, MouseButton};
+use super::{Area, Binding, Gesture, KeyChord, ModKey, MouseButton};
 use egui::Key;
 
 /// Erzeugt [`Action`] samt Id, Anzeigename, Bereich und Voreinstellung aus einer Tabelle.
@@ -158,6 +158,13 @@ action_table! {
     SketchIntersect, "skizze.schneiden", "action-sketch-intersect", Sketch, [];
     /// Fusion „Silhouette“ (Skizzen 6): ohne Vorgabetaste wie in Fusion, belegbar.
     SketchSilhouette, "skizze.silhouette", "action-sketch-silhouette", Sketch, [];
+    /// Fusion „3D-Geometrie einbeziehen“ (Skizzen 10): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchInclude3d, "skizze.3d_einbeziehen", "action-sketch-include-3d", Sketch, [];
+    /// Fusion „Auf Fläche projizieren“ (Skizzen 10): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchProjectToSurface, "skizze.auf_flaeche_projizieren", "action-sketch-project-to-surface",
+        Sketch, [];
+    /// Fusion „Schnittkurve“ (Skizzen 10): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchIntersectionCurve, "skizze.schnittkurve", "action-sketch-intersection-curve", Sketch, [];
     // Skizzen 7: die Arten am Spline-Knopf, ohne Vorgabetaste wie in Fusion (Annahme), belegbar.
     /// Fusion „Spline durch Stützpunkte“.
     SketchSplineFit, "skizze.spline_stuetzpunkte", "action-sketch-spline-fit", Sketch, [];
@@ -243,6 +250,18 @@ action_table! {
     /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
     SketchShowShortcuts, "skizze.tastenkuerzel", "action-sketch-show-shortcuts", Sketch,
         [key(Key::S)];
+    // Skizzen 10 (3D-Skizze): Tasten der Triade wie Fusion. Die Triade zeichnet Task 10; bis
+    // dahin ändern die Aktionen nur den Zustand der Sitzung (Ebene, Griff, Sperre).
+    /// Fusion: Alt allein gedrückt und losgelassen schaltet die aktive Triadenebene reihum.
+    SketchTriadCyclePlane, "skizze.triade_ebene", "action-sketch-triad-plane", Sketch,
+        [Binding::Modifier(ModKey::Alt)];
+    /// Fusion: Tab macht reihum einen Drehgriff der Triade aktiv.
+    SketchTriadCycleHandle, "skizze.triade_griff", "action-sketch-triad-handle", Sketch,
+        [key(Key::Tab)];
+    /// Fusion: Pfeil hoch (gehalten) sperrt die Lage in der aktiven Ebene; der Zeiger bewegt
+    /// dann nur entlang der Ebenennormale. Wirkt nur, solange die Taste gehalten wird
+    /// ([`super::dispatch::held`]); `run_action` tut nichts.
+    SketchLockZ, "skizze.z_sperren", "action-sketch-lock-z", Sketch, [key(Key::ArrowUp)];
     // Zeichnung: die vorhandenen Werkzeuge (wie ihr Schalter). Mittelpunktmarke C, Verschieben
     // M, Projizierte Ansicht P und Text T kommen erst mit ihrer Funktion; Entf (Nummernkreis
     // löschen) ist fest (`drawing_view`).
@@ -302,6 +321,17 @@ impl Action {
             .iter()
             .copied()
             .find(|a| a.sketch_tool() == Some(tool))
+    }
+
+    /// Wertet diese Aktion eine Belegung „Umschalttaste allein“ ([`Binding::Modifier`]) aus? Nur
+    /// die Tasten der Triade (Skizzen 10): Ebene und Griff über den Tipp
+    /// ([`super::dispatch::tap_actions`]), „Z sperren“ über das Halten ([`super::dispatch::held`]).
+    /// Für alle anderen lehnen Erfassung und Konfiguration so eine Belegung ab.
+    pub fn accepts_modifier(self) -> bool {
+        matches!(
+            self,
+            Action::SketchTriadCyclePlane | Action::SketchTriadCycleHandle | Action::SketchLockZ
+        )
     }
 
     /// Stelle in [`Action::ALL`] (die Varianten stehen dort in Tabellenreihenfolge).

@@ -97,10 +97,10 @@ fn without_an_elliptic_arc_the_file_keeps_its_format() {
     assert!(text.contains("\"format\": 1,"), "{text}");
 }
 
-// Skizzen 9: Format 19 ist jetzt gültig, zu neu ist erst 20.
+// Skizzen 10: Format 20 ist jetzt gültig, zu neu ist erst 21.
 #[test]
-fn format_20_is_too_new() {
+fn format_21_is_too_new() {
     let text = encode_version(&document(true, false).snapshot()).unwrap();
-    let e = load(&text.replacen("\"format\": 13", "\"format\": 20", 1)).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 20, .. }), "{e:?}");
+    let e = load(&text.replacen("\"format\": 13", "\"format\": 21", 1)).unwrap_err();
+    assert!(matches!(e, ProjectError::TooNew { found: 21, .. }), "{e:?}");
 }

@@ -4,7 +4,7 @@
 
 use crate::msg::Msg;
 use crate::sketch_kinds::ToolKind;
-use crate::sketch_state::{SketchSession, Tool, TransformStage, err};
+use crate::sketch_state::{Item, SketchSession, Tool, TransformStage, err};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
@@ -396,6 +396,24 @@ impl SketchSession {
             &shown,
             &|snap| !on_glyph(sk, snap),
         );
+        // 3D-Punkte stehen nicht im Index (Skizzen 10): Der sichtbar getroffene (`pick3`, über den
+        // Bildschirmabstand von der Ansicht gesetzt) fängt nach den 2D-Punkten und dem Ursprung,
+        // vor Mitten, Schnitten und Kurven. Die Bindung folgt dann den Regeln von
+        // `add_constraint`.
+        let point_class =
+            |h: &SnapHit| matches!(h.snap, Snap::Point(_) | Snap::Center(_) | Snap::Origin);
+        let hit = match (hit, self.pick3) {
+            (Some(h), _) if point_class(&h) => Some(h),
+            (h, Some(Item::Point(p))) => sk
+                .point_xy(p)
+                .ok()
+                .map(|at| SnapHit {
+                    snap: Snap::Point(p),
+                    at,
+                })
+                .or(h),
+            (h, _) => h,
+        };
         if let Some(hit) = hit {
             cur.at = hit.at;
             cur.snap = hit.snap;

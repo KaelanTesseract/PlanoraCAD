@@ -40,7 +40,7 @@ fn build(s: &mut AppState, n: usize) -> (FeatureId, Vec<CurveId>) {
             s.observe_sketch(false);
         }
     }
-    let curves: Vec<CurveId> = draft(s).copies.iter().map(|c| c.curve).collect();
+    let curves: Vec<CurveId> = draft(s).copies.iter().filter_map(|c| c.curve()).collect();
     assert_eq!(curves.len(), n, "genug Kanten projiziert");
     (id, curves)
 }
@@ -182,7 +182,11 @@ fn break_link_is_one_undo_step() {
     assert!(st(&mut w).message.is_none());
     // Rückgängig stellt beide Verknüpfungen wieder her, Wiederholen löst sie wieder.
     assert!(st(&mut w).undo_sketch());
-    let restored: Vec<CurveId> = draft(st(&mut w)).copies.iter().map(|x| x.curve).collect();
+    let restored: Vec<CurveId> = draft(st(&mut w))
+        .copies
+        .iter()
+        .filter_map(|x| x.curve())
+        .collect();
     assert_eq!(restored, c);
     assert!(st(&mut w).redo_sketch());
     assert!(draft(st(&mut w)).copies.is_empty());
@@ -261,8 +265,8 @@ fn warning_shows_in_browser_and_history() {
                 let m = sf.sketch.add_point(80.0, 80.0).unwrap();
                 let circle = sf.sketch.add_circle(m, 3.0).unwrap();
                 for copy in &mut sf.copies {
-                    if copy.curve == c {
-                        copy.curve = circle;
+                    if copy.curve() == Some(c) {
+                        copy.target = planora_feature::CopyTarget::Curve(circle);
                     }
                 }
             }

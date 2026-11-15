@@ -11,7 +11,7 @@ use crate::sketch_state::{
 };
 use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::tr;
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::fillet::{ChamferIds, FilletIds};
 use planora_sketch::helpers::RectIds;
@@ -51,6 +51,12 @@ pub enum FieldKind {
     MoveY,
     /// Drehung in Grad: Vorzeichen erlaubt.
     MoveAngle,
+    /// Verschieben in 3D (Skizzen 10, nur mit „3D-Skizze“): Z-Abstand, Vorzeichen und null erlaubt.
+    MoveZ,
+    /// Drehung um die X-Achse in Grad (Skizzen 10).
+    MoveAngleX,
+    /// Drehung um die Y-Achse in Grad (Skizzen 10).
+    MoveAngleY,
     /// Faktor des Maßstabs: größer als null, ohne Einheit.
     ScaleFactor,
     /// Muster (Skizzen 5): Anzahl der ersten Richtung, ganzzahlig 1 bis
@@ -67,6 +73,9 @@ pub enum FieldKind {
     /// Rho des Kegelschnitts (Skizzen 7): reine Zahl nach [`planora_sketch::conic_rho_ok`], wird nie
     /// ein Maß.
     Rho,
+    /// Z-Abstand beim Zeichnen in 3D mit Z-Sperre (Skizzen 10): Abstand entlang der Normale der
+    /// Triadenebene von der Stelle, an der Pfeil hoch gedrückt wurde.
+    ZDistance,
 }
 
 impl FieldKind {
@@ -76,6 +85,8 @@ impl FieldKind {
             FieldKind::Angle
             | FieldKind::Sweep
             | FieldKind::MoveAngle
+            | FieldKind::MoveAngleX
+            | FieldKind::MoveAngleY
             | FieldKind::PatternAngle => ParamUnit::Angle,
             FieldKind::Sides
             | FieldKind::ScaleFactor
@@ -107,6 +118,9 @@ impl FieldKind {
             FieldKind::MoveX => tr!("sketch-field-move-x"),
             FieldKind::MoveY => tr!("sketch-field-move-y"),
             FieldKind::MoveAngle => tr!("sketch-field-move-angle"),
+            FieldKind::MoveZ => tr!("sketch-field-move-z"),
+            FieldKind::MoveAngleX => tr!("sketch-field-move-angle-x"),
+            FieldKind::MoveAngleY => tr!("sketch-field-move-angle-y"),
             FieldKind::ScaleFactor => tr!("sketch-field-scale-factor"),
             FieldKind::PatternCount1 => tr!("sketch-pattern-slot-count1"),
             FieldKind::PatternSpacing1 => tr!("sketch-pattern-slot-spacing1"),
@@ -115,6 +129,7 @@ impl FieldKind {
             FieldKind::PatternCount => tr!("sketch-pattern-slot-count"),
             FieldKind::PatternAngle => tr!("sketch-pattern-slot-angle"),
             FieldKind::Rho => tr!("sketch-field-rho"),
+            FieldKind::ZDistance => tr!("sketch-field-z-distance"),
         }
     }
 
@@ -145,7 +160,8 @@ pub struct DrawField {
 }
 
 /// Werkzeug, Art und Stand, zu dem die Felder gehören (siehe [`DrawInput`]): offene Punkte,
-/// Lagen, Kurven, Bogenzug, Stufe von Verschieben/Kopieren oder Muster und die Felder der Stufe.
+/// Lagen, Kurven, Bogenzug, Stufe von Verschieben/Kopieren oder Muster, die Felder der Stufe und
+/// ob in 3D gezeichnet wird.
 type InputKey = (
     Option<Tool>,
     Option<ToolKind>,
@@ -155,6 +171,7 @@ type InputKey = (
     bool,
     TransformStage,
     &'static [FieldKind],
+    bool,
 );
 
 /// Felder der Stufe des laufenden Werkzeugs.
@@ -330,15 +347,21 @@ fn read_field(
         FieldKind::OffsetDistance if !v.is_finite() || v == 0.0 => {
             Err(tr!("sketch-field-offset-nonzero"))
         }
-        FieldKind::MoveX | FieldKind::MoveY if !v.is_finite() => {
+        FieldKind::MoveX | FieldKind::MoveY | FieldKind::MoveZ if !v.is_finite() => {
             Err(tr!("sketch-err-value-finite"))
         }
-        FieldKind::MoveAngle if !v.is_finite() => Err(tr!("sketch-err-value-finite")),
-        FieldKind::MoveAngle => Ok(Some(v.to_radians())),
+        FieldKind::MoveAngle | FieldKind::MoveAngleX | FieldKind::MoveAngleY if !v.is_finite() => {
+            Err(tr!("sketch-err-value-finite"))
+        }
+        FieldKind::MoveAngle | FieldKind::MoveAngleX | FieldKind::MoveAngleY => {
+            Ok(Some(v.to_radians()))
+        }
         FieldKind::ScaleFactor if !v.is_finite() || v <= 0.0 => {
             Err(tr!("sketch-field-factor-positive"))
         }
-        FieldKind::OffsetDistance | FieldKind::MoveX | FieldKind::MoveY => Ok(Some(v)),
+        FieldKind::OffsetDistance | FieldKind::MoveX | FieldKind::MoveY | FieldKind::MoveZ => {
+            Ok(Some(v))
+        }
         _ if !v.is_finite() || v <= 0.0 => Err(tr!("sketch-field-positive")),
         FieldKind::MinorAxis if minor_limit.is_some_and(|l| v > l) => {
             Err(tr!("sketch-field-minor-too-big"))
@@ -414,11 +437,14 @@ fn basis_direction(sk: &Sketch, chain: Option<CurveId>, start: PointId) -> DVec2
 impl SketchSession {
     /// Felder der aktuellen Stufe; nur bei geändertem Werkzeug oder Stand neu (dann leer).
     pub fn sync_input(&mut self, sk: &Sketch) {
+        // Die Felder von Verschieben in 3D gibt es nur mit „3D-Skizze“ (Skizzen 10, A1).
+        self.move3 = sk.three_d;
         let key = (
             Some(self.tool),
             self.planned_kind(),
             self.pending.clone(),
-            self.pending_pos.len(),
+            // Ebene Formen in 3D zählen ihre Lagen wie die Stufen in der Ebene.
+            self.pending_pos.len() + self.pending3.len(),
             self.pending_curves.len(),
             self.line_arc.is_some(),
             if self.tool == Tool::Pattern {
@@ -428,6 +454,9 @@ impl SketchSession {
             },
             // Muster: Die Felder wechseln mit der Art des Kreismusters (Voll ohne Winkel).
             self.stage_fields(),
+            // Zeichnen in 3D oder in der Ebene: Ein gesperrter Winkel hieße im anderen Weg etwas
+            // anderes, darum sind die Felder beim Wechsel leer (Fix-Runde 1 Task 11).
+            self.draw3,
         );
         if self.input.key == key {
             return;
@@ -470,15 +499,38 @@ impl SketchSession {
         if self.line_arc.is_some() {
             return &[];
         }
+        // Ebene Formen in 3D (Skizzen 10): nur das Rho des Kegelschnitts nach dem Scheitel.
+        if self.draw3
+            && let Some(kind) = self.planar3()
+        {
+            let rho = kind == crate::sketch_draw3::Planar3::Conic && self.pending3.len() == 3;
+            return if rho { &[F::Rho] } else { &[] };
+        }
         if let Some(kind) = self.planned_kind() {
             return kind.stages().get(self.kind_stage()).copied().unwrap_or(&[]);
         }
         if self.tool == Tool::Pattern {
             return self.pattern_fields();
         }
+        // Zeichnen in 3D mit Z-Sperre: nur die Höhe (Skizzen 10).
+        if self.draw3
+            && self.triad.lock_z
+            && matches!(self.tool, Tool::Line | Tool::Point | Tool::Spline)
+        {
+            return &[F::ZDistance];
+        }
         let (pts, pos) = (self.pending.len(), self.pending_pos.len());
         match self.tool {
             Tool::Offset if !self.pending_curves.is_empty() => &[F::OffsetDistance],
+            // Mit „3D-Skizze“ dazu Z-Abstand, X- und Y-Winkel in der Reihenfolge von Fusion (A1).
+            Tool::MoveCopy if self.transform.stage == TransformStage::Active && self.move3 => &[
+                F::MoveX,
+                F::MoveY,
+                F::MoveZ,
+                F::MoveAngleX,
+                F::MoveAngleY,
+                F::MoveAngle,
+            ],
             Tool::MoveCopy if self.transform.stage == TransformStage::Active => {
                 &[F::MoveX, F::MoveY, F::MoveAngle]
             }
@@ -575,8 +627,20 @@ impl SketchSession {
         if let Some(slot) = kind.pattern_slot() {
             return self.pattern_slot_value(slot);
         }
-        if matches!(kind, F::MoveX | F::MoveY | F::MoveAngle | F::ScaleFactor) {
+        if matches!(
+            kind,
+            F::MoveX
+                | F::MoveY
+                | F::MoveZ
+                | F::MoveAngle
+                | F::MoveAngleX
+                | F::MoveAngleY
+                | F::ScaleFactor
+        ) {
             return self.transform_field_value(kind);
+        }
+        if self.draw3 {
+            return self.field_value3(sk, kind);
         }
         let at = self.draw_cursor.as_ref()?.at;
         if kind == F::OffsetDistance {
@@ -617,7 +681,10 @@ impl SketchSession {
             | F::OffsetDistance
             | F::MoveX
             | F::MoveY
+            | F::MoveZ
             | F::MoveAngle
+            | F::MoveAngleX
+            | F::MoveAngleY
             | F::ScaleFactor
             | F::PatternCount1
             | F::PatternSpacing1
@@ -625,8 +692,84 @@ impl SketchSession {
             | F::PatternSpacing2
             | F::PatternCount
             | F::PatternAngle
-            | F::Rho => return None,
+            | F::Rho
+            | F::ZDistance => return None,
         })
+    }
+
+    /// Die beiden Achsen der aktiven Triadenebene in Skizzenkoordinaten (erste: Bezug des Winkels).
+    fn plane_axes3(&self) -> (DVec3, DVec3) {
+        let (u, v) = self.triad.active.axes();
+        (self.triad.axis(u), self.triad.axis(v))
+    }
+
+    /// [`field_value`](Self::field_value) beim Zeichnen in 3D: Länge vom Anfang der Linie, Winkel
+    /// in der aktiven Ebene zu ihrer ersten Achse (0° bis 180°), Z-Abstand von der Stelle der
+    /// Z-Sperre.
+    fn field_value3(&self, sk: &Sketch, kind: FieldKind) -> Option<f64> {
+        let cur = self.cursor3?;
+        match kind {
+            FieldKind::ZDistance => {
+                let base = self.lock_from?;
+                Some((cur.at - base).dot(self.triad.plane().1).abs())
+            }
+            FieldKind::Length | FieldKind::Angle => {
+                let from = sk.point_xyz(*self.pending.first()?).ok()?;
+                let d = cur.at - from;
+                if kind == FieldKind::Length {
+                    return Some(d.length());
+                }
+                let (u, v) = self.plane_axes3();
+                Some(d.dot(v).abs().atan2(d.dot(u)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Lage mit den gesperrten Größen beim Zeichnen in 3D; `None` ohne Sperre. Z-Abstand: von der
+    /// Stelle der Z-Sperre entlang der Normale, die Seite wählt der Zeiger. Länge und Winkel der
+    /// Linie: in der aktiven Ebene ab dem Anfang, der Winkel zur ersten Achse der Ebene, die Seite
+    /// wählt der Zeiger (wie [`locked_ray`] in 2D).
+    pub(crate) fn locked_position3(
+        &self,
+        sk: &Sketch,
+        cur: &crate::sketch_draw3::Cursor3,
+    ) -> Option<DVec3> {
+        use FieldKind as F;
+        let n = self.triad.plane().1;
+        if self.triad.lock_z {
+            let h = self.input.locked(F::ZDistance)?;
+            let base = self.lock_from?;
+            let side = if (cur.raw - base).dot(n) < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            return Some(base + n * side * h);
+        }
+        if self.tool != Tool::Line {
+            return None;
+        }
+        let from = sk.point_xyz(*self.pending.first()?).ok()?;
+        let (len, angle) = (self.input.locked(F::Length), self.input.locked(F::Angle));
+        if len.is_none() && angle.is_none() {
+            return None;
+        }
+        let (u, v) = self.plane_axes3();
+        let mut d = cur.raw - from;
+        d -= n * d.dot(n);
+        let Some(angle) = angle else {
+            return Some(from + d.try_normalize().unwrap_or(u) * len?);
+        };
+        let side = if d.dot(v) < 0.0 { -1.0 } else { 1.0 };
+        let ray = u * angle.cos() + v * side * angle.sin();
+        let projected = d.dot(ray);
+        let free = if projected > 0.0 {
+            projected
+        } else {
+            d.length()
+        };
+        Some(from + ray * len.unwrap_or(free))
     }
 
     /// Letzter Schritt des aufgelösten Zeigers: Gesperrte Größen gewinnen immer. Trifft die
@@ -772,6 +915,9 @@ impl SketchSession {
         radius: f64,
         scope: &ParamScope,
     ) -> Result<(), String> {
+        if self.draw3 {
+            return self.commit_input3(sf, scope);
+        }
         let raw = self.draw_cursor.as_ref().map(|c| c.raw).or(self.cursor);
         match raw {
             Some(raw) => self.commit_input(sf, raw, radius, false, scope),
@@ -804,7 +950,10 @@ impl SketchSession {
                                 | FieldKind::Rho
                                 | FieldKind::MoveX
                                 | FieldKind::MoveY
+                                | FieldKind::MoveZ
                                 | FieldKind::MoveAngle
+                                | FieldKind::MoveAngleX
+                                | FieldKind::MoveAngleY
                                 | FieldKind::ScaleFactor
                         )
                 })
@@ -876,6 +1025,23 @@ impl SketchSession {
         let prior = sf.sketch.clone();
         let overall = self.planned_kind() == Some(ToolKind::SlotOverall);
         let dim = dimension_kind(&mut sf.sketch, created, kind, chain, overall)?;
+        self.add_dimension_valued(sf, prior, dim, value, kind, text, scope)
+    }
+
+    /// Legt das Maß `dim` (Art des Felds `kind`) mit dem getippten `value` und seinem Text an;
+    /// `prior` ist der Stand vor dem Maß und seinen Hilfslinien. Wie
+    /// [`add_typed_dimension`](Self::add_typed_dimension).
+    #[allow(clippy::too_many_arguments)]
+    fn add_dimension_valued(
+        &mut self,
+        sf: &mut SketchFeature,
+        prior: Sketch,
+        dim: ConstraintKind,
+        value: f64,
+        kind: FieldKind,
+        text: &str,
+        scope: &ParamScope,
+    ) -> Result<Option<Msg>, Msg> {
         let dim = checked_value(&sf.sketch, &dim, value)?;
         let old = sf.sketch.measure(&dim);
         let id = sf.sketch.add_constraint(dim).map_err(err)?;
@@ -903,6 +1069,169 @@ impl SketchSession {
         }
         Ok(None)
     }
+}
+
+impl SketchSession {
+    /// [`commit_input`](Self::commit_input) beim Zeichnen in 3D: setzt den Punkt an der Lage von
+    /// [`cursor3`](Self::cursor3) (mit den gesperrten Größen); entsteht eine Linie, werden die
+    /// getippten Werte zu Maßen in 3D-Fassung: Länge `Distance`, Winkel `Angle` zur Hilfslinie
+    /// entlang der ersten Achse der Triadenebene (nur wenn diese eine Achse der Skizze ist), der
+    /// Z-Abstand `Distance`, wenn die Z-Sperre am Anfang der Linie begann. Atomar.
+    pub fn commit_input3(
+        &mut self,
+        sf: &mut SketchFeature,
+        scope: &ParamScope,
+    ) -> Result<(), String> {
+        self.sync_input(&sf.sketch);
+        if let Some(e) = self.input.fields.iter().find_map(|f| f.error.clone()) {
+            self.message = Some(Msg::Raw(e.clone()));
+            return Err(e);
+        }
+        let typed: Vec<(FieldKind, String)> = self
+            .input
+            .fields
+            .iter()
+            .filter(|f| f.locked.is_some())
+            .map(|f| (f.kind, f.text.clone()))
+            .collect();
+        if typed.is_empty() {
+            let result = self.click3(&mut sf.sketch);
+            self.sync_input(&sf.sketch);
+            return result;
+        }
+        let (saved_session, saved_draft) = (self.clone(), sf.clone());
+        match self.commit_typed3(sf, &typed, scope) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let text = e.text();
+                *self = saved_session;
+                *sf = saved_draft;
+                self.message = Some(e);
+                Err(text)
+            }
+        }
+    }
+
+    fn commit_typed3(
+        &mut self,
+        sf: &mut SketchFeature,
+        typed: &[(FieldKind, String)],
+        scope: &ParamScope,
+    ) -> Result<(), Msg> {
+        let base = self.lock_from;
+        if let Err(text) = self.click3(&mut sf.sketch) {
+            return Err(self.message.take().unwrap_or(Msg::Raw(text)));
+        }
+        let Some(created @ Created::Line(line)) = self.created.take() else {
+            self.sync_input(&sf.sketch);
+            return Ok(());
+        };
+        let (a, b) = line_ends(&sf.sketch, line)?;
+        let tol = sf.sketch.tolerance().linear;
+        let from_start =
+            base.is_some_and(|q| sf.sketch.point_xyz(a).is_ok_and(|s| s.distance(q) <= tol));
+        let mut note = None;
+        for (kind, text) in typed {
+            let (value, _) = dimension_input(text, kind.unit(), scope)?;
+            let prior = sf.sketch.clone();
+            let dim = match kind {
+                FieldKind::Length => ConstraintKind::Distance(a, b, 0.0),
+                FieldKind::ZDistance if from_start => ConstraintKind::Distance(a, b, 0.0),
+                FieldKind::Angle => match self.angle3_dimension(&mut sf.sketch, line)? {
+                    Some(dim) => dim,
+                    None => continue,
+                },
+                _ => continue,
+            };
+            note = self
+                .add_dimension_valued(sf, prior, dim, value, *kind, text, scope)?
+                .or(note);
+        }
+        if note.is_some() {
+            self.message = note;
+        }
+        self.edit_label = Some(created.undo_label());
+        self.sync_input(&sf.sketch);
+        Ok(())
+    }
+
+    /// Winkelmaß der 3D-Linie `line` zur ersten Achse der aktiven Triadenebene: über eine feste
+    /// Hilfslinie entlang dieser Achse, wenn sie eine Achse der Skizze ist (Triade unverdreht oder
+    /// um Vielfache von 90° gedreht); sonst `None`, die Linie liegt dann nur im getippten Winkel.
+    fn angle3_dimension(
+        &self,
+        sk: &mut Sketch,
+        line: CurveId,
+    ) -> Result<Option<ConstraintKind>, Msg> {
+        let (u, _) = self.plane_axes3();
+        let Some(axis) = [DVec3::X, DVec3::Y, DVec3::Z]
+            .into_iter()
+            .position(|a| u.dot(a) >= 1.0 - 1e-9)
+        else {
+            return Ok(None);
+        };
+        let helper = axis_reference_along(sk, axis)?;
+        Ok(Some(ConstraintKind::Angle(helper, line, 0.0)))
+    }
+}
+
+/// Hilfslinie entlang der Skizzenachse `axis` (0: x wie [`axis_reference`], 1: y, 2: z), einmal je
+/// Skizze: eine Konstruktionslinie vom Ursprung 10 mm entlang der Achse mit festen Enden. Die
+/// z-Achse hat 3D-Punkte mit `Fixed3`.
+pub(crate) fn axis_reference_along(sk: &mut Sketch, axis: usize) -> Result<CurveId, Msg> {
+    use ConstraintKind as K;
+    if axis == 0 {
+        return axis_reference(sk);
+    }
+    let end = if axis == 1 {
+        DVec3::new(0.0, AXIS_HELPER_LENGTH, 0.0)
+    } else {
+        DVec3::new(0.0, 0.0, AXIS_HELPER_LENGTH)
+    };
+    let pinned = |p: PointId, q: DVec3| {
+        sk.constraints().any(|(_, c)| {
+            c.enabled
+                && !c.driven
+                && match c.kind {
+                    K::Fixed(r, x, y) => r == p && q.z == 0.0 && x == q.x && y == q.y,
+                    K::Fixed3(r, x, y, z) => r == p && DVec3::new(x, y, z) == q,
+                    _ => false,
+                }
+        })
+    };
+    let found = sk.curves().find_map(|(c, data)| match data.kind {
+        CurveKind::Line { a, b }
+            if data.construction && pinned(a, DVec3::ZERO) && pinned(b, end) =>
+        {
+            Some(c)
+        }
+        _ => None,
+    });
+    if let Some(c) = found {
+        return Ok(c);
+    }
+    let (a, b) = if axis == 1 {
+        (
+            sk.add_point(0.0, 0.0).map_err(err)?,
+            sk.add_point(end.x, end.y).map_err(err)?,
+        )
+    } else {
+        (
+            sk.add_point3(DVec3::ZERO).map_err(err)?,
+            sk.add_point3(end).map_err(err)?,
+        )
+    };
+    let line = sk.add_line(a, b).map_err(err)?;
+    sk.set_construction(line, true).map_err(err)?;
+    for (p, q) in [(a, DVec3::ZERO), (b, end)] {
+        let pin = if axis == 1 {
+            K::Fixed(p, q.x, q.y)
+        } else {
+            K::Fixed3(p, q.x, q.y, q.z)
+        };
+        sk.add_constraint(pin).map_err(err)?;
+    }
+    Ok(line)
 }
 
 /// Das Maß der Art `kind` an der fertigen Kurve, noch ohne Wert. Winkel: `Angle(bezug, linie)`

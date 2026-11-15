@@ -984,6 +984,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     overlay.extend(crate::canvas::canvas_outlines(state, rect));
     overlay.extend(sketch_view::finished_sketch_shapes(state, rect));
     overlay.extend(sketch_view::insert_preview_shapes(state, rect));
+    // Ecken und Achsen, die ein offener Dialog gewählt hat (Task H3).
+    overlay.extend(sketch_view::dialog_mark_shapes(state, rect));
     // Punkte und Linie des Kalibrierens über allem anderen der Szene.
     overlay.extend(crate::insert::calibrate::shapes(state, rect));
     painter.set(sketches_slot, Shape::Vec(overlay));

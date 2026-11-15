@@ -221,7 +221,7 @@ fn project_edge_is_linked_and_not_construction() {
     assert_eq!(n, 1);
     let d = draft(&s);
     assert_eq!(d.copies.len(), 1);
-    let c = d.copies[0].curve;
+    let c = d.copies[0].curve().unwrap();
     assert!(matches!(d.copies[0].source, CopySource::Edge(_)));
     let data = d.sketch.curve(c).unwrap();
     assert!(!data.construction, "normale Geometrie (Skizzen 6)");
@@ -321,7 +321,7 @@ fn freeform_edges_become_fixed_splines_without_duplicates() {
         .unwrap();
     let top = DVec2::new(5.0, 7.0);
     assert!(sk.nearest_on_curve(c, top).unwrap().distance(top) < 1e-6);
-    assert!(draft(&s).copies.iter().any(|copy| copy.curve == c));
+    assert!(draft(&s).copies.iter().any(|copy| copy.curve() == Some(c)));
     // Die Freiformkante allein geht ebenso; sie liegt schon in der Skizze.
     let solid = s.bodies[body].solid.clone();
     let spline = solid
@@ -508,7 +508,7 @@ fn deleted_fixed_spline_takes_its_edge_copy_along() {
     draft.sketch.remove_curve(c).unwrap();
     draft.prune_copies();
     assert_eq!(draft.copies.len(), copies - 1);
-    assert!(draft.copies.iter().all(|copy| copy.curve != c));
+    assert!(draft.copies.iter().all(|copy| copy.curve() != Some(c)));
 }
 
 #[test]
@@ -651,7 +651,14 @@ fn esc_leaves_nothing() {
 #[test]
 fn esc_ends_project_intersect_and_silhouette() {
     let mut s = box_with_sketch_on_top();
-    for kind in [ToolKind::Project, ToolKind::Intersect, ToolKind::Silhouette] {
+    for kind in [
+        ToolKind::Project,
+        ToolKind::Intersect,
+        ToolKind::Silhouette,
+        ToolKind::Include3d,
+        ToolKind::ProjectToSurface,
+        ToolKind::IntersectionCurve,
+    ] {
         let steps = undo_len(&s);
         {
             let (se, sk) = s.session_sketch_mut().unwrap();
@@ -780,7 +787,16 @@ fn strip_still_fits_1080() {
     assert!(sketch_panel::has_flyout(Tool::ProjectEdge));
     assert_eq!(
         ToolKind::of(Tool::ProjectEdge),
-        &[ToolKind::Project, ToolKind::Intersect, ToolKind::Silhouette]
+        // Skizzen 10, Task 16: bewusst angepasst, „3D-Geometrie einbeziehen“ steht dahinter;
+        // Task 19 ebenso: „Auf Fläche projizieren“ und „Schnittkurve“.
+        &[
+            ToolKind::Project,
+            ToolKind::Intersect,
+            ToolKind::Silhouette,
+            ToolKind::Include3d,
+            ToolKind::ProjectToSurface,
+            ToolKind::IntersectionCurve,
+        ]
     );
     assert_eq!(
         sketch_panel::tool_label(Tool::ProjectEdge),

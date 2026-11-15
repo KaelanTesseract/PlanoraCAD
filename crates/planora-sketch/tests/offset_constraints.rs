@@ -740,7 +740,8 @@ fn dragging_a_source_corner_keeps_the_distance() {
             let r =
                 b.s.drag(&[Drag {
                     point: corner,
-                    target,
+                    target: target.extend(0.0),
+                    plane: None,
                 }])
                 .unwrap();
             assert!(!r.drag_failed, "{r:?}");
@@ -1458,7 +1459,8 @@ fn dragged_error(b: &mut Bench, corner: PointId, by: DVec2) -> f64 {
         let r =
             b.s.drag(&[Drag {
                 point: corner,
-                target,
+                target: target.extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert!(!r.drag_failed, "{r:?}");

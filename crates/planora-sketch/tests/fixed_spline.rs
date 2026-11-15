@@ -1024,3 +1024,61 @@ fn closed_curve_with_a_kink_below_tolerance_is_offset() {
         }
     }
 }
+
+/// Skizzen 10, Task 5: Einbezogene Freiformkurve im Raum behält ihre Höhe.
+#[test]
+fn fixed_spline_3d_keeps_z_control_points() {
+    use planora_sketch::helpers::{Included, include_curve};
+    for frame in [Frame::WORLD, tilted_frame()] {
+        let mut s = Sketch::new(frame, "S", tol());
+        let edge = free(wavy());
+        let g = include_curve(&frame, &edge, 0.0, 3.0).unwrap();
+        let Included::Spline { curve } = &g else {
+            panic!("Freiformkurve erwartet: {g:?}")
+        };
+        let local: Vec<DVec3> = wavy()
+            .control_points()
+            .iter()
+            .map(|&p| frame.to_local(p))
+            .collect();
+        for (a, b) in curve.control_points().iter().zip(&local) {
+            assert!(a.distance(*b) < 1e-12, "{a} ≠ {b}");
+        }
+        let ids = s.add_included(&g).unwrap();
+        assert_eq!(ids.curves.len(), 1);
+        let c = ids.curves[0];
+        let (a, b, kept) = fixed_ends(&s, c);
+        assert_ne!(a, b);
+        assert!(kept.control_points().iter().any(|q| q.z.abs() > 0.5));
+        assert!(s.is_3d_curve(c));
+        assert!(s.is_3d_point(a) && s.is_3d_point(b));
+        let start = frame.to_local(wavy().point(0.0));
+        let end = frame.to_local(wavy().point(3.0));
+        assert!(s.point_xyz(a).unwrap().distance(start) < 1e-9);
+        assert!(s.point_xyz(b).unwrap().distance(end) < 1e-9);
+        for p in [a, b] {
+            let at = s.point_xyz(p).unwrap();
+            assert!(
+                s.constraints()
+                    .any(|(_, d)| d.kind == K::Fixed3(p, at.x, at.y, at.z))
+            );
+            assert!(!has_fixed(&s, p));
+        }
+        let mid = s.curve_point3(c, 1.5).unwrap();
+        assert!(mid.distance(frame.to_local(wavy().point(1.5))) < 1e-9);
+        solved(&mut s, "3D-Freiform");
+        // Speichern und Laden behält die Höhe.
+        let back = Sketch::from_data(s.to_data()).unwrap();
+        assert_eq!(fixed_ends(&back, c).2, kept);
+        assert!(back.is_3d_point(a));
+    }
+    // Geschlossen im Raum: ein Punkt für beide Enden.
+    let mut s = sketch();
+    let g = include_curve(&Frame::WORLD, &free(circle(4.0, 2.0)), 0.0, 1.0).unwrap();
+    let c = s.add_included(&g).unwrap().curves[0];
+    let (a, b, _) = fixed_ends(&s, c);
+    assert_eq!(a, b);
+    assert!((s.point_xyz(a).unwrap().z - 2.0).abs() < 1e-12);
+    solved(&mut s, "geschlossen 3D");
+    Sketch::from_data(s.to_data()).unwrap();
+}

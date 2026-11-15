@@ -454,10 +454,24 @@ fn look_at_key() -> egui::Id {
     shell_panels::sketch_side_id().with("look-at")
 }
 
-/// Lage des Knopfs „Blick auf“ in der Palettenzeile im letzten Bild (für Tests).
+/// Lage des Knopfs „Blick auf“ in der Namenszeile der Palette im letzten Bild (für Tests).
 #[doc(hidden)]
 pub fn look_at_button(ctx: &egui::Context) -> Option<egui::Rect> {
     ctx.data(|d| d.get_temp::<egui::Rect>(look_at_key()))
+}
+
+/// Schriftgröße der Anzeigeschalter unter der Namenszeile der Palette (Tasks H1, H3).
+const SWITCH_TEXT_PX: f32 = 10.0;
+
+fn sketch_name_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("sketch-name")
+}
+
+/// Der Skizzenname in der Namenszeile der Palette im letzten Bild: gekürzt? und seine Lage (für
+/// Tests).
+#[doc(hidden)]
+pub fn sketch_name_label(ctx: &egui::Context) -> Option<(bool, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<(bool, egui::Rect)>(sketch_name_key()))
 }
 
 fn degree_buttons_key() -> egui::Id {
@@ -614,6 +628,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let mut palette = SketchPalette {
         grid: state.sketch_show_grid,
         snap: state.sketch_snap_grid,
+        three_d: false,
+        three_d_changed: false,
         changed: false,
         look_at: false,
         break_link: false,
@@ -636,6 +652,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         panel.pattern_dy = "0".into();
         panel.pattern_unit = current_unit();
     }
+    palette.three_d = sf.sketch.three_d;
     strip_field(ctx, strip, dark, se, &mut sf.sketch);
     let side = SideInput {
         panel: &mut panel,
@@ -650,6 +667,10 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     // sich die Vorschau geändert, kommt gleich ein weiteres.
     if se.update_text_preview(&sf.sketch, fonts.as_deref()) {
         ctx.request_repaint();
+    }
+    if palette.three_d_changed {
+        // Ein Schritt „3D-Skizze umschalten“.
+        se.set_three_d(&mut sf.sketch, palette.three_d);
     }
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
     state.show_sketch_profiles = show_profiles;
@@ -796,7 +817,8 @@ fn flyout_gesture(
 /// Zeigt die Liste des Knopfs `r`, wenn sie offen ist: alle Arten mit Namen und Kürzel, rechts
 /// neben dem Knopf. Sie schließt bei einem Eintrag, bei Esc (macht `Popup` selbst) und bei einem
 /// Drücken außerhalb von Liste und Knopf; `CloseOnClick` taugt nicht, das Loslassen nach dem Halten
-/// schlösse sie sofort. Liefert die gewählte Art.
+/// schlösse sie sofort. Liefert die gewählte Art; Name und Lage der Einträge gehen nach `entries`
+/// (für die Tests). Alle Arten zeichnen auch in 3D, keine ist gedämpft (Task H).
 fn flyout_list(
     r: &egui::Response,
     tool: Tool,
@@ -910,6 +932,9 @@ fn strip_button(
 struct SketchPalette {
     grid: bool,
     snap: bool,
+    /// Haken „3D-Skizze“ (Skizzen 10): der Stand und ob er in diesem Bild umgeschaltet wurde.
+    three_d: bool,
+    three_d_changed: bool,
     changed: bool,
     /// Der Knopf „Blick auf“ wurde gedrückt.
     look_at: bool,
@@ -1198,7 +1223,11 @@ fn rho_field_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, c: 
 fn project_options(ui: &mut egui::Ui, se: &mut SketchSession) {
     use crate::sketch_kinds::ToolKind;
     use crate::sketch_state::ProjectFilter;
-    if se.kinds.project == ToolKind::Silhouette {
+    // Silhouette und Einbeziehen haben keine Einstellungen (Einbeziehen ist immer verknüpft);
+    // „Auf Fläche projizieren“ und „Schnittkurve“ haben ihre Felder im eigenen Dialog.
+    if matches!(se.kinds.project, ToolKind::Silhouette | ToolKind::Include3d)
+        || se.kinds.project.has_dialog()
+    {
         return;
     }
     ui.label(tr!("sketch-project-filter"));
@@ -1338,39 +1367,64 @@ fn side_contents(
         palette,
         fonts,
     } = side;
-    // Name, rechts daneben der Schalter „Profil anzeigen“ (wie Fusions Skizzenpalette
-    // „Profil“: geschlossene Flächen hell eingefärbt); in einer Zeile, damit die Liste darunter
-    // nicht nach unten rutscht.
+    // Zwei Zeilen, damit die Liste darunter nicht nach unten rutscht. Oben der Name, rechts
+    // daneben der Schalter „3D-Skizze“ (Skizzen 10, er gehört zur Skizze) und das Symbol „Blick
+    // auf“; ganz rechts liegt (mit eigenen Fenstern) das Symbol „Abdocken“/„Andocken“ über der
+    // Zeile. Der Name nimmt den Rest und kürzt sich erst bei sehr langen Namen (Tasks H1, H3; der
+    // volle Name steht dann im Hinweis). Darunter die Anzeigeschalter „Skizzenraster“, „Fang“ und
+    // „Profil anzeigen“ (wie Fusions Skizzenpalette „Profil“: geschlossene Flächen hell
+    // eingefärbt); drei Haken passen in die schmale Spalte nur eng und mit kleiner Schrift.
     ui.horizontal(|ui| {
-        ui.strong(&sf.sketch.name);
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().icon_spacing = 2.0;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Ganz rechts steht (mit eigenen Fenstern) das Symbol „Abdocken“/„Andocken“.
             if crate::detach::can_detach(ui.ctx()) {
                 ui.add_space(crate::dialog::corner_dock_width(ui));
             }
-            ui.checkbox(show_profiles, tr!("sketch-show-profile"));
+            // Nur das Symbol (die Spalte ist schmal); Name und Hinweis im Hinweistext.
+            let label = tr!("sketch-look-at");
+            let look = icons::source_icon_button(
+                ui,
+                IconSource::Hand(HandIcon::LookAt),
+                &label,
+                ui.visuals().dark_mode,
+            )
+            .on_hover_text(format!("{label}\n{}", tr!("sketch-look-at-hint")));
+            ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
+            palette.look_at |= look.clicked();
+            let three_d = ui
+                .checkbox(&mut palette.three_d, tr!("sketch-palette-three-d"))
+                .on_hover_text(tr!("sketch-palette-three-d-hint"));
+            palette.three_d_changed |= three_d.changed();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let name = egui::RichText::new(&sf.sketch.name).strong();
+                let shown = ui.add(egui::Label::new(name.clone()).truncate());
+                let full = egui::WidgetText::from(name)
+                    .into_galley(
+                        ui,
+                        Some(egui::TextWrapMode::Extend),
+                        f32::INFINITY,
+                        egui::TextStyle::Body,
+                    )
+                    .size()
+                    .x;
+                let cut = full > shown.rect.width() + 0.5;
+                ui.data_mut(|d| d.insert_temp(sketch_name_key(), (cut, shown.rect)));
+            });
         });
     });
-    // Skizzenraster und Fang in einer eigenen Zeile unter dem Namen.
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().icon_spacing = 2.0;
+        let small = |t: String| egui::RichText::new(t).size(SWITCH_TEXT_PX);
         let grid = ui
-            .checkbox(&mut palette.grid, tr!("sketch-palette-grid"))
+            .checkbox(&mut palette.grid, small(tr!("sketch-palette-grid")))
             .on_hover_text(tr!("sketch-palette-grid-hint"));
         let snap = ui
-            .checkbox(&mut palette.snap, tr!("sketch-palette-snap"))
+            .checkbox(&mut palette.snap, small(tr!("sketch-palette-snap")))
             .on_hover_text(tr!("sketch-palette-snap-hint"));
         palette.changed |= grid.changed() || snap.changed();
-        // Nur das Symbol (die Spalte ist schmal); Name und Hinweis im Hinweistext.
-        let label = tr!("sketch-look-at");
-        let look = icons::source_icon_button(
-            ui,
-            IconSource::Hand(HandIcon::LookAt),
-            &label,
-            ui.visuals().dark_mode,
-        )
-        .on_hover_text(format!("{label}\n{}", tr!("sketch-look-at-hint")));
-        ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
-        palette.look_at |= look.clicked();
+        ui.checkbox(show_profiles, small(tr!("sketch-show-profile")));
     });
     tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);
@@ -1385,7 +1439,10 @@ fn side_contents(
             // Geometrische Abhängigkeiten gehen immer: Ohne passende Auswahl startet der Knopf den
             // Befehl (Fusion „erst Befehl, dann Auswahl“) und erscheint dann aktiv. Maße brauchen
             // die Auswahl wie bisher.
-            let enabled = !action.is_dimension() || available.contains(&action);
+            // An 3D-Geometrie sind die Arten ohne 3D-Fassung gedämpft (Spec Entwurf 2); der
+            // Hinweis nennt den Grund.
+            let blocked = se.blocked_in_3d(sk, action);
+            let enabled = !blocked && (!action.is_dimension() || available.contains(&action));
             let active = se.tool == Tool::Constraint(action);
             let label = if action.is_dimension() {
                 format!("{} …", action.label())
@@ -1405,10 +1462,12 @@ fn side_contents(
             {
                 button = button.on_hover_text(with_hint(&km, bound, &label));
             }
-            if button
-                .on_disabled_hover_text(tr!("sketch-not-fitting"))
-                .clicked()
-            {
+            let why = if blocked {
+                tr!("sketch-not-in-3d-hint")
+            } else {
+                tr!("sketch-not-fitting")
+            };
+            if button.on_disabled_hover_text(why).clicked() {
                 panel.error = None;
                 if action.is_dimension() {
                     panel.editor = Some(new_editor(se, sk, action));

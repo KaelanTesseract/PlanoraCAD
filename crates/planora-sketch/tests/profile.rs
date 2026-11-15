@@ -445,3 +445,31 @@ fn internally_tangent_circles_give_the_inner_disk_and_a_small_gap_is_fine() {
         "Kernel und Skizze urteilen gleich"
     );
 }
+
+#[test]
+fn profile_skips_3d_curves() {
+    use planora_math::DVec3;
+    let mut s = sketch();
+    rect(&mut s, 0.0, 0.0, 3.0, 4.0);
+    let m = s.add_point3(DVec3::new(10.0, 0.0, 2.0)).unwrap();
+    s.add_circle3(m, 1.0, DVec3::new(0.0, 0.0, 1.0)).unwrap();
+    let e = s.profiles();
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
+    assert_eq!(e.profiles.len(), 1);
+}
+
+#[test]
+fn in_plane_3d_curves_make_no_profile() {
+    use planora_math::DVec3;
+    let mut s = sketch();
+    let p: Vec<PointId> = [(0.0, 0.0), (3.0, 0.0), (3.0, 4.0), (0.0, 4.0)]
+        .iter()
+        .map(|&(x, y)| s.add_point3(DVec3::new(x, y, 0.0)).unwrap())
+        .collect();
+    for i in 0..4 {
+        s.add_line(p[i], p[(i + 1) % 4]).unwrap();
+    }
+    let e = s.profiles();
+    assert!(e.profiles.is_empty());
+    assert!(e.curve_loops.is_empty());
+}

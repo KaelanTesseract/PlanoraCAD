@@ -10,7 +10,7 @@ use crate::constraint::ConstraintId;
 use crate::model::{CurveData, CurveId, CurveKind, PointData, PointId, Sketch};
 use crate::text::{TextId, WalkCache};
 use crate::text_shape::{Contour, Seg};
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -127,10 +127,18 @@ impl Piece {
 
 impl Sketch {
     /// Bringt Punkte und Kurven des Textes `t` auf die Konturen `placed` (Skizzenkoordinaten,
-    /// geprüft). Neue Kurven bekommen den Stil der vorhandenen. Liefert, ob sich etwas geändert
-    /// hat; nur dann gibt es einen neuen Stand. Ein Punkt, der höchstens um
-    /// [`SAME_POINT_REL`] × Höhe abweicht, bleibt, wie er ist.
+    /// geprüft; bei einem Text in 3D in der Basis seiner Ebene, siehe `Sketch::text_lift`, dann
+    /// mit 3D-Punkten in der Ebene seiner Normale). Neue Kurven bekommen den Stil der vorhandenen.
+    /// Liefert, ob sich etwas geändert hat; nur dann gibt es einen neuen Stand. Ein Punkt, der
+    /// höchstens um [`SAME_POINT_REL`] × Höhe abweicht, bleibt, wie er ist. Ein Text in 3D mit
+    /// entartetem Rahmen bleibt unverändert (die Aufrufer legen ihn dann ohnehin nicht).
     pub(crate) fn sync_text(&mut self, t: TextId, placed: &[Contour]) -> bool {
+        // Ein Text in 3D: Die Konturen sind in der Basis seiner Ebene gesetzt und werden in den
+        // Raum gelegt (Skizzen 10). Ist der Rahmen gerade entartet, bleibt alles, wie es ist.
+        let lift = self.text_lift(t);
+        if lift.is_none() && self.texts[t].normal.is_some() {
+            return false;
+        }
         let same = SAME_POINT_REL * self.texts[t].height;
         let (want_points, pieces) = layout(placed);
         let old_points = std::mem::take(&mut self.texts[t].points);
@@ -149,18 +157,43 @@ impl Sketch {
             match old_points.get(j) {
                 Some(&p) if self.points[p].alive => {
                     let (xi, yi) = (self.points[p].x, self.points[p].y);
-                    for (i, v) in [(xi, at.x), (yi, at.y)] {
+                    let mut write = |vars: &mut Vec<f64>, i: usize, v: f64| {
                         // Ein ungültiger alter Wert (NaN) wird immer neu geschrieben.
-                        let old = self.vars[i];
+                        let old = vars[i];
                         if old.is_nan() || (old - v).abs() > same {
-                            self.vars[i] = v;
+                            vars[i] = v;
                             values = true;
+                        }
+                    };
+                    match lift {
+                        Some(l) => {
+                            let at = l.to3(at);
+                            let zi = match self.points[p].z {
+                                Some(zi) => zi,
+                                None => {
+                                    let zi = self.new_var(at.z);
+                                    self.points[p].z = Some(zi);
+                                    structure = true;
+                                    zi
+                                }
+                            };
+                            for (i, v) in [(xi, at.x), (yi, at.y), (zi, at.z)] {
+                                write(&mut self.vars, i, v);
+                            }
+                        }
+                        None => {
+                            for (i, v) in [(xi, at.x), (yi, at.y)] {
+                                write(&mut self.vars, i, v);
+                            }
                         }
                     }
                     points.push(p);
                 }
                 _ => {
-                    points.push(self.push_text_point(at));
+                    points.push(match lift {
+                        Some(l) => self.push_text_point3(l.to3(at)),
+                        None => self.push_text_point(at),
+                    });
                     structure = true;
                 }
             }
@@ -187,6 +220,7 @@ impl Sketch {
                         construction,
                         centerline: false,
                         show_frame: false,
+                        normal: None,
                         alive: true,
                     });
                     curves.push(c);
@@ -238,6 +272,19 @@ impl Sketch {
         self.points.push(PointData {
             x,
             y,
+            z: None,
+            construction: false,
+            alive: true,
+        })
+    }
+
+    /// Neuer 3D-Punkt eines Textes in 3D (die Lage ist geprüft).
+    fn push_text_point3(&mut self, at: DVec3) -> PointId {
+        let (x, y, z) = (self.new_var(at.x), self.new_var(at.y), self.new_var(at.z));
+        self.points.push(PointData {
+            x,
+            y,
+            z: Some(z),
             construction: false,
             alive: true,
         })
@@ -289,5 +336,78 @@ impl Sketch {
             }
         }
         changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::Sketch;
+    use crate::text::{HAlign, TextParams, TextPlacement, VAlign};
+    use crate::text_shape::{Contour, Glyph, Seg, ShapedLine, TextShape, TextStyle};
+    use planora_math::{DVec2, DVec3, Frame, Tolerance};
+    use std::sync::Arc;
+
+    /// Ein entarteter Rahmen eines Textes in 3D: `sync_text` lässt Kurven und Punkte stehen und
+    /// beim Text (Review I1, Task 13).
+    #[test]
+    fn sync_keeps_parts_of_degenerate_3d_frame() {
+        let v = DVec2::new;
+        let contours = vec![Contour {
+            start: v(0.0, 0.0),
+            segs: vec![
+                Seg::Line(v(0.6, 0.0)),
+                Seg::Line(v(0.6, 0.7)),
+                Seg::Line(v(0.0, 0.0)),
+            ],
+        }];
+        let shape = Arc::new(TextShape {
+            lines: vec![ShapedLine {
+                glyphs: vec![Glyph {
+                    origin: v(0.0, 0.0),
+                    advance: 0.8,
+                    contours: contours.clone(),
+                }],
+                width: 0.8,
+            }],
+            ascender: 0.9,
+            descender: -0.2,
+            line_height: 1.2,
+            substituted: None,
+            synthetic: false,
+            missing_chars: false,
+        });
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let params = TextParams {
+            content: "A".into(),
+            style: TextStyle {
+                font: "Test".into(),
+                bold: false,
+                italic: false,
+                spacing: 0.0,
+            },
+            height: 5.0,
+            flip_h: false,
+            flip_v: false,
+        };
+        let t = s
+            .add_text_box3(
+                [DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 40.0, 10.0)],
+                DVec3::X,
+                params,
+                HAlign::Left,
+                VAlign::Bottom,
+                shape,
+            )
+            .unwrap();
+        let before = s.texts[t].clone();
+        let TextPlacement::Box { corners, .. } = before.placement else {
+            panic!("kein Rahmen");
+        };
+        let c0 = s.pos3(corners[0]);
+        s.set_point_xyz(corners[1], c0).unwrap();
+        assert!(s.text_lift(t).is_none(), "Grundlinie ohne Länge");
+        assert!(!s.sync_text(t, &contours));
+        assert_eq!(s.texts[t].curves, before.curves);
+        assert_eq!(s.texts[t].points, before.points);
     }
 }

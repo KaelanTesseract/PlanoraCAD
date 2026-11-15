@@ -1,6 +1,7 @@
 //! Abhängigkeiten und Maße. Jede Abhängigkeit liefert Residuen als `Dual`, also mit exakten
 //! Ableitungen nach den beteiligten Variablen.
 
+use crate::constraint3d::{dot3c, ellipse_axis3, ellipse_residual3, length3, sub3};
 use crate::curves::{
     CONIC_KNOTS, Sampled, conic_weight, ellipse_eval, nurbs_eval_dual, spline_eval,
     spline_second_derivatives,
@@ -15,8 +16,10 @@ use planora_kernel::Id;
 use planora_math::DVec2;
 use std::cell::RefCell;
 
+pub use crate::constraint3d::Axis3;
+
 /// Mindestlänge für Richtungsvektoren beim Normieren (verhindert Division durch null).
-const MIN_LEN: f64 = 1e-9;
+pub(crate) const MIN_LEN: f64 = 1e-9;
 /// Untergrenze des Spielraums (in Parametereinheiten), mit dem ein Spline-Parameter über
 /// `[0, n − 1]` hinausragen darf (sehr lange End-Segmente).
 const MIN_SPLINE_T_TOL: f64 = 1e-12;
@@ -114,6 +117,26 @@ pub enum ConstraintKind {
     /// Griff-Bogens liegt auf der Normalen des Tangentengriffs, und die Öffnung des Bogens ist
     /// `min(L / r, 2,5 rad)`. Es bleibt der Radius als einziger Freiheitsgrad.
     SplineCurvatureHandle(CurveId, PointId),
+    /// Intern (Skizzen 10): Eine ebene Kurve mit eigener Normale bleibt in ihrer Ebene durch den
+    /// Mittelpunkt. Beim Bogen liegen Start und Ende darin, bei der Ellipse steht die große
+    /// Halbachse senkrecht zur Normale, beim Ellipsenbogen gilt beides. Der Kreis braucht sie
+    /// nicht: Sein Umfang liegt über die Normale ohnehin in der Ebene.
+    ///
+    /// An den Rahmenlinien 0, 1 und 2 eines Textes in 3D (Task 13) mit der Normale des Textes:
+    /// Beide Enden liegen in der Ebene, so bleiben alle vier Ecken in der Textebene; der Löser
+    /// verschiebt sie höchstens längs der Normale und dreht sie nie.
+    InPlane(CurveId),
+    /// Linie oder zwei Punkte parallel zur z-Achse der Skizze (Skizzen 10): die dritte Art neben
+    /// waagerecht (x) und senkrecht (y), nur an 3D-Geometrie (ab Format 20).
+    AlongZ(LineOrPoints),
+    /// Fester Punkt im Raum (Skizzen 10): x, y und z. `Fixed` bleibt die 2D-Fassung; an einem
+    /// 3D-Punkt legt das Fixieren `Fixed3` an (ab Format 20).
+    Fixed3(PointId, f64, f64, f64),
+    /// Intern (Skizzen 10): große Halbachse `(x, y, z)` und kleine Halbachse einer einbezogenen
+    /// Ellipse oder eines einbezogenen Ellipsenbogens im Raum fest. Nur `add_included` legt sie
+    /// an, damit eingezogene Ellipsen ganz bestimmt sind; die Maße `Ellipse…` bleiben an
+    /// 3D-Geometrie für den Benutzer gesperrt.
+    EllipseAxes3(CurveId, f64, f64, f64, f64),
 }
 
 impl ConstraintKind {
@@ -149,6 +172,47 @@ impl ConstraintKind {
                 | ConstraintKind::SlotOverall(..)
                 | ConstraintKind::PatternValue(..)
         )
+    }
+
+    /// Lässt sich die Art an 3D-Geometrie setzen (Skizzen 10)? Die Liste von Fusion:
+    /// Deckungsgleich (auch Konzentrisch), Punkt auf Kurve, Waagerecht/Senkrecht/`AlongZ`,
+    /// Parallel, Rechtwinklig, Kollinear, Tangential, Gleich, Fixieren, Mittelpunkt, dazu die Maße
+    /// Abstand, Radius, Durchmesser und Winkel (Annahme A2) und die internen Einträge der ebenen
+    /// Kurven. Alle übrigen sind an 3D-Geometrie gesperrt.
+    pub fn allowed_in_3d(&self) -> bool {
+        use ConstraintKind::*;
+        matches!(
+            self,
+            Coincident(..)
+                | PointOnCurve(..)
+                | Horizontal(..)
+                | Vertical(..)
+                | AlongZ(..)
+                | Parallel(..)
+                | Perpendicular(..)
+                | Collinear(..)
+                | Tangent(..)
+                | Equal(..)
+                | Fixed(..)
+                | Fixed3(..)
+                | Midpoint(..)
+                | Distance(..)
+                | Radius(..)
+                | Diameter(..)
+                | Angle(..)
+                | ArcRadius(..)
+                | EllipticArcEnds(..)
+                | InPlane(..)
+                | EllipseAxes3(..)
+        )
+    }
+
+    /// Der feste Punkt von `Fixed` oder `Fixed3`, sonst `None`.
+    pub fn fixed_point(&self) -> Option<PointId> {
+        match *self {
+            ConstraintKind::Fixed(p, ..) | ConstraintKind::Fixed3(p, ..) => Some(p),
+            _ => None,
+        }
     }
 
     /// Ist das ein Radius oder Durchmesser?
@@ -224,7 +288,14 @@ impl ConstraintKind {
 
     /// Die direkt beteiligten Punkte.
     pub fn points(&self) -> Vec<PointId> {
+        let (a, n) = self.points_array();
+        a[..n].to_vec()
+    }
+
+    /// Wie [`points`](Self::points), ohne Zuweisung: höchstens zwei Punkte, `n` sind belegt.
+    pub(crate) fn points_array(&self) -> ([PointId; 2], usize) {
         use ConstraintKind::*;
+        let z = PointId::from_index(0);
         match self {
             Coincident(a, b)
             | Distance(a, b, _)
@@ -232,23 +303,31 @@ impl ConstraintKind {
             | DistanceX(a, b, _)
             | DistanceY(a, b, _)
             | SlotOverall(a, b, ..)
-            | Smooth(_, a, _, b) => vec![*a, *b],
-            Horizontal(LineOrPoints::Points(a, b)) | Vertical(LineOrPoints::Points(a, b)) => {
-                vec![*a, *b]
-            }
+            | Smooth(_, a, _, b) => ([*a, *b], 2),
+            Horizontal(LineOrPoints::Points(a, b))
+            | Vertical(LineOrPoints::Points(a, b))
+            | AlongZ(LineOrPoints::Points(a, b)) => ([*a, *b], 2),
             PointOnCurve(p, _)
             | Fixed(p, ..)
+            | Fixed3(p, ..)
             | Midpoint(p, _)
             | DistancePointLine(p, ..)
             | CenterlineDiameter(p, ..)
-            | SplineCurvatureHandle(_, p) => vec![*p],
-            _ => vec![],
+            | SplineCurvatureHandle(_, p) => ([*p, z], 1),
+            _ => ([z, z], 0),
         }
     }
 
     /// Die direkt beteiligten Kurven.
     pub fn curves(&self) -> Vec<CurveId> {
+        let (a, n) = self.curves_array();
+        a[..n].to_vec()
+    }
+
+    /// Wie [`curves`](Self::curves), ohne Zuweisung: höchstens zwei Kurven, `n` sind belegt.
+    pub(crate) fn curves_array(&self) -> ([CurveId; 2], usize) {
         use ConstraintKind::*;
+        let z = CurveId::from_index(0);
         match self {
             PointOnCurve(_, c)
             | Midpoint(_, c)
@@ -257,23 +336,26 @@ impl ConstraintKind {
             | Diameter(c, _)
             | ArcRadius(c)
             | EllipticArcEnds(c)
+            | InPlane(c)
+            | EllipseAxes3(c, ..)
             | EllipseMajor(c, _)
             | EllipseMinor(c, _)
             | EllipseAngle(c, _)
             | Symmetric(_, _, c)
             | Horizontal(LineOrPoints::Line(c))
             | Vertical(LineOrPoints::Line(c))
+            | AlongZ(LineOrPoints::Line(c))
             | CenterlineDiameter(_, c, _)
             | SlotOverall(_, _, c, _)
-            | SplineCurvatureHandle(c, _) => vec![*c],
+            | SplineCurvatureHandle(c, _) => ([*c, z], 1),
             Parallel(a, b)
             | Perpendicular(a, b)
             | Tangent(a, b)
             | Equal(a, b)
             | Angle(a, b, _)
             | Collinear(a, b)
-            | Smooth(a, _, b, _) => vec![*a, *b],
-            _ => vec![],
+            | Smooth(a, _, b, _) => ([*a, *b], 2),
+            _ => ([z, z], 0),
         }
     }
 }
@@ -320,18 +402,19 @@ pub struct Evaluation {
 // ---- Auswertung ---------------------------------------------------------------------------
 
 type V2 = (Dual, Dual);
+use crate::constraint3d::V3;
 
 /// Auswertungskontext. Erster Durchlauf (`collecting`) sammelt die beteiligten Variablen,
 /// der zweite baut daraus Dual-Zahlen mit Gradienten fester Länge.
 pub(crate) struct Ctx<'a> {
-    sk: &'a Sketch,
+    pub(crate) sk: &'a Sketch,
     x: &'a [f64],
     locals: RefCell<Vec<usize>>,
     collecting: bool,
 }
 
 impl<'a> Ctx<'a> {
-    fn collecting(sk: &'a Sketch, x: &'a [f64]) -> Ctx<'a> {
+    pub(crate) fn collecting(sk: &'a Sketch, x: &'a [f64]) -> Ctx<'a> {
         Ctx {
             sk,
             x,
@@ -340,7 +423,7 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    fn var(&self, i: usize) -> Dual {
+    pub(crate) fn var(&self, i: usize) -> Dual {
         let mut locals = self.locals.borrow_mut();
         let pos = match locals.iter().position(|&l| l == i) {
             Some(p) => p,
@@ -357,9 +440,17 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    fn pt(&self, p: PointId) -> V2 {
+    pub(crate) fn pt(&self, p: PointId) -> V2 {
         let d = &self.sk.points[p];
         (self.var(d.x), self.var(d.y))
+    }
+
+    /// Lage eines Punktes im Raum (Skizzen 10); ein 2D-Punkt hat z als Konstante 0 ohne
+    /// Gradient.
+    pub(crate) fn pt3(&self, p: PointId) -> V3 {
+        let d = &self.sk.points[p];
+        let z = d.z.map_or_else(|| Dual::constant(0.0), |i| self.var(i));
+        (self.var(d.x), self.var(d.y), z)
     }
 }
 
@@ -416,6 +507,7 @@ fn ellipse_of(ctx: &Ctx, c: CurveId) -> (V2, V2, Dual, Dual) {
         ax,
         ay,
         minor,
+        ..
     }
     | CurveKind::EllipticArc {
         center,
@@ -511,14 +603,14 @@ fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
 }
 
 /// Die Zusatzvariable einer parametrischen Abhängigkeit.
-fn extra_var(ctx: &Ctx, data: &ConstraintData) -> Dual {
+pub(crate) fn extra_var(ctx: &Ctx, data: &ConstraintData) -> Dual {
     let Some(t) = data.extra else {
         unreachable!("parametric constraints are created with an extra variable")
     };
     ctx.var(t)
 }
 
-fn is_line_kind(k: &CurveKind) -> bool {
+pub(crate) fn is_line_kind(k: &CurveKind) -> bool {
     matches!(k, CurveKind::Line { .. })
 }
 
@@ -551,7 +643,7 @@ fn is_ellipse_kind(k: &CurveKind) -> bool {
 
 /// Bei einer Linie und einer Ellipse/einem Ellipsenbogen/einem Spline (in beliebiger
 /// Reihenfolge): `(Linie, Kurve)`.
-fn line_and_param(sk: &Sketch, a: CurveId, b: CurveId) -> Option<(CurveId, CurveId)> {
+pub(crate) fn line_and_param(sk: &Sketch, a: CurveId, b: CurveId) -> Option<(CurveId, CurveId)> {
     let (ka, kb) = (&sk.curves[a].kind, &sk.curves[b].kind);
     if is_line_kind(ka) && is_param_kind(kb) {
         Some((a, b))
@@ -569,7 +661,7 @@ fn line_and_param(sk: &Sketch, a: CurveId, b: CurveId) -> Option<(CurveId, Curve
 pub(crate) const SHARED_END_TANGENT_DRIFT: f64 = 1e-3;
 
 /// Gemeinsamer Endpunkt zweier Linien oder Bögen.
-fn shared_end(sk: &Sketch, a: CurveId, b: CurveId) -> Option<PointId> {
+pub(crate) fn shared_end(sk: &Sketch, a: CurveId, b: CurveId) -> Option<PointId> {
     let ends = |c: CurveId| match sk.curves[c].kind {
         CurveKind::Line { a, b } => Some([a, b]),
         CurveKind::Arc { start, end, .. } => Some([start, end]),
@@ -624,7 +716,7 @@ pub(crate) fn curve_ends(kind: &CurveKind) -> Option<[PointId; 2]> {
 
 /// Der Punkt der Linie `l2`, der kein Punkt der Linie `l1` ist (für Kollinear); `None`, wenn
 /// beide Punkte geteilt sind oder eine der Kurven keine Linie ist.
-fn collinear_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> Option<PointId> {
+pub(crate) fn collinear_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> Option<PointId> {
     let (CurveKind::Line { a: a1, b: b1 }, CurveKind::Line { a: a2, b: b2 }) =
         (&sk.curves[l1].kind, &sk.curves[l2].kind)
     else {
@@ -634,7 +726,7 @@ fn collinear_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> Option<PointId> {
 }
 
 /// Teilen die (geprüften) Linien `l1` und `l2` einen Punkt?
-fn lines_share_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> bool {
+pub(crate) fn lines_share_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> bool {
     let (CurveKind::Line { a: a1, b: b1 }, CurveKind::Line { a: a2, b: b2 }) =
         (&sk.curves[l1].kind, &sk.curves[l2].kind)
     else {
@@ -708,6 +800,17 @@ fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> Option<V2> {
 }
 
 fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
+    // 3D-Geometrie rechnet in der 3D-Fassung (Skizzen 10); reine 2D-Geometrie genau wie bisher.
+    if ctx.sk.constraint_is_3d(&data.kind)
+        && let Some(rows) = crate::constraint3d::eval(ctx, data)
+    {
+        return rows;
+    }
+    eval_kind_2d(ctx, data)
+}
+
+/// Residuen in der Skizzenebene (die Fassung vor Skizzen 10).
+fn eval_kind_2d(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
     use ConstraintKind::*;
     let sk = ctx.sk;
     match &data.kind {
@@ -819,6 +922,23 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let pp = ctx.pt(*p);
             vec![&pp.0 - *x, &pp.1 - *y]
         }
+        // An einem 2D-Punkt (z = 0, siehe `check_3d`) bleiben x und y.
+        Fixed3(p, x, y, _) => {
+            let pp = ctx.pt(*p);
+            vec![&pp.0 - *x, &pp.1 - *y]
+        }
+        // An reiner 2D-Geometrie (`check_3d` lässt das nicht zu): Die Linie fiele zu einem Punkt.
+        AlongZ(l) => {
+            let (a, b) = match l {
+                LineOrPoints::Line(c) => {
+                    let (a, d) = line_dir(ctx, *c);
+                    let b = (&a.0 + &d.0, &a.1 + &d.1);
+                    (a, b)
+                }
+                LineOrPoints::Points(a, b) => (ctx.pt(*a), ctx.pt(*b)),
+            };
+            vec![&a.0 - &b.0, &a.1 - &b.1]
+        }
         Symmetric(a, b, axis) => {
             let (pa, pb) = (ctx.pt(*a), ctx.pt(*b));
             let mid = ((&pa.0 + &pb.0) * 0.5, (&pa.1 + &pb.1) * 0.5);
@@ -853,6 +973,13 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let CurveKind::Arc { center, start, end } = sk.curves[*c].kind else {
                 unreachable!("type was checked")
             };
+            if sk.arc_is_3d(*c) {
+                // 3D-Bogen (Skizzen 10): Abstände im Raum.
+                let pc = ctx.pt3(center);
+                return vec![
+                    length3(&sub3(&ctx.pt3(end), &pc)) - length3(&sub3(&ctx.pt3(start), &pc)),
+                ];
+            }
             let pc = ctx.pt(center);
             vec![length(&sub2(&ctx.pt(end), &pc)) - length(&sub2(&ctx.pt(start), &pc))]
         }
@@ -860,16 +987,63 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let CurveKind::EllipticArc { start, end, .. } = sk.curves[*c].kind else {
                 unreachable!("type was checked")
             };
+            if sk.arc_is_3d(*c) {
+                return vec![
+                    ellipse_residual3(ctx, *c, &ctx.pt3(start)),
+                    ellipse_residual3(ctx, *c, &ctx.pt3(end)),
+                ];
+            }
             vec![
                 ellipse_residual(ctx, *c, &ctx.pt(start)),
                 ellipse_residual(ctx, *c, &ctx.pt(end)),
             ]
+        }
+        InPlane(c) => {
+            // Rahmenlinie eines Textes in 3D: die Normale des Textes (Task 13).
+            let n = sk
+                .text_frame_normal(*c)
+                .unwrap_or_else(|| sk.curve_normal(*c));
+            let off = |m: PointId, p: PointId| dot3c(&sub3(&ctx.pt3(p), &ctx.pt3(m)), n);
+            match sk.curves[*c].kind {
+                CurveKind::Line { a, b } => vec![off(a, b)],
+                CurveKind::Arc { center, start, end } => vec![off(center, start), off(center, end)],
+                CurveKind::Ellipse { ax, ay, az, .. } => {
+                    vec![dot3c(&ellipse_axis3(ctx, ax, ay, az), n)]
+                }
+                CurveKind::EllipticArc {
+                    center,
+                    ax,
+                    ay,
+                    az,
+                    start,
+                    end,
+                    ..
+                } => vec![
+                    dot3c(&ellipse_axis3(ctx, ax, ay, az), n),
+                    off(center, start),
+                    off(center, end),
+                ],
+                _ => unreachable!("type was checked"),
+            }
         }
         EllipseMajor(c, v) => {
             let (_, a, _, _) = ellipse_of(ctx, *c);
             vec![length(&a) - *v]
         }
         EllipseMinor(c, v) => vec![ellipse_of(ctx, *c).3 - *v],
+        EllipseAxes3(c, x, y, z, m) => {
+            let (CurveKind::Ellipse {
+                ax, ay, az, minor, ..
+            }
+            | CurveKind::EllipticArc {
+                ax, ay, az, minor, ..
+            }) = sk.curves[*c].kind
+            else {
+                unreachable!("type was checked")
+            };
+            let a = crate::constraint3d::ellipse_axis3(ctx, ax, ay, az);
+            vec![a.0 - *x, a.1 - *y, a.2 - *z, ctx.var(minor) - *m]
+        }
         EllipseAngle(c, v) => {
             let (_, a, len, _) = ellipse_of(ctx, *c);
             let dir = (Dual::constant(v.cos()), Dual::constant(v.sin()));
@@ -1446,6 +1620,11 @@ impl Sketch {
             return None;
         }
         self.check_structure(kind).ok()?;
+        if self.constraint_is_3d(kind)
+            && let Some(v) = self.measure3(kind)
+        {
+            return v.is_finite().then_some(v);
+        }
         let ctx = Ctx::collecting(self, &self.vars);
         let v = match kind {
             Distance(a, b, _) => length(&sub2(&ctx.pt(*a), &ctx.pt(*b))).v,
@@ -1515,10 +1694,16 @@ impl Sketch {
         use ConstraintKind::*;
         match kind {
             Coincident(a, b) if a == b => degenerate(tr!("sketch-err-point-self")),
-            Horizontal(LineOrPoints::Line(c)) | Vertical(LineOrPoints::Line(c)) if !is_line(*c) => {
+            Horizontal(LineOrPoints::Line(c))
+            | Vertical(LineOrPoints::Line(c))
+            | AlongZ(LineOrPoints::Line(c))
+                if !is_line(*c) =>
+            {
                 wrong(tr!("sketch-err-only-lines"))
             }
-            Horizontal(LineOrPoints::Points(a, b)) | Vertical(LineOrPoints::Points(a, b))
+            Horizontal(LineOrPoints::Points(a, b))
+            | Vertical(LineOrPoints::Points(a, b))
+            | AlongZ(LineOrPoints::Points(a, b))
                 if a == b =>
             {
                 degenerate(tr!("sketch-err-two-points"))
@@ -1560,7 +1745,20 @@ impl Sketch {
             {
                 wrong(tr!("sketch-err-only-elliptic-arcs"))
             }
-            EllipseMajor(c, _) | EllipseMinor(c, _) | EllipseAngle(c, _)
+            // Die Normale selbst prüft das Laden (`check_curve_normal`); ein gelöschter Eintrag
+            // darf an einer Kurve stehen, die wieder in der Skizzenebene liegt.
+            InPlane(c)
+                if !matches!(
+                    self.curves[*c].kind,
+                    CurveKind::Arc { .. }
+                        | CurveKind::Ellipse { .. }
+                        | CurveKind::EllipticArc { .. }
+                ) && !(matches!(self.curves[*c].kind, CurveKind::Line { .. })
+                    && self.text_frame_normal(*c).is_some()) =>
+            {
+                wrong(tr!("sketch-err-normal-kind"))
+            }
+            EllipseMajor(c, _) | EllipseMinor(c, _) | EllipseAngle(c, _) | EllipseAxes3(c, ..)
                 if !is_ellipse_kind(&self.curves[*c].kind) =>
             {
                 wrong(tr!("sketch-err-only-ellipses"))
@@ -1639,6 +1837,11 @@ impl Sketch {
             Fixed(_, x, y) => {
                 finite(*x)?;
                 finite(*y)
+            }
+            Fixed3(_, x, y, z) => {
+                finite(*x)?;
+                finite(*y)?;
+                finite(*z)
             }
             _ => Ok(()),
         }
@@ -1833,6 +2036,9 @@ impl Sketch {
         let Some(p) = shared_end(self, a, b) else {
             return 0;
         };
+        if self.constraint_is_3d(kind) {
+            return self.shared_end_sign3(a, b, p);
+        }
         let ctx = Ctx::collecting(self, &self.vars);
         if shared_end_parts(&ctx, a, b, p).1.v < 0.0 {
             -1
@@ -1861,6 +2067,11 @@ impl Sketch {
     /// Lage bei mehrdeutigen Abhängigkeiten, bestimmt aus der aktuellen Geometrie.
     fn initial_branch(&self, kind: &ConstraintKind) -> i8 {
         use ConstraintKind::*;
+        if self.constraint_is_3d(kind)
+            && let Some(b) = self.initial_branch3(kind)
+        {
+            return b;
+        }
         let ctx = Ctx::collecting(self, &self.vars);
         let sign = |v: f64| if v >= 0.0 { 1 } else { -1 };
         match kind {
@@ -1905,6 +2116,7 @@ impl Sketch {
                 ax,
                 ay,
                 minor,
+                ..
             }
             | CurveKind::EllipticArc {
                 center,
@@ -1932,8 +2144,21 @@ impl Sketch {
             return None;
         };
         shared_end(self, a, b)?;
-        // Die Zeile ist die Abweichung selbst.
-        Some(self.evaluate(id, x)?.residuals.first()?.v.abs())
+        // Die Zeilen sind die Abweichung selbst (in 3D zwei Winkel; NaN bleibt NaN).
+        let ev = self.evaluate(id, x)?;
+        ev.residuals.first()?;
+        Some(
+            ev.residuals
+                .iter()
+                .map(|r| r.v.abs())
+                .fold(0.0, |m: f64, v| {
+                    if m.is_nan() || v.is_nan() {
+                        f64::NAN
+                    } else {
+                        m.max(v)
+                    }
+                }),
+        )
     }
 
     /// Ist die lebende Abhängigkeit an den aktuellen Werten ohne Bewegung erfüllt? Alle Residuen
@@ -1956,7 +2181,9 @@ impl Sketch {
             return false;
         };
         let kind = &self.constraints[id].kind;
+        let is_3d = self.constraint_is_3d(kind);
         let angular_row = |row: usize| match kind {
+            _ if is_3d => crate::constraint3d::angular_row(self, kind, row),
             Parallel(..) | Perpendicular(..) | Angle(..) | EllipseAngle(..) => true,
             Collinear(..) | Smooth(..) => row == 0,
             SplineCurvatureHandle(..) => true,
@@ -1987,6 +2214,9 @@ impl Sketch {
     /// Startwert der Zusatzvariablen einer (geprüften) parametrischen Abhängigkeit: der
     /// nächstgelegene Kurvenparameter. `None`, wenn die Abhängigkeit keine braucht.
     pub(crate) fn extra_start(&self, kind: &ConstraintKind) -> Option<f64> {
+        if self.constraint_is_3d(kind) && self.needs_extra(kind) {
+            return self.extra_start3(kind);
+        }
         match kind {
             ConstraintKind::PointOnCurve(p, c)
                 if on_curve_needs_parameter(&self.curves[*c].kind) =>
@@ -2019,7 +2249,10 @@ impl Sketch {
         }
         let fixed_of = |s: &Sketch, p: PointId| -> Vec<ConstraintId> {
             s.constraints()
-                .filter(|(_, c)| matches!(c.kind, ConstraintKind::Fixed(q, ..) if q == p))
+                .filter(|(_, c)| {
+                    matches!(c.kind, ConstraintKind::Fixed(q, ..) | ConstraintKind::Fixed3(q, ..)
+                        if q == p)
+                })
                 .map(|(i, _)| i)
                 .collect()
         };
@@ -2039,11 +2272,14 @@ impl Sketch {
             if !fixed_of(self, p).is_empty() {
                 continue;
             }
-            let Ok(xy) = self.point_xy(p) else { continue };
-            if self
-                .add_constraint(ConstraintKind::Fixed(p, xy.x, xy.y))
-                .is_ok()
-            {
+            let Ok(at) = self.point_xyz(p) else { continue };
+            // Am 3D-Punkt ist auch z fest (Ruling R2).
+            let kind = if self.is_3d_point(p) {
+                ConstraintKind::Fixed3(p, at.x, at.y, at.z)
+            } else {
+                ConstraintKind::Fixed(p, at.x, at.y)
+            };
+            if self.add_constraint(kind).is_ok() {
                 n += 1;
             }
         }
@@ -2056,6 +2292,8 @@ impl Sketch {
             kind,
             ConstraintKind::ArcRadius(_)
                 | ConstraintKind::EllipticArcEnds(_)
+                | ConstraintKind::InPlane(_)
+                | ConstraintKind::EllipseAxes3(..)
                 | ConstraintKind::PatternValue(..)
                 | ConstraintKind::SplineCurvatureHandle(..)
         ) {
@@ -2063,9 +2301,17 @@ impl Sketch {
                 "sketch-err-internal-constraint"
             )));
         }
+        // Am 3D-Punkt hält „fest“ auch z (Ruling R2): `Fixed` wird `Fixed3` mit der jetzigen Höhe.
+        let kind = match kind {
+            ConstraintKind::Fixed(p, x, y) if self.is_3d_point(p) => {
+                ConstraintKind::Fixed3(p, x, y, self.pos3(p).z)
+            }
+            k => k,
+        };
         self.check_refs(&kind)?;
         self.check_centerline(&kind)?;
         self.refuse_text_glyphs(&kind)?;
+        let lift = self.check_3d(&kind)?;
         // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
         let (mut data, start) = self.new_constraint_data(kind);
         // Mit Mustern: Schlösse die Abhängigkeit eine Schleife zwischen Vorlage und eigenem
@@ -2089,6 +2335,9 @@ impl Sketch {
                 data.kind = kind;
             }
         }
+        // 2D-Punkte, die die 3D-Abhängigkeit verbindet, werden 3D (Spec 10). Das legt Variablen
+        // an, darum erst danach die Zusatzvariable.
+        self.apply_lift(&lift);
         data.extra = start.map(|t| self.new_var(t));
         self.touch_structure();
         Ok(self.constraints.push(data))
@@ -2237,7 +2486,7 @@ impl Sketch {
     /// Das `Fixed` am Ende eines lebenden festen Splines bleibt (A3): Ohne es verließe der Punkt die
     /// unveränderliche Kurve. Mit der Kurve geht es.
     fn check_not_fixed_spline_end(&self, id: ConstraintId) -> Result<(), SketchError> {
-        let ConstraintKind::Fixed(p, ..) = self.constraints[id].kind else {
+        let Some(p) = self.constraints[id].kind.fixed_point() else {
             return Ok(());
         };
         let holds = |d: &crate::model::CurveData| matches!(d.kind, CurveKind::FixedSpline { start, end, .. } if p == start || p == end);

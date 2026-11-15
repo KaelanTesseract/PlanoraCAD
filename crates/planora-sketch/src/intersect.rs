@@ -133,7 +133,12 @@ impl Sketch {
         // Griffe schneiden nichts: Sonst fiele an jedem Stützpunkt mit Griff eine Schnittstelle an.
         let handle_curves = self.handle_curves();
         for (id, data) in self.curves() {
-            if id == c || (data.construction && !with_construction) || handle_curves.contains(&id) {
+            // 3D-Kurven schneiden in der Skizzenebene nichts (Skizzen 10).
+            if id == c
+                || (data.construction && !with_construction)
+                || handle_curves.contains(&id)
+                || self.is_3d_curve(id)
+            {
                 continue;
             }
             if let Some(h) = self.geom(id) {

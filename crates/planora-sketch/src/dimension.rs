@@ -101,6 +101,11 @@ impl Sketch {
     ///   wählen: `Angle` misst zwischen den gerichteten Linien, `π − θ` wäre nur als
     ///   `Angle(L2, L1, π − θ)` mit dem Messwert `−θ` zu haben (Zeile erfüllt, Anzeige falsch).
     ///
+    /// An 3D-Geometrie (Skizzen 10, Annahme A2) gibt es nur die Arten mit 3D-Fassung: Wo die
+    /// Zeigerregel waagerecht oder senkrecht wählte, bleibt es der ausgerichtete Abstand im Raum
+    /// ([`Sketch::dimension_axis_blocked`]); zwei Linien im Raum ergeben den Winkel (ohne
+    /// Vorzeichen), parallele keinen Plan, ebenso Punkt–Linie und die Halbachsen der Ellipse.
+    ///
     /// Liest das Maß nur Exemplare eines Musters, ist der Plan `driven`: So legt ihn
     /// [`Sketch::add_constraint`] an (Schlusskorrektur I1).
     ///
@@ -112,13 +117,19 @@ impl Sketch {
         if !pointer.is_finite() {
             return None;
         }
-        let (kind, mode) = match picks {
-            [DimPick::Curve(c, _)] => self.single_curve(*c, pointer)?,
-            [first, second] => {
-                let (a, b) = (self.item(first)?, self.item(second)?);
-                self.pair(a, b, pointer)?
+        let (kind, mode) = self.raw_plan(picks, pointer)?;
+        // An 3D-Geometrie (Skizzen 10, Annahme A2): waagerecht und senkrecht bemaßen ist gesperrt,
+        // es bleibt der ausgerichtete Abstand im Raum; Arten ohne 3D-Fassung gibt es nicht.
+        let (kind, mode) = if self.constraint_is_3d(&kind) {
+            match kind {
+                ConstraintKind::DistanceX(a, b, v) | ConstraintKind::DistanceY(a, b, v) => {
+                    (ConstraintKind::Distance(a, b, v), DimMode::Aligned)
+                }
+                k if k.allowed_in_3d() => (k, mode),
+                _ => return None,
             }
-            _ => return None,
+        } else {
+            (kind, mode)
         };
         // Maße an Buchstaben lehnt `add_constraint` ab (Spec E): Dann gibt es keinen Plan.
         if self.refuse_text_glyphs(&kind).is_err() {
@@ -143,6 +154,31 @@ impl Sketch {
             mode,
             anchor: pointer,
         })
+    }
+
+    /// Wählte die Zeigerregel bei `picks` und `pointer` waagerecht oder senkrecht, obwohl
+    /// 3D-Geometrie beteiligt ist (Skizzen 10)? Dann bemaßt [`Sketch::dimension_plan`]
+    /// ausgerichtet, und die Oberfläche nennt den Grund.
+    pub fn dimension_axis_blocked(&self, picks: &[DimPick], pointer: DVec2) -> bool {
+        pointer.is_finite()
+            && self.raw_plan(picks, pointer).is_some_and(|(kind, _)| {
+                matches!(
+                    kind,
+                    ConstraintKind::DistanceX(..) | ConstraintKind::DistanceY(..)
+                ) && self.constraint_is_3d(&kind)
+            })
+    }
+
+    /// Das Maß nach den Regeln der Ebene, vor der Prüfung auf 3D-Geometrie (Wert noch 0).
+    fn raw_plan(&self, picks: &[DimPick], pointer: DVec2) -> Option<(ConstraintKind, DimMode)> {
+        match picks {
+            [DimPick::Curve(c, _)] => self.single_curve(*c, pointer),
+            [first, second] => {
+                let (a, b) = (self.item(first)?, self.item(second)?);
+                self.pair(a, b, pointer)
+            }
+            _ => None,
+        }
     }
 
     /// Das Maß einer einzeln gewählten Kurve (Wert noch 0).
@@ -207,6 +243,16 @@ impl Sketch {
             (Item::Line(l1, a1, b1), Item::Line(l2, a2, b2)) => {
                 if l1 == l2 {
                     return None;
+                }
+                // Linien im Raum: Richtungen in 3D; der Winkel hat dort kein Vorzeichen.
+                if self.is_3d_curve(l1) || self.is_3d_curve(l2) {
+                    let d1 = (self.pos3(b1) - self.pos3(a1)).try_normalize()?;
+                    let d2 = (self.pos3(b2) - self.pos3(a2)).try_normalize()?;
+                    return Some(if d1.cross(d2).length() <= 10.0 * self.tol.angular {
+                        (DistancePointLine(a2, l1, 0.0), DimMode::PointLine)
+                    } else {
+                        (Angle(l1, l2, 0.0), DimMode::Angle)
+                    });
                 }
                 let d1 = (self.pos(b1) - self.pos(a1)).try_normalize()?;
                 let d2 = (self.pos(b2) - self.pos(a2)).try_normalize()?;

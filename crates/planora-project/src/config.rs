@@ -149,6 +149,21 @@ pub struct Config {
         deserialize_with = "lenient_bool_true"
     )]
     pub sketch_snap: bool,
+    /// Ebenenquadrate der Triade der 3D-Skizze anzeigen (Skizzen 10; Voreinstellung an, nur „aus“
+    /// wird geschrieben). Kein Wahrheitswert → an.
+    #[serde(
+        default = "default_true",
+        skip_serializing_if = "is_true",
+        deserialize_with = "lenient_bool_true"
+    )]
+    pub show_triad_planes: bool,
+    /// Drehgriffe der Triade anzeigen (wie `show_triad_planes`).
+    #[serde(
+        default = "default_true",
+        skip_serializing_if = "is_true",
+        deserialize_with = "lenient_bool_true"
+    )]
+    pub show_triad_handles: bool,
     /// Abgedockte Fenster (Dialoge und Felder als eigene Betriebssystemfenster): Schlüssel →
     /// letzte Lage und Größe in physischen Pixeln. Kaputte Einträge (kein Objekt, fehlende
     /// Zahlen, Breite oder Höhe nicht endlich oder höchstens 0) fallen einzeln weg, ein
@@ -282,6 +297,8 @@ impl Default for Config {
             length_unit: None,
             sketch_grid: true,
             sketch_snap: true,
+            show_triad_planes: true,
+            show_triad_handles: true,
             detached: BTreeMap::new(),
         }
     }

@@ -126,7 +126,7 @@ fn intersect_cylinder_gives_ellipse_on_tilted_plane() {
     // Verknüpft mit dem Mantel, erstes Stück dieser Fläche.
     let copies = &draft(&s).copies;
     assert_eq!(copies.len(), 1);
-    assert_eq!(copies[0].curve, c);
+    assert_eq!(copies[0].curve().unwrap(), c);
     assert!(matches!(
         copies[0].source,
         CopySource::Section { index: 0, .. }
@@ -342,7 +342,16 @@ fn intersect_is_one_undo_step() {
 fn flyout_has_intersect_and_silhouette_without_keys() {
     assert_eq!(
         ToolKind::of(Tool::ProjectEdge),
-        &[ToolKind::Project, ToolKind::Intersect, ToolKind::Silhouette]
+        // Skizzen 10, Task 16: bewusst angepasst, „3D-Geometrie einbeziehen“ steht dahinter;
+        // Task 19 ebenso: „Auf Fläche projizieren“ und „Schnittkurve“.
+        &[
+            ToolKind::Project,
+            ToolKind::Intersect,
+            ToolKind::Silhouette,
+            ToolKind::Include3d,
+            ToolKind::ProjectToSurface,
+            ToolKind::IntersectionCurve,
+        ]
     );
     assert_eq!(STRIP_TOOLS, 20);
     assert_eq!(sketch_panel::TOOL_ORDER.len(), 20);

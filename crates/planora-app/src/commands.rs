@@ -271,6 +271,9 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchProjectEdge
         | Action::SketchIntersect
         | Action::SketchSilhouette
+        | Action::SketchInclude3d
+        | Action::SketchProjectToSurface
+        | Action::SketchIntersectionCurve
         | Action::SketchSplineFit
         | Action::SketchSplineControl
         | Action::SketchConic => {
@@ -322,6 +325,19 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             }
         }
         Action::SketchLookAt => ws.active_tab_mut().state.look_at_sketch(),
+        // Skizzen 10: Ebene und Griff der Triade wechseln nur den Zustand der Sitzung
+        // (`SketchSession::triad`, gezeichnet und bedient in `sketch_triad`). „Z sperren“ gilt nur
+        // gehalten (siehe `keymap::dispatch::held`) und tut hier nichts.
+        Action::SketchTriadCyclePlane | Action::SketchTriadCycleHandle => {
+            if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
+                if a == Action::SketchTriadCyclePlane {
+                    se.cycle_triad_plane(sk);
+                } else {
+                    se.cycle_triad_handle(sk);
+                }
+            }
+        }
+        Action::SketchLockZ => {}
         Action::SketchToggleGrid | Action::SketchToggleSnap => {
             let state = &mut ws.active_tab_mut().state;
             if state.open_sketch_id().is_some() {
@@ -477,6 +493,7 @@ pub(crate) fn track(ws: &mut Workspace, a: Action) {
 /// in einem anderen Tab wartet, bis der Tab wieder vorn ist; ist der Tab zu, entfällt es.
 pub fn observe(ws: &mut Workspace) {
     ws.sync_sketch_grid();
+    ws.sync_triad_view();
     observe_sketch(ws);
     let Some(p) = ws.last_command.pending.clone() else {
         return;

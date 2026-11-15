@@ -706,3 +706,33 @@ fn undocked_tree_stays_out_when_it_lands_off_screen() {
         "Eintrag bleibt"
     );
 }
+
+// ---- Namenszeile der Skizzenpalette mit Abdock-Symbol (Task H3) ---------------------------------
+
+/// Mit eigenen Fenstern (Abdock-Symbol in der Ecke) steht „Skizze 12“ in der Namenszeile der
+/// Palette ungekürzt, angedockt und abgedockt (so breit wie die Spalte); ein sehr langer Name
+/// kürzt sich weiter.
+#[test]
+fn sketch_name_is_not_cut_next_to_the_dock_icon() {
+    let column = DetachedWindow {
+        width: theme::PANEL_WIDTH,
+        ..window_at(1500.0, 100.0)
+    };
+    for detached in [vec![], vec![(Place::SketchSide, column)]] {
+        for (name, want_cut) in [("Skizze 12", false), ("Eine sehr lange Skizze 12", true)] {
+            let mut rig = Rig::new(&detached);
+            open_sketch(&mut rig);
+            rig.state().session_sketch_mut().unwrap().1.name = name.to_string();
+            rig.settle(3);
+            let (cut, rect) =
+                planora_app::sketch_panel::sketch_name_label(&rig.screen.ctx).expect("Name");
+            assert_eq!(
+                cut,
+                want_cut,
+                "„{name}“, {} px breit, abgedockt: {}",
+                rect.width(),
+                !detached.is_empty()
+            );
+        }
+    }
+}

@@ -15,7 +15,8 @@ fn dragging_a_free_point_moves_it_exactly() {
     let r = s
         .drag(&[Drag {
             point: a,
-            target: DVec2::new(3.0, -4.0),
+            target: DVec2::new(3.0, -4.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Solved);
@@ -38,7 +39,8 @@ fn dragging_respects_hard_constraints() {
     let r = s
         .drag(&[Drag {
             point: b,
-            target: DVec2::new(7.0, 7.0),
+            target: DVec2::new(7.0, 7.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
@@ -66,7 +68,13 @@ fn dragging_a_hinge_never_flips_to_the_mirror_solution() {
         DVec2::new(4.5, 2.0),
         DVec2::new(3.5, 3.5),
     ] {
-        let r = s.drag(&[Drag { point: m, target }]).unwrap();
+        let r = s
+            .drag(&[Drag {
+                point: m,
+                target: target.extend(0.0),
+                plane: None,
+            }])
+            .unwrap();
         assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
         let pm = s.point_xy(m).unwrap();
         assert!(pm.y > 0.0, "ist nach unten umgeklappt: {pm:?}");
@@ -90,7 +98,8 @@ fn dragging_in_a_degenerate_direction_keeps_the_state_valid() {
     let r = s
         .drag(&[Drag {
             point: b,
-            target: DVec2::ZERO,
+            target: DVec2::ZERO.extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert!(s.variables().iter().all(|v| v.is_finite()));
@@ -106,7 +115,8 @@ fn drag_rejects_bad_input() {
     assert!(matches!(
         s.drag(&[Drag {
             point: a,
-            target: DVec2::new(f64::NAN, 0.0)
+            target: DVec2::new(f64::NAN, 0.0).extend(0.0),
+            plane: None
         }]),
         Err(SketchError::InvalidInput(_))
     ));
@@ -114,7 +124,8 @@ fn drag_rejects_bad_input() {
     assert_eq!(
         s.drag(&[Drag {
             point: bogus,
-            target: DVec2::ZERO
+            target: DVec2::ZERO.extend(0.0),
+            plane: None
         }])
         .unwrap_err(),
         SketchError::UnknownObject
@@ -162,7 +173,8 @@ fn dragging_a_free_point_solves_other_groups_like_a_plain_solve() {
     let r = s
         .drag(&[Drag {
             point: free,
-            target: DVec2::new(1.0, 2.0),
+            target: DVec2::new(1.0, 2.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Conflicting, "{r:?}");
@@ -192,7 +204,8 @@ fn dragging_one_group_does_not_touch_an_unrelated_conflicting_group() {
     let r = s
         .drag(&[Drag {
             point: b,
-            target: DVec2::new(0.0, 10.0),
+            target: DVec2::new(0.0, 10.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Conflicting, "{r:?}");
@@ -232,7 +245,8 @@ fn an_untouched_group_is_not_solved_again() {
     let r = s
         .drag(&[Drag {
             point: b,
-            target: DVec2::new(0.0, 10.0),
+            target: DVec2::new(0.0, 10.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.group_solves, 1, "{r:?}");
@@ -337,7 +351,8 @@ fn moving_a_free_end_of_a_line_into_a_group_is_seen_by_the_cache() {
     let r = s
         .drag(&[Drag {
             point: c,
-            target: DVec2::new(1.0, 7.0),
+            target: DVec2::new(1.0, 7.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
@@ -371,7 +386,8 @@ fn a_line_between_two_groups_is_seen_by_the_cache() {
     // Start (b auf a) geprüft, das volle Lösen danach muss die neue Lage von b sehen.
     s.drag(&[Drag {
         point: b,
-        target: DVec2::new(8.0, 8.0),
+        target: DVec2::new(8.0, 8.0).extend(0.0),
+        plane: None,
     }])
     .unwrap();
     let pb = s.point_xy(b).unwrap();
@@ -392,7 +408,11 @@ fn drag_rejects_targets_beyond_max_coord() {
     s.add_constraint(K::Distance(a, b, 4.0)).unwrap();
     for target in [DVec2::new(2e9, 0.0), DVec2::new(0.0, -2e9)] {
         assert!(matches!(
-            s.drag(&[Drag { point: b, target }]),
+            s.drag(&[Drag {
+                point: b,
+                target: target.extend(0.0),
+                plane: None
+            }]),
             Err(SketchError::InvalidInput(_))
         ));
     }
@@ -503,7 +523,8 @@ fn drag_failed_names_only_the_groups_that_use_the_dragged_values() {
     let r = s
         .drag(&[Drag {
             point: free,
-            target: DVec2::new(1.0, 2.0),
+            target: DVec2::new(1.0, 2.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Conflicting);
@@ -511,7 +532,8 @@ fn drag_failed_names_only_the_groups_that_use_the_dragged_values() {
     let r = s
         .drag(&[Drag {
             point: unrelated[0],
-            target: DVec2::new(21.0, 0.0),
+            target: DVec2::new(21.0, 0.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert!(r.drag_failed, "{r:?}");
@@ -529,8 +551,63 @@ fn drag_failed_sees_a_free_point_that_collapses_a_line_of_a_group() {
     let r = s
         .drag(&[Drag {
             point: c,
-            target: DVec2::ZERO,
+            target: DVec2::ZERO.extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert!(r.drag_failed, "{r:?}");
+}
+
+// ---- Skizzen 10, Task 4: Ziehen im Raum -------------------------------------------------------
+
+#[test]
+fn drag_3d_point_in_given_plane() {
+    use planora_math::DVec3;
+    let mut s = sketch();
+    let p = s.add_point3(DVec3::new(1.0, 2.0, 3.0)).unwrap();
+    // Ebene durch (0,0,5) mit Normale (0,1,0): y wird 0, x und z folgen dem Ziel.
+    s.drag(&[Drag {
+        point: p,
+        target: DVec3::new(4.0, 1.0, 9.0),
+        plane: Some((DVec3::new(0.0, 0.0, 5.0), DVec3::Y)),
+    }])
+    .unwrap();
+    assert!(s.point_xyz(p).unwrap().distance(DVec3::new(4.0, 0.0, 9.0)) < 1e-12);
+    // Eine schräge Ebene: Das Ziel wird senkrecht auf sie geworfen und liegt danach in ihr.
+    let (o, n) = (DVec3::new(0.0, 0.0, 5.0), DVec3::new(0.0, 1.0, 1.0));
+    s.drag(&[Drag {
+        point: p,
+        target: DVec3::new(2.0, 4.0, 8.0),
+        plane: Some((o, n)),
+    }])
+    .unwrap();
+    let got = s.point_xyz(p).unwrap();
+    assert!((got - o).dot(n.normalize()).abs() < 1e-12, "{got:?}");
+    assert!(got.distance(DVec3::new(2.0, 0.5, 4.5)) < 1e-12, "{got:?}");
+}
+
+#[test]
+fn drag_2d_point_ignores_z() {
+    use planora_math::DVec3;
+    let mut s = sketch();
+    let p = s.add_point(1.0, 2.0).unwrap();
+    // Ohne Ebene zählt z des Ziels nicht.
+    s.drag(&[Drag {
+        point: p,
+        target: DVec3::new(3.0, 4.0, 99.0),
+        plane: None,
+    }])
+    .unwrap();
+    assert_eq!(s.point_xy(p).unwrap(), DVec2::new(3.0, 4.0));
+    assert!(!s.is_3d_point(p));
+    // Auch mit (schräger) Zugebene bleibt ein 2D-Punkt in der Skizzenebene: x und y des Ziels,
+    // keine Projektion auf die Ebene.
+    s.drag(&[Drag {
+        point: p,
+        target: DVec3::new(5.0, 6.0, 7.0),
+        plane: Some((DVec3::new(0.0, 0.0, 5.0), DVec3::new(0.0, 1.0, 1.0))),
+    }])
+    .unwrap();
+    assert_eq!(s.point_xy(p).unwrap(), DVec2::new(5.0, 6.0));
+    assert!(!s.is_3d_point(p));
 }
