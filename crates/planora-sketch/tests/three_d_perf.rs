@@ -2,44 +2,14 @@
 //! werden, und eine lange 3D-Kette muss bedienbar bleiben.
 //! `cargo test -p planora-sketch --release --test three_d_perf -- --ignored --nocapture`
 
-use planora_exchange::import2d::{Element2d, Import2d, Layer2d};
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::import::{InsertOptions, Placement};
 use planora_sketch::model::Sketch;
 use planora_sketch::solver::{Drag, SolveStatus};
-use planora_sketch::text_shape::{TextShape, TextShapeError, TextShaper, TextStyle};
 use std::time::Instant;
 
 mod common;
-use common::{chain_2d, chain_3d};
-
-struct NoText;
-
-impl TextShaper for NoText {
-    fn shape(&self, _: &str, _: &TextStyle) -> Result<TextShape, TextShapeError> {
-        Err(TextShapeError::Empty)
-    }
-}
-
-/// Eine Kette aus `n` Halbkreisen (wie eine Polylinie mit Bulge): ein einziger Zusammenhang.
-/// Dieselbe Skizze wie `chained_bulge_arcs_insert_and_drag` in `import_perf.rs`.
-fn arc_chain(n: usize) -> Import2d {
-    let elements = (0..n)
-        .map(|i| Element2d::Arc {
-            c: DVec2::new(2.0 * i as f64 + 1.0, 0.0),
-            r: 1.0,
-            start: std::f64::consts::PI,
-            end: std::f64::consts::TAU,
-        })
-        .collect();
-    Import2d {
-        layers: vec![Layer2d {
-            name: "0".into(),
-            elements,
-        }],
-        ..Default::default()
-    }
-}
+use common::{NoText, arc_chain, chain_2d, chain_3d};
 
 /// Reine 2D-Skizze: 500 verkettete Bögen einfügen und einen Zugschritt am Ende rechnen.
 /// Vergleichswert (Skizzen 9, `offene-punkte.md`): 10,9 s einfügen, 16,9 s Zugschritt, jeweils

@@ -530,6 +530,8 @@ fn bits(s: &Sketch) -> Vec<u64> {
 fn pure_2d_results_unchanged() {
     // Die bemaßte Skizze aus `tests/e2e.rs` (a_dimensioned_rectangle_extrudes_to_the_right_volume).
     let mut s = default_sketch();
+    // Bitgenauer Vergleich: immer der dichte Weg, unabhängig von `PLANORA_SOLVER` (Ruling F12).
+    s.set_solver_path(planora_sketch::sparse::SolverPath::Dense);
     let r = s
         .add_rectangle(DVec2::new(1.0, 1.0), DVec2::new(30.0, 20.0))
         .unwrap();
@@ -554,6 +556,7 @@ fn pure_2d_results_unchanged() {
     );
     // Dazu Tangente am gemeinsamen Ende, Gleich, Rechtwinklig, Punkt auf Kreis und Radius.
     let mut s = default_sketch();
+    s.set_solver_path(planora_sketch::sparse::SolverPath::Dense);
     let a = s.add_point(0.0, 0.0).unwrap();
     let b = s.add_point(10.0, 0.5).unwrap();
     let m = s.add_point(10.0, 5.0).unwrap();

@@ -219,6 +219,9 @@ pub struct Sketch {
     /// Ergebnisse der letzten Solver-Läufe je Gruppe (siehe `solver.rs`). Jede Änderung an
     /// Objekten oder Abhängigkeiten leert ihn; reine Wertänderungen erkennt der Solver selbst.
     pub(crate) solve_cache: SolveCache,
+    /// Weg des Lösers (dicht, dünn oder je Gruppengröße), siehe [`crate::sparse::SolverPath`].
+    /// Gehört nicht zur Datei und nicht zum Vergleich von Ständen.
+    pub(crate) solver_path: crate::sparse::SolverPath,
     /// Haken „3D-Skizze“ (Skizzen 10): schaltet die 3D-Werkzeuge frei. Bereits gezeichnete
     /// 3D-Geometrie bleibt, wenn der Haken fällt.
     pub three_d: bool,
@@ -287,8 +290,17 @@ impl Sketch {
             texts: Arena::new(),
             revision: next_revision(),
             solve_cache: SolveCache::default(),
+            solver_path: crate::sparse::SolverPath::from_env(),
             three_d: false,
         }
+    }
+
+    /// Legt den Weg des Lösers fest (nur zum Prüfen); verwirft die gemerkten Ergebnisse, damit
+    /// der nächste Lauf auf dem neuen Weg rechnet.
+    #[doc(hidden)]
+    pub fn set_solver_path(&mut self, p: crate::sparse::SolverPath) {
+        self.solver_path = p;
+        self.solve_cache = SolveCache::default();
     }
 
     /// Setzt den Haken „3D-Skizze“; die Geometrie bleibt unverändert.

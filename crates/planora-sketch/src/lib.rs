@@ -30,6 +30,9 @@ pub mod shapes;
 pub mod snap;
 pub mod solid;
 pub mod solver;
+/// Dünne lineare Algebra des Solvers (große Gruppen); nur für die Tests öffentlich.
+#[doc(hidden)]
+pub mod sparse;
 pub mod spline_handles;
 pub mod tangent_circles;
 pub mod text;

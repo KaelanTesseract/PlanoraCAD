@@ -27,8 +27,10 @@ use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use crate::pattern::{PATTERN_ROUNDS, PatternId};
+use crate::sparse::{Envelope, SparseRows, envelope_cholesky_solve, rcm_order};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3};
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -325,6 +327,9 @@ struct Group {
     /// Variablen von Musterexemplaren, die die Abhängigkeiten der Gruppe lesen: für den Löser
     /// Konstanten (keine Spalte), aber Teil von `reads`. Aufsteigend, ohne Doppelte.
     pattern_reads: Vec<usize>,
+    /// Dünner Weg (Skizzen 11a): Ordnung der Spalten nach RCM (neu → alt), einmal je
+    /// `build_groups_holding` aus den Variablen der Abhängigkeiten. `None`: dichter Weg.
+    order: Option<Vec<usize>>,
 }
 
 impl Group {
@@ -335,10 +340,69 @@ impl Group {
     }
 }
 
+/// Jacobi-Matrix einer Gruppe: dicht (kleine Gruppen) oder als dünne Zeilen.
+enum Jacobian {
+    Dense(Matrix),
+    Sparse(SparseRows),
+}
+
+impl Jacobian {
+    /// Die Matrix dicht (die Rangprüfung rechnet noch dicht).
+    fn dense(&self) -> Cow<'_, Matrix> {
+        match self {
+            Jacobian::Dense(m) => Cow::Borrowed(m),
+            Jacobian::Sparse(m) => Cow::Owned(m.to_dense()),
+        }
+    }
+}
+
+/// Normalgleichungen eines Schritts: `JᵀJ` dicht oder als Hülle in RCM-Ordnung.
+enum Normal<'a> {
+    Dense(Matrix),
+    Sparse(Envelope, &'a [usize]),
+}
+
+impl Normal<'_> {
+    /// Maßstab der Dämpfung, siehe `MIN_DIAG`.
+    fn scale(&self) -> f64 {
+        match self {
+            Normal::Dense(gram) => (0..gram.rows())
+                .map(|i| gram.get(i, i))
+                .fold(MIN_DIAG, f64::max),
+            Normal::Sparse(env, _) => env.max_diagonal().max(MIN_DIAG),
+        }
+    }
+
+    /// Löst `(JᵀJ + damping · I) · step = rhs`; der Schritt steht in der Spaltenordnung der
+    /// Gruppe.
+    fn solve(&self, damping: f64, rhs: &[f64]) -> Option<Vec<f64>> {
+        match self {
+            Normal::Dense(gram) => {
+                let mut m = gram.clone();
+                for i in 0..m.rows() {
+                    m.add_to(i, i, damping);
+                }
+                timed(|t| &mut t.cholesky, || cholesky_solve(&m, rhs))
+            }
+            Normal::Sparse(env, order) => {
+                let mut m = env.clone();
+                m.add_diagonal(damping);
+                let b: Vec<f64> = order.iter().map(|&old| rhs[old]).collect();
+                let y = timed(|t| &mut t.cholesky, || envelope_cholesky_solve(&m, &b))?;
+                let mut step = vec![0.0; y.len()];
+                for (&old, v) in order.iter().zip(y) {
+                    step[old] = v;
+                }
+                Some(step)
+            }
+        }
+    }
+}
+
 /// Residuen und Jacobi-Matrix einer Gruppe.
 struct Assembled {
     r: Vec<f64>,
-    j: Matrix,
+    j: Jacobian,
     /// Die ersten `hard_rows` Zeilen stammen aus Abhängigkeiten, der Rest aus weichen Bedingungen.
     hard_rows: usize,
     /// Zu jeder harten Zeile: Index der Abhängigkeit in `Group::constraints`.
@@ -689,14 +753,22 @@ impl Sketch {
                 rows.push((s.weight * (x[s.var] - s.target), vec![(c, s.weight)]));
             }
         }
-        let mut j = Matrix::zeros(rows.len(), g.vars.len());
-        let mut r = Vec::with_capacity(rows.len());
-        for (i, (value, entries)) in rows.iter().enumerate() {
-            r.push(*value);
-            for (c, d) in entries {
-                j.add_to(i, *c, *d);
+        let (r, j) = if g.order.is_some() {
+            // Dünner Weg: dieselben Einträge als dünne Zeilen.
+            let (r, entries): (Vec<f64>, Vec<Vec<(usize, f64)>>) = rows.into_iter().unzip();
+            let j = SparseRows::from_rows(g.vars.len(), &entries);
+            (r, Jacobian::Sparse(j))
+        } else {
+            let mut j = Matrix::zeros(rows.len(), g.vars.len());
+            let mut r = Vec::with_capacity(rows.len());
+            for (i, (value, entries)) in rows.iter().enumerate() {
+                r.push(*value);
+                for (c, d) in entries {
+                    j.add_to(i, *c, *d);
+                }
             }
-        }
+            (r, Jacobian::Dense(j))
+        };
         Assembled {
             r,
             j,
@@ -741,23 +813,25 @@ impl Sketch {
                 break;
             }
             iterations += 1;
-            let (gradient, gram) = timed(
+            let (gradient, normal) = timed(
                 |t| &mut t.normal,
-                || (a.j.transpose_mul_vec(&a.r), a.j.gram()),
+                || match &a.j {
+                    Jacobian::Dense(j) => (j.transpose_mul_vec(&a.r), Normal::Dense(j.gram())),
+                    Jacobian::Sparse(j) => {
+                        // Dünne Zeilen baut `assemble` nur mit `order`.
+                        let order = g.order.as_deref().unwrap_or_default();
+                        let env = Envelope::gram(j, order);
+                        (j.transpose_mul_vec(&a.r), Normal::Sparse(env, order))
+                    }
+                },
             );
             let rhs: Vec<f64> = gradient.iter().map(|v| -v).collect();
             // Maßstab der Dämpfung, siehe `MIN_DIAG`.
-            let scale = (0..gram.rows())
-                .map(|i| gram.get(i, i))
-                .fold(MIN_DIAG, f64::max);
+            let scale = normal.scale();
             let mut accepted = false;
             let mut stalled = false;
             for _ in 0..DAMPING_TRIES {
-                let mut m = gram.clone();
-                for i in 0..m.rows() {
-                    m.add_to(i, i, lambda * scale);
-                }
-                if let Some(step) = timed(|t| &mut t.cholesky, || cholesky_solve(&m, &rhs)) {
+                if let Some(step) = normal.solve(lambda * scale, &rhs) {
                     let mut trial = x.to_vec();
                     for (c, &v) in g.vars.iter().enumerate() {
                         trial[v] += step[c];
@@ -842,7 +916,7 @@ impl Sketch {
     /// Wie [`analyze`](Self::analyze) mit den schon gebauten Zeilen `a` (alle Abhängigkeiten,
     /// ohne weiche Bedingungen) an der gelösten Stelle.
     fn analyze_assembled(&self, g: &Group, a: &Assembled) -> Analysis {
-        let space = timed(|t| &mut t.rank, || analyze_rows(&a.j, RANK_REL_TOL));
+        let space = timed(|t| &mut t.rank, || analyze_rows(&a.j.dense(), RANK_REL_TOL));
         let mut redundant = Vec::new();
         for (row, independent) in space.independent.iter().enumerate() {
             let id = g.constraints[a.owner[row]];
@@ -1081,15 +1155,36 @@ impl Sketch {
                     curves: Vec::new(),
                     reads: Vec::new(),
                     pattern_reads: Vec::new(),
+                    order: None,
                 });
                 index[root] = groups.len() - 1;
             }
             groups[index[root]].vars.push(v);
         }
+        // Dünner Weg: Struktur von `JᵀJ` aus den Variablen der Abhängigkeiten (je Abhängigkeit
+        // eine Zeile über alle ihre Variablen, eine Obermenge der echten Zeilen).
+        let sparse: Vec<bool> = groups
+            .iter()
+            .map(|g| self.solver_path.sparse_for(g.vars.len()))
+            .collect();
+        let mut pattern: Vec<Vec<Vec<(usize, f64)>>> = vec![Vec::new(); groups.len()];
         for (id, locals, read) in active {
             let gi = index[find(&mut parent, locals[0])];
+            if sparse[gi] {
+                let g = &groups[gi];
+                let row = locals
+                    .iter()
+                    .filter_map(|&v| g.column(v).map(|c| (c, 1.0)))
+                    .collect();
+                pattern[gi].push(row);
+            }
             groups[gi].constraints.extend(id);
             groups[gi].pattern_reads.extend(read);
+        }
+        for ((g, rows), sparse) in groups.iter_mut().zip(&pattern).zip(&sparse) {
+            if *sparse {
+                g.order = Some(rcm_order(&SparseRows::from_rows(g.vars.len(), rows)));
+            }
         }
         // Kurven, deren Variablen (Punkte oder eigene) in einer Gruppe liegen, gehören zu ihr
         // (für die Prüfung auf Entartung).

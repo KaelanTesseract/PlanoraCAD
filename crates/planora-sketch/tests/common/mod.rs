@@ -137,3 +137,50 @@ pub fn chain_3d(s: &mut Sketch, segments: usize) -> (planora_sketch::model::Poin
     }
     (last.unwrap(), curves)
 }
+
+/// Eine Kette aus `n` Halbkreisen (wie eine Polylinie mit Bulge): ein einziger Zusammenhang.
+pub fn arc_chain(n: usize) -> planora_exchange::import2d::Import2d {
+    use planora_exchange::import2d::{Element2d, Import2d, Layer2d};
+    let elements = (0..n)
+        .map(|i| Element2d::Arc {
+            c: DVec2::new(2.0 * i as f64 + 1.0, 0.0),
+            r: 1.0,
+            start: std::f64::consts::PI,
+            end: std::f64::consts::TAU,
+        })
+        .collect();
+    Import2d {
+        layers: vec![Layer2d {
+            name: "0".into(),
+            elements,
+        }],
+        ..Default::default()
+    }
+}
+
+/// Schriftsetzer ohne Schrift: Texte entfallen beim Einfügen.
+pub struct NoText;
+
+impl planora_sketch::text_shape::TextShaper for NoText {
+    fn shape(
+        &self,
+        _: &str,
+        _: &planora_sketch::text_shape::TextStyle,
+    ) -> Result<planora_sketch::text_shape::TextShape, planora_sketch::text_shape::TextShapeError>
+    {
+        Err(planora_sketch::text_shape::TextShapeError::Empty)
+    }
+}
+
+/// Fügt [`arc_chain`] mit `n` Bögen in `s` ein (Vorgaben wie beim Einfügen ohne Haken).
+pub fn insert_arc_chain(s: &mut Sketch, n: usize) {
+    let r = s
+        .insert_geometry(
+            &arc_chain(n),
+            &planora_sketch::import::Placement::default(),
+            &planora_sketch::import::InsertOptions::default(),
+            &NoText,
+        )
+        .unwrap();
+    assert_eq!(r.curves, n);
+}
