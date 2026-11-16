@@ -974,6 +974,12 @@ struct SideInput<'a> {
     fonts: Option<&'a planora_text::FontLibrary>,
 }
 
+/// Inhaltshöhe und sichtbare Höhe des Skizzenfelds im letzten Bild (nur für Tests).
+#[doc(hidden)]
+pub fn side_scroll_extent(ctx: &egui::Context) -> Option<(f32, f32)> {
+    ctx.data(|d| d.get_temp(egui::Id::new("planora-sketch-side-extent")))
+}
+
 /// Skizzenfeld rechts (Spaltenbreite 250): Inhalt in einer senkrechten ScrollArea, höchstens so
 /// hoch wie die Spalte.
 fn side_field(
@@ -1010,7 +1016,11 @@ fn side_field(
             palette: &mut *palette,
             fonts,
         };
-        theme::scroll_area(ui, area, |ui| side_contents(ui, &mut *se, &mut *sf, side));
+        let out = theme::scroll_area(ui, area, |ui| side_contents(ui, &mut *se, &mut *sf, side));
+        // Für Tests: Inhaltshöhe und sichtbare Höhe des Skizzenfelds.
+        let extent = (out.content_size.y, out.inner_rect.height());
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new("planora-sketch-side-extent"), extent));
     };
     if undocked {
         let title = tr!("panel-sketch-side");
@@ -1810,8 +1820,9 @@ pub fn status_line(sk: &Sketch, r: &planora_sketch::solver::SolveReport) -> (Str
     }
 }
 
-/// Höchste Höhe der Liste „Unterbestimmte finden“, bevor sie scrollt.
-const UNDER_LIST_MAX_H: f32 = 160.0;
+/// Höchste Höhe der Liste „Unterbestimmte finden“, bevor sie scrollt. Klein genug, dass das
+/// Skizzenfeld bei 1080 Höhe auch mit gewählter Linie ohne äußeren Bildlauf auskommt (H2-1).
+const UNDER_LIST_MAX_H: f32 = 72.0;
 
 /// Knöpfe „Unterbestimmte finden“ und „Skizze berechnen“ und, solange sie offen ist, die Liste der
 /// unterbestimmten Elemente (Skizzen 11a): Haken „Bestimmte ausblenden“, je Element eine Zeile

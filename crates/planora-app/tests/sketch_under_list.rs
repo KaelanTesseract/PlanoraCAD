@@ -451,9 +451,36 @@ fn gap_below_list(n: u32) -> f32 {
 /// mehr Platz, je mehr Zeilen die Liste hat.
 #[test]
 fn under_list_rows_count_spacing_once() {
-    let (two, three) = (gap_below_list(2), gap_below_list(3));
+    let (two, three) = (gap_below_list(1), gap_below_list(2));
     assert!(
         (three - two).abs() < 0.5,
-        "2 Zeilen: {two}, 3 Zeilen: {three}"
+        "1 Zeile: {two}, 2 Zeilen: {three}"
     );
+}
+
+/// Handtest 2, H2-2: Das X an einer Linie löscht wie die Entf-Taste: Endpunkte und Maße der Linie
+/// gehen mit, ein Rückgängig-Schritt.
+#[test]
+fn x_on_a_line_removes_its_points_and_dimensions_like_delete() {
+    let mut w = ws();
+    let (line, lone) = open_line_and_point(&mut w);
+    // Längenmaß an der Linie.
+    {
+        let (se, sk) = state(&mut w).session_sketch_mut().unwrap();
+        let (a, b) = {
+            let pts = sk.curve(line).unwrap().kind.points();
+            (pts[0], pts[1])
+        };
+        sk.add_constraint(K::Distance(a, b, 5.0)).unwrap();
+        se.last_report = Some(sk.solve());
+    }
+    w.observe_history(false);
+    let before = undo_len(&w);
+    let (se, sk) = state(&mut w).session_sketch_mut().unwrap();
+    assert!(se.delete_under_item(sk, CheckItem::Curve(line)));
+    assert_eq!(sk.constraints().count(), 0, "Maß muss mit");
+    let points: Vec<_> = sk.points().map(|p| p.0).collect();
+    assert_eq!(points, vec![lone], "nur der freie Punkt bleibt");
+    w.observe_history(false);
+    assert_eq!(undo_len(&w), before + 1);
 }

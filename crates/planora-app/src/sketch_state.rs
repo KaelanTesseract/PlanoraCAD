@@ -3411,6 +3411,28 @@ impl SketchSession {
                     }
                 }
             }
+            // Wie in Fusion gehen mit einer Kurve ihre Endpunkte samt Maßen und Abhängigkeiten:
+            // Was an einem nun freien Punkt der gelöschten Kurve hängt, fällt mit weg (sonst hielte
+            // es den Punkt am Leben). Punkte, die noch eine andere Kurve benutzt, bleiben mit
+            // allem, was an ihnen hängt.
+            if !orphans.is_empty() {
+                let mut still_used: std::collections::HashSet<PointId> =
+                    sk.curves().flat_map(|(_, c)| c.kind.points()).collect();
+                still_used.extend(sk.pattern_centers());
+                let gone: Vec<PointId> = orphans
+                    .iter()
+                    .copied()
+                    .filter(|p| !still_used.contains(p))
+                    .collect();
+                let doomed: Vec<ConstraintId> = sk
+                    .constraints()
+                    .filter(|(_, k)| k.kind.points().iter().any(|p| gone.contains(p)))
+                    .map(|(id, _)| id)
+                    .collect();
+                for id in doomed {
+                    let _ = sk.remove_constraint(id);
+                }
+            }
             sk.prune_points(&orphans);
             se.pending.retain(|&p| sk.point_xy(p).is_ok());
             se.forget_removed_curves(sk);
