@@ -273,6 +273,21 @@ fn blend_from_3d_curve_refused() {
     assert_eq!(s.blend_end_near(line, DVec2::new(10.0, 0.0)), None);
 }
 
+/// Handtest 11a, Ruling H1-1: In einer 3D-Skizze ist jede Kurve eine 3D-Kurve, auch eine Linie
+/// auf z = 0 (Fusion bietet die Übergangskurve nur in 2D-Skizzen an). Fällt der Haken, ist sie
+/// wieder eine Quelle.
+#[test]
+fn blend_in_3d_sketch_refused_even_on_z0() {
+    let mut s = sketch();
+    let (p, q) = (pt(&mut s, 0.0, 0.0), pt(&mut s, 10.0, 0.0));
+    let line = s.add_line(p, q).unwrap();
+    s.set_three_d(true);
+    assert_eq!(s.blend_source(line), Err(BlendRefusal::ThreeD));
+    assert_eq!(s.blend_end_near(line, DVec2::new(10.0, 0.0)), None);
+    s.set_three_d(false);
+    assert_eq!(s.blend_source(line), Ok(()));
+}
+
 #[test]
 fn blend_circle_refused() {
     let mut s = sketch();

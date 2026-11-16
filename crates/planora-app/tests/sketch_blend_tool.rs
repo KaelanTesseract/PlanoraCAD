@@ -230,6 +230,26 @@ fn hover_over_circle_gives_no_target() {
     assert_eq!(parts(&mut w).0.message_text(), Some(err));
 }
 
+/// Handtest 11a, Fund 4a (Ruling H1-1): In einer 3D-Skizze wählt das Werkzeug auch eine Linie auf
+/// z = 0 nicht und meldet, dass 3D-Kurven keine Quelle sind.
+#[test]
+fn line_in_3d_sketch_is_refused_with_message() {
+    let mut w = rig(true);
+    {
+        let (se, sf, _) = parts(&mut w);
+        se.set_three_d(&mut sf.sketch, true);
+        se.set_tool(&mut sf.sketch, Tool::BlendCurve);
+    }
+    let before = fingerprint(sk(&w));
+    assert_eq!(hover(&mut w, v(9.5, 0.0)), None);
+    assert!(parts(&mut w).0.blend.hover.is_none(), "keine Quelle");
+    let err = click(&mut w, v(9.5, 0.0)).unwrap_err();
+    assert_eq!(err, tr!("sketch-blend-three-d"));
+    assert_eq!(parts(&mut w).0.message_text(), Some(err));
+    assert!(parts(&mut w).0.blend.first.is_none(), "nichts gewählt");
+    assert_eq!(fingerprint(sk(&w)), before);
+}
+
 #[test]
 fn esc_leaves_nothing() {
     let mut w = rig(true);

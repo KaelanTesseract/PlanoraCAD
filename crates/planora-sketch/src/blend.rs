@@ -72,7 +72,9 @@ const PREVIEW_STEPS: usize = 64;
 
 impl Sketch {
     /// Kann `c` Quelle einer Übergangskurve sein? Quellen sind offene 2D-Kurven mit zwei Enden:
-    /// Linie, Bogen, Ellipsenbogen, beide Splinearten, Kegelschnitt und offene feste Splines.
+    /// Linie, Bogen, Ellipsenbogen, beide Splinearten, Kegelschnitt und offene feste Splines. In
+    /// einer 3D-Skizze ([`Sketch::three_d`]) ist jede Kurve eine 3D-Kurve, auch eine auf z = 0
+    /// (Ruling H1-1; Fusion bietet die Übergangskurve nur in 2D-Skizzen an).
     pub fn blend_source(&self, c: CurveId) -> Result<(), BlendRefusal> {
         let Some(data) = self.curve(c) else {
             return Err(BlendRefusal::NotCurve);
@@ -80,7 +82,7 @@ impl Sketch {
         if self.text_of_curve(c).is_some() {
             return Err(BlendRefusal::Text);
         }
-        if self.is_3d_curve(c) {
+        if self.three_d || self.is_3d_curve(c) {
             return Err(BlendRefusal::ThreeD);
         }
         match open_curve_ends(&data.kind) {
