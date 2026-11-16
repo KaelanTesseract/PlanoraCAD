@@ -3587,7 +3587,8 @@ impl SketchSession {
     /// Kurve öffnet er das Menü ([`curve_menu`](Self::curve_menu)), sonst bricht er wie bisher ab.
     pub fn secondary_click(&mut self, sk: &mut Sketch, at: (f32, f32)) {
         let curve_selected = self.selection.iter().any(|i| matches!(i, Item::Curve(_)));
-        if self.tool == Tool::Select && curve_selected && !self.in_gesture() {
+        if self.tool == Tool::Select && curve_selected && !self.in_gesture() && !self.is_dragging()
+        {
             self.curve_menu = Some(at);
         } else {
             self.curve_menu = None;

@@ -16,6 +16,7 @@ use planora_math::DVec3;
 use planora_sketch::comb::{COMB_DENSITY, COMB_MIN_PX, COMB_SCALE_MAX, COMB_SCALE_MIN};
 use planora_sketch::comb::{CombSettings, comb_teeth};
 use planora_sketch::model::{CurveId, CurveKind, Sketch};
+use std::collections::HashSet;
 
 /// Strichstärke von Zähnen und Hüllkurve.
 const COMB_WIDTH: f32 = 1.0;
@@ -190,8 +191,23 @@ pub fn comb_shapes(
     px_per_mm: f64,
     color: Color32,
 ) -> Vec<Shape> {
+    comb_shapes_skipping(sk, to_screen, px_per_mm, color, &HashSet::new())
+}
+
+/// Wie [`comb_shapes`], ohne die Kurven in `hidden` (ausgeblendete Hilfskurven wie Griffe,
+/// Musterquellen und Text zeichnen keinen Kamm).
+pub fn comb_shapes_skipping(
+    sk: &Sketch,
+    to_screen: impl Fn(DVec3) -> Pos2,
+    px_per_mm: f64,
+    color: Color32,
+    hidden: &HashSet<CurveId>,
+) -> Vec<Shape> {
     let mut out = Vec::new();
     for (c, data) in sk.curves() {
+        if hidden.contains(&c) {
+            continue;
+        }
         if let Some(settings) = data.comb {
             out.extend(comb_curve_shapes(
                 sk, c, settings, &to_screen, px_per_mm, color,

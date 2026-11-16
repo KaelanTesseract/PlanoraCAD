@@ -1193,11 +1193,16 @@ fn comb_screen(map: &Mapper) -> impl Fn(DVec3) -> Pos2 + '_ {
 }
 
 /// Krümmungskämme der Skizze `sk` (Skizzen 11a) für die Ansicht `map`.
-fn comb_overlay(sk: &Sketch, map: &Mapper, color: Color32) -> Vec<Shape> {
+fn comb_overlay(
+    sk: &Sketch,
+    map: &Mapper,
+    color: Color32,
+    hidden: &HashSet<CurveId>,
+) -> Vec<Shape> {
     let Some(scale) = px_per_mm(map) else {
         return Vec::new();
     };
-    crate::curvature_dialog::comb_shapes(sk, comb_screen(map), scale, color)
+    crate::curvature_dialog::comb_shapes_skipping(sk, comb_screen(map), scale, color, hidden)
 }
 
 /// Strichstärke fertiger Skizzen in der 3D-Ansicht (dünner als im Skizzen-Modus).
@@ -1289,7 +1294,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             }
         }
         // Krümmungskamm (Skizzen 11a), auch außerhalb des Skizzen-Modus.
-        out.extend(comb_overlay(sk, &map, col.comb));
+        out.extend(comb_overlay(sk, &map, col.comb, &handles_hidden.curves));
         // Kontrollpunktrahmen (Skizzen 9) dünn und gestrichelt.
         let frame_stroke = Stroke::new(FINISHED_CONSTRUCTION_WIDTH, col.construction);
         for line in frame_polygons3(sk) {
@@ -2877,7 +2882,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
 
     // Krümmungskamm (Skizzen 11a) und die Vorschau des offenen Dialogs „Krümmungsanzeige
     // einrichten“; die Vorschau ändert die Skizze nicht.
-    painter.extend(comb_overlay(sk, &map, col.comb));
+    painter.extend(comb_overlay(sk, &map, col.comb, &hidden));
     if let (Some(d), Some(scale)) = (state.curvature_dialog.as_ref(), px_per_mm(&map)) {
         painter.extend(crate::curvature_dialog::preview_shapes(
             sk,

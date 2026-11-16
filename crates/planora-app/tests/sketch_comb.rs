@@ -494,3 +494,91 @@ fn the_dialog_and_the_menu_are_drawn_and_the_preview_leaves_the_sketch_alone() {
     // Die Vorschau zeichnet, die Skizze bleibt ohne Kamm.
     assert_eq!(comb_of(app.ws_mut(), arc), None);
 }
+
+// ---- Nacharbeit -------------------------------------------------------------------------------
+
+#[test]
+fn right_click_during_a_drag_cancels_like_before() {
+    let mut w = ws();
+    let (arc, _) = open_sketch(&mut w);
+    select(&mut w, vec![Item::Curve(arc)]);
+    let (se, sk) = state(&mut w).session_sketch_mut().unwrap();
+    // Zug an einem Bogenpunkt (Endpunkt bei 10|0)
+    assert!(se.begin_drag(sk, DVec2::new(10.0, 0.0), 0.5));
+    assert!(se.is_dragging());
+    se.secondary_click(sk, (10.0, 20.0));
+    assert_eq!(se.curve_menu, None, "kein Menü im Zug");
+    assert!(!se.is_dragging(), "der Zug ist beendet");
+}
+
+#[test]
+fn hidden_curves_draw_no_comb() {
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let (arc, _) = arc_and_line(&mut sk);
+    sk.set_comb(arc, Some(CombSettings::default())).unwrap();
+    let to_screen = |p: DVec3| pos2(p.x as f32 * 10.0, -p.y as f32 * 10.0);
+    let none = std::collections::HashSet::new();
+    let hidden: std::collections::HashSet<CurveId> = [arc].into_iter().collect();
+    let red = egui::Color32::RED;
+    assert!(
+        !planora_app::curvature_dialog::comb_shapes_skipping(&sk, to_screen, 10.0, red, &none)
+            .is_empty()
+    );
+    assert!(
+        planora_app::curvature_dialog::comb_shapes_skipping(&sk, to_screen, 10.0, red, &hidden)
+            .is_empty()
+    );
+}
+
+#[test]
+fn dragging_the_density_field_is_one_undo_step() {
+    let c = context();
+    let mut app = PlanoraApp::for_tests(ws());
+    let (arc, _) = open_sketch(app.ws_mut());
+    state(app.ws_mut())
+        .session_sketch_mut()
+        .unwrap()
+        .1
+        .set_comb(arc, Some(CombSettings::default()))
+        .unwrap();
+    app.ws_mut().observe_history(false);
+    select(app.ws_mut(), vec![Item::Curve(arc)]);
+    let t = settle(&c, &mut app);
+    let area = shell_panels::field_rects(&c)
+        .into_iter()
+        .find(|(n, _)| *n == "Skizze")
+        .expect("Skizzenfeld")
+        .1;
+    let label = t
+        .iter()
+        .find(|(s, r)| s == "Dichte" && area.contains(r.center()))
+        .expect("Dichte")
+        .1;
+    // Das Feld rechts neben dem Namen zeigt den Wert 20.
+    let field = t
+        .iter()
+        .find(|(s, r)| {
+            s == "20" && area.contains(r.center()) && (r.center().y - label.center().y).abs() < 6.0
+        })
+        .expect("Wert 20")
+        .1
+        .center();
+    let n = undo_len(app.ws_mut());
+    frame(&c, &mut app, vec![Event::PointerMoved(field)]);
+    frame(
+        &c,
+        &mut app,
+        vec![Event::PointerMoved(field), button(field, true)],
+    );
+    for i in 1..=6 {
+        let p = pos2(field.x + 8.0 * i as f32, field.y);
+        frame(&c, &mut app, vec![Event::PointerMoved(p)]);
+    }
+    let end = pos2(field.x + 48.0, field.y);
+    frame(&c, &mut app, vec![button(end, false)]);
+    frame(&c, &mut app, vec![]);
+    frame(&c, &mut app, vec![]);
+    let got = comb_of(app.ws_mut(), arc).unwrap().density;
+    assert!(got > 20, "das Ziehen ändert die Dichte: {got}");
+    assert_eq!(undo_len(app.ws_mut()), n + 1, "ein Zug ist ein Schritt");
+}
