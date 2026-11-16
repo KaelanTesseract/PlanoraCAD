@@ -2,6 +2,19 @@
 
 Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht oben.
 
+## Unveröffentlicht
+
+### Neu
+- Skizzen: Zeichnen und Prüfen wie in Fusion. Neu sind die Mittelpunktlinie (erster Klick ist die Mitte, die getippte Länge gilt für die ganze Linie), die Übergangskurve unter „Bearbeiten → Ändern“ (verbindet zwei Enden glatt, wahlweise nur in der Richtung oder auch in der Krümmung) und der Krümmungskamm (Rechtsklick auf eine Kurve, Dichte und Maßstab einstellbar). Der Bogen „Mittelpunkt“ folgt der Richtung der Maus in beiden Drehrichtungen, und beim Bemaßen zweier Linien wählt die Lage des Zeigers zwischen Winkel und Gegenwinkel.
+- Skizzen: Kreis, Polygon und Rechteck haben in der 3D-Skizze jetzt dieselben Felder am Zeiger wie in 2D. Die Felder nehmen keinen Mausklick an, ein Klick setzt den Punkt wie sonst. Der Kreis „2 Tangenten“ fragt den Radius, das Polygon über eine Kante Länge, Winkel und Seitenzahl.
+- Skizzen: Oben im Skizzenfeld steht der Status (unterbestimmt, bestimmt, Widerspruch, nicht gelöst). Eine ganz bestimmte Skizze zeigt im Baum ein rotes Schloss. „Unterbestimmte finden“ listet, was sich noch bewegen lässt; ein Klick auf die Zeile holt das Element ins Bild.
+- Skizzen: Löschst du einen Körper, auf den sich projizierte Kurven beziehen, bleibt die Skizze jetzt stehen und zeigt eine Warnung. Der Dialog „Verlorene Projektionen“ verknüpft die Kurven neu, löst sie oder löscht sie.
+- Skizzen: Große Skizzen rechnen viel schneller. Eine Kette aus 200 Kurven in 3D lässt sich in etwa 0,03 s je Zugschritt ziehen statt in über 30 s, eine DXF-Datei mit 1000 Bögen in etwa 0,01 s statt in über 2 Minuten. Kleine Skizzen rechnen wie vorher.
+- Skizzen mit einer Übergangskurve mit Richtungsvorgabe, einem glatten Ellipsenbogen oder einem Gegenwinkel werden im neuen Dateiformat 21 gespeichert und lassen sich von älteren Programmversionen nicht öffnen. Alle anderen Dateien bleiben unverändert. Wo es von Fusion abweicht, steht in `docs/superpowers/offene-punkte.md`.
+
+### Behoben
+- Ein Absturz beim Tippen in den Feldern am Zeiger (etwa Strg+A im Winkelfeld des Polygons in der 3D-Skizze) ist behoben.
+
 ## 0.0.2-dev.2
 
 ### Neu
