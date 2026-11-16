@@ -190,6 +190,8 @@ pub enum Icon {
     Dock,
     /// Phosphor `arrow-square-out` (Fenster abdocken).
     Undock,
+    /// Phosphor `lock` (`lock-simple` gehört schon zu Fixed): das rote Schloss einer voll bestimmten Skizze.
+    Lock,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -283,6 +285,7 @@ pub const ALL: &[Icon] = &[
     Icon::Help,
     Icon::Dock,
     Icon::Undock,
+    Icon::Lock,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -376,6 +379,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Help, '\u{e3e8}', "question"),
     (Icon::Dock, '\u{e5dc}', "arrow-square-in"),
     (Icon::Undock, '\u{e5de}', "arrow-square-out"),
+    (Icon::Lock, '\u{e2fa}', "lock"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {
@@ -1728,6 +1732,8 @@ pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
         T::Constraint(action) => sketch_action_icon(action),
         T::InsertControlPoint => IconSource::Hand(HandIcon::SketchSplineControl),
         T::Text => IconSource::Hand(HandIcon::Text),
+        // Wie der Spline mit Kontrollpunkten: Die Übergangskurve ist einer.
+        T::BlendCurve => IconSource::Hand(HandIcon::SketchSplineControl),
     }
 }
 

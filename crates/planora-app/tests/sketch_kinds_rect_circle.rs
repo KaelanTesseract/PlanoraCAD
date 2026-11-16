@@ -431,7 +431,7 @@ fn field_values_show_the_shape_before_the_first_key() {
         ShapePlan::Circle(m, r) => (m, r),
         other => panic!("{other:?}"),
     };
-    assert!((se.field_value(&s, F::Diameter).unwrap() - 2.0 * r).abs() < EPS);
+    assert!((se.field_value(&s, F::Radius).unwrap() - r).abs() < EPS);
 }
 
 // ---- 2-Punkt-Kreis ------------------------------------------------------------------------------
@@ -555,7 +555,7 @@ fn circle_2t_shows_nothing_before_the_last_stage() {
 }
 
 #[test]
-fn circle_2t_typed_diameter_makes_two_tangents_and_a_dimension() {
+fn circle_2t_types_radius() {
     let mut w = rig(ToolKind::Circle2T);
     let (a, b) = {
         let (_, sf, _) = parts(&mut w);
@@ -566,16 +566,25 @@ fn circle_2t_typed_diameter_makes_two_tangents_and_a_dimension() {
     };
     commit(&mut w, 0.0, 1.1).unwrap();
     commit(&mut w, 20.1, 20.0).unwrap();
-    type_in(&mut w, F::Diameter, "10");
+    // Fusion: „2 Tangenten“ tippt den Radius, nicht den Durchmesser (Skizzen 11a).
+    {
+        let (se, sf, _) = parts(&mut w);
+        se.sync_input(&sf.sketch);
+        let fields: Vec<F> = se.input.fields.iter().map(|f| f.kind).collect();
+        assert_eq!(fields, [F::Radius]);
+    }
+    type_in(&mut w, F::Radius, "8");
     let before: Vec<DVec2> = sk(&w).points().map(|(p, _)| xy(sk(&w), p)).collect();
     commit(&mut w, 17.0, 5.0).unwrap();
     let sketch = sk(&w);
     let (c, m, r) = only_circle(sketch);
-    assert!((r - 5.0).abs() < 1e-9);
-    assert!(close(m, at(15.0, 6.0)), "{m:?}");
+    assert!((r - 8.0).abs() < 1e-9);
+    assert!(close(m, at(12.0, 9.0)), "{m:?}");
     assert!(kinds(sketch).contains(&K::Tangent(a, c)));
     assert!(kinds(sketch).contains(&K::Tangent(b, c)));
-    assert!(matches!(dims(sketch)[0].1, K::Diameter(d, v) if d == c && v == 10.0));
+    // Ein Radius-Maß, kein Durchmesser.
+    assert_eq!(dims(sketch).len(), 1);
+    assert!(matches!(dims(sketch)[0].1, K::Radius(d, v) if d == c && v == 8.0));
     let rep = report(sketch);
     assert_eq!(rep.status, SolveStatus::Solved);
     assert!(rep.redundant.is_empty());
@@ -621,7 +630,7 @@ fn circle_2t_last_click_near_a_line_is_not_a_snap() {
 }
 
 #[test]
-fn circle_2t_parallel_lines_only_take_their_own_diameter() {
+fn circle_2t_parallel_lines_only_take_their_own_radius() {
     let mut w = rig(ToolKind::Circle2T);
     {
         let (_, sf, _) = parts(&mut w);
@@ -631,14 +640,14 @@ fn circle_2t_parallel_lines_only_take_their_own_diameter() {
     commit(&mut w, 0.0, 1.1).unwrap();
     commit(&mut w, 0.0, 11.1).unwrap();
     let before = bits(sk(&w));
-    type_in(&mut w, F::Diameter, "4");
+    type_in(&mut w, F::Radius, "2");
     assert_eq!(
         commit(&mut w, 3.0, 8.0).unwrap_err(),
         t("sketch-tangent-no-solution")
     );
     assert_eq!(bits(sk(&w)), before);
     assert_eq!(parts(&mut w).0.pending_curves.len(), 2);
-    type_in(&mut w, F::Diameter, "");
+    type_in(&mut w, F::Radius, "");
     commit(&mut w, 3.0, 8.0).unwrap();
     let (_, m, r) = only_circle(sk(&w));
     assert!(close(m, at(3.0, 6.0)) && (r - 5.0).abs() < 1e-9);
@@ -1259,7 +1268,7 @@ fn circle_2t_by_raw_events_is_one_undo_step() {
         g.click(1300.0, 550.0);
         g.frame(vec![Event::PointerMoved(pos2(1150.0, 520.0))]);
         g.settle();
-        g.type_text("10");
+        g.type_text("5");
         g.key(Key::Enter);
     });
     assert_eq!(count(&done, |k| matches!(k, K::Tangent(..))), 2);
@@ -1326,6 +1335,21 @@ fn messages_exist_in_both_languages() {
             ] {
                 assert!(!t(key).is_empty() && t(key) != key, "{key}");
             }
+        });
+    }
+}
+
+/// Handtest 11a, Fund 7b: Der Hinweis zum Kreis „2 Tangenten“ nennt das Feld, das die Stufe zeigt
+/// (Radius), nicht den Durchmesser; deutsch und englisch.
+#[test]
+fn circle_2t_hint_names_the_radius_field() {
+    for lang in [planora_i18n::german(), planora_i18n::english()] {
+        planora_i18n::with_lang(&lang, || {
+            let hint = ToolKind::Circle2T.hint().to_lowercase();
+            let field = F::Radius.label().to_lowercase();
+            let other = F::Diameter.label().to_lowercase();
+            assert!(hint.contains(&field), "{hint}");
+            assert!(!hint.contains(&other), "{hint}");
         });
     }
 }

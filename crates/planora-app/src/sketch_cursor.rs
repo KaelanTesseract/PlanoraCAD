@@ -3,6 +3,7 @@
 //! ohne Oberfläche; der Fang-Index wird nur neu gebaut, wenn sich die Skizze geändert hat.
 
 use crate::msg::Msg;
+use crate::sketch_input::FieldKind;
 use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::{Item, SketchSession, Tool, TransformStage, err};
 use planora_math::DVec2;
@@ -316,6 +317,7 @@ impl SketchSession {
                 | Tool::Trim
                 | Tool::Extend
                 | Tool::Break
+                | Tool::BlendCurve
                 | Tool::Constraint(_)
                 | Tool::InsertControlPoint
         )
@@ -526,7 +528,12 @@ impl SketchSession {
         {
             return Some((AutoConstraint::Tangent(arc), forward));
         }
-        plan_direction(sk, self.tool, start, self.line_chain, end, on_geometry)
+        let found = plan_direction(sk, self.tool, start, self.line_chain, end, on_geometry);
+        // Die Mitte liegt mitten in der Linie, nicht an ihrem Ende: Dort läuft nichts tangential
+        // weiter (Skizzen 11a).
+        found.filter(|(auto, _)| {
+            !(self.is_midpoint_line() && matches!(auto, AutoConstraint::Tangent(_)))
+        })
     }
 
     /// Tangente des Bogens: beim Setzen des Anfangs aus dem Punkt unter dem Zeiger, danach die
@@ -585,6 +592,12 @@ impl SketchSession {
         self.draw_cursor = raw
             .filter(|r| r.is_finite() && self.is_drawing_tool())
             .map(|r| self.resolve_cursor(sk, r, radius));
+        // Der Bogen „Mittelpunkt“ folgt dem Zug; ein getipptes Winkelfeld setzt die Lage selbst.
+        if let Some(at) = self.draw_cursor.as_ref().map(|c| c.at)
+            && self.input.locked(FieldKind::Sweep).is_none()
+        {
+            self.track_arc_sweep(at);
+        }
     }
 
     /// Fang-Index zum Stand von `sk`, wenn nötig neu gebaut.

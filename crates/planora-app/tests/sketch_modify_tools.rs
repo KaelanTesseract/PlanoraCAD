@@ -263,6 +263,8 @@ fn only_the_forms_with_kinds_and_the_fillet_have_a_triangle() {
     assert_eq!(
         with,
         [
+            // Skizzen 11a, Task 8 bewusst angepasst: Linie und Mittelpunktlinie am Linienknopf.
+            Tool::Line,
             Tool::Rectangle,
             Tool::Circle,
             Tool::Arc,
@@ -477,7 +479,9 @@ fn menus_show_the_modify_entries_only_with_an_open_sketch() {
     );
     assert_eq!(
         app::SKETCH_MODIFY_TOOLS,
-        [Tool::Offset, Tool::MoveCopy, Tool::Scale],
+        // Skizzen 11a, Task 10 bewusst angepasst: 3 → 4, die Übergangskurve steht wie in Fusion
+        // unter „Ändern“ (nicht in der Leiste).
+        [Tool::Offset, Tool::MoveCopy, Tool::Scale, Tool::BlendCurve],
         "Untermenü „Ändern“, nach Rundung und Fasen"
     );
     for tool in app::SKETCH_MODIFY_TOOLS {
@@ -760,4 +764,36 @@ fn the_stage_of_a_chamfer_offers_its_fields() {
         let got: Vec<F> = se.input.fields.iter().map(|f| f.kind).collect();
         assert_eq!(got, fields, "{kind:?}");
     }
+}
+
+/// Ruling H1-5 (b): In einer 3D-Skizze steht die Übergangskurve nicht im Untermenü „Ändern“ (wie
+/// Fusion), und die Aktion wählt dort kein Werkzeug. In 2D bleibt alles wie gehabt.
+#[test]
+fn blend_curve_only_in_2d_sketches() {
+    let mut w = workspace(true);
+    assert!(app::sketch_modify_tools(&w).contains(&Tool::BlendCurve));
+    {
+        let (se, sk) = w.active_tab_mut().state.session_sketch_mut().unwrap();
+        se.set_three_d(sk, true);
+        se.choose_tool(sk, Tool::Line);
+    }
+    let tools = app::sketch_modify_tools(&w);
+    assert!(!tools.contains(&Tool::BlendCurve), "{tools:?}");
+    assert_eq!(tools, vec![Tool::Offset, Tool::MoveCopy, Tool::Scale]);
+    planora_app::commands::run_action(&mut w, Action::SketchBlendCurve);
+    assert_eq!(
+        w.active_tab().state.sketch_session.as_ref().unwrap().tool,
+        Tool::Line,
+        "die Aktion wirkt in 3D nicht"
+    );
+    {
+        let (se, sk) = w.active_tab_mut().state.session_sketch_mut().unwrap();
+        se.set_three_d(sk, false);
+    }
+    assert!(app::sketch_modify_tools(&w).contains(&Tool::BlendCurve));
+    planora_app::commands::run_action(&mut w, Action::SketchBlendCurve);
+    assert_eq!(
+        w.active_tab().state.sketch_session.as_ref().unwrap().tool,
+        Tool::BlendCurve
+    );
 }

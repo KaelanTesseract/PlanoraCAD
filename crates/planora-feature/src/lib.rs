@@ -60,6 +60,7 @@ pub use model::{
     ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane, VertexRef,
     include_plane_half, mesh_locked, sketch_source_allowed,
 };
+pub use ops::{delete_lost_targets, relink_copies};
 pub use params::{ParamEdit, ParamId, ParamScope, Parameter};
 pub use parts_sheets::{
     follow_page_delete, parts_name_taken, parts_page_name_taken, parts_sheet_exists,

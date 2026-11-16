@@ -309,3 +309,20 @@ fn tiny_inputs_never_give_nan() {
     let nan = v(f64::NAN, 0.0);
     assert!(circle_through(a, nan, c, TOL).is_none());
 }
+
+// ---- Mittelpunktlinie (Skizzen 11a, Task 8) ---------------------------------------------------
+
+#[test]
+fn midpoint_line_plan_is_symmetric() {
+    let (a, b) = midpoint_line_plan(v(1.0, 1.0), v(4.0, 5.0), TOL).unwrap();
+    assert_near(a, v(-2.0, -3.0));
+    assert_near(b, v(4.0, 5.0));
+    assert_near((a + b) / 2.0, v(1.0, 1.0));
+}
+
+#[test]
+fn midpoint_line_plan_zero_refused() {
+    assert!(midpoint_line_plan(v(1.0, 1.0), v(1.0, 1.0), TOL).is_none());
+    assert!(midpoint_line_plan(v(1.0, 1.0), v(1.0 + 0.5 * TOL, 1.0), TOL).is_none());
+    assert!(midpoint_line_plan(v(1.0, 1.0), v(f64::NAN, 1.0), TOL).is_none());
+}

@@ -8,7 +8,7 @@
 
 use crate::constraint::{
     ConstraintData, ConstraintKind, Ctx, LineOrPoints, MIN_LEN, collinear_point, extra_var,
-    is_line_kind, line_and_param, lines_share_point, shared_end,
+    is_line_kind, line_and_param, lines_share_point, open_curve_ends, shared_end,
 };
 use crate::curves::{
     CONIC_KNOTS, conic_weight, nurbs_eval_dual, spline_eval, spline_second_derivatives,
@@ -272,6 +272,62 @@ fn param_curve3(ctx: &Ctx, c: CurveId, t: &Dual) -> (V3, V3) {
     }
 }
 
+/// Richtung aus dem Ende `p` in die Kurve `c` hinein im Raum (nicht normiert), wie `into_curve` in
+/// der Skizzenebene; `None`, wenn `p` (nicht mehr) ein Ende von `c` ist.
+fn into_curve3(ctx: &Ctx, c: CurveId, p: PointId) -> Option<V3> {
+    let kind = &ctx.sk.curves[c].kind;
+    let [first, last] = open_curve_ends(kind)?;
+    if p != first && p != last {
+        return None;
+    }
+    let flip = |d: V3| {
+        if p == first { d } else { (-&d.0, -&d.1, -&d.2) }
+    };
+    let at_param = |t: f64| flip(param_curve3(ctx, c, &Dual::constant(t)).1);
+    Some(match kind {
+        CurveKind::Line { a, b } => {
+            let d = sub3(&ctx.pt3(*b), &ctx.pt3(*a));
+            flip(d)
+        }
+        // Gegen den Uhrzeigersinn um die Normale vom Start zum Ende: `n × r`.
+        CurveKind::Arc { center, .. } => {
+            let r = sub3(&ctx.pt3(p), &ctx.pt3(*center));
+            flip(cross3c(ctx.sk.curve_normal(c), &r))
+        }
+        CurveKind::Spline { points, .. } => at_param(if p == first {
+            0.0
+        } else {
+            (points.len() - 1) as f64
+        }),
+        CurveKind::ControlSpline { knots, .. } => at_param(if p == first {
+            *knots.first()?
+        } else {
+            *knots.last()?
+        }),
+        CurveKind::Conic { .. } => at_param(if p == first { 0.0 } else { 1.0 }),
+        CurveKind::FixedSpline { curve, .. } => {
+            let (lo, hi) = curve.domain();
+            at_param(if p == first { lo } else { hi })
+        }
+        CurveKind::EllipticArc { .. } => {
+            let n = ctx.sk.curve_normal(c);
+            let (m, a, len, minor) = ellipse_of3(ctx, c);
+            let minor = if minor.v < MIN_LEN {
+                Dual::constant(MIN_LEN)
+            } else {
+                minor
+            };
+            let v = sub3(&ctx.pt3(p), &m);
+            let b = cross3c(n, &a);
+            let x = dot3(&v, &a) / &len / &len;
+            let y = dot3(&v, &b) / &len / &minor;
+            let t = y.atan2(&x);
+            flip(param_curve3(ctx, c, &t).1)
+        }
+        _ => return None,
+    })
+}
+
 /// Zwei Zeilen „Punkt `p` auf der Geraden durch `a` mit Richtung `d`“ (Abstand je Achse).
 fn on_line_rows(a: &V3, d: &V3, p: &V3) -> [Dual; 2] {
     let len = norm_len3(d);
@@ -440,6 +496,14 @@ pub(crate) fn eval(ctx: &Ctx, data: &ConstraintData) -> Option<Vec<Dual>> {
             let ((_, d1), (_, d2)) = (line_dir3(ctx, *c1), line_dir3(ctx, *c2));
             parallel_rows(&d1, &d2).to_vec()
         }
+        // Richtungen an den Enden gleich oder gegenläufig: zwei Zeilen wie bei `Parallel`.
+        EndTangent(c1, p1, c2, p2) => {
+            let (Some(d1), Some(d2)) = (into_curve3(ctx, *c1, *p1), into_curve3(ctx, *c2, *p2))
+            else {
+                return Some(Vec::new());
+            };
+            parallel_rows(&d1, &d2).to_vec()
+        }
         Perpendicular(c1, c2) => {
             let ((_, d1), (_, d2)) = (line_dir3(ctx, *c1), line_dir3(ctx, *c2));
             vec![dot3(&d1, &d2) / (norm_len3(&d1) * norm_len3(&d2))]
@@ -487,7 +551,12 @@ pub(crate) fn eval(ctx: &Ctx, data: &ConstraintData) -> Option<Vec<Dual>> {
             let den = norm_len3(&d1) * norm_len3(&d2);
             let sin = length3(&cross3(&d1, &d2));
             let w = v.abs();
-            vec![(sin * w.cos() - dot3(&d1, &d2) * w.sin()) / den]
+            if data.supplement {
+                // Gegenwinkel: zwischen `d1` und `−d2`, `dot` wechselt das Vorzeichen.
+                vec![(sin * w.cos() + dot3(&d1, &d2) * w.sin()) / den]
+            } else {
+                vec![(sin * w.cos() - dot3(&d1, &d2) * w.sin()) / den]
+            }
         }
         Tangent(c1, c2) if line_and_param(sk, *c1, *c2).is_some() => {
             let Some((line, curve)) = line_and_param(sk, *c1, *c2) else {
@@ -578,7 +647,7 @@ pub(crate) fn eval(ctx: &Ctx, data: &ConstraintData) -> Option<Vec<Dual>> {
 pub(crate) fn angular_row(sk: &Sketch, kind: &ConstraintKind, row: usize) -> bool {
     use ConstraintKind::*;
     match kind {
-        Parallel(..) | Perpendicular(..) | Angle(..) | EllipseAngle(..) => true,
+        Parallel(..) | Perpendicular(..) | Angle(..) | EllipseAngle(..) | EndTangent(..) => true,
         Collinear(..) => row < 2,
         Tangent(a, b) => match line_and_param(sk, *a, *b) {
             Some((_, c))
@@ -650,7 +719,7 @@ impl Sketch {
     }
 
     /// Aktueller Wert eines Maßes an 3D-Geometrie; `None`, wenn die Art wie in 2D misst.
-    pub(crate) fn measure3(&self, kind: &ConstraintKind) -> Option<f64> {
+    pub(crate) fn measure3(&self, kind: &ConstraintKind, supplement: bool) -> Option<f64> {
         use ConstraintKind::*;
         let ctx = Ctx::collecting(self, &self.vars);
         Some(match kind {
@@ -659,7 +728,8 @@ impl Sketch {
             Diameter(c, _) => 2.0 * circle_of3(&ctx, *c).1.v,
             Angle(c1, c2, _) => {
                 let ((_, d1), (_, d2)) = (line_dir3(&ctx, *c1), line_dir3(&ctx, *c2));
-                length3(&cross3(&d1, &d2)).v.atan2(dot3(&d1, &d2).v)
+                let (sin, dot) = (length3(&cross3(&d1, &d2)).v, dot3(&d1, &d2).v);
+                sin.atan2(if supplement { -dot } else { dot })
             }
             EllipseMajor(c, _) => length3(&ellipse_of3(&ctx, *c).1).v,
             _ => return None,

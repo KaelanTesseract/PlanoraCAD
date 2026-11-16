@@ -659,6 +659,34 @@ fn the_field_never_covers_the_pointer() {
     }
 }
 
+/// A9 (Ruling T13-1): Die Felder nehmen keinen Mausklick an. Ein Klick auf die alte Lage eines
+/// Feldes wirkt auf die Zeichnung wie jeder Klick (der Kreis wird abgesetzt), gibt dem Feld aber
+/// keinen Fokus und wechselt das aktive Feld nicht.
+#[test]
+fn a_click_on_the_old_field_place_acts_on_the_drawing() {
+    let mut s = open_sketch();
+    set_tool(&mut s, Tool::Circle);
+    let mut o = Overlay::new(s);
+    o.click(START);
+    let aim = START + vec2(120.0, 0.0);
+    o.frames(vec![vec![moved(aim)], vec![]]);
+    let on_field = aim + vec2(50.0, 34.0);
+    assert!(planora_app::sketch_inline::over_field(
+        &o.ctx,
+        o.se(),
+        on_field
+    ));
+
+    o.frames(vec![
+        vec![button(on_field, true)],
+        vec![button(on_field, false)],
+        vec![],
+    ]);
+    assert_eq!(o.sk().curves().count(), 1, "der Klick setzt den Kreis ab");
+    // Das Feld verschwindet mit der Form; der Klick hat ihm keinen Fokus gegeben.
+    assert_eq!(o.ctx.memory(|m| m.focused()), None);
+}
+
 // ---- Fokus bleibt in den Feldern --------------------------------------------------------------
 
 /// Taste im Bild direkt nach einer Fokusanforderung (langsames Bild, gehaltene Taste): Dort gilt

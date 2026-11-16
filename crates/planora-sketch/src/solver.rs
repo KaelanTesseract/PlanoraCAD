@@ -27,15 +27,96 @@ use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use crate::pattern::{PATTERN_ROUNDS, PatternId};
+use crate::sparse::{
+    Envelope, SparseRows, analyze_rows_sparse, envelope_cholesky_solve, rcm_order,
+};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
+
+/// Zeit eines gemessenen Lösungslaufs, aufgeteilt nach den Teilen der Rechnung (nur zum Messen,
+/// siehe [`Sketch::solve_timed`]). `normal` ist `JᵀJ` samt Gradient, `rank` die Rangbestimmung.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SolveTimings {
+    /// Aufbau von Residuen und Jacobi-Matrix.
+    pub assemble: Duration,
+    /// Normalgleichungen: `JᵀJ` und Gradient.
+    pub normal: Duration,
+    /// Cholesky-Zerlegung und Lösen des Schritts.
+    pub cholesky: Duration,
+    /// Rang, Redundanz und freie Variablen.
+    pub rank: Duration,
+    /// Der ganze Aufruf.
+    pub total: Duration,
+    /// Zahl der Gruppen, die auf dem dünnen Weg gerechnet wurden (Skizzen 11a).
+    pub sparse_groups: usize,
+}
+
+thread_local! {
+    /// Zähler des laufenden `*_timed`-Aufrufs. Ohne einen solchen ist er `None`; dann läuft kein
+    /// `Instant::now()`, der normale Weg kostet nur das Lesen dieses Wertes.
+    static TIMINGS: Cell<Option<SolveTimings>> = const { Cell::new(None) };
+}
+
+/// Setzt den Zähler beim Verlassen (auch bei einem Panic) wieder auf `None`.
+struct TimingsGuard;
+
+impl Drop for TimingsGuard {
+    fn drop(&mut self) {
+        TIMINGS.with(|c| c.set(None));
+    }
+}
+
+/// Führt `f` aus und rechnet die Zeit dem Teil `part` zu, wenn gerade gemessen wird.
+#[inline]
+fn timed<T>(part: fn(&mut SolveTimings) -> &mut Duration, f: impl FnOnce() -> T) -> T {
+    if TIMINGS.with(|c| c.get().is_none()) {
+        return f();
+    }
+    let start = Instant::now();
+    let out = f();
+    let spent = start.elapsed();
+    TIMINGS.with(|c| {
+        if let Some(mut t) = c.get() {
+            *part(&mut t) += spent;
+            c.set(Some(t));
+        }
+    });
+    out
+}
+
+/// Zählt eine dünn gerechnete Gruppe, wenn gerade gemessen wird.
+fn count_sparse_group() {
+    TIMINGS.with(|c| {
+        if let Some(mut t) = c.get() {
+            t.sparse_groups += 1;
+            c.set(Some(t));
+        }
+    });
+}
+
+/// Misst den Aufruf `f` und liefert dessen Ergebnis mit der Aufteilung der Zeit.
+fn measure<T>(f: impl FnOnce() -> T) -> (T, SolveTimings) {
+    TIMINGS.with(|c| c.set(Some(SolveTimings::default())));
+    let _guard = TimingsGuard;
+    let start = Instant::now();
+    let out = f();
+    let total = start.elapsed();
+    let mut t = TIMINGS.with(|c| c.get()).unwrap_or_default();
+    t.total = total;
+    (out, t)
+}
 
 /// Höchstzahl nutzererzeugter Abhängigkeiten einer Gruppe, für die die Widerspruchsdiagnose
 /// je Abhängigkeit einen eigenen Lauf rechnet (Entscheidung D4). Jeder Lauf kostet so viel wie
 /// ein Lösen der Gruppe; bei mehr Abhängigkeiten meldet der Solver „nicht lösbar“ mit den
 /// Abhängigkeiten, deren Residuum am Ende des gescheiterten Laufs zu groß ist.
 const MAX_DIAGNOSE_RUNS: usize = 48;
+
+/// Zeilen einer Gruppe und die Abhängigkeit (Index in `Group::constraints`) je Zeile.
+type RowsPart = (Vec<(f64, Vec<(usize, f64)>)>, Vec<usize>);
 
 /// Höchstzahl der Levenberg-Marquardt-Schritte je Lauf.
 const MAX_ITERATIONS: usize = 100;
@@ -59,6 +140,9 @@ const LAMBDA_FACTOR: f64 = 10.0;
 /// eines Punktes um einen festen Punkt) „billig“ und erzeugt riesige Querschritte, mit denen
 /// der Solver schon bei einfachen Startlagen nicht konvergiert.
 const MIN_DIAG: f64 = 1e-9;
+/// Zug auf dem dünnen Weg: Senkt ein Schritt die Kosten um höchstens diesen Anteil und sind die
+/// harten Residuen erfüllt, endet die weiche Phase (Ruling T3-3).
+const SOFT_STALL_RATIO: f64 = 0.5;
 /// Relative Schrittweite bzw. Kostensenkung, unter der ein Schritt als Stillstand gilt.
 const STALL_REL: f64 = 1e-14;
 /// So viele Schritte für den ganzen Weg nimmt [`Sketch::solve_in_steps`] höchstens.
@@ -137,6 +221,8 @@ enum Outcome {
         dof: usize,
         redundant: Vec<ConstraintId>,
         free_vars: Vec<usize>,
+        /// Analyse vom Zugbeginn übernommen (dünner Weg), nicht an diesen Werten gerechnet.
+        carried: bool,
     },
     Failed {
         conflict: bool,
@@ -161,16 +247,43 @@ impl SolveCache {
 
     /// Nimmt den Eintrag der Gruppe heraus, wenn er zu ihren Lesevariablen und deren Werten in
     /// `x` passt. Ein Eintrag, der nicht passt, ist ohnehin überholt (der alte Speicher wird
-    /// nach dem Lauf verworfen).
+    /// nach dem Lauf verworfen). Gerufen nur für Gruppen ohne Zug: Ein Eintrag mit übernommener
+    /// Analyse (`carried`) passt dann nie, die Analyse wird an der neuen Lage neu gerechnet.
     fn take(&mut self, g: &Group, x: &[f64]) -> Option<CachedGroup> {
         let hit = self.groups.remove(&g.constraints)?;
-        (hit.reads == g.reads
+        let carried = matches!(hit.outcome, Outcome::Solved { carried: true, .. });
+        (!carried
+            && hit.reads == g.reads
             && hit
                 .reads
                 .iter()
                 .zip(&hit.values)
                 .all(|(&v, &bits)| x[v].to_bits() == bits))
         .then_some(hit)
+    }
+
+    /// Analyse eines gelösten Eintrags mit den Abhängigkeiten `constraints` und denselben
+    /// Lesevariablen `reads`, ohne Blick auf die Werte (Zug auf dem dünnen Weg: Rang und freie
+    /// Teile gelten vom Zugbeginn an weiter). Andere Lesevariablen heißen andere Spalten; dann
+    /// passen die gemerkten freien Variablen nicht.
+    fn analysis_for(&self, constraints: &[ConstraintId], reads: &[usize]) -> Option<Analysis> {
+        let hit = self.groups.get(constraints)?;
+        if hit.reads != reads {
+            return None;
+        }
+        match &hit.outcome {
+            Outcome::Solved {
+                dof,
+                redundant,
+                free_vars,
+                ..
+            } => Some(Analysis {
+                dof: *dof,
+                redundant: redundant.clone(),
+                free_vars: free_vars.clone(),
+            }),
+            Outcome::Failed { .. } => None,
+        }
     }
 
     /// Übernimmt einen passenden Eintrag aus [`take`](Self::take) unverändert: Lesevariablen
@@ -262,6 +375,9 @@ struct Group {
     /// Variablen von Musterexemplaren, die die Abhängigkeiten der Gruppe lesen: für den Löser
     /// Konstanten (keine Spalte), aber Teil von `reads`. Aufsteigend, ohne Doppelte.
     pattern_reads: Vec<usize>,
+    /// Dünner Weg (Skizzen 11a): Ordnung der Spalten nach RCM (neu → alt), einmal je
+    /// `build_groups_holding` aus den Variablen der Abhängigkeiten. `None`: dichter Weg.
+    order: Option<Vec<usize>>,
 }
 
 impl Group {
@@ -272,10 +388,69 @@ impl Group {
     }
 }
 
+/// Jacobi-Matrix einer Gruppe: dicht (kleine Gruppen) oder als dünne Zeilen.
+enum Jacobian {
+    Dense(Matrix),
+    Sparse(SparseRows),
+}
+
+impl Group {
+    /// Die RCM-Ordnung des dünnen Wegs. Dünne Zeilen baut `assemble` nur, wenn `order` gesetzt
+    /// ist; wer eine [`Jacobian::Sparse`] der Gruppe hat, hat also auch die Ordnung.
+    fn sparse_order(&self) -> &[usize] {
+        self.order
+            .as_deref()
+            .expect("sparse Jacobian only exists together with the group's RCM order")
+    }
+}
+
+/// Normalgleichungen eines Schritts: `JᵀJ` dicht oder als Hülle in RCM-Ordnung.
+enum Normal<'a> {
+    Dense(Matrix),
+    Sparse(Envelope, &'a [usize]),
+}
+
+impl Normal<'_> {
+    /// Maßstab der Dämpfung, siehe `MIN_DIAG`.
+    fn scale(&self) -> f64 {
+        match self {
+            Normal::Dense(gram) => (0..gram.rows())
+                .map(|i| gram.get(i, i))
+                .fold(MIN_DIAG, f64::max),
+            Normal::Sparse(env, _) => env.max_diagonal().max(MIN_DIAG),
+        }
+    }
+
+    /// Löst `(JᵀJ + damping · I) · step = rhs`; der Schritt steht in der Spaltenordnung der
+    /// Gruppe.
+    fn solve(&self, damping: f64, rhs: &[f64]) -> Option<Vec<f64>> {
+        match self {
+            Normal::Dense(gram) => {
+                let mut m = gram.clone();
+                for i in 0..m.rows() {
+                    m.add_to(i, i, damping);
+                }
+                timed(|t| &mut t.cholesky, || cholesky_solve(&m, rhs))
+            }
+            Normal::Sparse(env, order) => {
+                let mut m = env.clone();
+                m.add_diagonal(damping);
+                let b: Vec<f64> = order.iter().map(|&old| rhs[old]).collect();
+                let y = timed(|t| &mut t.cholesky, || envelope_cholesky_solve(&m, &b))?;
+                let mut step = vec![0.0; y.len()];
+                for (&old, v) in order.iter().zip(y) {
+                    step[old] = v;
+                }
+                Some(step)
+            }
+        }
+    }
+}
+
 /// Residuen und Jacobi-Matrix einer Gruppe.
 struct Assembled {
     r: Vec<f64>,
-    j: Matrix,
+    j: Jacobian,
     /// Die ersten `hard_rows` Zeilen stammen aus Abhängigkeiten, der Rest aus weichen Bedingungen.
     hard_rows: usize,
     /// Zu jeder harten Zeile: Index der Abhängigkeit in `Group::constraints`.
@@ -388,6 +563,20 @@ impl Sketch {
     /// Löst alle aktiven Abhängigkeiten. Nicht lösbare Gruppen bleiben unverändert.
     pub fn solve(&mut self) -> SolveReport {
         self.solve_with_soft(&[])
+    }
+
+    /// „Skizze berechnen“: leert den Zwischenspeicher und löst alles neu. Werte ändern sich nur,
+    /// soweit das Lösen sie ändert; eine schon gelöste Skizze bleibt bitgleich.
+    pub fn recompute_all(&mut self) -> SolveReport {
+        self.solve_cache = SolveCache::default();
+        self.solve()
+    }
+
+    /// Wie [`solve`](Self::solve), mit der Aufteilung der Zeit (nur zum Messen). Das Ergebnis ist
+    /// bitgleich zu dem von `solve`.
+    #[doc(hidden)]
+    pub fn solve_timed(&mut self) -> (SolveReport, SolveTimings) {
+        measure(|| self.solve())
     }
 
     /// Löst bei festgehaltenen Punkten `hold`, ohne dass sie sich auch nur im letzten Bit bewegen:
@@ -577,6 +766,48 @@ impl Sketch {
 
     /// Baut Residuen und Jacobi-Matrix der Gruppe an der Stelle `x`, je nach `which` (alle, ohne eine Abhängigkeit, oder mit Restwerten für Tangenten).
     fn assemble(&self, g: &Group, x: &[f64], soft: &[Soft], which: Rows) -> Assembled {
+        timed(
+            |t| &mut t.assemble,
+            || self.assemble_rows(g, x, soft, which),
+        )
+    }
+
+    /// Der Aufbau selbst, siehe [`assemble`](Self::assemble).
+    fn assemble_rows(&self, g: &Group, x: &[f64], soft: &[Soft], which: Rows) -> Assembled {
+        let (mut rows, owner) = self.constraint_rows(g, x, which);
+        let hard_rows = rows.len();
+        for s in soft {
+            if let Some(c) = g.column(s.var) {
+                rows.push((s.weight * (x[s.var] - s.target), vec![(c, s.weight)]));
+            }
+        }
+        let (r, j) = if g.order.is_some() {
+            // Dünner Weg: dieselben Einträge als dünne Zeilen.
+            let (r, entries): (Vec<f64>, Vec<Vec<(usize, f64)>>) = rows.into_iter().unzip();
+            let j = SparseRows::from_rows(g.vars.len(), &entries);
+            (r, Jacobian::Sparse(j))
+        } else {
+            let mut j = Matrix::zeros(rows.len(), g.vars.len());
+            let mut r = Vec::with_capacity(rows.len());
+            for (i, (value, entries)) in rows.iter().enumerate() {
+                r.push(*value);
+                for (c, d) in entries {
+                    j.add_to(i, *c, *d);
+                }
+            }
+            (r, Jacobian::Dense(j))
+        };
+        Assembled {
+            r,
+            j,
+            hard_rows,
+            owner,
+        }
+    }
+
+    /// Zeilen der Abhängigkeiten der Gruppe an der Stelle `x`, je Zeile Wert und Einträge
+    /// `(Spalte, Ableitung)`, dazu der Index der Abhängigkeit in `g.constraints`.
+    fn constraint_rows(&self, g: &Group, x: &[f64], which: Rows) -> RowsPart {
         let mut rows: Vec<(f64, Vec<(usize, f64)>)> = Vec::new();
         let mut owner = Vec::new();
         for (ci, &id) in g.constraints.iter().enumerate() {
@@ -594,37 +825,18 @@ impl Sketch {
             let Some(ev) = self.evaluate(id, x) else {
                 continue;
             };
+            let cols: Vec<Option<usize>> = ev.locals.iter().map(|v| g.column(*v)).collect();
             for res in &ev.residuals {
-                let entries = ev
-                    .locals
+                let entries = cols
                     .iter()
                     .enumerate()
-                    .filter_map(|(k, v)| g.column(*v).map(|c| (c, res.grad(k))))
+                    .filter_map(|(k, c)| c.map(|c| (c, res.grad(k))))
                     .collect();
                 rows.push((res.v - target, entries));
                 owner.push(ci);
             }
         }
-        let hard_rows = rows.len();
-        for s in soft {
-            if let Some(c) = g.column(s.var) {
-                rows.push((s.weight * (x[s.var] - s.target), vec![(c, s.weight)]));
-            }
-        }
-        let mut j = Matrix::zeros(rows.len(), g.vars.len());
-        let mut r = Vec::with_capacity(rows.len());
-        for (i, (value, entries)) in rows.iter().enumerate() {
-            r.push(*value);
-            for (c, d) in entries {
-                j.add_to(i, *c, *d);
-            }
-        }
-        Assembled {
-            r,
-            j,
-            hard_rows,
-            owner,
-        }
+        (rows, owner)
     }
 
     /// Levenberg-Marquardt mit einheitlicher Dämpfung `λ · max_k (JᵀJ)_kk · I` (siehe
@@ -663,21 +875,24 @@ impl Sketch {
                 break;
             }
             iterations += 1;
-            let gradient = a.j.transpose_mul_vec(&a.r);
-            let gram = a.j.gram();
+            let (gradient, normal) = timed(
+                |t| &mut t.normal,
+                || match &a.j {
+                    Jacobian::Dense(j) => (j.transpose_mul_vec(&a.r), Normal::Dense(j.gram())),
+                    Jacobian::Sparse(j) => {
+                        let order = g.sparse_order();
+                        let env = Envelope::gram(j, order);
+                        (j.transpose_mul_vec(&a.r), Normal::Sparse(env, order))
+                    }
+                },
+            );
             let rhs: Vec<f64> = gradient.iter().map(|v| -v).collect();
             // Maßstab der Dämpfung, siehe `MIN_DIAG`.
-            let scale = (0..gram.rows())
-                .map(|i| gram.get(i, i))
-                .fold(MIN_DIAG, f64::max);
+            let scale = normal.scale();
             let mut accepted = false;
             let mut stalled = false;
             for _ in 0..DAMPING_TRIES {
-                let mut m = gram.clone();
-                for i in 0..m.rows() {
-                    m.add_to(i, i, lambda * scale);
-                }
-                if let Some(step) = cholesky_solve(&m, &rhs) {
+                if let Some(step) = normal.solve(lambda * scale, &rhs) {
                     let mut trial = x.to_vec();
                     for (c, &v) in g.vars.iter().enumerate() {
                         trial[v] += step[c];
@@ -689,6 +904,17 @@ impl Sketch {
                         let step_len = step.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
                         stalled =
                             step_len <= STALL_REL * size || (cost - trial_cost) <= STALL_REL * cost;
+                        // Zug auf dem dünnen Weg (Ruling T3-3): Sind die harten Residuen schon
+                        // erfüllt und sinken die Kosten je Schritt nur noch langsam, ist das
+                        // Zugziel erreicht; weitere Schritte wandern nur entlang freier
+                        // Richtungen (unsichtbar, ~1e-6 mm). Der dichte Weg rechnet wie bisher.
+                        if !soft.is_empty()
+                            && g.order.is_some()
+                            && (cost - trial_cost) <= SOFT_STALL_RATIO * cost
+                            && t.hard_inf() <= tol_r
+                        {
+                            stalled = true;
+                        }
                         x.copy_from_slice(&trial);
                         a = t;
                         cost = trial_cost;
@@ -762,9 +988,25 @@ impl Sketch {
     /// Wie [`analyze`](Self::analyze) mit den schon gebauten Zeilen `a` (alle Abhängigkeiten,
     /// ohne weiche Bedingungen) an der gelösten Stelle.
     fn analyze_assembled(&self, g: &Group, a: &Assembled) -> Analysis {
-        let space = analyze_rows(&a.j, RANK_REL_TOL);
+        let (independent, rank, free) = timed(
+            |t| &mut t.rank,
+            || match &a.j {
+                Jacobian::Dense(j) => {
+                    let space = analyze_rows(j, RANK_REL_TOL);
+                    let free: Vec<bool> = (0..g.vars.len())
+                        .map(|c| space.null_space.iter().any(|v| v[c].abs() > FREE_COMPONENT))
+                        .collect();
+                    (space.independent, space.rank, free)
+                }
+                Jacobian::Sparse(j) => {
+                    let space =
+                        analyze_rows_sparse(j, g.sparse_order(), RANK_REL_TOL, FREE_COMPONENT);
+                    (space.independent, space.rank, space.free)
+                }
+            },
+        );
         let mut redundant = Vec::new();
-        for (row, independent) in space.independent.iter().enumerate() {
+        for (row, independent) in independent.iter().enumerate() {
             let id = g.constraints[a.owner[row]];
             if !independent && !self.constraints[id].internal && !redundant.contains(&id) {
                 redundant.push(id);
@@ -773,17 +1015,12 @@ impl Sketch {
         let free_vars = g
             .vars
             .iter()
-            .enumerate()
-            .filter(|(c, _)| {
-                space
-                    .null_space
-                    .iter()
-                    .any(|v| v[*c].abs() > FREE_COMPONENT)
-            })
-            .map(|(_, &v)| v)
+            .zip(&free)
+            .filter(|(_, f)| **f)
+            .map(|(&v, _)| v)
             .collect();
         Analysis {
-            dof: g.vars.len().saturating_sub(space.rank),
+            dof: g.vars.len().saturating_sub(rank),
             redundant,
             free_vars,
         }
@@ -1001,15 +1238,36 @@ impl Sketch {
                     curves: Vec::new(),
                     reads: Vec::new(),
                     pattern_reads: Vec::new(),
+                    order: None,
                 });
                 index[root] = groups.len() - 1;
             }
             groups[index[root]].vars.push(v);
         }
+        // Dünner Weg: Struktur von `JᵀJ` aus den Variablen der Abhängigkeiten (je Abhängigkeit
+        // eine Zeile über alle ihre Variablen, eine Obermenge der echten Zeilen).
+        let sparse: Vec<bool> = groups
+            .iter()
+            .map(|g| self.solver_path.sparse_for(g.vars.len()))
+            .collect();
+        let mut pattern: Vec<Vec<Vec<(usize, f64)>>> = vec![Vec::new(); groups.len()];
         for (id, locals, read) in active {
             let gi = index[find(&mut parent, locals[0])];
+            if sparse[gi] {
+                let g = &groups[gi];
+                let row = locals
+                    .iter()
+                    .filter_map(|&v| g.column(v).map(|c| (c, 1.0)))
+                    .collect();
+                pattern[gi].push(row);
+            }
             groups[gi].constraints.extend(id);
             groups[gi].pattern_reads.extend(read);
+        }
+        for ((g, rows), sparse) in groups.iter_mut().zip(&pattern).zip(&sparse) {
+            if *sparse {
+                g.order = Some(rcm_order(&SparseRows::from_rows(g.vars.len(), rows)));
+            }
         }
         // Kurven, deren Variablen (Punkte oder eigene) in einer Gruppe liegen, gehören zu ihr
         // (für die Prüfung auf Entartung).
@@ -1252,6 +1510,7 @@ impl Sketch {
                         dof: d,
                         redundant: red,
                         free_vars: fv,
+                        ..
                     } => {
                         dof += d;
                         free_vars.extend(fv.iter().copied());
@@ -1284,6 +1543,9 @@ impl Sketch {
                 continue;
             }
             group_solves += 1;
+            if g.order.is_some() {
+                count_sparse_group();
+            }
             // Schon am Start erfüllt und ohne Zug (etwa jeder Punkt mit `Fixed` nach dem
             // Auflösen eines Textes): Levenberg-Marquardt bräche vor dem ersten Schritt ab, mit
             // 0 Schritten, konvergiert und `x` gleich dem Start. Das wird hier ohne Kopie des
@@ -1357,6 +1619,11 @@ impl Sketch {
                 Vec::new()
             };
             if lm.converged && outside.is_empty() && !self.degenerate(&g.curves, x) {
+                // Zug auf dem dünnen Weg (Ruling F7): Rang und freie Teile vom Zugbeginn
+                // übernehmen, statt sie in jedem Zugschritt neu zu rechnen; das Lösen beim
+                // Loslassen rechnet sie neu (siehe `SolveCache::take`). Gruppen, die nur für
+                // diesen Lauf gehaltene Werte lesen, rechnen wie bisher.
+                let carried = !group_soft.is_empty() && g.order.is_some() && !only_this_run(&g);
                 let analysis = match &ready {
                     Some(Ready::FixedPoint) => {
                         let analysis = Analysis {
@@ -1371,6 +1638,9 @@ impl Sketch {
                         analysis
                     }
                     Some(Ready::Assembled(a)) => self.analyze_assembled(&g, a),
+                    None if carried => old_cache
+                        .analysis_for(&g.constraints, &g.reads)
+                        .unwrap_or_else(|| self.analyze(&g, x)),
                     None => self.analyze(&g, x),
                 };
                 dof += analysis.dof;
@@ -1391,6 +1661,7 @@ impl Sketch {
                             dof: analysis.dof,
                             redundant: analysis.redundant,
                             free_vars: analysis.free_vars,
+                            carried,
                         },
                     );
                 }
@@ -1505,6 +1776,16 @@ impl Sketch {
     /// Umkehrung der Lage des Exemplars, **Annahme**).
     pub fn drag(&mut self, drags: &[Drag]) -> Result<SolveReport, SketchError> {
         self.drag_holding(drags, &[])
+    }
+
+    /// Wie [`drag`](Self::drag), mit der Aufteilung der Zeit (nur zum Messen).
+    #[doc(hidden)]
+    pub fn drag_timed(
+        &mut self,
+        drags: &[Drag],
+    ) -> Result<(SolveReport, SolveTimings), SketchError> {
+        let (r, t) = measure(|| self.drag(drags));
+        Ok((r?, t))
     }
 
     /// Wie [`drag`](Self::drag), aber die Punkte `hold` stehen für den Löser fest wie Exemplare eines
@@ -1701,6 +1982,35 @@ mod tests {
     use super::*;
     use crate::constraint::ConstraintKind as K;
     use planora_math::{Frame, Tolerance};
+
+    #[test]
+    fn analysis_for_needs_the_same_reads() {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let a = s.add_point(0.0, 0.0).unwrap();
+        let b = s.add_point(3.0, 0.0).unwrap();
+        let id = s.add_constraint(K::Distance(a, b, 3.0)).unwrap();
+        let mut cache = SolveCache::default();
+        cache.groups.insert(
+            vec![id],
+            CachedGroup {
+                reads: vec![0, 1, 2, 3],
+                values: vec![0; 4],
+                outcome: Outcome::Solved {
+                    dof: 3,
+                    redundant: Vec::new(),
+                    free_vars: vec![0, 1, 2, 3],
+                    carried: false,
+                },
+            },
+        );
+        let hit = cache
+            .analysis_for(&[id], &[0, 1, 2, 3])
+            .map(|a| a.free_vars);
+        assert_eq!(hit, Some(vec![0, 1, 2, 3]));
+        // Dieselben Abhängigkeiten, andere Lesevariablen: nichts übernehmen.
+        assert!(cache.analysis_for(&[id], &[0, 1, 2, 4]).is_none());
+        assert!(cache.analysis_for(&[id], &[0, 1, 2]).is_none());
+    }
 
     #[test]
     fn soft_pull_moves_free_points_and_keeps_hard_constraints_exact() {

@@ -398,3 +398,61 @@ fn an_implausible_or_invalid_profile_index_is_an_error_not_a_panic() {
         Ok(FeatureStatus::Skipped(_))
     ));
 }
+
+/// Rechteck mit zwei Maßen und einer festen Ecke: voll bestimmt (Skizzen 11a, A4).
+fn determined_rect() -> SketchFeature {
+    use planora_sketch::constraint::ConstraintKind as K;
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let r = sk
+        .add_rectangle(DVec2::ZERO, DVec2::new(40.0, 30.0))
+        .unwrap();
+    let c = &r.points;
+    sk.add_constraint(K::Distance(c[0], c[1], 40.0)).unwrap();
+    sk.add_constraint(K::Distance(c[1], c[2], 30.0)).unwrap();
+    sk.add_constraint(K::Fixed(c[0], 0.0, 0.0)).unwrap();
+    SketchFeature {
+        sketch: sk,
+        plane: SketchPlane::Standard(StandardPlane::XY),
+        copies: vec![],
+        formulas: Default::default(),
+    }
+}
+
+#[test]
+fn sketch_locked_after_recompute() {
+    let mut d = Document::new();
+    let s = d
+        .add_feature("S", FeatureKind::Sketch(determined_rect()))
+        .unwrap();
+    assert!(d.feature(s).unwrap().sketch_locked());
+    // Ein Maß weg: wieder unterbestimmt, kein Schloss.
+    d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            let dim = sf
+                .sketch
+                .constraints()
+                .find(|(_, c)| {
+                    matches!(
+                        c.kind,
+                        planora_sketch::constraint::ConstraintKind::Distance(..)
+                    )
+                })
+                .map(|(id, _)| id)
+                .unwrap();
+            sf.sketch.remove_constraint(dim).unwrap();
+        }
+    })
+    .unwrap();
+    assert!(!d.feature(s).unwrap().sketch_locked());
+    // Ein Körper-Feature trägt nie ein Schloss.
+    let b = d
+        .add_feature(
+            "Q",
+            FeatureKind::Box {
+                size: DVec3::ONE,
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    assert!(!d.feature(b).unwrap().sketch_locked());
+}

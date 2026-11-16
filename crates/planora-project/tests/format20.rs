@@ -8,9 +8,7 @@ use planora_i18n::tr;
 use planora_kernel::Curve;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec3, Frame, Tolerance};
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{decode_version, encode_version, required_format};
 use planora_sketch::helpers::include_curve;
 use planora_sketch::{ConstraintKind as K, LineOrPoints, Sketch};
 use std::sync::Arc;
@@ -68,11 +66,6 @@ fn edited(sk: Sketch, f: impl FnOnce(&mut serde_json::Value)) -> String {
 
 fn err_text(text: &str) -> String {
     decode_version(text, "x.json").unwrap_err().to_string()
-}
-
-#[test]
-fn format_version_is_20() {
-    assert_eq!(FORMAT_VERSION, 20);
 }
 
 /// Review Focus 2: Jede vorhandene Testdatei lädt und wird bytegleich wieder geschrieben, ohne
@@ -255,19 +248,6 @@ fn three_d_flag_alone_needs_20() {
         v["features"][0]["art"]["skizze"]["drei_d"],
         serde_json::json!(true)
     );
-}
-
-#[test]
-fn format_21_is_too_new() {
-    let mut sk = new_sketch();
-    sk.set_three_d(true);
-    let text = encode_version(&document(sk).snapshot()).unwrap().replacen(
-        "\"format\": 20",
-        "\"format\": 21",
-        1,
-    );
-    let e = decode_version(&text, "x.json").unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 21, .. }), "{e:?}");
 }
 
 /// Eine Datei mit kleinerer Formatnummer darf die neuen Felder nicht enthalten.

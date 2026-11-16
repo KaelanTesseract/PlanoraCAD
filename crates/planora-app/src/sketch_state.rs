@@ -13,11 +13,13 @@ use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constrain
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3};
 use planora_sketch::SketchError;
+use planora_sketch::blend::{BlendEnd, BlendKind};
+use planora_sketch::comb::{COMB_DENSITY, COMB_SCALE_MAX, COMB_SCALE_MIN, CombSettings};
 use planora_sketch::constraint::{Axis3, ConstraintId, ConstraintKind, FixToggle, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
 use planora_sketch::offset::{OffsetPlan, OffsetProblem};
-use planora_sketch::shapes::{folded_over, sweep_crossed_half_turn};
+use planora_sketch::shapes::{self, folded_over, sweep_crossed_half_turn};
 use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
 use planora_sketch::text::TextRemoval;
@@ -77,6 +79,9 @@ pub enum Tool {
     /// Abschnitt „Text“ im Skizzenfeld; Zustand in [`SketchSession::text`], Ablauf in
     /// [`crate::sketch_text`].
     Text,
+    /// Fusion „Übergangskurve“ (Skizzen 11a): zwei Kurvenenden wählen, der Zeiger entscheidet über
+    /// das Ende; die Art (G1/G2) steht in [`SketchSession::blend`].
+    BlendCurve,
 }
 
 impl Tool {
@@ -92,8 +97,21 @@ impl Tool {
                 | Tool::Offset
                 | Tool::MoveCopy
                 | Tool::Scale
+                | Tool::BlendCurve
         )
     }
+}
+
+/// Zustand der Übergangskurve (Skizzen 11a): die Art, das erste gewählte Ende und das Ende unter
+/// dem Zeiger (gültiges Ziel, je Bild neu bestimmt, siehe [`SketchSession::blend_hover`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BlendState {
+    /// Tangential (G1) oder Krümmung (G2, Vorgabe wie in Fusion).
+    pub kind: BlendKind,
+    /// Das erste gewählte Ende.
+    pub first: Option<BlendEnd>,
+    /// Das Ende, das ein Klick jetzt wählen würde.
+    pub hover: Option<BlendEnd>,
 }
 
 /// Zustand der Skizzenbemaßung ([`crate::sketch_dimension`]): die gewählten Objekte, das gesetzte
@@ -171,6 +189,30 @@ impl Default for TransformState {
             selection_before: Vec::new(),
             blocked_note: false,
         }
+    }
+}
+
+/// Ergebnis von [`SketchSession::toggle_curvature`].
+#[derive(Clone, Debug)]
+pub enum CombToggle {
+    /// Der Dialog „Krümmungsanzeige einrichten“ soll für diese Kurven (ohne Kamm) öffnen.
+    Dialog(Vec<CurveId>),
+    /// Der Kamm wurde bei so vielen Kurven entfernt.
+    Off(usize),
+    /// Nichts zu tun, mit Meldung (nur Linien oder keine Kurve gewählt).
+    Refused(Msg),
+}
+
+/// Einstellungen in die erlaubten Bereiche gezwungen (nicht endliche Maßstäbe werden zur Vorgabe).
+pub fn clamp_comb(s: CombSettings) -> CombSettings {
+    let scale = if s.scale.is_finite() {
+        s.scale.clamp(COMB_SCALE_MIN, COMB_SCALE_MAX)
+    } else {
+        CombSettings::default().scale
+    };
+    CombSettings {
+        density: s.density.clamp(*COMB_DENSITY.start(), *COMB_DENSITY.end()),
+        scale,
     }
 }
 
@@ -465,6 +507,14 @@ pub struct LineArcDrag {
 // Ebene und Achse der Triade (Skizzen 10) liegen mit der Triade in `sketch_triad`.
 pub use crate::sketch_triad::{TriadAxis, TriadPlane};
 
+/// Laufende Wahl „Neu verknüpfen“ (Skizzen 11a): das Ziel der verlorenen Kopie und ihre alte
+/// Herkunft (bestimmt die Familie, die der Klick treffen muss).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelinkPick {
+    pub target: planora_feature::CopyTarget,
+    pub family: planora_feature::CopySource,
+}
+
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
 pub struct SketchSession {
@@ -516,6 +566,9 @@ pub struct SketchSession {
     /// Was der letzte Klick fertig angelegt hat.
     pub created: Option<Created>,
     pub last_report: Option<SolveReport>,
+    /// Die offene Liste „Unterbestimmte finden“ (bleibt, bis man sie schließt oder die Skizze
+    /// verlässt; die Zeilen kommen je Bild aus `last_report`).
+    pub under_list: Option<crate::sketch_under::UnderList>,
     /// Meldung zum letzten Schritt; gespeichert als Grund und erst beim Zeichnen übersetzt
     /// ([`message_text`](Self::message_text)).
     pub message: Option<Msg>,
@@ -547,6 +600,13 @@ pub struct SketchSession {
     /// Name des nächsten Schritts für Rückgängig, wenn ein Werkzeug ihn besser kennt als der
     /// Vergleich der Stände (Stutzen, Dehnen, Brechen); der Verlauf nimmt und leert ihn.
     pub edit_label: Option<Msg>,
+    /// Rechtsklickmenü der gewählten Kurve (Skizzen 11a): Bildschirmlage, an der es steht; nicht
+    /// Teil des Dokuments. Esc, ein Klick daneben oder ein Werkzeugwechsel schließen es.
+    pub curve_menu: Option<(f32, f32)>,
+    /// „Neu verknüpfen“ aus „Verlorene Projektionen verwalten“ (Skizzen 11a): Der nächste
+    /// passende Klick auf Kante, Fläche oder Kurve einer früheren Skizze wird die neue Herkunft;
+    /// Esc und ein Werkzeugwechsel nehmen die Wahl zurück. Nicht Teil des Dokuments.
+    pub relink: Option<RelinkPick>,
     /// Triade der 3D-Skizze (Skizzen 10; gehört nicht zum Dokument und nicht zum Rückgängig):
     /// Lage, Drehung, aktive Ebene, aktiver Drehgriff (Tab) und „Z sperren“ (Pfeil hoch gehalten,
     /// setzt die Oberfläche je Bild aus der Taste, [`crate::keymap::dispatch::held`]).
@@ -583,6 +643,11 @@ pub struct SketchSession {
     /// zum Start und der seitdem gezogene Winkel (mit Vorzeichen, gegen den Uhrzeigersinn um die
     /// Normale der Ebene positiv). Das Vorzeichen gibt die Richtung des Bogens wie der Zug.
     pub arc_sweep3: Option<(f64, f64)>,
+    /// Dasselbe für den Bogen „Mittelpunkt“ in 2D (Skizzen 11a, A6): letzter Winkel des Zeigers
+    /// zum Start und der seitdem gezogene Winkel mit Vorzeichen (gegen den Uhrzeigersinn positiv).
+    pub arc_sweep: Option<(f64, f64)>,
+    /// Mitte und Start des laufenden 2D-Bogens „Mittelpunkt“, Bezug für [`arc_sweep`](Self::arc_sweep).
+    pub arc_base: Option<(DVec2, DVec2)>,
     /// Letzte Stelle beim Stutzen durch Ziehen (`None`: kein Zug läuft).
     pub trim_drag: Option<DVec2>,
     /// Zählt die gelungenen Änderungen durch Stutzen, Dehnen und Brechen, mit dem Werkzeug der
@@ -611,6 +676,8 @@ pub struct SketchSession {
     pub dim: DimToolState,
     /// Rechteckige und Kreisförmige Anordnung.
     pub pattern: crate::sketch_pattern::PatternToolState,
+    /// Übergangskurve ([`Tool::BlendCurve`]); gehört dem Werkzeug, die Art bleibt aber für die Sitzung.
+    pub blend: BlendState,
     /// Projizieren (Skizzen 6): Auswahlfilter und „Projektionsverknüpfung“, für die Sitzung.
     pub project: ProjectState,
     /// Abhängigkeitsbefehl: der Bezug, den der letzte Klick gewählt oder abgewählt hat (für einen
@@ -740,6 +807,7 @@ impl SketchSession {
             input: DrawInput::default(),
             created: None,
             last_report: None,
+            under_list: None,
             message: None,
             dragging: None,
             curve_drag: None,
@@ -751,6 +819,8 @@ impl SketchSession {
             history_jumps: 0,
             hover_preview: None,
             edit_label: None,
+            curve_menu: None,
+            relink: None,
             triad: Default::default(),
             triad_ui: Default::default(),
             cursor3: None,
@@ -762,6 +832,8 @@ impl SketchSession {
             pending3: Vec::new(),
             plane3: None,
             arc_sweep3: None,
+            arc_sweep: None,
+            arc_base: None,
             trim_drag: None,
             modify_edits: (0, None),
             fillet_run: None,
@@ -774,6 +846,7 @@ impl SketchSession {
             grip_drag3: None,
             dim: DimToolState::default(),
             pattern: Default::default(),
+            blend: BlendState::default(),
             project: ProjectState::default(),
             constraint_last: None,
             text: None,
@@ -793,6 +866,8 @@ impl SketchSession {
         self.trim_drag = None;
         self.hover_preview = None;
         self.fillet_run = None;
+        self.blend.first = None;
+        self.blend.hover = None;
         if self.transform.blocked_note || self.pattern.blocked_note {
             self.message = None;
         }
@@ -808,6 +883,8 @@ impl SketchSession {
             self.selection.clear();
         }
         self.constraint_last = None;
+        // Die Wahl für „Neu verknüpfen“ endet mit jedem Werkzeugwechsel.
+        self.relink = None;
         self.tool = tool;
         // Ein Werkzeugwechsel beendet die Klick-Auswahl.
         self.drop_curve_picks();
@@ -857,6 +934,8 @@ impl SketchSession {
         self.pending3.clear();
         self.plane3 = None;
         self.arc_sweep3 = None;
+        self.arc_sweep = None;
+        self.arc_base = None;
         self.input = DrawInput::default();
         // Bemaßen: Wahl und gesetztes Maß (sein Feld schließt) entfallen, nichts bleibt.
         self.dim = DimToolState::default();
@@ -978,6 +1057,8 @@ impl SketchSession {
         self.trim_drag = None;
         self.hover_preview = None;
         self.fillet_run = None;
+        self.blend.first = None;
+        self.blend.hover = None;
         self.transform = TransformState::default();
         self.grip_drag = None;
         self.pattern.reset_after_jump();
@@ -1232,6 +1313,7 @@ impl SketchSession {
                     Ok(())
                 }
                 Tool::Point => se.click_point(sk, cur, prior),
+                Tool::Line if se.is_midpoint_line() => se.click_midpoint_line(sk, cur, prior),
                 Tool::Line => se.click_line(sk, cur, prior),
                 Tool::Rectangle => se.click_rectangle(sk, cur, prior),
                 Tool::Circle => se.click_circle(sk, cur, prior),
@@ -1260,6 +1342,7 @@ impl SketchSession {
                 Tool::Constraint(action) => se.click_constraint(sk, action, Some(at), radius),
                 Tool::InsertControlPoint => se.click_insert_control_point(sk, at, radius, prior),
                 Tool::Text => se.click_text(sk, cur, at, radius),
+                Tool::BlendCurve => se.blend_step(sk, at, prior).map(|_| ()),
             }
         })
     }
@@ -1436,6 +1519,15 @@ impl SketchSession {
     /// Vorschau unter dem Mauszeiger `at` (siehe [`hover_preview`](Self::hover_preview)):
     /// nur bei Stutzen, Dehnen und Brechen.
     pub fn update_hover(&mut self, sk: &Sketch, at: Option<DVec2>, radius: f64) {
+        if self.tool == Tool::BlendCurve {
+            // Verlässt der Zeiger die Fläche, bleibt kein Ring am letzten Ziel stehen.
+            self.blend.hover = None;
+            self.hover_preview = at
+                .filter(|a| a.is_finite())
+                .and_then(|at| self.blend_hover_with(sk, at, radius));
+            return;
+        }
+        self.blend.hover = None;
         self.hover_preview = at
             .filter(|a| {
                 a.is_finite() && matches!(self.tool, Tool::Trim | Tool::Extend | Tool::Break)
@@ -1657,6 +1749,42 @@ impl SketchSession {
         Ok(())
     }
 
+    /// Klick der Mittelpunktlinie (Skizzen 11a, Fusion „Midpoint Line“): Der erste setzt oder fängt
+    /// die Mitte, der zweite das Ende; der Anfang liegt gespiegelt, und die Mitte ist über
+    /// `Midpoint` an die Linie gebunden. Das Ende fängt und bekommt automatische Abhängigkeiten wie
+    /// bei der Linie, der gespiegelte Anfang nicht. Keine Kette: Danach beginnt die nächste Linie
+    /// neu.
+    fn click_midpoint_line(
+        &mut self,
+        sk: &mut Sketch,
+        cur: &DrawCursor,
+        prior: &Sketch,
+    ) -> Result<(), Msg> {
+        let Some(&mid) = self.pending.first() else {
+            let p = self.attach(sk, None, cur)?;
+            self.pending = vec![p];
+            self.solve_checked(sk, prior)?;
+            self.follow_triad(sk, p);
+            return Ok(());
+        };
+        let from = sk.point_xy(mid).map_err(err)?;
+        let (start, _) = shapes::midpoint_line_plan(from, cur.at, sk.tolerance().linear)
+            .ok_or_else(|| ToolKind::MidpointLine.refusal())?;
+        let end = self.attach(sk, None, cur)?;
+        let a = sk.add_point(start.x, start.y).map_err(err)?;
+        let line = sk.add_midpoint_line(mid, a, end).map_err(err)?;
+        self.solve_checked(sk, prior)?;
+        for auto in &cur.autos {
+            self.try_auto(sk, auto.kind(line));
+        }
+        self.pending.clear();
+        self.line_chain = None;
+        self.line_after_arc = None;
+        self.created = Some(Created::Line(line));
+        self.follow_triad(sk, end);
+        Ok(())
+    }
+
     /// Versucht eine automatische Abhängigkeit an einer Kopie: Sie entfällt still (`false`), wenn
     /// die Skizze vorher nicht gelöst war, danach nicht gelöst ist, die neue überzählig wäre oder
     /// ein Punkt sich um mehr als `10·tol.linear` bewegen würde.
@@ -1738,6 +1866,32 @@ impl SketchSession {
         Ok(())
     }
 
+    /// Läuft der Bogen „Mittelpunkt“ in 2D im Uhrzeigersinn (so gezogen)?
+    pub fn arc_cw(&self) -> bool {
+        self.arc_sweep.is_some_and(|(_, total)| total < 0.0)
+    }
+
+    /// Führt beim Bogen „Mittelpunkt“ in 2D nach dem Start den gezogenen Winkel des Zeigers `at`
+    /// mit (Fusion: Der Bogen folgt dem Zug; gleiche Regel wie in 3D). Sonst vergessen.
+    pub fn track_arc_sweep(&mut self, at: DVec2) {
+        let (true, Some((m, s))) = (
+            self.tool == Tool::Arc && self.kind_of(Tool::Arc) == Some(ToolKind::ArcCenter),
+            self.arc_base,
+        ) else {
+            self.arc_sweep = None;
+            return;
+        };
+        let p = at - m;
+        if p.length() <= 0.0 || !p.is_finite() {
+            return;
+        }
+        let angle = (s - m).angle_to(p);
+        let (last, total) = self.arc_sweep.unwrap_or((0.0, 0.0));
+        let step = (angle - last + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+            - std::f64::consts::PI;
+        self.arc_sweep = Some((angle, total + step));
+    }
+
     fn click_arc(&mut self, sk: &mut Sketch, cur: &DrawCursor, prior: &Sketch) -> Result<(), Msg> {
         let tol = sk.tolerance().linear;
         match *self.pending.as_slice() {
@@ -1758,6 +1912,11 @@ impl SketchSession {
                     return Err(crate::msg!("sketch-arc-start-center"));
                 }
                 self.pending.push(s);
+                self.arc_sweep = None;
+                self.arc_base = Some((
+                    sk.point_xy(center).map_err(err)?,
+                    sk.point_xy(s).map_err(err)?,
+                ));
                 self.plan_arc_tangent(sk, center, s, cur)?;
             }
             [center, start, ..] => {
@@ -1769,6 +1928,11 @@ impl SketchSession {
                     return Err(crate::msg!("sketch-arc-end-center"));
                 }
                 let on_start = || crate::msg!("sketch-arc-end-on-start");
+                // Auch ein Klick ohne Zeigerbilder davor zählt als Zug (Fusion: der Bogen folgt ihm).
+                if self.input.locked(FieldKind::Sweep).is_none() {
+                    self.track_arc_sweep(cur.at);
+                }
+                let cw = self.arc_cw();
                 let end = match cur.point(tol) {
                     Some(p) if p == start => return Err(on_start()),
                     Some(p) if p != center => p,
@@ -1789,7 +1953,13 @@ impl SketchSession {
                 if sk.point_xy(end).map_err(err)?.distance(s) <= tol {
                     return Err(on_start());
                 }
-                let arc = sk.add_arc(center, start, end).map_err(err)?;
+                // Im Uhrzeigersinn gezogen läuft der Bogen vom Ende zum Start.
+                let arc = if cw {
+                    sk.add_arc(center, end, start)
+                } else {
+                    sk.add_arc(center, start, end)
+                }
+                .map_err(err)?;
                 self.clear_pending();
                 self.solve_checked(sk, prior)?;
                 for auto in &cur.autos {
@@ -1936,6 +2106,14 @@ impl SketchSession {
     /// (gewählter Bezug oder gesetztes Maß) und endet erst, wenn nichts mehr offen ist. Ein
     /// Abhängigkeitsbefehl ([`Tool::Constraint`]) endet ganz, ohne seine halbe Auswahl.
     pub fn cancel(&mut self, sk: &mut Sketch) {
+        // Ein offenes Rechtsklickmenü schließt zuerst.
+        if self.curve_menu.take().is_some() {
+            return;
+        }
+        // Dann die Wahl für „Neu verknüpfen“: nichts geändert, zurück zur Auswahl.
+        if self.relink.take().is_some() {
+            return;
+        }
         if self.grip_drag.is_some() {
             self.abort_grip();
             return;
@@ -2717,7 +2895,7 @@ impl SketchSession {
                 }
             }
             let smooth = matches!(kind, ConstraintKind::Smooth(..));
-            let id = se.add_checked(sk, prior, kind, action.label_msg())?;
+            let id = se.add_checked(sk, prior, kind, false, action.label_msg())?;
             // Glatt schaltet dabei Griffe ein; der Vergleich der Stände hieße den Schritt danach.
             if smooth {
                 se.edit_label = Some(action.label_msg());
@@ -2788,13 +2966,16 @@ impl SketchSession {
         sk: &mut Sketch,
         prior: &Sketch,
         kind: ConstraintKind,
+        supplement: bool,
         label: Msg,
     ) -> Result<ConstraintId, Msg> {
         let se = self;
         let dimension = kind.is_dimension();
-        let old = sk.measure(&kind);
+        let old = measure_kind(sk, &kind, supplement);
         let value_of = kind.length_value();
-        let id = sk.add_constraint(kind).map_err(err)?;
+        let id = sk
+            .add_constraint_supplement(kind, supplement)
+            .map_err(err)?;
         // Ein Maß nur an Exemplaren eines Musters legt die Skizze anzeigend an (es hätte sonst
         // keine Wirkung, Schlusskorrektur I1); sein Wert ist der gemessene.
         let driven = sk.constraint(id).is_some_and(|c| c.driven);
@@ -2835,7 +3016,7 @@ impl SketchSession {
     /// Macht das überzählige Maß `id` anzeigend (es zeigt den aktuellen Wert) und sagt es.
     pub(crate) fn make_driven(&mut self, sk: &mut Sketch, id: ConstraintId) -> Result<(), Msg> {
         sk.set_driven(id, true).map_err(err)?;
-        if let Some(v) = sk.constraint(id).and_then(|c| sk.measure(&c.kind)) {
+        if let Some(v) = sk.measure_constraint(id) {
             sk.set_constraint_value(id, v).map_err(err)?;
         }
         self.last_report = Some(sk.solve());
@@ -2870,11 +3051,11 @@ impl SketchSession {
             // Ein Winkelmaß gilt nur bis 180° im Betrag: Darüber zeigte es einen Wert, den die Form nicht
             // hat. Unverändert bestätigen geht immer (ein getippter Öffnungswinkel darf größer sein).
             if matches!(kind, ConstraintKind::Angle(_, _, v) if v != value)
-                && !angle_value_ok(sk.measure(&kind), value)
+                && !angle_value_ok(sk.measure_constraint(id), value)
             {
                 return Err(crate::msg!("sketch-angle-range"));
             }
-            let old = sk.measure(&kind);
+            let old = sk.measure_constraint(id);
             let users = sk.constraints().count();
             sk.set_constraint_value(id, value).map_err(err)?;
             // Eine kleinere Anzahl eines Musters nimmt die Abhängigkeiten der wegfallenden
@@ -3121,7 +3302,8 @@ impl SketchSession {
             if !kind.is_dimension() {
                 return Err(crate::msg!("sketch-only-dimension-driven"));
             }
-            if let Some(v) = sk.measure(&kind) {
+            // Mit dem Feld des Maßes: Ein Gegenwinkel misst `π − θ`, sonst spränge die Geometrie.
+            if let Some(v) = sk.measure_constraint(id) {
                 sk.set_constraint_value(id, v).map_err(err)?;
             }
             sk.set_driven(id, driven).map_err(err)?;
@@ -3148,8 +3330,23 @@ impl SketchSession {
 
     /// Löscht die Auswahl samt abhängiger Kurven und Abhängigkeiten. Punkte gelöschter (auch
     /// mitgelöschter) Kurven, die danach nichts mehr benutzt, werden mit entfernt; andere freie
-    /// Punkte bleiben.
+    /// Punkte bleiben. Ohne Kopien des Entwurfs; Entf und das X der Liste nehmen
+    /// [`delete_selection_in`](Self::delete_selection_in).
     pub fn delete_selection(&mut self, sk: &mut Sketch) {
+        self.delete_selection_keeping(sk, &[]);
+    }
+
+    /// [`delete_selection`](Self::delete_selection) am ganzen Entwurf `sf`: Eingezogene Punkte
+    /// (Punktziele in `sf.copies`) bleiben beim Löschen einer Kurve stehen, samt Fixierung und
+    /// Verknüpfung (Schlussprüfung I-1).
+    pub fn delete_selection_in(&mut self, sf: &mut SketchFeature) {
+        let keep = kept_points(sf);
+        self.delete_selection_keeping(&mut sf.sketch, &keep);
+    }
+
+    /// Der gemeinsame Weg: Die Punkte `keep` zählen beim Löschen einer Kurve als benutzt (sie
+    /// gehen nicht mit ihr). Ein ausdrücklich gewählter Punkt aus `keep` wird trotzdem gelöscht.
+    pub(crate) fn delete_selection_keeping(&mut self, sk: &mut Sketch, keep: &[PointId]) {
         // Im Abhängigkeitsbefehl gehört die Auswahl dem Befehl: Entf löscht nichts, es nimmt nur
         // die halbe Auswahl zurück.
         if matches!(self.tool, Tool::Constraint(_)) {
@@ -3229,6 +3426,31 @@ impl SketchSession {
                     }
                 }
             }
+            // Wie in Fusion gehen mit einer Kurve ihre Endpunkte samt Maßen und Abhängigkeiten:
+            // Was an einem nun freien Punkt der gelöschten Kurve hängt, fällt mit weg (sonst hielte
+            // es den Punkt am Leben). Punkte, die noch eine andere Kurve benutzt, die Mitte eines
+            // Kreismusters und die geschützten Punkte `keep` (eingezogene Punkte) bleiben mit
+            // allem, was an ihnen hängt.
+            if !orphans.is_empty() {
+                let mut still_used: std::collections::HashSet<PointId> =
+                    sk.curves().flat_map(|(_, c)| c.kind.points()).collect();
+                still_used.extend(sk.pattern_centers());
+                still_used.extend(keep.iter().copied());
+                let gone: Vec<PointId> = orphans
+                    .iter()
+                    .copied()
+                    .filter(|p| !still_used.contains(p))
+                    .collect();
+                let doomed: Vec<ConstraintId> = sk
+                    .constraints()
+                    .filter(|(_, k)| k.kind.points().iter().any(|p| gone.contains(p)))
+                    .map(|(id, _)| id)
+                    .collect();
+                for id in doomed {
+                    let _ = sk.remove_constraint(id);
+                }
+            }
+            orphans.retain(|p| !keep.contains(p));
             sk.prune_points(&orphans);
             se.pending.retain(|&p| sk.point_xy(p).is_ok());
             se.forget_removed_curves(sk);
@@ -3312,6 +3534,128 @@ impl SketchSession {
             {
                 let _ = sk.set_centerline(c, !on);
             }
+        }
+    }
+
+    // ---- Krümmungskamm (Skizzen 11a) -----------------------------------------------------------
+
+    /// Die gewählten Kurven, die einen Kamm tragen können (ohne Linien), je einmal.
+    fn comb_curves(&self, sk: &Sketch) -> Vec<CurveId> {
+        let mut out: Vec<CurveId> = Vec::new();
+        for c in self.selected_curves() {
+            if sk.comb_capable(c) && !out.contains(&c) {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// Lässt sich „Krümmungsanzeige ein/aus“ anwenden (mindestens eine gewählte Kurve, die
+    /// keine Linie ist)? Gilt für Menüpunkt, Aktion und Schalter im Skizzenfeld.
+    pub fn can_toggle_curvature(&self, sk: &Sketch) -> bool {
+        !self.comb_curves(sk).is_empty()
+    }
+
+    /// Fusion „Toggle Curvature Display“: Haben alle gewählten kammfähigen Kurven einen Kamm,
+    /// wird er bei allen entfernt (ein Rückgängig-Schritt). Sonst kommt der Dialog für die ohne
+    /// Kamm (den öffnet die Oberfläche, hier ändert sich nichts). Nur Linien oder keine Kurve
+    /// gewählt: abgelehnt.
+    pub fn toggle_curvature(&mut self, sk: &mut Sketch) -> CombToggle {
+        let curves = self.comb_curves(sk);
+        if curves.is_empty() {
+            return CombToggle::Refused(crate::msg!("sketch-comb-select-curve"));
+        }
+        let without: Vec<CurveId> = curves
+            .iter()
+            .copied()
+            .filter(|c| sk.comb(*c).is_none())
+            .collect();
+        if without.is_empty() {
+            for c in &curves {
+                let _ = sk.set_comb(*c, None);
+            }
+            self.edit_label = Some(crate::msg!("undo-comb-toggle"));
+            return CombToggle::Off(curves.len());
+        }
+        CombToggle::Dialog(without)
+    }
+
+    /// Setzt `settings` bei allen `curves` in einem Schritt (OK im Dialog); Kurven, die es nicht
+    /// mehr gibt, bleiben außen vor. Gibt an, bei wie vielen es geklappt hat.
+    pub fn apply_comb(
+        &mut self,
+        sk: &mut Sketch,
+        curves: &[CurveId],
+        settings: CombSettings,
+    ) -> usize {
+        let settings = clamp_comb(settings);
+        let done = curves
+            .iter()
+            .filter(|c| sk.set_comb(**c, Some(settings)).is_ok())
+            .count();
+        if done > 0 {
+            self.edit_label = Some(crate::msg!("undo-comb-toggle"));
+        }
+        done
+    }
+
+    /// Schalter „Krümmungskamm“ im Skizzenfeld: schaltet bei allen gewählten kammfähigen Kurven
+    /// den Kamm ein (mit den Vorgaben, wo noch keiner ist) oder aus.
+    pub fn set_comb_selected(&mut self, sk: &mut Sketch, on: bool) {
+        let curves = self.comb_curves(sk);
+        for c in &curves {
+            let has = sk.comb(*c).is_some();
+            if on && !has {
+                let _ = sk.set_comb(*c, Some(CombSettings::default()));
+            } else if !on && has {
+                let _ = sk.set_comb(*c, None);
+            }
+        }
+        if !curves.is_empty() {
+            self.edit_label = Some(crate::msg!("undo-comb-toggle"));
+        }
+    }
+
+    /// Ist genau eine Kurve gewählt und trägt sie einen Kamm: ihre Einstellungen (für die Felder
+    /// „Dichte“ und „Maßstab“ im Skizzenfeld).
+    pub fn single_comb(&self, sk: &Sketch) -> Option<(CurveId, CombSettings)> {
+        let [Item::Curve(c)] = self.selection.as_slice() else {
+            return None;
+        };
+        Some((*c, sk.comb(*c)?))
+    }
+
+    /// Ändert Dichte und/oder Maßstab des Kamms von `c` (auf die Bereiche begrenzt); ohne Kamm
+    /// nichts.
+    pub fn edit_comb(
+        &mut self,
+        sk: &mut Sketch,
+        c: CurveId,
+        density: Option<u32>,
+        scale: Option<f64>,
+    ) {
+        let Some(old) = sk.comb(c) else {
+            return;
+        };
+        let new = clamp_comb(CombSettings {
+            density: density.unwrap_or(old.density),
+            scale: scale.unwrap_or(old.scale),
+        });
+        if new != old && sk.set_comb(c, Some(new)).is_ok() {
+            self.edit_label = Some(crate::msg!("undo-comb-settings"));
+        }
+    }
+
+    /// Rechtsklick in der Zeichnung an der Bildschirmlage `at`: Im Auswahlwerkzeug mit gewählter
+    /// Kurve öffnet er das Menü ([`curve_menu`](Self::curve_menu)), sonst bricht er wie bisher ab.
+    pub fn secondary_click(&mut self, sk: &mut Sketch, at: (f32, f32)) {
+        let curve_selected = self.selection.iter().any(|i| matches!(i, Item::Curve(_)));
+        if self.tool == Tool::Select && curve_selected && !self.in_gesture() && !self.is_dragging()
+        {
+            self.curve_menu = Some(at);
+        } else {
+            self.curve_menu = None;
+            self.cancel(sk);
         }
     }
 
@@ -3416,6 +3760,13 @@ pub(crate) fn check_change(
         }
     };
     report.is_worse_than(before).then_some(report.status)
+}
+
+/// Punkte des Entwurfs `sf`, die das Löschen einer Kurve nicht mitnimmt: die Punktziele seiner
+/// Kopien (eingezogene Ecken, Ursprung, Schnittpunkte; Schlussprüfung I-1). Eigenständige
+/// Skizzenpunkte des Punktwerkzeugs kennt das Modell nicht gesondert (siehe `offene-punkte.md`).
+pub(crate) fn kept_points(sf: &SketchFeature) -> Vec<PointId> {
+    sf.copies.iter().filter_map(|c| c.point()).collect()
 }
 
 /// Die Kette um `c`, wie sie der Versatz nimmt: Querlinien und Rollkreise eines früheren Versatzes
@@ -3759,6 +4110,15 @@ pub(crate) fn round_center(sk: &Sketch, c: CurveId) -> Option<PointId> {
 /// Freiheitsgrade von `sk`, frisch gerechnet (nicht aus einem möglicherweise älteren Bericht).
 fn dof_of(sk: &Sketch) -> usize {
     sk.clone().solve().dof
+}
+
+/// Der Messwert von `kind`, bei einem Winkel mit der Zeigerseite `supplement` (Gegenwinkel
+/// `π − θ`, Skizzen 11a, A7). Für ein schon angelegtes Maß gilt [`Sketch::measure_constraint`].
+pub fn measure_kind(sk: &Sketch, kind: &ConstraintKind, supplement: bool) -> Option<f64> {
+    match *kind {
+        ConstraintKind::Angle(c1, c2, _) => sk.measure_angle(c1, c2, supplement),
+        _ => sk.measure(kind),
+    }
 }
 
 /// Darf ein Winkelmaß den Wert `value` bekommen? Der Betrag ist höchstens 180°; ein negativer

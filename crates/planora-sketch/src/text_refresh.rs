@@ -221,6 +221,7 @@ impl Sketch {
                         centerline: false,
                         show_frame: false,
                         normal: None,
+                        comb: None,
                         alive: true,
                     });
                     curves.push(c);

@@ -205,7 +205,7 @@ const NEW_KEYS: [&str; 3] = ["\"parameter\"", "\"formeln\"", "\"naechster_parame
 
 #[test]
 fn format_9_only_with_parameters_or_formulas() {
-    assert_eq!(FORMAT_VERSION, 20); // seit Skizzen 10 (3D-Skizze)
+    assert_eq!(FORMAT_VERSION, 21); // seit Skizzen 10 (3D-Skizze)
     let mut d = quader();
     assert_eq!(required_format(&d.snapshot()), 1);
 
@@ -841,10 +841,10 @@ fn limits_count_characters_not_bytes() {
 #[test]
 fn too_new() {
     let good = encode_version(&full_document().snapshot()).unwrap();
-    let e = bad(&good.replacen("\"format\": 9", "\"format\": 21", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 21, .. }), "{e:?}");
-    let e = bad("{\"format\": 21, \"parameter\": \"ganz anders\"}");
-    assert!(matches!(e, ProjectError::TooNew { found: 21, .. }), "{e:?}");
+    let e = bad(&good.replacen("\"format\": 9", "\"format\": 22", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 22, .. }), "{e:?}");
+    let e = bad("{\"format\": 22, \"parameter\": \"ganz anders\"}");
+    assert!(matches!(e, ProjectError::TooNew { found: 22, .. }), "{e:?}");
     // Format 9 selbst ist nicht zu neu.
     assert!(decode_version(&good, "x").is_ok());
 }

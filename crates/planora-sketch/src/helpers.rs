@@ -419,6 +419,7 @@ impl Sketch {
         };
         let construction = self.curves[source].construction;
         let centerline = self.curves[source].centerline;
+        let comb = self.curves[source].comb;
         let id = match self.curves[source].kind.clone() {
             CurveKind::Line { a, b } => self.add_line(map[&a], map[&b])?,
             CurveKind::Circle { center, radius } => {
@@ -492,6 +493,7 @@ impl Sketch {
         };
         self.curves[id].construction = construction;
         self.curves[id].centerline = centerline;
+        self.curves[id].comb = comb;
         Ok(id)
     }
 

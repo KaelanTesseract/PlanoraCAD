@@ -1,6 +1,9 @@
 //! 2D-Skizzen mit Constraint-Solver für PlanoraCAD.
 
 pub(crate) mod arrangement;
+pub mod blend;
+pub mod check;
+pub mod comb;
 pub mod constraint;
 pub(crate) mod constraint3d;
 pub(crate) mod curves;
@@ -30,6 +33,9 @@ pub mod shapes;
 pub mod snap;
 pub mod solid;
 pub mod solver;
+/// Dünne lineare Algebra des Solvers (große Gruppen); nur für die Tests öffentlich.
+#[doc(hidden)]
+pub mod sparse;
 pub mod spline_handles;
 pub mod tangent_circles;
 pub mod text;
@@ -40,6 +46,7 @@ pub mod text_shape;
 pub mod transform;
 pub mod triangulate;
 
+pub use check::{CheckItem, SketchStatus};
 pub use constraint::{
     Axis3, ConstraintData, ConstraintId, ConstraintKind, Evaluation, FixToggle, LineOrPoints,
 };
@@ -69,7 +76,7 @@ pub use profile_ref::LegacyMigration;
 pub use shapes::{ArcSlotIds, CenterRectIds, PolygonIds, SlotIds, SlotStyle};
 pub use snap::{AlignHit, Snap, SnapHit, SnapIndex};
 pub use solid::{extrude_profile, revolve_profile};
-pub use solver::{Drag, SolveReport, SolveStatus};
+pub use solver::{Drag, SolveReport, SolveStatus, SolveTimings};
 pub use spline_handles::{NodeCurvature, NodeHandle, Nodes, hermite_nodes};
 pub use text::{
     HAlign, ReshapeReport, ShapedCache, TextData, TextId, TextKindEdit, TextParams, TextPlacement,

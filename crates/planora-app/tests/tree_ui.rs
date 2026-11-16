@@ -381,9 +381,10 @@ fn the_delete_note_mentions_face_sketches_of_a_union() {
 }
 
 #[test]
-fn an_edge_copy_reference_goes_away_with_its_source_feature() {
-    // Die Kopie steht nur im Entwurf; „Löschen“ beendet die Skizze vorher, sodass die Rückfrage
-    // die Skizze als Folge nennt und danach nichts mehr auf den Quader verweist.
+fn deleting_an_edge_copy_source_keeps_the_sketch_with_a_warning() {
+    // Skizzen 11a Task 17: Die Herkunft einer Kopie ist ein schwacher Bezug. „Löschen“ beendet
+    // die Skizze vorher (die Kopie stand nur im Entwurf); der Quader geht ohne Rückfrage, die
+    // Skizze bleibt, ihr Bezug ist verloren (Warnung, die Kurve bleibt stehen).
     let mut s = AppState::new();
     let a = s.create_box(DVec3::new(10.0, 20.0, 5.0)).unwrap();
     let sk = s
@@ -397,21 +398,26 @@ fn an_edge_copy_reference_goes_away_with_its_source_feature() {
             .iter()
             .any(|(e, _)| s.project_edge_into_sketch(0, e).is_ok())
     );
-    assert!(
-        s.document.dependents(a).is_empty(),
-        "nur im Entwurf: das Dokument kennt die Kopie noch nicht"
-    );
     browser::request_delete(&mut s, a);
     assert!(s.sketch_session.is_none(), "Skizze vorher beendet");
-    let plan = s.pending_delete.clone().expect("Rückfrage");
-    assert!(plan.text().contains("Skizze 1"), "{}", plan.text());
-    browser::apply_delete(&mut s, &plan).unwrap();
     assert!(
-        s.document
-            .features()
-            .iter()
-            .all(|f| !f.kind.dependencies().contains(&a))
+        s.pending_delete.is_none(),
+        "keine Rückfrage, nichts hängt hart am Quader"
     );
+    assert!(s.document.feature(a).is_none(), "Quader gelöscht");
+    let f = s.document.feature(sk).expect("Skizze bleibt");
+    assert_eq!(
+        f.status,
+        planora_feature::FeatureStatus::Ok,
+        "{:?}",
+        f.status
+    );
+    assert!(f.warning().is_some());
+    assert_eq!(f.lost_projections().len(), 1);
+    // Die Herkunft bleibt gespeichert (Rückgängig lässt die Verknüpfung wieder aufleben); hart
+    // verweist die Skizze nicht auf den Quader.
+    assert_eq!(f.kind.weak_dependencies(), vec![a]);
+    assert!(f.kind.dependencies().is_empty());
     s.document.check_invariants().unwrap();
 }
 
@@ -427,23 +433,19 @@ fn a_stale_delete_confirmation_is_refreshed_instead_of_deleting() {
     browser::request_delete(&mut s, x);
     let shown = s.pending_delete.clone().expect("Rückfrage");
     assert!(!shown.text().contains("Skizze 1"));
-    // Während die Rückfrage offen ist: Skizze S anlegen und eine Kante von X hineinkopieren.
-    let sk = s
-        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
-        .unwrap();
-    s.open_sketch(sk).unwrap();
-    let solid = s.bodies[0].solid.clone();
-    let mut copied = false;
-    for (e, _) in solid.edges.iter() {
-        if s.project_edge_into_sketch(0, e).is_ok() {
-            let c = s.sketch_draft.as_ref().unwrap().copies.last().unwrap();
-            if c.source.origins().contains(&x) {
-                copied = true;
-                break;
-            }
-        }
-    }
-    assert!(copied, "eine Kante von X kopiert");
+    // Während die Rückfrage offen ist: Skizze S auf einer Fläche von X anlegen (harter Bezug;
+    // eine kopierte Kante wäre seit Skizzen 11a Task 17 nur ein schwacher Bezug).
+    let face = s.bodies[0]
+        .solid
+        .faces
+        .iter()
+        .find(|(id, f)| {
+            f.tag.as_ref().is_some_and(|t| t.origin == x.0)
+                && planora_sketch::plane_of_face(&s.bodies[0].solid, *id).is_some()
+        })
+        .map(|(id, _)| id)
+        .expect("ebene Fläche von X");
+    let sk = s.new_sketch_on_face(0, face).unwrap();
     // „Löschen“ im Rückfragefenster
     let c = ctx();
     frame(&c, &mut s, vec![], "");
@@ -646,4 +648,90 @@ fn a_skipped_tip_over_an_active_origin_is_marked_grey_with_its_reason() {
     let found = colors.iter().find(|(t, _)| t == "übersprungen");
     assert_eq!(found.map(|f| f.1), Some(weak), "{colors:?}");
     assert!(!why.is_empty());
+}
+
+// ---- Rotes Schloss am Skizzen-Eintrag (Skizzen 11a, Task 15) ---------------------------------
+
+/// Skizze mit Rechteck; mit `determined` voll bestimmt (zwei Maße, feste Ecke).
+fn state_with_rect_sketch(determined: bool) -> (AppState, planora_feature::FeatureId) {
+    use planora_feature::{FeatureKind, SketchPlane, StandardPlane};
+    use planora_math::DVec2;
+    use planora_sketch::constraint::ConstraintKind as K;
+    let mut s = AppState::new();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.document
+        .update(id, |k| {
+            if let FeatureKind::Sketch(sf) = k {
+                let r = sf
+                    .sketch
+                    .add_rectangle(DVec2::ZERO, DVec2::new(40.0, 30.0))
+                    .unwrap();
+                if determined {
+                    let c = r.points;
+                    sf.sketch
+                        .add_constraint(K::Distance(c[0], c[1], 40.0))
+                        .unwrap();
+                    sf.sketch
+                        .add_constraint(K::Distance(c[1], c[2], 30.0))
+                        .unwrap();
+                    sf.sketch.add_constraint(K::Fixed(c[0], 0.0, 0.0)).unwrap();
+                }
+            }
+        })
+        .unwrap();
+    s.refresh();
+    (s, id)
+}
+
+fn tree_text(s: &mut AppState) -> String {
+    let c = ctx();
+    let mut text = String::new();
+    for _ in 0..3 {
+        let out = c.run_ui(egui::RawInput::default(), |ui| browser::show(ui, s));
+        text = texts(&out);
+        out.drop_without_applying_deltas();
+    }
+    text
+}
+
+fn lock_glyph() -> String {
+    planora_app::icons::glyph(planora_app::icons::Icon::Lock).to_string()
+}
+
+#[test]
+fn locked_sketch_shows_lock_icon() {
+    let (mut s, id) = state_with_rect_sketch(true);
+    assert!(s.document.feature(id).unwrap().sketch_locked());
+    let text = tree_text(&mut s);
+    assert!(text.contains(&lock_glyph()), "Schloss fehlt:\n{text}");
+}
+
+#[test]
+fn under_sketch_shows_no_lock() {
+    let (mut s, id) = state_with_rect_sketch(false);
+    assert!(!s.document.feature(id).unwrap().sketch_locked());
+    let text = tree_text(&mut s);
+    assert!(!text.contains(&lock_glyph()), "{text}");
+}
+
+#[test]
+fn timeline_shows_no_lock() {
+    let (mut s, _) = state_with_rect_sketch(true);
+    let c = ctx();
+    let mut text = String::new();
+    for _ in 0..3 {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        let out = c.run_ui(raw, |ui| planora_app::history_bar::show(ui.ctx(), &mut s));
+        text = texts(&out);
+        out.drop_without_applying_deltas();
+    }
+    assert!(!text.contains(&lock_glyph()), "{text}");
 }

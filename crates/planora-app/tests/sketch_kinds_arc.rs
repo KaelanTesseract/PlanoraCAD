@@ -22,7 +22,7 @@ use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::shapes::{ArcPlan, ShapePlan};
 use planora_sketch::solver::{SolveReport, SolveStatus};
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 const R: f64 = 0.5;
 const SIZE: Vec2 = vec2(1920.0, 1080.0);
@@ -1094,6 +1094,106 @@ fn arc_tangent_by_raw_events_is_one_undo_step_and_matches_the_preview() {
     assert_solved(&done);
 }
 
+// ---- Bogen Mittelpunkt folgt dem Zug (Skizzen 11a, A6) -------------------------------------------
+
+/// Mitte (0,0) und Start (10,0) gesetzt, der Bogen wartet auf das Ende.
+fn center_arc_started() -> (SketchSession, Sketch) {
+    let (mut se, mut sk) = session(ToolKind::ArcCenter);
+    click(&mut se, &mut sk, 0.0, 0.0);
+    click(&mut se, &mut sk, 10.0, 0.0);
+    (se, sk)
+}
+
+fn on_circle(deg: f64) -> DVec2 {
+    let t = deg.to_radians();
+    at(10.0 * t.cos(), 10.0 * t.sin())
+}
+
+/// Zieht den Zeiger über `path` und klickt am letzten Punkt.
+fn drag_and_click(se: &mut SketchSession, sk: &mut Sketch, path: &[DVec2]) {
+    for &p in path {
+        se.track_arc_sweep(p);
+    }
+    let end = *path.last().unwrap();
+    click(se, sk, end.x, end.y);
+}
+
+#[test]
+fn arc_center_follows_clockwise_drag() {
+    let (mut se, mut sk) = center_arc_started();
+    drag_and_click(&mut se, &mut sk, &[at(7.0, -7.0), at(0.0, -10.0)]);
+    let arc = last_arc(&sk);
+    assert!(se.arc_sweep.is_none(), "nach dem Anlegen vergessen");
+    assert!(close(arc.center, at(0.0, 0.0)));
+    // Im Uhrzeigersinn: gespeichert vom Ende zum Start.
+    assert!(close(arc.start, at(0.0, -10.0)), "{arc:?}");
+    assert!(close(arc.end, at(10.0, 0.0)), "{arc:?}");
+    assert!((arc.sweep() - FRAC_PI_2).abs() < 1e-9, "{}", arc.sweep());
+}
+
+#[test]
+fn arc_center_ccw_unchanged() {
+    let (mut se, mut sk) = center_arc_started();
+    drag_and_click(&mut se, &mut sk, &[at(7.0, 7.0), at(0.0, 10.0)]);
+    let arc = last_arc(&sk);
+    assert!(close(arc.start, at(10.0, 0.0)), "{arc:?}");
+    assert!(close(arc.end, at(0.0, 10.0)), "{arc:?}");
+    assert!((arc.sweep() - FRAC_PI_2).abs() < 1e-9);
+}
+
+#[test]
+fn arc_center_sweeps_past_180() {
+    let (mut se, mut sk) = center_arc_started();
+    let path = [on_circle(90.0), on_circle(180.0), on_circle(270.0)];
+    drag_and_click(&mut se, &mut sk, &path);
+    let arc = last_arc(&sk);
+    assert!(close(arc.start, at(10.0, 0.0)), "{arc:?}");
+    assert!(
+        (arc.sweep() - 3.0 * FRAC_PI_2).abs() < 1e-9,
+        "{}",
+        arc.sweep()
+    );
+}
+
+#[test]
+fn arc_center_reverse_over_start_flips() {
+    let (mut se, mut sk) = center_arc_started();
+    let path = [on_circle(30.0), on_circle(-40.0)];
+    drag_and_click(&mut se, &mut sk, &path);
+    let arc = last_arc(&sk);
+    assert!(close(arc.end, at(10.0, 0.0)), "im Uhrzeigersinn: {arc:?}");
+    assert!(
+        (arc.sweep() - 40f64.to_radians()).abs() < 1e-9,
+        "{}",
+        arc.sweep()
+    );
+}
+
+#[test]
+fn arc_center_typed_sweep_keeps_drag_sign() {
+    let mut w = rig(ToolKind::ArcCenter);
+    {
+        let (se, sf, _) = parts(&mut w);
+        click(se, &mut sf.sketch, 0.0, 0.0);
+        click(se, &mut sf.sketch, 10.0, 0.0);
+        se.track_arc_sweep(at(7.0, -7.0));
+    }
+    type_in(&mut w, F::Sweep, "45");
+    commit(&mut w, 7.0, -7.0).unwrap();
+    let arc = last_arc(sk(&w));
+    assert!(close(arc.end, at(10.0, 0.0)), "im Uhrzeigersinn: {arc:?}");
+    assert!((arc.sweep() - FRAC_PI_4).abs() < 1e-9, "{}", arc.sweep());
+}
+
+#[test]
+fn arc_center_sweep_is_forgotten_on_restart_and_tool_change() {
+    let (mut se, mut sk) = center_arc_started();
+    se.track_arc_sweep(at(7.0, -7.0));
+    assert!(se.arc_cw());
+    se.set_tool(&mut sk, Tool::Line);
+    assert!(se.arc_sweep.is_none() && !se.arc_cw());
+}
+
 #[test]
 fn escape_leaves_nothing_of_a_started_tangent_arc() {
     let mut gui = Gui::new();
@@ -1122,5 +1222,31 @@ fn messages_exist_in_both_languages() {
                 assert!(!t(key).is_empty() && t(key) != key, "{key}");
             }
         });
+    }
+}
+
+/// Handtest 11a, Fund 5a: Das Feld „Öffnungswinkel“ schlägt die tatsächliche Öffnung des Bogens
+/// vor, auch im Uhrzeigersinn (wie Fusion), nicht 360° − Öffnung.
+#[test]
+fn arc_center_sweep_field_shows_the_real_opening_both_ways() {
+    for (path, want) in [
+        (vec![on_circle(-20.0), on_circle(-60.0)], 60.0),
+        (
+            vec![on_circle(-90.0), on_circle(-180.0), on_circle(-250.0)],
+            250.0,
+        ),
+        (vec![on_circle(20.0), on_circle(60.0)], 60.0),
+        (
+            vec![on_circle(90.0), on_circle(180.0), on_circle(250.0)],
+            250.0,
+        ),
+    ] {
+        let (mut se, sk) = center_arc_started();
+        for &p in &path {
+            se.update_cursor(&sk, Some(p), R);
+        }
+        se.sync_input(&sk);
+        let sweep = se.field_value(&sk, F::Sweep).unwrap().to_degrees();
+        assert!((sweep - want).abs() < 1e-6, "{path:?}: {sweep}");
     }
 }

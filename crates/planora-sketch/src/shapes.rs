@@ -66,6 +66,16 @@ pub fn rect_three_point(a: DVec2, b: DVec2, depth_at: DVec2, tol: f64) -> Option
     Some([a, b, b + n, a + n])
 }
 
+/// Mittelpunktlinie (Fusion „Midpoint Line“): Die Linie liegt symmetrisch zur Mitte `mid`, ihr
+/// Ende ist `end`; geliefert werden Anfang und Ende `(2·mid − end, end)`. `None` bei nicht
+/// endlichen Lagen oder wenn das Ende höchstens `tol` von der Mitte entfernt liegt.
+pub fn midpoint_line_plan(mid: DVec2, end: DVec2, tol: f64) -> Option<(DVec2, DVec2)> {
+    if !all_finite(&[mid, end]) || end.distance(mid) <= tol {
+        return None;
+    }
+    Some((mid * 2.0 - end, end))
+}
+
 /// Achsenparalleles Rechteck um `center` mit Ecke `corner`; Reihenfolge wie `RectIds`.
 pub fn rect_center(center: DVec2, corner: DVec2, tol: f64) -> Option<[DVec2; 4]> {
     if !all_finite(&[center, corner]) {
@@ -667,6 +677,22 @@ impl Sketch {
             s.add_constraint(ConstraintKind::Parallel(l0, l2))?;
             s.add_constraint(ConstraintKind::Parallel(l1, l3))?;
             Ok(r)
+        })
+    }
+
+    /// Linie `a`–`b` mit dem Punkt `mid` als Mitte (`Midpoint(mid, linie)`), Fusion
+    /// „Mittelpunktlinie“. `mid` ist ein gewöhnlicher Skizzenpunkt, auch ein vorhandener. Alles
+    /// oder nichts.
+    pub fn add_midpoint_line(
+        &mut self,
+        mid: PointId,
+        a: PointId,
+        b: PointId,
+    ) -> Result<CurveId, SketchError> {
+        self.atomically(|s| {
+            let line = s.add_line(a, b)?;
+            s.add_constraint(ConstraintKind::Midpoint(mid, line))?;
+            Ok(line)
         })
     }
 

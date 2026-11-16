@@ -57,6 +57,10 @@ pub const DIALOG_KEYS: &[&str] = &[
     // Auf Fläche projizieren und Schnittkurve (Skizzen 10)
     "sketch_project_to_surface",
     "sketch_intersection_curve",
+    // Krümmungsanzeige einrichten (Skizzen 11a)
+    "curvature_display",
+    // Verlorene Projektionen verwalten (Skizzen 11a)
+    "lost_projections",
     // Baum und Zeichnung
     "tree_rename",
     "tree_delete",

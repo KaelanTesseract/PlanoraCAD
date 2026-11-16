@@ -327,7 +327,9 @@ impl Document {
     }
 
     /// Schlüssel der Eingaben: eigene Version, Ergebnisstände der Eingangsfeatures und bei
-    /// lesenden Features die Ergebnisstände aller sichtbaren Körper.
+    /// lesenden Features die Ergebnisstände aller sichtbaren Körper. Schwache Bezüge
+    /// ([`FeatureKind::weak_dependencies`]) zählen mit ihrem Ergebnisstand, wenn die Quelle vor
+    /// dem Feature steht; gelöscht oder dahinter geschoben zählt 0 (verlorener Bezug).
     fn cache_key(&self, idx: usize, visible: &[BodyRef]) -> Vec<u64> {
         let f = &self.features[idx];
         let mut key = vec![f.version];
@@ -336,6 +338,15 @@ impl Document {
                 .dependencies()
                 .into_iter()
                 .map(|d| self.result_version(d)),
+        );
+        key.extend(
+            f.kind
+                .weak_dependencies()
+                .into_iter()
+                .map(|id| match self.index_of(id) {
+                    Some(i) if i < idx => self.result_version(id),
+                    _ => 0,
+                }),
         );
         if Self::reads_visible(&f.kind) {
             key.extend(visible.iter().map(|r| self.result_version(r.feature)));
@@ -356,9 +367,11 @@ impl Document {
     }
 
     /// Hält ein unterdrücktes, fehlerhaftes oder übersprungenes Eingangsfeature `dep` das
-    /// Feature `kind` an? Bei Skizzen nur die Herkunft der Skizzenebene (Fläche oder
-    /// Konstruktionsebene): Die Herkunft einer Projektion ergibt dann einen verlorenen Bezug
-    /// (Warnung, Spec A4), keinen Stillstand.
+    /// Feature `kind` an? `dep` ist ein harter Bezug ([`FeatureKind::dependencies`]); bei Skizzen
+    /// ist das nur die Herkunft der Skizzenebene (Fläche oder Konstruktionsebene). Die Herkunft
+    /// einer Projektion ist ein schwacher Bezug und kommt hier nicht an: Fehlt sie, steht sie
+    /// dahinter, ist sie unterdrückt oder fehlerhaft, ergibt das beim Nachführen einen
+    /// verlorenen Bezug (Warnung, Skizzen 11a A5), keinen Stillstand.
     fn blocks(kind: &FeatureKind, dep: FeatureId) -> bool {
         match kind {
             FeatureKind::Sketch(s) => match &s.plane {
@@ -375,7 +388,8 @@ impl Document {
         }
     }
 
-    /// Prüft die Eingangsfeatures von `idx` auf Unterdrückung, Fehler und Lage.
+    /// Prüft die harten Eingangsfeatures von `idx` auf Unterdrückung, Fehler und Lage (schwache
+    /// Bezüge siehe [`Document::blocks`]).
     fn blocked_by_dependency(&self, idx: usize) -> Option<Blocked> {
         let kind = &self.features[idx].kind;
         for dep in kind.dependencies() {
@@ -422,10 +436,15 @@ impl Document {
             sketch,
             hints,
             warning,
+            locked,
+            lost,
             plane,
             canvas,
             canvas_face,
         } = computed;
+        // Der Rückfall nach einem vollen Neubau gilt bis zur ersten Berechnung (Ruling T17-1).
+        let id = self.features[idx].id;
+        self.carried_sketches.remove(&id);
         let f = &mut self.features[idx];
         f.result = Some(FeatureResult {
             bodies,
@@ -433,6 +452,8 @@ impl Document {
             result_version,
             key,
             warning,
+            lost,
+            locked,
             plane,
             canvas,
         });

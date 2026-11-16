@@ -41,6 +41,8 @@ pub struct CurveRecord {
     /// Normale einer ebenen Kurve außerhalb der Skizzenebene (Skizzen 10), normiert; `None` in
     /// der Skizzenebene.
     pub normal: Option<DVec3>,
+    /// Krümmungskamm (Skizzen 11a); die Datei schreibt ihn ab Format 21 (Task 7).
+    pub comb: Option<crate::comb::CombSettings>,
     pub alive: bool,
 }
 
@@ -48,6 +50,8 @@ pub struct CurveRecord {
 pub struct ConstraintRecord {
     pub kind: ConstraintKind,
     pub branch: i8,
+    /// Gegenwinkel am Winkelmaß (Skizzen 11a); die Datei schreibt ihn ab Format 21 (Task 7).
+    pub supplement: bool,
     pub driven: bool,
     pub enabled: bool,
     pub internal: bool,
@@ -185,6 +189,7 @@ impl Sketch {
                     centerline: c.centerline,
                     show_frame: c.show_frame,
                     normal: c.normal,
+                    comb: c.comb,
                     alive: c.alive,
                 })
                 .collect(),
@@ -194,6 +199,7 @@ impl Sketch {
                 .map(|(_, c)| ConstraintRecord {
                     kind: c.kind.clone(),
                     branch: c.branch,
+                    supplement: c.supplement,
                     driven: c.driven,
                     enabled: c.enabled,
                     internal: c.internal,
@@ -297,6 +303,16 @@ impl Sketch {
             {
                 return Err(bad(tr!("sketch-err-data-show-frame")));
             }
+            // Der Krümmungskamm (Skizzen 11a) liegt an einer gekrümmten Kurve, mit Werten in den
+            // Bereichen; eine Linie hat keinen.
+            if let Some(comb) = &c.comb {
+                if matches!(c.kind, CurveKind::Line { .. }) {
+                    return Err(bad(tr!("sketch-err-comb-line")));
+                }
+                if !comb.is_valid() {
+                    return Err(bad(tr!("sketch-err-comb-range")));
+                }
+            }
             check_curve_normal(c)?;
             // Eine lebende Kurve mit eigener Ebene liegt ganz im Raum: Ein 2D-Punkt (z = 0) und
             // die gekippte Ebene überbestimmten sie (Skizzen 10).
@@ -387,6 +403,10 @@ impl Sketch {
         }
         check_handles(&d)?;
         for c in &d.constraints {
+            // Den Gegenwinkel (Skizzen 11a) gibt es nur am Winkelmaß.
+            if c.supplement && !matches!(c.kind, ConstraintKind::Angle(..)) {
+                return Err(bad(tr!("sketch-supplement-angle-only")));
+            }
             if !(-1..=1).contains(&c.branch) {
                 return Err(bad(tr!("sketch-err-data-constraint-place")));
             }
@@ -438,6 +458,7 @@ impl Sketch {
                 centerline: c.centerline,
                 show_frame: c.show_frame,
                 normal: c.normal,
+                comb: c.comb,
                 alive: c.alive,
             });
         }
@@ -447,6 +468,7 @@ impl Sketch {
                 kind: c.kind,
                 branch: c.branch,
                 shared_sign: 0,
+                supplement: c.supplement,
                 driven: c.driven,
                 enabled: c.enabled,
                 internal: c.internal,

@@ -23,7 +23,7 @@ use planora_project::library::Library;
 
 /// Fensterbreite der Prüfung auf Abschneiden.
 const WIDTH: f32 = 1400.0;
-const HEIGHT: f32 = 900.0;
+const HEIGHT: f32 = 1080.0;
 
 /// Alte Flächenfarben vor Graphit (dürfen nirgends mehr vorkommen).
 const OLD_COLORS: [Color32; 2] = [

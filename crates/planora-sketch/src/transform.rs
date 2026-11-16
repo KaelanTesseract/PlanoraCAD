@@ -269,6 +269,7 @@ fn map_ids(
         EllipseAxes3(x, ax, ay, az, m) => EllipseAxes3(c(*x), *ax, *ay, *az, *m),
         Collinear(a, b) => Collinear(c(*a), c(*b)),
         Smooth(a, pa, b, pb) => Smooth(c(*a), p(*pa), c(*b), p(*pb)),
+        EndTangent(a, pa, b, pb) => EndTangent(c(*a), p(*pa), c(*b), p(*pb)),
         DistanceX(a, b, v) => DistanceX(p(*a), p(*b), *v),
         DistanceY(a, b, v) => DistanceY(p(*a), p(*b), *v),
         CenterlineDiameter(a, x, v) => CenterlineDiameter(p(*a), c(*x), *v),
@@ -1340,6 +1341,7 @@ impl Sketch {
         s: &Similarity,
     ) -> Result<CurveId, SketchError> {
         let (construction, centerline) = (self.curves[c].construction, self.curves[c].centerline);
+        let comb = self.curves[c].comb;
         // Eine Kurve in 3D behält ihre Ebene, um z mitgedreht (Skizzen 10).
         let normal = self.curves[c].normal.map(|n| s.turn(n));
         let id = match self.curves[c].kind.clone() {
@@ -1428,6 +1430,7 @@ impl Sketch {
         };
         self.curves[id].construction = construction;
         self.curves[id].centerline = centerline;
+        self.curves[id].comb = comb;
         Ok(id)
     }
 
@@ -1572,7 +1575,7 @@ impl Sketch {
         for (id, d, held_before) in inner {
             let (value, _) = transformed_value(&d.kind, s);
             let kind = map_ids(&value, |p| points[&p], |c| curves[&c]);
-            let new = self.add_constraint(kind)?;
+            let new = self.add_constraint_supplement(kind, d.supplement)?;
             if let (Some(from), Some(to)) = (d.extra, self.constraints[new].extra) {
                 self.vars[to] = self.vars[from];
             }

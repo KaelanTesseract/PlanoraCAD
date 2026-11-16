@@ -2809,7 +2809,22 @@ fn sketch_create_entries(ui: &mut egui::Ui, ws: &mut Workspace) {
 }
 
 /// Die Werkzeuge im Untermenü „Ändern“ nach Rundung und Fasen (Versatz wie in Fusions „Modify“).
-pub const SKETCH_MODIFY_TOOLS: [Tool; 3] = [Tool::Offset, Tool::MoveCopy, Tool::Scale];
+pub const SKETCH_MODIFY_TOOLS: [Tool; 4] =
+    [Tool::Offset, Tool::MoveCopy, Tool::Scale, Tool::BlendCurve];
+
+/// Die Werkzeuge, die das Untermenü „Ändern“ für die offene Skizze zeigt: [`SKETCH_MODIFY_TOOLS`],
+/// in einer 3D-Skizze ohne die Übergangskurve (Ruling H1-5, wie Fusion: nur in 2D-Skizzen).
+pub fn sketch_modify_tools(ws: &Workspace) -> Vec<Tool> {
+    let three_d = ws
+        .active_tab()
+        .state
+        .session_sketch()
+        .is_some_and(|sk| sk.three_d);
+    SKETCH_MODIFY_TOOLS
+        .into_iter()
+        .filter(|&t| !(three_d && t == Tool::BlendCurve))
+        .collect()
+}
 
 /// Bei offener Skizze das Untermenü „Ändern“ im Menü „Bearbeiten“: Skizzenrundung, die drei
 /// Fasen, Versatz, Verschieben/Kopieren und Skizzenmaßstab.
@@ -2822,7 +2837,7 @@ fn sketch_modify_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         let kinds = crate::sketch_kinds::ToolKind::of(Tool::Fillet)
             .iter()
             .map(|k| (k.action(), icons::sketch_kind_icon(*k), k.hint()));
-        let tools = SKETCH_MODIFY_TOOLS.map(|t| {
+        let tools = sketch_modify_tools(ws).into_iter().map(|t| {
             let action = Action::for_sketch_tool(t).unwrap_or(Action::SketchMoveCopy);
             (
                 action,
@@ -3193,6 +3208,10 @@ impl eframe::App for PlanoraApp {
         }
         // Skizzen 10: „Auf Fläche projizieren“ und „Schnittkurve“ der offenen Skizze.
         crate::surface_project_dialog::show_open(&ctx, &mut tab.state);
+        // Skizzen 11a: „Krümmungsanzeige einrichten“.
+        crate::curvature_dialog::show_open(&ctx, &mut tab.state);
+        // Skizzen 11a: „Verlorene Projektionen verwalten“.
+        crate::lost_projections_dialog::show_open(&ctx, &mut tab.state);
         // Die Fenster „DXF einfügen“ und „SVG einfügen“ nutzen denselben Wahlmodus (sie zeichnen
         // erst danach).
         if tab.plane_dialog.is_none()

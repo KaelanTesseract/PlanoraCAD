@@ -157,6 +157,9 @@ fn the_inserted_control_point_is_the_nearest_of_the_moved_group() {
 #[test]
 fn a_held_drag_leaves_no_numbers_for_the_next_solve() {
     let mut s = sketch();
+    // Der Zug landet bitgenau am Ziel (Vergleich mit `==`): immer der dichte Weg, unabhängig von
+    // `PLANORA_SOLVER` (Ruling F12). Dünn weicht y um 4e-16 ab.
+    s.set_solver_path(planora_sketch::sparse::SolverPath::Dense);
     let (c, pts) = spline(&mut s, &WAVE);
     s.activate_curvature_handle(c, pts[2]).unwrap();
     let free = |r: &SolveReport| {

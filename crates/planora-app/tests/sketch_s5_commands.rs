@@ -684,7 +684,9 @@ fn the_disabled_row_delete_explains_itself_in_english() {
         let at = shot
             .bounds
             .iter()
-            .find(|(t, _)| *t == label)
+            .filter(|(t, _)| *t == label)
+            // Die oberste Zeile: Weiter unten kann eine Zeile unter dem Fußfeld verschwinden.
+            .min_by(|a, b| a.1.top().total_cmp(&b.1.top()))
             .unwrap_or_else(|| panic!("„{label}“ fehlt"))
             .1
             .center();

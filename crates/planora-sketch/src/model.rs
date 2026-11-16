@@ -184,6 +184,8 @@ pub struct CurveData {
     /// Skizzenkoordinaten (Skizzen 10). `None`: Die Kurve liegt in der Skizzenebene, alles wie
     /// bisher. Eine Zahl in der Kurve wie `rho` beim Kegelschnitt, keine Löservariable.
     pub normal: Option<DVec3>,
+    /// Krümmungskamm (Skizzen 11a): `None` ohne Kamm. Wandert mit Kopien und Teilstücken.
+    pub comb: Option<crate::comb::CombSettings>,
     pub(crate) alive: bool,
 }
 
@@ -219,6 +221,9 @@ pub struct Sketch {
     /// Ergebnisse der letzten Solver-Läufe je Gruppe (siehe `solver.rs`). Jede Änderung an
     /// Objekten oder Abhängigkeiten leert ihn; reine Wertänderungen erkennt der Solver selbst.
     pub(crate) solve_cache: SolveCache,
+    /// Weg des Lösers (dicht, dünn oder je Gruppengröße), siehe [`crate::sparse::SolverPath`].
+    /// Gehört nicht zur Datei und nicht zum Vergleich von Ständen.
+    pub(crate) solver_path: crate::sparse::SolverPath,
     /// Haken „3D-Skizze“ (Skizzen 10): schaltet die 3D-Werkzeuge frei. Bereits gezeichnete
     /// 3D-Geometrie bleibt, wenn der Haken fällt.
     pub three_d: bool,
@@ -287,8 +292,17 @@ impl Sketch {
             texts: Arena::new(),
             revision: next_revision(),
             solve_cache: SolveCache::default(),
+            solver_path: crate::sparse::SolverPath::from_env(),
             three_d: false,
         }
+    }
+
+    /// Legt den Weg des Lösers fest (nur zum Prüfen); verwirft die gemerkten Ergebnisse, damit
+    /// der nächste Lauf auf dem neuen Weg rechnet.
+    #[doc(hidden)]
+    pub fn set_solver_path(&mut self, p: crate::sparse::SolverPath) {
+        self.solver_path = p;
+        self.solve_cache = SolveCache::default();
     }
 
     /// Setzt den Haken „3D-Skizze“; die Geometrie bleibt unverändert.
@@ -493,6 +507,7 @@ impl Sketch {
             centerline: false,
             show_frame: false,
             normal: None,
+            comb: None,
             alive: true,
         })
     }
@@ -1063,6 +1078,21 @@ impl Sketch {
     /// die Datei Format 19 (Skizzen 9).
     pub fn has_frame_entry(&self) -> bool {
         self.curves.iter().any(|(_, c)| c.show_frame)
+    }
+
+    /// Steht etwas aus Skizzen 11a in der Skizze, auch in einem gelöschten Eintrag: ein
+    /// Krümmungskamm an einem Kurveneintrag, eine Tangente am Ende, ein Winkelmaß mit Gegenwinkel
+    /// oder ein Glatt mit einem Ellipsenbogen als Partner? Dann braucht die Datei Format 21.
+    pub fn needs_format_21(&self) -> bool {
+        self.curves.iter().any(|(_, c)| c.comb.is_some())
+            || self.constraints.iter().any(|(_, c)| {
+                c.supplement
+                    || c.kind.needs_format_21()
+                    || matches!(c.kind, crate::constraint::ConstraintKind::Smooth(a, _, b, _)
+                    if [a, b].iter().any(|k| {
+                        matches!(self.curves[*k].kind, CurveKind::EllipticArc { .. })
+                    }))
+            })
     }
 
     /// Gibt es einen Mustereintrag oder einen Abhängigkeitseintrag, der Format 15 braucht, auch

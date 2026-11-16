@@ -545,7 +545,8 @@ fn right_click_and_esc_abort_the_box_and_keep_the_selection() {
     assert!(!box_active(&s));
     assert_selected(&s, &old);
 
-    // Danach wirkt der Rechtsklick wieder wie sonst: Er leert die Auswahl.
+    // Danach wirkt der Rechtsklick wieder wie sonst: Mit gewählter Kurve öffnet er das Menü
+    // „Krümmungsanzeige ein/aus“ (Skizzen 11a) und lässt die Auswahl, Esc schließt das Menü ...
     play(
         &ctx,
         &mut s,
@@ -555,6 +556,24 @@ fn right_click_and_esc_abort_the_box_and_keep_the_selection() {
             (false, vec![button(a, RIGHT, false, false)]),
         ],
     );
+    assert_selected(&s, &old);
+    let menu = |s: &AppState| s.sketch_session.as_ref().unwrap().curve_menu.is_some();
+    assert!(menu(&s), "das Menü ist offen");
+    play(&ctx, &mut s, vec![(false, vec![esc()])]);
+    assert!(!menu(&s), "Esc schließt das Menü");
+    assert_selected(&s, &old);
+    // ... und ohne gewählte Kurve leert er wie bisher nur die Auswahl (nichts, kein Menü).
+    select(&mut s, &[]);
+    play(
+        &ctx,
+        &mut s,
+        vec![
+            (false, vec![moved(a)]),
+            (false, vec![button(a, RIGHT, true, false)]),
+            (false, vec![button(a, RIGHT, false, false)]),
+        ],
+    );
+    assert!(!menu(&s), "ohne Kurve kein Menü");
     assert_selected(&s, &[]);
 }
 

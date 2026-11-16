@@ -342,6 +342,60 @@ fn edge_typed_length_is_the_first_side_and_stage_two_chooses_the_side() {
     }
 }
 
+/// Fusion: Die Kante hat Länge, Tab zum Winkel, danach die Seitenzahl. Der Winkel gilt wie bei der
+/// Linie gegen die Waagerechte.
+#[test]
+fn polygon_edge_length_tab_angle_then_sides() {
+    let mut w = rig(ToolKind::PolygonEdge);
+    commit(&mut w, 0.0, 0.0).unwrap();
+    {
+        let (se, sf, _) = parts(&mut w);
+        se.sync_input(&sf.sketch);
+        let fields: Vec<F> = se.input.fields.iter().map(|f| f.kind).collect();
+        assert_eq!(fields, [F::Length, F::Angle]);
+        se.next_field(false);
+        assert_eq!(se.input.active, 1, "Tab geht zum Winkel");
+    }
+    type_in(&mut w, F::Length, "10");
+    type_in(&mut w, F::Angle, "30");
+    commit(&mut w, 40.0, 5.0).unwrap();
+    assert!(
+        dims(sk(&w)).is_empty(),
+        "die Werte warten bis zum Abschluss"
+    );
+    {
+        let (se, sf, _) = parts(&mut w);
+        se.sync_input(&sf.sketch);
+        let fields: Vec<F> = se.input.fields.iter().map(|f| f.kind).collect();
+        assert_eq!(fields, [F::Sides]);
+    }
+    type_in(&mut w, F::Sides, "6");
+    commit(&mut w, 4.0, -8.0).unwrap();
+    let sketch = sk(&w);
+    let cs = corners(sketch);
+    assert_eq!(cs.len(), 6);
+    assert!(cs[0].distance(at(0.0, 0.0)) < 1e-9);
+    let d = cs[1] - cs[0];
+    assert!((d.length() - 10.0).abs() < 1e-9, "{d:?}");
+    assert!((d.y.atan2(d.x).to_degrees() - 30.0).abs() < 1e-9, "{d:?}");
+    let ds = dims(sketch);
+    assert_eq!(
+        ds.len(),
+        2,
+        "Länge und Winkel, die Seitenzahl ist kein Maß: {ds:?}"
+    );
+    assert!(
+        ds.iter()
+            .any(|(_, k)| matches!(k, K::Distance(_, _, l) if (l - 10.0).abs() < 1e-9))
+    );
+    assert!(
+        ds.iter()
+            .any(|(_, k)| matches!(k, K::Angle(_, _, a) if (a.to_degrees() - 30.0).abs() < 1e-9))
+    );
+    assert_solved(sketch);
+    assert_regular(sketch, 6);
+}
+
 #[test]
 fn a_dimension_changed_in_the_app_keeps_the_shape() {
     for kind in KINDS {
@@ -438,11 +492,11 @@ fn a_bad_side_count_names_the_range_and_refuses_the_last_click() {
 }
 
 #[test]
-fn edge_takes_the_side_count_of_stage_one_into_stage_two() {
+fn edge_takes_its_side_count_in_stage_two() {
     let mut w = rig(ToolKind::PolygonEdge);
     commit(&mut w, 0.0, 0.0).unwrap();
-    type_in(&mut w, F::Sides, "5");
     commit(&mut w, 10.0, 0.0).unwrap();
+    type_in(&mut w, F::Sides, "5");
     {
         let (se, sf, _) = parts(&mut w);
         se.sync_input(&sf.sketch);

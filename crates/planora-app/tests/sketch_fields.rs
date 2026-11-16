@@ -21,7 +21,7 @@ use planora_project::library::Library;
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::CurveId;
 
-const SIZE: Vec2 = vec2(1400.0, 900.0);
+const SIZE: Vec2 = vec2(1400.0, 1080.0);
 const SMALL: Vec2 = vec2(800.0, 600.0);
 
 fn context() -> egui::Context {
@@ -610,7 +610,7 @@ fn pointer_on_sketch_fields_does_not_reach_the_sketch() {
         let foot = field(&c, "Fuß");
         for (name, p) in [
             ("Leiste", punkt.center()),
-            ("Skizze", field(&c, "Skizze").center()),
+            ("Skizze", field(&c, "Skizze").center_top() + vec2(0.0, 3.0)),
             ("Fuß", foot.left_center() + vec2(6.0, 0.0)),
             ("oben", field(&c, "oben").left_center() + vec2(6.0, 0.0)),
             ("Status", field(&c, "Status").center()),
@@ -1080,5 +1080,54 @@ fn foot_shows_warning_and_error_colours() {
         let foot = field(&c, "Fuß");
         let t = shot.find_in(foot, &text);
         assert_eq!(t.color, want, "{what}: Farbe von „{text}“");
+    }
+}
+
+// Handtest 2, Fund H2-1 -----------------------------------------------------------------------
+
+/// Bei 1920×1080 passt das Skizzenfeld mit offener, langer Liste „Unterbestimmte finden“ ohne
+/// äußeren Bildlauf; die Liste scrollt für sich (feste, begrenzte Höhe).
+#[test]
+fn sketch_field_with_open_under_list_needs_no_outer_scroll_at_1080() {
+    let size = vec2(1920.0, 1080.0);
+    let c = context();
+    let mut app = sketching(0);
+    {
+        let (se, sk) = state(&mut app).session_sketch_mut().unwrap();
+        for i in 0..40 {
+            let a = sk.add_point(f64::from(i) * 3.0, 0.0).unwrap();
+            let b = sk.add_point(f64::from(i) * 3.0 + 1.0, 5.0).unwrap();
+            sk.add_line(a, b).unwrap();
+        }
+        let first = sk.curves().next().unwrap().0;
+        se.selection = vec![Item::Curve(first)];
+        se.last_report = Some(sk.solve());
+        se.open_under_list();
+    }
+    settle(&c, &mut app, size);
+    let (content, inner) = sketch_panel::side_scroll_extent(&c).expect("Skizzenfeld gezeichnet");
+    assert!(
+        content <= inner + 0.5,
+        "Feld braucht äußeren Bildlauf: Inhalt {content}, sichtbar {inner}"
+    );
+}
+
+// Handtest 2, Fund H2-3 -----------------------------------------------------------------------
+
+#[test]
+fn arc_center_hint_names_no_fixed_direction() {
+    for key in ["sketch-tool-arc-hint", "sketch-kind-arc-center-hint"] {
+        for (lang, bad) in [("de", "Uhrzeigersinn"), ("en", "clockwise")] {
+            let path = format!(
+                "{}/../planora-i18n/languages/{lang}.ftl",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let text = std::fs::read_to_string(path).unwrap();
+            let line = text
+                .lines()
+                .find(|l| l.starts_with(&format!("{key} =")))
+                .unwrap();
+            assert!(!line.contains(bad), "{lang}/{key}: {line}");
+        }
     }
 }

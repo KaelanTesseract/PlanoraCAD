@@ -93,6 +93,10 @@ action_table! {
     DeleteSelection, "modell.loeschen", "action-delete", Model, [key(Key::Delete)];
     /// Startet den zuletzt abgeschlossenen wiederholbaren Befehl noch einmal.
     RepeatLast, "modell.befehl_wiederholen", "action-repeat-last", Model, [key(Key::Space)];
+    /// Fusion „Verlorene Projektionen verwalten“ (Skizzen 11a) für die gewählte Skizze; ohne
+    /// Vorgabetaste wie in Fusion, belegbar.
+    ManageLostProjections, "modell.verlorene_projektionen", "action-manage-lost-projections",
+        Model, [];
     /// Öffnet das Fenster „Tastenkürzel“ mit aktivem Suchfeld (Fusion „Shortcuts“); wie
     /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
     ShowShortcuts, "ansicht.tastenkuerzel", "action-show-shortcuts", Model, [key(Key::S)];
@@ -125,6 +129,9 @@ action_table! {
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Die
     // Esc, Enter und Entf der Skizze sind fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];
+    /// Fusion „Mittelpunktlinie“ (Skizzen 11a): zweite Art des Linienwerkzeugs, ohne Vorgabetaste
+    /// wie in Fusion, belegbar.
+    SketchMidpointLine, "skizze.mittelpunktlinie", "action-sketch-midpoint-line", Sketch, [];
     // Die Arten der Formen (`sketch_kinds::ToolKind`): Der Name ist der Name der Art, der Knopf
     // der Leiste heißt weiter nach der Form (`sketch_panel::tool_label`). Nur Rechteck und Kreis
     // haben eine Vorgabetaste.
@@ -188,6 +195,8 @@ action_table! {
     SketchExtend, "skizze.dehnen", "action-sketch-extend", Sketch, [];
     /// Fusion „Brechen“: ohne Vorgabetaste wie in Fusion, belegbar.
     SketchBreak, "skizze.brechen", "action-sketch-break", Sketch, [];
+    /// Fusion „Übergangskurve“ (Skizzen 11a): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchBlendCurve, "skizze.uebergangskurve", "action-sketch-blend-curve", Sketch, [];
     // Skizzen 4 (Ändern). F, O und M sind Annahmen nach Fusion; `F` kollidiert nicht mit dem
     // Verrunden des Modells, weil der Bereich ein anderer ist.
     /// Fusion „Skizzenrundung“ (Art Rundung der Liste).
@@ -237,6 +246,15 @@ action_table! {
     /// Wie der Knopf im Skizzenfeld: schaltet die ausgewählten Linien zwischen Mittellinie und
     /// normal um (ohne Vorgabetaste).
     SketchCenterline, "skizze.mittellinie", "action-sketch-centerline", Sketch, [];
+    /// Fusion „Krümmungsanzeige ein/aus“ (Toggle Curvature Display, Skizzen 11a): wie der Menüpunkt
+    /// im Rechtsklickmenü der gewählten Kurve; ohne Vorgabetaste wie in Fusion.
+    SketchToggleCurvature, "skizze.kruemmungsanzeige", "action-sketch-toggle-curvature", Sketch, [];
+    /// Fusion „Unterbestimmte finden“ (Find Under-Constrained, Skizzen 11a): öffnet die Liste im
+    /// Skizzenfeld; ohne Vorgabetaste wie in Fusion.
+    SketchFindUnderConstrained, "skizze.unterbestimmte_finden", "action-sketch-find-under", Sketch, [];
+    /// Fusion „Skizze berechnen“ (Compute Sketch, Skizzen 11a): wie der Knopf im Skizzenfeld;
+    /// ohne Vorgabetaste wie in Fusion.
+    SketchCompute, "skizze.berechnen", "action-sketch-compute", Sketch, [];
     /// Fusion „Verknüpfung aufheben“ (Skizzen 6): wie der Knopf im Skizzenfeld, nur mit
     /// ausgewählten projizierten Kurven; ohne Vorgabetaste wie in Fusion.
     SketchBreakLink, "skizze.verknuepfung_aufheben", "action-sketch-break-link", Sketch, [];
@@ -295,6 +313,7 @@ impl Action {
             Action::SketchOffset => Some(Tool::Offset),
             Action::SketchMoveCopy => Some(Tool::MoveCopy),
             Action::SketchScale => Some(Tool::Scale),
+            Action::SketchBlendCurve => Some(Tool::BlendCurve),
             Action::SketchDimension => Some(Tool::Dimension),
             Action::SketchText => Some(Tool::Text),
             _ => self.sketch_kind().map(crate::sketch_kinds::ToolKind::tool),

@@ -415,10 +415,16 @@ pub fn stored_value(kind: &ConstraintKind) -> Option<f64> {
     kind.value()
 }
 
-/// Anzuzeigender Wert eines Maßes: bei anzeigenden (`driven`) Maßen der gemessene Wert.
-pub fn shown_value(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> Option<f64> {
+/// Anzuzeigender Wert eines Maßes: bei anzeigenden (`driven`) Maßen der gemessene Wert, bei einem
+/// Winkel mit `supplement` der Gegenwinkel (Skizzen 11a, A7).
+pub fn shown_value(
+    sk: &Sketch,
+    kind: &ConstraintKind,
+    driven: bool,
+    supplement: bool,
+) -> Option<f64> {
     if driven {
-        sk.measure(kind).or_else(|| stored_value(kind))
+        crate::sketch_state::measure_kind(sk, kind, supplement).or_else(|| stored_value(kind))
     } else {
         stored_value(kind)
     }
@@ -466,6 +472,7 @@ pub fn kind_msg(kind: &ConstraintKind) -> crate::msg::Msg {
         K::EllipseAngle(..) => crate::msg!("sketch-constraint-ellipse-angle"),
         K::Collinear(..) => crate::msg!("sketch-constraint-collinear"),
         K::Smooth(..) => crate::msg!("sketch-constraint-smooth"),
+        K::EndTangent(..) => crate::msg!("sketch-constraint-end-tangent"),
         K::DistanceX(..) => crate::msg!("sketch-constraint-distance-x"),
         K::DistanceY(..) => crate::msg!("sketch-constraint-distance-y"),
         K::CenterlineDiameter(..) => crate::msg!("sketch-constraint-centerline-diameter"),
@@ -518,7 +525,7 @@ pub fn constraint_label(centers: &HashSet<PointId>, kind: &ConstraintKind) -> St
 
 /// Eintrag der Abhängigkeitsliste, z. B. „Abstand 40,00 mm“; anzeigende Maße in Klammern.
 pub fn constraint_name(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> String {
-    constraint_name_among(sk, &round_centers(sk), kind, driven)
+    constraint_name_among(sk, &round_centers(sk), kind, driven, false)
 }
 
 /// Wie [`constraint_name`] mit den Mitten aus [`round_centers`] (für die ganze Liste einmal).
@@ -527,9 +534,10 @@ pub fn constraint_name_among(
     centers: &HashSet<PointId>,
     kind: &ConstraintKind,
     driven: bool,
+    supplement: bool,
 ) -> String {
     let label = constraint_label(centers, kind);
-    match shown_value(sk, kind, driven) {
+    match shown_value(sk, kind, driven, supplement) {
         Some(v) if driven => format!("{label} ({})", value_text(kind, v)),
         Some(v) => format!("{label} {}", value_text(kind, v)),
         None => label,
@@ -599,6 +607,17 @@ pub fn overlay_text(
     kind: &ConstraintKind,
     driven: bool,
 ) -> String {
+    overlay_text_with(ctx, sk, kind, driven, false)
+}
+
+/// Wie [`overlay_text`]; `supplement`: das Winkelmaß misst den Gegenwinkel (Skizzen 11a, A7).
+pub fn overlay_text_with(
+    ctx: &egui::Context,
+    sk: &Sketch,
+    kind: &ConstraintKind,
+    driven: bool,
+    supplement: bool,
+) -> String {
     use ConstraintKind as K;
     let plain = match kind {
         K::Coincident(..)
@@ -613,7 +632,7 @@ pub fn overlay_text(
         K::Parallel(..) => parallel_symbol(ctx).to_string(),
         K::Perpendicular(..) => perpendicular_symbol(ctx),
         K::Equal(..) => "=".to_string(),
-        K::Tangent(..) => "T".to_string(),
+        K::Tangent(..) | K::EndTangent(..) => "T".to_string(),
         // Der Punkt im Ursprung ist „deckungsgleich mit dem Ursprung“, kein Festsetzen von Hand.
         K::Fixed(_, x, y) if *x == 0.0 && *y == 0.0 => return String::new(),
         K::Fixed3(_, x, y, z) if *x == 0.0 && *y == 0.0 && *z == 0.0 => return String::new(),
@@ -626,7 +645,7 @@ pub fn overlay_text(
     if !plain.is_empty() {
         return plain;
     }
-    let Some(v) = shown_value(sk, kind, driven) else {
+    let Some(v) = shown_value(sk, kind, driven, supplement) else {
         return String::new();
     };
     let text = match kind {
@@ -659,6 +678,8 @@ pub fn auto_marks(sk: &Sketch, se: &SketchSession) -> Vec<(DVec2, AutoConstraint
         return Vec::new();
     };
     let own = match (se.tool, se.pending.last().and_then(|&p| pos(sk, p))) {
+        // Mittelpunktlinie: Die Zeichen stehen in der Mitte der ganzen Linie, also an ihrer Mitte.
+        (Tool::Line, Some(start)) if se.is_midpoint_line() => start,
         (Tool::Line, Some(start)) => (start + cur.at) * 0.5,
         _ => cur.at,
     };
@@ -765,7 +786,7 @@ pub fn constraint_anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec3> {
             vec![curve_anchor3(sk, *a), curve_anchor3(sk, *b)]
         }
         // Am gemeinsamen (oder zusammengelegten) Ende ein Zeichen, nicht zwei übereinander.
-        K::Smooth(_, a, _, b) => {
+        K::Smooth(_, a, _, b) | K::EndTangent(_, a, _, b) => {
             let (pa, pb) = (pos3(sk, *a), pos3(sk, *b));
             match pa.zip(pb) {
                 Some((x, y)) if x.distance(y) <= sk.tolerance().linear => vec![pa],
@@ -1158,6 +1179,32 @@ pub fn insert_preview_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     out
 }
 
+/// Bildpunkte je Millimeter der Skizze in der Mitte der Ansicht (für die Mindestlänge der Zähne
+/// des Krümmungskamms); `None`, wenn die Ansicht sie dort nicht bestimmen kann.
+fn px_per_mm(map: &Mapper) -> Option<f64> {
+    let r = map.radius_at(map.rect.center())?;
+    (r.is_finite() && r > 0.0).then(|| f64::from(PICK_RADIUS_PX) / r)
+}
+
+/// Bildschirmlage für den Kamm: Punkte hinter der Kamera werden zu einem nicht endlichen Punkt,
+/// den die Zeichnung auslässt.
+fn comb_screen(map: &Mapper) -> impl Fn(DVec3) -> Pos2 + '_ {
+    |p| map.to_screen3(p).unwrap_or(Pos2::new(f32::NAN, f32::NAN))
+}
+
+/// Krümmungskämme der Skizze `sk` (Skizzen 11a) für die Ansicht `map`.
+fn comb_overlay(
+    sk: &Sketch,
+    map: &Mapper,
+    color: Color32,
+    hidden: &HashSet<CurveId>,
+) -> Vec<Shape> {
+    let Some(scale) = px_per_mm(map) else {
+        return Vec::new();
+    };
+    crate::curvature_dialog::comb_shapes_skipping(sk, comb_screen(map), scale, color, hidden)
+}
+
 /// Strichstärke fertiger Skizzen in der 3D-Ansicht (dünner als im Skizzen-Modus).
 const FINISHED_WIDTH: f32 = 1.2;
 /// Strichstärke der Konstruktionsgeometrie fertiger Skizzen.
@@ -1213,6 +1260,9 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             Some(FeatureKind::Sketch(def)) => def.copies.iter().filter_map(|c| c.curve()).collect(),
             _ => HashSet::new(),
         };
+        // Verlorene Projektionen gelb, mit „Übrige Geometrie abblenden“ alles andere gedämpft
+        // (Skizzen 11a).
+        let lost = crate::lost_projections_dialog::marks(state, id);
         // Eine fertige Skizze hat keine Auswahl: Griffe ohne Abhängigkeit sind nicht zu sehen (B6).
         let handles_hidden = crate::sketch_handles::hidden_handles_of(sk, &[]);
         for (c, data) in sk.curves() {
@@ -1232,7 +1282,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 sketch: id,
                 curve: c,
             });
-            let color = if marked {
+            let base = if marked {
                 col.selected
             } else if projected.contains(&c) {
                 col.projected
@@ -1241,11 +1291,20 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             } else {
                 col.finished
             };
+            let color = lost_ink(
+                base,
+                marked,
+                lost.curves.contains(&c),
+                lost.dim_rest,
+                col.lost,
+            );
             let stroke = Stroke::new(width, color);
             for path in paths {
                 out.extend(style_shapes(path, stroke, data.style()));
             }
         }
+        // Krümmungskamm (Skizzen 11a), auch außerhalb des Skizzen-Modus.
+        out.extend(comb_overlay(sk, &map, col.comb, &handles_hidden.curves));
         // Kontrollpunktrahmen (Skizzen 9) dünn und gestrichelt.
         let frame_stroke = Stroke::new(FINISHED_CONSTRUCTION_WIDTH, col.construction);
         for line in frame_polygons3(sk) {
@@ -1453,8 +1512,50 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
         cursor_after_fields(rect, state, pointer);
     }
     draw(ui, rect, state, response.hover_pos());
+    show_curve_menu(ui, state);
     crate::sketch_triad::show(ui, state);
     response.hovered()
+}
+
+/// Rechtsklickmenü der gewählten Kurve (Skizzen 11a): „Krümmungsanzeige ein/aus“, gedämpft, wenn
+/// nur Linien gewählt sind. Ein Klick auf den Punkt führt ihn aus; ein Linksklick daneben schließt
+/// das Menü (Esc und ein neuer Rechtsklick über die Sitzung).
+fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
+    let Some(at) = state.sketch_session.as_ref().and_then(|se| se.curve_menu) else {
+        return;
+    };
+    let can = state
+        .session_sketch()
+        .zip(state.sketch_session.as_ref())
+        .is_some_and(|(sk, se)| se.can_toggle_curvature(sk));
+    let mut run = false;
+    let response = theme::field_area(egui::Id::new("planora-sketch-curve-menu"), pos2(at.0, at.1))
+        .order(egui::Order::Foreground)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.scope(|ui| {
+                    theme::menu_style(ui.style_mut());
+                    let item = ui.add_enabled(
+                        can,
+                        egui::Button::new(tr!("action-sketch-toggle-curvature")),
+                    );
+                    if !can {
+                        item.on_disabled_hover_text(tr!("sketch-comb-select-curve"));
+                    } else if item.clicked() {
+                        run = true;
+                    }
+                });
+            });
+        });
+    let outside = ui.input(|i| i.pointer.primary_pressed())
+        && ui
+            .input(|i| i.pointer.interact_pos())
+            .is_some_and(|p| !response.response.rect.contains(p));
+    if run {
+        crate::curvature_dialog::toggle(state);
+    } else if outside && let Some(se) = state.sketch_session.as_mut() {
+        se.curve_menu = None;
+    }
 }
 
 /// Die Abbildung auf die Skizze im Rechteck `rect` für dieses Bild.
@@ -1920,7 +2021,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 .is_some_and(|(p, l)| sketch_pattern::pattern_hit(l, p).is_some()));
     // Ein Klick auf ein Feld der Anordnung (die Felder nehmen keine Mausereignisse an) schaltet
     // kein Exemplar darunter (Handtest Skizzen 5). Die anderen Befehle führen ihre Felder neben
-    // dem Zeiger, dort trifft ein Klick nie ein Feld.
+    // dem Zeiger: Sie nehmen keinen Klick an, er wirkt auf die Zeichnung (Skizzen 11a, A9, Fusion).
     let click_on_field = (primary_click || response.double_clicked() || response.triple_clicked())
         && state.sketch_session.as_ref().is_some_and(|se| {
             se.runs_pattern()
@@ -2144,6 +2245,8 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 
     // Klicks
     let mut project_at = None;
+    // Klick der Wahl „Neu verknüpfen“ (Skizzen 11a).
+    let mut relink_at = None;
     // Doppelklick auf einen Maßtext im Auswahlwerkzeug: öffnet sein Feld wie die Liste (das Feld
     // braucht den ganzen Stand und öffnet darum erst nach der Eingabe dieses Bilds).
     let mut open_label = None;
@@ -2155,6 +2258,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         // Das Loslassen nach dem Abbruch ist kein Klick.
     } else if click_on_field {
         // Der Klick gehört dem Feld der Anordnung.
+    } else if se.relink.is_some() && response.clicked_by(PointerButton::Primary) {
+        // „Neu verknüpfen“ (Skizzen 11a): Der Klick wählt die neue Herkunft in der 3D-Szene wie
+        // „Projizieren“ (Ruling F9), auch wo der Sehstrahl die Skizzenebene nicht trifft.
+        relink_at = pointer;
     } else if (response.double_clicked() || response.triple_clicked()) && !se.click_after_flyout {
         let label = pointer
             .filter(|_| se.tool == Tool::Select)
@@ -2278,7 +2385,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         se.click_after_flyout = false;
     }
     if response.clicked_by(PointerButton::Secondary) && !se.box_aborted {
-        se.cancel(&mut sf.sketch);
+        // Im Auswahlwerkzeug mit gewählter Kurve öffnet der Rechtsklick das Menü, sonst bricht er
+        // ab wie bisher.
+        let at = pointer.unwrap_or(Pos2::ZERO);
+        se.secondary_click(&mut sf.sketch, (at.x, at.y));
     }
     if !ui.input(|i| i.pointer.any_down()) {
         se.box_aborted = false;
@@ -2329,7 +2439,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         // In der Anordnung gehört die Auswahl der Vorlage; Entf löscht dort nichts. Ebenso bei
         // offenem Abschnitt „Text“: Beim Ändern ist der Text selbst gewählt.
         if delete && !gesture && !se.runs_pattern() && !se.runs_text() {
-            se.delete_selection(&mut sf.sketch);
+            se.delete_selection_in(sf);
         }
     }
     // Vorschau von Stutzen, Dehnen und Brechen unter dem Mauszeiger (nach den Änderungen
@@ -2345,6 +2455,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let tool = se.tool;
     let kind = se.kinds.project;
     let settings = se.project;
+    let relink_family = se.relink.as_ref().map(|r| r.family.clone());
 
     // Projizieren: Kante oder Fläche in der 3D-Szene wählen; mit dem Filter „Körper“ zählt der
     // Körper unter dem Zeiger (die Markierung zeigt, was der Zeiger trifft). Schneiden und
@@ -2362,12 +2473,42 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY)
         }
     };
-    let hover = if tool == Tool::ProjectEdge {
+    // „Neu verknüpfen“: Eingezogene 3D-Geometrie wählt wie „3D-Geometrie einbeziehen“ (Ecken,
+    // Ebenen, Achsen, Ursprung; Ruling T18-1), alles andere wie „Projizieren“ (Ruling F9).
+    let relink_filter = |family: &planora_feature::CopySource| {
+        if crate::state::relink_picks_like_include(family) {
+            PickFilter::INCLUDE
+        } else {
+            PickFilter::GEOMETRY
+        }
+    };
+    let hover = if let Some(family) = relink_family.as_ref() {
+        pointer.and_then(|p| state.pick_with(map.local(p), map.viewport(), relink_filter(family)))
+    } else if tool == Tool::ProjectEdge {
         pointer.and_then(|p| pick_at(state, p))
     } else {
         None
     };
     state.set_hover(hover);
+    if let (Some(p), Some(family)) = (relink_at, relink_family.as_ref()) {
+        let picked = state.pick_with(map.local(p), map.viewport(), relink_filter(family));
+        let done = if crate::state::relink_picks_like_include(family) {
+            include_pick(state, &map, p, picked).map(|pick| {
+                let _ = state.relink_include_pick(pick);
+            })
+        } else {
+            let curve = sketch_curve_under(state, &map, p);
+            relink_target(family, picked, curve).map(|t| {
+                let _ = state.relink_pick(t);
+            })
+        };
+        if done.is_none()
+            && let Some(se) = state.sketch_session.as_mut()
+        {
+            se.message = Some(crate::msg!("lost-relink-wrong-pick"));
+        }
+        return;
+    }
     if let Some(id) = open_label {
         crate::sketch_panel::open_existing_dimension_editor(ui.ctx(), state, id);
     }
@@ -2567,6 +2708,26 @@ pub fn project_target(pick: Pick, filter: ProjectFilter) -> Option<ProjectTarget
     })
 }
 
+/// Was ein Klick der Wahl „Neu verknüpfen“ (Skizzen 11a) für die alte Herkunft `family` wählt:
+/// dieselbe Auswahl wie „Projizieren“ mit „Angegebene Elemente“ (Ruling F9). Kante oder Fläche
+/// unter dem Zeiger (`picked`); bei einer Skizzenkurve als Herkunft die Kurve einer früheren
+/// Skizze unter dem Zeiger (`curve`). `None`, wenn nichts Passendes getroffen ist.
+pub fn relink_target(
+    family: &planora_feature::CopySource,
+    picked: Option<Pick>,
+    curve: Option<(FeatureId, CurveId)>,
+) -> Option<ProjectTarget> {
+    use planora_feature::{CopySource, IncludeRef};
+    let wants_curve = matches!(
+        family,
+        CopySource::SketchCurve { .. } | CopySource::Include(IncludeRef::SketchCurve { .. })
+    );
+    if wants_curve {
+        return curve.map(|(s, c)| ProjectTarget::SketchCurve(s, c));
+    }
+    picked.and_then(|p| project_target(p, ProjectFilter::Entities))
+}
+
 /// Ist der Punkt vollständig bestimmt (laut letztem Bericht)?
 fn point_determined(report: Option<&SolveReport>, p: PointId) -> bool {
     report.is_some_and(|r| r.status == SolveStatus::Solved && !r.free_points.contains(&p))
@@ -2581,6 +2742,8 @@ fn curve_determined(report: Option<&SolveReport>, c: CurveId) -> bool {
 struct Projected {
     curves: HashSet<CurveId>,
     points: HashSet<PointId>,
+    /// Verlorene Projektionen (gelb) und „Übrige Geometrie abblenden“ (Skizzen 11a).
+    lost: crate::lost_projections_dialog::LostMarks,
 }
 
 impl Projected {
@@ -2593,8 +2756,43 @@ impl Projected {
             .flat_map(|d| d.kind.points())
             .chain(draft.copies.iter().filter_map(|c| c.point()))
             .collect();
-        Projected { curves, points }
+        Projected {
+            curves,
+            points,
+            lost: Default::default(),
+        }
     }
+
+    /// Wie [`Projected::of`] für die offene Skizze, mit den verlorenen Projektionen und dem
+    /// Abblenden des Dialogs „Verlorene Projektionen verwalten“.
+    fn of_open(state: &AppState, draft: &SketchFeature) -> Projected {
+        let mut p = Projected::of(draft);
+        if let Some(id) = state.open_sketch_id() {
+            p.lost = crate::lost_projections_dialog::marks(state, id);
+        }
+        p
+    }
+}
+
+/// Farbe mit verlorenen Projektionen (gelb) und „Übrige Geometrie abblenden“ (Skizzen 11a):
+/// Gewähltes hat Vorrang, dann die verlorene Geometrie; alles andere ist mit dem Haken gedämpft.
+fn lost_ink(base: Color32, selected: bool, lost: bool, dim_rest: bool, col: Color32) -> Color32 {
+    if selected {
+        base
+    } else if lost {
+        col
+    } else if dim_rest {
+        dimmed(base)
+    } else {
+        base
+    }
+}
+
+/// Anteil der Deckkraft, mit dem „Bestimmte ausblenden“ voll bestimmte Geometrie zeichnet.
+const DIMMED_ALPHA: f32 = 0.2;
+
+fn dimmed(c: Color32) -> Color32 {
+    c.gamma_multiply(DIMMED_ALPHA)
 }
 
 /// Farbe einer Kurve der offenen Skizze (ohne Aufhellung unter dem Zeiger): gewählt (auch die
@@ -2609,9 +2807,32 @@ fn curve_ink(
 ) -> Color32 {
     let selected = se.selection.contains(&Item::Curve(c))
         || se.pending_curves.contains(&c)
+        || se.blend.first.is_some_and(|e| e.curve == c)
         || dim_picked(se, Item::Curve(c));
+    let base = curve_ink_base(col, se, sk, projected, c, selected);
+    lost_ink(
+        base,
+        selected,
+        projected.lost.curves.contains(&c),
+        projected.lost.dim_rest,
+        col.lost,
+    )
+}
+
+/// [`curve_ink`] ohne verlorene Projektionen und Abblenden.
+fn curve_ink_base(
+    col: &theme::SketchColors,
+    se: &SketchSession,
+    sk: &Sketch,
+    projected: &Projected,
+    c: CurveId,
+    selected: bool,
+) -> Color32 {
     if selected {
         col.selected
+    } else if se.hides_determined() && curve_determined(se.last_report.as_ref(), c) {
+        // Haken „Bestimmte ausblenden“ (Skizzen 11a): voll bestimmte Geometrie gedämpft.
+        dimmed(col.determined)
     } else if projected.curves.contains(&c) {
         col.projected
     } else if sk.curve(c).is_some_and(|d| d.construction) {
@@ -2646,15 +2867,24 @@ fn point_ink(
     let selected = se.selection.contains(&Item::Point(p))
         || se.is_dragged_point(p)
         || dim_picked(se, Item::Point(p));
-    if selected {
+    let base = if selected {
         col.selected
+    } else if se.hides_determined() && point_determined(se.last_report.as_ref(), p) {
+        dimmed(col.determined)
     } else if projected.points.contains(&p) {
         col.projected
     } else if point_determined(se.last_report.as_ref(), p) {
         col.determined
     } else {
         col.free
-    }
+    };
+    lost_ink(
+        base,
+        selected,
+        projected.lost.points.contains(&p),
+        projected.lost.dim_rest,
+        col.lost,
+    )
 }
 
 /// Farbe, in der die Ansicht die Kurve `c` der offenen Skizze zeichnet (ohne Aufhellung unter
@@ -2662,7 +2892,13 @@ fn point_ink(
 pub fn curve_color(state: &AppState, c: CurveId) -> Color32 {
     let col = colors(state.dark);
     match (state.sketch_session.as_ref(), state.sketch_draft.as_ref()) {
-        (Some(se), Some(draft)) => curve_ink(&col, se, &draft.sketch, &Projected::of(draft), c),
+        (Some(se), Some(draft)) => curve_ink(
+            &col,
+            se,
+            &draft.sketch,
+            &Projected::of_open(state, draft),
+            c,
+        ),
         _ => col.free,
     }
 }
@@ -2671,7 +2907,7 @@ pub fn curve_color(state: &AppState, c: CurveId) -> Color32 {
 pub fn point_color(state: &AppState, p: PointId) -> Color32 {
     let col = colors(state.dark);
     match (state.sketch_session.as_ref(), state.sketch_draft.as_ref()) {
-        (Some(se), Some(draft)) => point_ink(&col, se, &Projected::of(draft), p),
+        (Some(se), Some(draft)) => point_ink(&col, se, &Projected::of_open(state, draft), p),
         _ => col.free,
     }
 }
@@ -2682,7 +2918,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         return;
     };
     let sk = &draft.sketch;
-    let projected = Projected::of(draft);
+    let projected = Projected::of_open(state, draft);
     let painter = ui.painter_at(rect);
     let col = colors(state.dark);
     let map = Mapper {
@@ -2785,6 +3021,19 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
     }
 
+    // Krümmungskamm (Skizzen 11a) und die Vorschau des offenen Dialogs „Krümmungsanzeige
+    // einrichten“; die Vorschau ändert die Skizze nicht.
+    painter.extend(comb_overlay(sk, &map, col.comb, &hidden));
+    if let (Some(d), Some(scale)) = (state.curvature_dialog.as_ref(), px_per_mm(&map)) {
+        painter.extend(crate::curvature_dialog::preview_shapes(
+            sk,
+            d,
+            comb_screen(&map),
+            scale,
+            col.comb,
+        ));
+    }
+
     // Hilfslinien der gewählten Kurve (Kontrollpolygon, Kegelschnitt), gestrichelt unter den Punkten.
     for line in curve_guides3(se, sk) {
         for path in map.paths3(&line) {
@@ -2880,9 +3129,38 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
 
     // Stutzen/Brechen: das Stück rot; Dehnen: der Weg zum neuen Ende rot gestrichelt.
     if let Some(pl) = &se.hover_preview {
-        let stroke = Stroke::new(CURVE_WIDTH + 1.0, col.trim_highlight);
+        // Übergangskurve: die Vorschau der neuen Kurve in der Vorschaufarbe, nicht rot wie das
+        // Stück, das Stutzen entfernt.
+        let ink = if se.tool == Tool::BlendCurve {
+            col.preview
+        } else {
+            col.trim_highlight
+        };
+        let stroke = Stroke::new(CURVE_WIDTH + 1.0, ink);
         for path in map.paths(pl) {
-            draw_path(&painter, path, stroke, se.tool == Tool::Extend);
+            draw_path(
+                &painter,
+                path,
+                stroke,
+                matches!(se.tool, Tool::Extend | Tool::BlendCurve),
+            );
+        }
+    }
+    // Übergangskurve: gewähltes und überfahrenes Ende hervorgehoben (Kurve kräftig, Ende als Ring).
+    if se.tool == Tool::BlendCurve {
+        for (end, ink) in [
+            (se.blend.hover, col.preview),
+            (se.blend.first, col.selected),
+        ] {
+            let Some(end) = end else {
+                continue;
+            };
+            for path in curve_screen_paths(sk, end.curve, &map) {
+                draw_path(&painter, path, Stroke::new(CURVE_WIDTH + 1.0, ink), false);
+            }
+            if let Some(at) = point_screen(sk, end.point, &map) {
+                painter.circle_stroke(at, POINT_PX + 4.0, Stroke::new(2.0, ink));
+            }
         }
     }
 
@@ -2903,7 +3181,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let text = match mark {
             // Nur als Schlüssel für „je Kurve und Art einmal“; gezeichnet wird das Symbol.
             Some(m) => format!("{m:?}"),
-            None => overlay_text(ui.ctx(), sk, &c.kind, c.driven),
+            None => overlay_text_with(ui.ctx(), sk, &c.kind, c.driven, c.supplement()),
         };
         if text.is_empty() {
             continue;
@@ -3069,7 +3347,7 @@ fn dim_picked(se: &SketchSession, item: Item) -> bool {
 /// Text der Vorschau der Skizzenbemaßung, wie das Maß später in der Ansicht steht
 /// (etwa „40,00 mm“, „Ø 30,00 mm“, „R 5,00 mm“, „30,0°“); ein anzeigendes wie in der Ansicht.
 pub fn dimension_text(ctx: &egui::Context, sk: &Sketch, plan: &DimPlan) -> String {
-    overlay_text(ctx, sk, &plan.kind, plan.driven)
+    overlay_text_with(ctx, sk, &plan.kind, plan.driven, plan.supplement)
 }
 
 /// Hilfsstriche der Vorschau der Skizzenbemaßung (Skizzenkoordinaten): waagerecht und senkrecht
@@ -3398,6 +3676,7 @@ fn draw_preview3(
         }
     }
     let shape: Vec<DVec3> = match (se.tool, pending.as_slice()) {
+        (Tool::Line, [.., last]) if se.is_midpoint_line() => vec![*last * 2.0 - cur.at, cur.at],
         (Tool::Line, [.., last]) => vec![*last, cur.at],
         (Tool::Spline, [_, ..]) => pending.iter().copied().chain([cur.at]).collect(),
         _ => Vec::new(),
@@ -3528,6 +3807,7 @@ fn draw_preview(
             .collect()
     };
     let shape: Vec<DVec2> = match (se.tool, pending.as_slice(), se.pending_pos.as_slice()) {
+        (Tool::Line, [.., last], _) if se.is_midpoint_line() => vec![*last * 2.0 - cursor, cursor],
         (Tool::Line, [.., last], _) => vec![*last, cursor],
         (Tool::Rectangle, _, [a, ..]) => vec![
             *a,
@@ -3543,11 +3823,13 @@ fn draw_preview(
             let a0 = (*s - *m).y.atan2((*s - *m).x);
             let d = cursor - *m;
             let a1 = d.y.atan2(d.x);
-            let sweep = (a1 - a0).rem_euclid(TAU);
+            // Im Uhrzeigersinn gezogen läuft die Vorschau andersherum (wie der Bogen).
+            let sign = if se.arc_cw() { -1.0 } else { 1.0 };
+            let sweep = (sign * (a1 - a0)).rem_euclid(TAU);
             let steps = ((sweep / TAU * STEPS_PER_TURN as f64).ceil() as usize).max(1);
             (0..=steps)
                 .map(|k| {
-                    let t = a0 + sweep * k as f64 / steps as f64;
+                    let t = a0 + sign * sweep * k as f64 / steps as f64;
                     *m + DVec2::new(t.cos(), t.sin()) * r
                 })
                 .collect()

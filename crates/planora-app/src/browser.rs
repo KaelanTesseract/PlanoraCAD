@@ -288,6 +288,22 @@ pub fn sketch_row_warning(state: &AppState, id: FeatureId) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Hat die Skizzenzeile `id` das rote Schloss (Skizzen 11a, A4)? Für die offene Skizze zählt der
+/// Bericht der Sitzung (er folgt jeder Änderung), sonst der letzte Rechenstand des Features. Die
+/// Zeitleiste zeigt kein Schloss.
+pub fn sketch_row_locked(state: &AppState, id: FeatureId) -> bool {
+    if let Some(se) = state.sketch_session.as_ref().filter(|s| s.sketch == id)
+        && let Some(r) = &se.last_report
+        && let Some(sk) = state.session_sketch()
+    {
+        return sk.is_locked(r);
+    }
+    state
+        .document
+        .feature(id)
+        .is_some_and(|f| f.sketch_locked())
+}
+
 /// Text für die Statuszeile: der Fehler des ersten Features mit Status `Error`.
 pub fn status_text(state: &AppState) -> Option<String> {
     state
@@ -491,6 +507,8 @@ enum Action {
     PickStandard(StandardPlane),
     /// „Skizzenebene neu festlegen“ für diese Skizze (Wahlmodus).
     RedefinePlane(FeatureId),
+    /// „Verlorene Projektionen verwalten“ dieser Skizze (Skizzen 11a).
+    ManageLostProjections(FeatureId),
     /// „Kalibrieren“ dieser Leinwand (Klickmodus in der Ansicht).
     Calibrate(FeatureId),
 }
@@ -507,6 +525,8 @@ struct SketchRow {
     hidden: bool,
     /// Das Auge der Zeile selbst steht auf „aus“.
     own_hidden: bool,
+    /// Voll bestimmt: rotes Schloss (Skizzen 11a, A4).
+    locked: bool,
 }
 
 /// Angaben einer Körperzeile: ein sichtbarer Körper oder, wenn von einem Körper gerade nichts
@@ -1307,6 +1327,7 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             warning: sketch_row_warning(state, f.id),
             hidden: state.is_feature_hidden(f.id),
             own_hidden: state.own_feature_hidden(f.id),
+            locked: sketch_row_locked(state, f.id),
         })
         .collect();
     if rows.is_empty() {
@@ -1327,6 +1348,8 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         }
         // Mit Warnung: Warnzeichen über der Ecke des Symbols, der Text im Hinweis (wie Fusion).
         let warned = r.warning.is_some();
+        let locked = r.locked;
+        let lock_color = theme::palette(ui.visuals().dark_mode).error;
         let resp = row_lead(
             ui,
             0.0,
@@ -1346,11 +1369,21 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
                     );
                     paint_source(p, badge, IconSource::Font(Icon::Warning), warn_color);
                 }
+                // Rotes Schloss unten links über dem Symbol (die Warnung sitzt unten rechts).
+                if locked {
+                    let size = rect.width() * WARN_BADGE;
+                    let badge = egui::Rect::from_min_size(
+                        rect.left_bottom() + vec2(-size * 0.25, -size * 0.75),
+                        vec2(size, size),
+                    );
+                    paint_source(p, badge, IconSource::Font(Icon::Lock), lock_color);
+                }
             },
         )
         .on_hover_text(
             reason
                 .or(r.warning.clone())
+                .or_else(|| locked.then(|| tr!("tree-sketch-locked")))
                 .unwrap_or_else(|| tr!("tree-sketch-hint")),
         );
         // Die geöffnete Skizze bleibt sichtbar: ohne Auge.
@@ -1368,20 +1401,21 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         }
         // Neue Körper aus der Skizze eines zurückgesetzten Körpers sind gesperrt.
         let lock = crate::history_bar::lock_reason(state, &[id]);
+        let lost = crate::lost_projections_dialog::offers(state, id);
         resp.context_menu(|ui| {
-            feature_menu(ui, action, id, r.suppressed, Some(lock));
+            feature_menu(ui, action, id, r.suppressed, Some((lock, lost)));
         });
     }
 }
 
 /// Kontextmenü einer Körper- oder Skizzenzeile für das Feature `id`. `sketch` (nur bei
-/// Skizzen): die Sperre für neue Körper aus ihr.
+/// Skizzen): die Sperre für neue Körper aus ihr und ob sie verlorene Projektionen hat.
 fn feature_menu(
     ui: &mut egui::Ui,
     action: &mut Option<Action>,
     id: FeatureId,
     suppressed: bool,
-    sketch: Option<Option<String>>,
+    sketch: Option<(Option<String>, bool)>,
 ) {
     let pick = |action: &mut Option<Action>, a: Action, ui: &mut egui::Ui| {
         *action = Some(a);
@@ -1402,7 +1436,7 @@ fn feature_menu(
         pick(action, Action::Edit(id), ui);
     }
     rename_and_suppress(ui, action, id, suppressed);
-    if let Some(lock) = sketch {
+    if let Some((lock, lost)) = sketch {
         ui.separator();
         for (label, act, key) in [
             (
@@ -1431,6 +1465,16 @@ fn feature_menu(
         );
         if ui.add(redefine).clicked() {
             pick(action, Action::RedefinePlane(id), ui);
+        }
+        // Nur an Skizzen mit verlorenen Projektionen (Skizzen 11a).
+        if lost {
+            let manage = key_button(
+                &tr!("action-manage-lost-projections"),
+                crate::keymap::Action::ManageLostProjections,
+            );
+            if ui.add(manage).clicked() {
+                pick(action, Action::ManageLostProjections(id), ui);
+            }
         }
     }
     delete_entry(ui, action, id);
@@ -1738,6 +1782,9 @@ fn run(state: &mut AppState, action: Action) {
         }
         Action::RedefinePlane(id) => {
             let _ = state.start_redefine_sketch_plane(id);
+        }
+        Action::ManageLostProjections(id) => {
+            state.open_lost_projections(id);
         }
         // Fehler (offene Skizze, ausgeblendet) stehen in der Meldung.
         Action::Calibrate(id) => {

@@ -243,6 +243,18 @@ impl CopySource {
         }
     }
 
+    /// Gleiche Familie für „Neu verknüpfen“ (Skizzen 11a, Fusion „Relink“): Kante ↔ Kante,
+    /// Schnitt ↔ Schnitt, Silhouette ↔ Silhouette, Einbeziehen mit gleicher [`IncludeRef`]-Art,
+    /// Skizzenkurve ↔ Skizzenkurve, „Auf Fläche projizieren“ ↔ dasselbe, Schnittkurve ↔
+    /// Schnittkurve.
+    pub fn same_family(&self, other: &CopySource) -> bool {
+        use std::mem::discriminant;
+        match (self, other) {
+            (CopySource::Include(a), CopySource::Include(b)) => discriminant(a) == discriminant(b),
+            _ => discriminant(self) == discriminant(other),
+        }
+    }
+
     /// Eine der Arten aus Skizzen 10 (Format 20)?
     pub fn is_3d_kind(&self) -> bool {
         !matches!(
@@ -352,8 +364,13 @@ impl SketchFeature {
     /// Löst die Verknüpfung der projizierten Kurve `curve` mit ihrer Herkunft: Die Kurve folgt
     /// dem Körper nicht mehr, ihre `Fixed`-Werte bleiben. `true`, wenn es einen Eintrag gab.
     pub fn break_link(&mut self, curve: CurveId) -> bool {
+        self.break_link_target(CopyTarget::Curve(curve))
+    }
+
+    /// Wie [`SketchFeature::break_link`] für ein beliebiges Ziel (Kurve oder Punkt).
+    pub fn break_link_target(&mut self, target: CopyTarget) -> bool {
         let before = self.copies.len();
-        self.copies.retain(|c| c.target != CopyTarget::Curve(curve));
+        self.copies.retain(|c| c.target != target);
         self.copies.len() != before
     }
 
@@ -575,21 +592,17 @@ impl FeatureKind {
         }
     }
 
-    /// Alle Features, auf die dieses verweist; aufsteigend sortiert, ohne Doppelte.
+    /// Die harten Bezüge: alle Features, auf die dieses verweist und ohne die es nicht
+    /// bestehen kann; aufsteigend sortiert, ohne Doppelte. Bei Skizzen nur die Herkunft der
+    /// Skizzenebene (Fläche, Konstruktionsebene); die Herkunft der Kopien ist ein schwacher
+    /// Bezug ([`FeatureKind::weak_dependencies`], Skizzen 11a A5).
     pub fn dependencies(&self) -> Vec<FeatureId> {
         let mut deps = match self {
-            FeatureKind::Sketch(s) => {
-                let mut d = Vec::new();
-                match &s.plane {
-                    SketchPlane::Standard(_) => {}
-                    SketchPlane::OnFace(r) => d.push(FeatureId(r.origin)),
-                    SketchPlane::OnPlane(id) => d.push(*id),
-                }
-                for c in &s.copies {
-                    d.extend(c.source.origins());
-                }
-                d
-            }
+            FeatureKind::Sketch(s) => match &s.plane {
+                SketchPlane::Standard(_) => Vec::new(),
+                SketchPlane::OnFace(r) => vec![FeatureId(r.origin)],
+                SketchPlane::OnPlane(id) => vec![*id],
+            },
             FeatureKind::Box { .. }
             | FeatureKind::Cylinder { .. }
             | FeatureKind::Sphere { .. }
@@ -612,6 +625,33 @@ impl FeatureKind {
             FeatureKind::Plane(p) => p.dependencies(),
             FeatureKind::Canvas(c) => c.dependencies(),
         };
+        deps.sort();
+        deps.dedup();
+        deps
+    }
+
+    /// Die schwachen Bezüge (Skizzen 11a A5): bei Skizzen die Herkunft aller Kopien
+    /// (Projektion, Schnitt, Silhouette, einbezogene 3D-Geometrie, „Auf Fläche projizieren“,
+    /// Schnittkurve), aufsteigend sortiert, ohne Doppelte; sonst leer. Fehlt die Quelle, steht sie
+    /// hinter dem Feature, ist sie unterdrückt oder fehlerhaft, ist der Bezug verloren (Warnung,
+    /// die Kurve bleibt stehen), kein Fehler. Die losen Verweise ([`CopySource::loose_origins`])
+    /// gehören nicht dazu.
+    pub fn weak_dependencies(&self) -> Vec<FeatureId> {
+        let FeatureKind::Sketch(s) = self else {
+            return Vec::new();
+        };
+        let mut deps: Vec<FeatureId> = s.copies.iter().flat_map(|c| c.source.origins()).collect();
+        deps.sort();
+        deps.dedup();
+        deps
+    }
+
+    /// Harte und schwache Bezüge zusammen ([`FeatureKind::dependencies`] und
+    /// [`FeatureKind::weak_dependencies`]); aufsteigend sortiert, ohne Doppelte. Für Hervorhebung
+    /// und Sperren im Verlauf.
+    pub fn all_dependencies(&self) -> Vec<FeatureId> {
+        let mut deps = self.dependencies();
+        deps.extend(self.weak_dependencies());
         deps.sort();
         deps.dedup();
         deps
@@ -677,6 +717,10 @@ pub(crate) struct FeatureResult {
     pub(crate) key: Vec<u64>,
     /// Warnung der Berechnung (siehe [`Feature::warning`]).
     pub(crate) warning: Option<String>,
+    /// Ziele der Kopien mit verlorenem Bezug (siehe [`Feature::lost_projections`]).
+    pub(crate) lost: Vec<CopyTarget>,
+    /// Voll bestimmte, nicht leere Skizze (siehe [`Feature::sketch_locked`]).
+    pub(crate) locked: bool,
     /// Koordinatensystem einer Konstruktionsebene (siehe [`Document::plane_frame`]).
     pub(crate) plane: Option<Frame>,
     /// Koordinatensystem des Trägers einer Leinwand (siehe [`Document::canvas_frame`]); bei
@@ -718,6 +762,20 @@ impl Feature {
     /// Skizzenkurven.
     pub fn warning(&self) -> Option<&str> {
         self.warning.as_deref()
+    }
+
+    /// Ziele der Kopien einer Skizze, deren Bezug bei der letzten Berechnung verloren war (die
+    /// Kurven der Warnung „verlorene Projektion“), in der Reihenfolge der Kopien; leer ohne
+    /// Ergebnis und für andere Features.
+    pub fn lost_projections(&self) -> &[CopyTarget] {
+        self.result.as_ref().map_or(&[], |r| r.lost.as_slice())
+    }
+
+    /// Ist die Skizze nach der letzten Berechnung voll bestimmt (und nicht leer)? Das rote
+    /// Schloss im Browser (Skizzen 11a, A4); `false` für andere Features und ohne Ergebnis.
+    pub fn sketch_locked(&self) -> bool {
+        matches!(self.kind, FeatureKind::Sketch(_))
+            && self.result.as_ref().is_some_and(|r| r.locked)
     }
 
     /// Stand der Parameter (und der Unterdrückung); ändert sich bei jeder solchen Änderung.
@@ -779,6 +837,12 @@ pub struct Document {
     pub(crate) param_values: Vec<f64>,
     /// Nächste zu vergebende Parameterkennung (beginnt bei 1).
     pub(crate) next_param: u64,
+    /// Ergebnis-Skizzen des Dokuments vor einem vollen Neubau ([`Document::restore`]) je
+    /// Feature: Rückfall für den letzten berechneten Stand, damit eine Kurve mit verlorenem
+    /// Bezug an ihrer zuletzt nachgeführten Lage bleibt (Skizzen 11a, Ruling T17-1). Ein Eintrag
+    /// gilt bis zur ersten Berechnung seiner Skizze (dann entfernt ihn `store`); übrig bleiben nur
+    /// Skizzen ohne Ergebnis (hinter dem Marker, zurückgerollt), auch über weitere Neubauten.
+    pub(crate) carried_sketches: std::collections::HashMap<FeatureId, Sketch>,
 }
 
 /// Standard-Sehnentoleranz in Millimetern (wie in der App).
@@ -828,6 +892,7 @@ impl Document {
             parameters: Vec::new(),
             param_values: Vec::new(),
             next_param: 1,
+            carried_sketches: std::collections::HashMap::new(),
         }
     }
 

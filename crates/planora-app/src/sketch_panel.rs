@@ -23,6 +23,7 @@ use egui::RichText;
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_math::DVec2;
+use planora_sketch::comb::{COMB_DENSITY, COMB_SCALE_MAX, COMB_SCALE_MIN};
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::model::{CurveId, CurveKind, Sketch};
 
@@ -85,6 +86,7 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Constraint(action) => action.label(),
         Tool::InsertControlPoint => tr!("action-sketch-insert-control-point"),
         Tool::Text => tr!("action-sketch-text"),
+        Tool::BlendCurve => tr!("action-sketch-blend-curve"),
     }
 }
 
@@ -114,6 +116,7 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Constraint(action) => command_hint(action),
         Tool::InsertControlPoint => tr!("sketch-tool-insert-control-point-hint"),
         Tool::Text => tr!("sketch-tool-text-hint"),
+        Tool::BlendCurve => tr!("sketch-tool-blend-curve-hint"),
     }
 }
 
@@ -321,7 +324,7 @@ fn existing_editor(
         return None;
     }
     let unit = constraint_unit(&c.kind);
-    let value = shown_value(&sf.sketch, &c.kind, c.driven).unwrap_or(0.0);
+    let value = shown_value(&sf.sketch, &c.kind, c.driven, c.supplement()).unwrap_or(0.0);
     let text = match sf.formulas.get(&id).filter(|_| !c.driven) {
         Some(f) => formula_text(f, unit, scope),
         None => editor_text(value, unit),
@@ -485,6 +488,18 @@ pub fn degree_buttons(ctx: &egui::Context) -> Vec<(u8, egui::Rect)> {
         .unwrap_or_default()
 }
 
+fn line_kind_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("line-kind")
+}
+
+/// Art und Lage der Umschalter „Linie“ und „Mittelpunktlinie“ im letzten Bild, leer ohne das
+/// Linienwerkzeug (für Tests).
+#[doc(hidden)]
+pub fn line_kind_buttons(ctx: &egui::Context) -> Vec<(ToolKind, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<(ToolKind, egui::Rect)>>(line_kind_key()))
+        .unwrap_or_default()
+}
+
 fn rho_field_key() -> egui::Id {
     shell_panels::sketch_side_id().with("conic-rho")
 }
@@ -633,6 +648,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         changed: false,
         look_at: false,
         break_link: false,
+        focus: None,
     };
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
@@ -679,6 +695,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     state.sketch_grid_changed |= palette.changed;
     if palette.look_at {
         state.look_at_sketch();
+    }
+    if let Some(it) = palette.focus {
+        state.focus_under_item(it);
     }
     if palette.break_link {
         // Derselbe Weg wie die Aktion: alle gewählten Projektionen in einem Schritt.
@@ -940,6 +959,8 @@ struct SketchPalette {
     look_at: bool,
     /// Der Knopf „Verknüpfung aufheben“ wurde gedrückt (Skizzen 6).
     break_link: bool,
+    /// Zeile der Liste „Unterbestimmte finden“, auf die geklickt wurde: Die Ansicht folgt.
+    focus: Option<planora_sketch::check::CheckItem>,
 }
 
 /// Was das Skizzenfeld außer Sitzung und Entwurf braucht.
@@ -951,6 +972,12 @@ struct SideInput<'a> {
     palette: &'a mut SketchPalette,
     /// Die Schriftliste für den Abschnitt „Text“; `None`, solange sie gelesen wird.
     fonts: Option<&'a planora_text::FontLibrary>,
+}
+
+/// Inhaltshöhe und sichtbare Höhe des Skizzenfelds im letzten Bild (nur für Tests).
+#[doc(hidden)]
+pub fn side_scroll_extent(ctx: &egui::Context) -> Option<(f32, f32)> {
+    ctx.data(|d| d.get_temp(egui::Id::new("planora-sketch-side-extent")))
 }
 
 /// Skizzenfeld rechts (Spaltenbreite 250): Inhalt in einer senkrechten ScrollArea, höchstens so
@@ -989,7 +1016,11 @@ fn side_field(
             palette: &mut *palette,
             fonts,
         };
-        theme::scroll_area(ui, area, |ui| side_contents(ui, &mut *se, &mut *sf, side));
+        let out = theme::scroll_area(ui, area, |ui| side_contents(ui, &mut *se, &mut *sf, side));
+        // Für Tests: Inhaltshöhe und sichtbare Höhe des Skizzenfelds.
+        let extent = (out.content_size.y, out.inner_rect.height());
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new("planora-sketch-side-extent"), extent));
     };
     if undocked {
         let title = tr!("panel-sketch-side");
@@ -1027,8 +1058,16 @@ fn tool_options(
     } else {
         ui.data_mut(|d| d.remove_temp::<Vec<(u8, egui::Rect)>>(degree_buttons_key()));
     }
+    if se.tool == Tool::Line {
+        line_options(ui, se, &mut sf.sketch);
+    } else {
+        ui.data_mut(|d| d.remove_temp::<Vec<(ToolKind, egui::Rect)>>(line_kind_key()));
+    }
     if se.tool == Tool::Offset {
         ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
+    }
+    if se.tool == Tool::BlendCurve {
+        blend_options(ui, se);
     }
     if se.tool == Tool::ProjectEdge {
         project_options(ui, se);
@@ -1074,6 +1113,56 @@ fn tool_options(
     }
 }
 
+/// Art der Übergangskurve (Skizzen 11a, Fusion „Continuity“): „Tangential“ (G1) oder „Krümmung“
+/// (G2). Die Art wirkt auf die nächste Kurve; eine laufende Wahl bleibt.
+fn blend_options(ui: &mut egui::Ui, se: &mut SketchSession) {
+    use planora_sketch::blend::BlendKind;
+    ui.horizontal_wrapped(|ui| {
+        for (kind, label, hint) in [
+            (
+                BlendKind::G1,
+                tr!("sketch-blend-kind-g1"),
+                tr!("sketch-blend-kind-g1-hint"),
+            ),
+            (
+                BlendKind::G2,
+                tr!("sketch-blend-kind-g2"),
+                tr!("sketch-blend-kind-g2-hint"),
+            ),
+        ] {
+            let selected = se.blend.kind == kind;
+            if ui
+                .selectable_label(selected, label)
+                .on_hover_text(hint)
+                .clicked()
+                && !selected
+            {
+                se.choose_blend_kind(kind);
+            }
+        }
+    });
+}
+
+/// Umschalter des Linienwerkzeugs (Skizzen 11a, Fusion „Optionen des Features“): „Linie“ oder
+/// „Mittelpunktlinie“. Das Werkzeug bleibt, nur die Art wechselt (wie ein Eintrag der Liste am
+/// Leistenknopf).
+fn line_options(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch) {
+    let mut rects = Vec::new();
+    ui.horizontal_wrapped(|ui| {
+        for &kind in ToolKind::of(Tool::Line) {
+            let selected = se.kinds.line == kind;
+            let button = ui
+                .selectable_label(selected, kind.label())
+                .on_hover_text(kind.hint());
+            rects.push((kind, button.rect));
+            if button.clicked() && !selected {
+                se.choose_kind(sk, kind);
+            }
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(line_kind_key(), rects));
+}
+
 /// Einstellung des Splines mit Kontrollpunkten (Skizzen 7): der Grad neuer Kurven, 5 oder 3.
 fn spline_options(ui: &mut egui::Ui, se: &mut SketchSession) {
     let mut rects = Vec::new();
@@ -1087,6 +1176,55 @@ fn spline_options(ui: &mut egui::Ui, se: &mut SketchSession) {
         }
     });
     ui.data_mut(|d| d.insert_temp(degree_buttons_key(), rects));
+}
+
+/// Schalter „Krümmungskamm“ und, bei genau einer gewählten Kurve mit Kamm, die Felder „Dichte“
+/// und „Maßstab“ (Skizzen 11a, wie Fusions Krümmungsanzeige). Ohne gewählte Kurve, die keine
+/// Linie ist, gibt es beides nicht (wie „Verknüpfung aufheben“ nur bei einer Projektion).
+fn comb_fields(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch) {
+    if !se.can_toggle_curvature(sk) {
+        return;
+    }
+    let on = se
+        .selection
+        .iter()
+        .filter_map(|i| match i {
+            Item::Curve(c) if sk.comb_capable(*c) => Some(*c),
+            _ => None,
+        })
+        .all(|c| sk.comb(c).is_some());
+    let tip = with_hint(
+        &crate::keymap::mouse::current(ui.ctx()),
+        Action::SketchToggleCurvature,
+        &tr!("sketch-comb-switch-hint"),
+    );
+    let switch = ui
+        .add(egui::Button::selectable(on, tr!("sketch-comb-switch")))
+        .on_hover_text(tip);
+    if switch.clicked() {
+        se.set_comb_selected(sk, !on);
+    }
+    if let Some((c, comb)) = se.single_comb(sk) {
+        let (mut density, mut scale) = (comb.density, comb.scale);
+        ui.horizontal(|ui| {
+            ui.label(tr!("sketch-comb-density"));
+            theme::field(ui, egui::DragValue::new(&mut density).range(COMB_DENSITY));
+            ui.label(tr!("sketch-comb-scale"));
+            theme::field(
+                ui,
+                egui::DragValue::new(&mut scale)
+                    .range(COMB_SCALE_MIN..=COMB_SCALE_MAX)
+                    .speed(0.01)
+                    .max_decimals(2),
+            );
+        });
+        if density != comb.density {
+            se.edit_comb(sk, c, Some(density), None);
+        }
+        if scale != comb.scale {
+            se.edit_comb(sk, c, None, Some(scale));
+        }
+    }
 }
 
 /// Abschnitt „Bearbeiten“ (Skizzen 7, B7, D3, D4): Griff-Knöpfe am gewählten Stützpunkt, Grad und
@@ -1426,6 +1564,9 @@ fn side_contents(
         palette.changed |= grid.changed() || snap.changed();
         ui.checkbox(show_profiles, small(tr!("sketch-show-profile")));
     });
+    // Skizzenstatus oben im Feld (Skizzen 11a, A4); die Freiheitsgrade stehen weiter im Fußfeld.
+    status_row(ui, se, &sf.sketch);
+    under_section(ui, se, sf, palette);
     tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);
 
@@ -1498,6 +1639,8 @@ fn side_contents(
     let can_break_link = !se.selected_projections(sf).is_empty();
     // „Text bearbeiten“ und „Text auflösen“ nur, wenn ein Text gewählt ist (Spec C8, C9).
     let has_text = !se.selected_texts(&sf.sketch).is_empty();
+    // Eingezogene Punkte bleiben beim Löschen stehen (wie bei Entf).
+    let keep = crate::sketch_state::kept_points(sf);
     let sk = &mut sf.sketch;
     ui.separator();
 
@@ -1523,6 +1666,7 @@ fn side_contents(
         Action::SketchCenterline,
         &centerline,
     );
+    comb_fields(ui, se, sk);
     ui.horizontal_wrapped(|ui| {
         if tool_button(
             ui,
@@ -1638,7 +1782,7 @@ fn side_contents(
         })
         .clicked()
         {
-            se.delete_selection(sk);
+            se.delete_selection_keeping(sk, &keep);
         }
     });
     sections(ui, se, sk, panel);
@@ -1654,6 +1798,146 @@ fn side_contents(
     // Liste der Abhängigkeiten
     theme::section_header(ui, &tr!("sketch-section-list"), theme::SUB_HEADER_H);
     constraint_list(ui, se, sf, panel, scope);
+}
+
+/// Farbe der Statuszeile oben im Skizzenfeld (Skizzen 11a, A4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusTone {
+    Normal,
+    /// Widerspruch: rote Schrift.
+    Error,
+    /// Nicht gelöst: orange Schrift.
+    Warning,
+}
+
+/// Text und Ton der Statuszeile oben im Skizzenfeld: „Status: Unterbestimmt“, „Bestimmt“,
+/// „Widerspruch“ (rot) oder „nicht gelöst“ (orange).
+pub fn status_line(sk: &Sketch, r: &planora_sketch::solver::SolveReport) -> (String, StatusTone) {
+    use planora_sketch::check::SketchStatus;
+    match sk.status(r) {
+        SketchStatus::Under => (tr!("sketch-check-under"), StatusTone::Normal),
+        SketchStatus::Determined => (tr!("sketch-check-determined"), StatusTone::Normal),
+        SketchStatus::Conflict => (tr!("sketch-check-conflict"), StatusTone::Error),
+        SketchStatus::NotSolved => (tr!("sketch-check-not-solved"), StatusTone::Warning),
+    }
+}
+
+/// Höchste Höhe der Liste „Unterbestimmte finden“, bevor sie scrollt. Klein genug, dass das
+/// Skizzenfeld bei 1080 Höhe auch mit gewählter Linie ohne äußeren Bildlauf auskommt (H2-1).
+const UNDER_LIST_MAX_H: f32 = 72.0;
+
+/// Knöpfe „Unterbestimmte finden“ und „Skizze berechnen“ und, solange sie offen ist, die Liste der
+/// unterbestimmten Elemente (Skizzen 11a): Haken „Bestimmte ausblenden“, je Element eine Zeile
+/// (Klick wählt es und holt es ins Bild), ein X löscht es (außer Skizzenpunkte), „Schließen“.
+fn under_section(
+    ui: &mut egui::Ui,
+    se: &mut SketchSession,
+    sf: &mut SketchFeature,
+    palette: &mut SketchPalette,
+) {
+    let sk = &mut sf.sketch;
+    let mouse = crate::keymap::mouse::current(ui.ctx());
+    ui.horizontal_wrapped(|ui| {
+        let find = ui
+            .add(egui::Button::selectable(
+                se.under_list.is_some(),
+                tr!("sketch-check-find"),
+            ))
+            .on_hover_text(with_hint(
+                &mouse,
+                Action::SketchFindUnderConstrained,
+                &tr!("sketch-check-find"),
+            ));
+        if find.clicked() {
+            se.open_under_list();
+        }
+        let compute = ui
+            .button(tr!("sketch-check-compute"))
+            .on_hover_text(with_hint(
+                &mouse,
+                Action::SketchCompute,
+                &tr!("sketch-check-compute"),
+            ));
+        if compute.clicked() {
+            se.compute_sketch(sk);
+        }
+    });
+    let Some(mut list) = se.under_list else {
+        return;
+    };
+    let rows = se.under_row_items(sk);
+    let mut delete = None;
+    ui.horizontal(|ui| {
+        ui.checkbox(
+            &mut list.hide_determined,
+            tr!("sketch-check-hide-determined"),
+        );
+    });
+    // „Schließen“ darunter, so bleibt die Zeile des Hakens auch in der schmalen Spalte ganz.
+    let close = ui.button(tr!("sketch-check-close")).clicked();
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new(tr!("sketch-check-none")).color(ui.visuals().weak_text_color()),
+        );
+    }
+    // Nur die sichtbaren Zeilen werden gebaut und gezeichnet (eine DXF-Bogenkette liefert 500).
+    let row_h = under_row_height(ui);
+    egui::ScrollArea::vertical()
+        .id_salt("planora-sketch-under-list")
+        .max_height(UNDER_LIST_MAX_H)
+        .auto_shrink([false, true])
+        .show_rows(ui, row_h, rows.len(), |ui, range| {
+            for (it, n, deletable) in &rows[range] {
+                use planora_sketch::check::CheckItem;
+                let text = crate::sketch_under::row_text(sk, *it, *n);
+                ui.horizontal(|ui| {
+                    if *deletable {
+                        let x = ui
+                            .small_button("×")
+                            .on_hover_text(tr!("sketch-check-delete-hint"));
+                        if x.clicked() {
+                            delete = Some(*it);
+                        }
+                    }
+                    let picked = match (se.selection.as_slice(), it) {
+                        ([Item::Curve(a)], CheckItem::Curve(b)) => a == b,
+                        ([Item::Point(a)], CheckItem::Point(b)) => a == b,
+                        _ => false,
+                    };
+                    if ui.selectable_label(picked, text).clicked() {
+                        palette.focus = Some(*it);
+                    }
+                });
+            }
+        });
+    se.under_list = if close { None } else { Some(list) };
+    if let Some(it) = delete {
+        se.delete_under_item_in(sf, it);
+    }
+}
+
+/// Zeilenhöhe der Liste „Unterbestimmte finden“ für `ScrollArea::show_rows`: nur die Höhe einer
+/// Zeile, denn `show_rows` zählt den Abstand `item_spacing` selbst dazu (sonst wäre die Liste je
+/// Zeile um ihn zu hoch, bei 500 Zeilen rund 2000 Pixel Leerraum).
+#[doc(hidden)]
+pub fn under_row_height(ui: &egui::Ui) -> f32 {
+    ui.spacing().interact_size.y
+}
+
+/// Die Statuszeile als Zeile der Palette.
+fn status_row(ui: &mut egui::Ui, se: &SketchSession, sk: &Sketch) {
+    let report = match &se.last_report {
+        Some(r) => r.clone(),
+        None => sk.clone().solve(),
+    };
+    let (text, tone) = status_line(sk, &report);
+    let p = theme::palette(ui.visuals().dark_mode);
+    let color = match tone {
+        StatusTone::Normal => p.text_secondary,
+        StatusTone::Error => p.error,
+        StatusTone::Warning => p.warning,
+    };
+    ui.label(RichText::new(text).size(SWITCH_TEXT_PX + 1.0).color(color));
 }
 
 /// Fußfeld: rechts „Skizze beenden“, davor der Zustand der Skizze (Farbe nach Schweregrad und
@@ -2010,9 +2294,9 @@ fn constraint_list(
     scope: &ParamScope,
 ) {
     let sk = &sf.sketch;
-    let rows: Vec<(ConstraintId, ConstraintKind, bool)> = sk
+    let rows: Vec<(ConstraintId, ConstraintKind, bool, bool)> = sk
         .constraints()
-        .map(|(id, c)| (id, c.kind.clone(), c.driven))
+        .map(|(id, c)| (id, c.kind.clone(), c.driven, c.supplement()))
         .collect();
     if rows.is_empty() {
         ui.label(RichText::new(tr!("sketch-list-empty")).small().weak());
@@ -2031,11 +2315,12 @@ fn constraint_list(
             .max_height(LIST_HEIGHT)
             .auto_shrink([false, true]),
         |ui| {
-            for (id, kind, driven) in rows {
+            for (id, kind, driven, supplement) in rows {
                 let item = Item::Constraint(id);
                 let selected = se.selection.contains(&item);
-                let mut text =
-                    RichText::new(constraint_name_among(&sf.sketch, &centers, &kind, driven));
+                let mut text = RichText::new(constraint_name_among(
+                    &sf.sketch, &centers, &kind, driven, supplement,
+                ));
                 if bad.contains(&id) {
                     text = text.color(theme::palette(ui.visuals().dark_mode).error);
                 }
@@ -2130,7 +2415,7 @@ fn constraint_list(
                 }
                 if delete && !se.runs_pattern() && !se.runs_text() {
                     se.selection = vec![item];
-                    se.delete_selection(&mut sf.sketch);
+                    se.delete_selection_in(sf);
                 }
             }
         },

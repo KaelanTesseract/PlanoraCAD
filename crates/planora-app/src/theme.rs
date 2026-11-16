@@ -774,6 +774,8 @@ pub struct SketchColors {
     /// Projizierte Geometrie, die ihrer Herkunft folgt (Skizzen 6, lila wie in Fusion; gleich
     /// der violetten Körperfarbe `BODY_COLORS[3]`).
     pub projected: Color32,
+    /// Projizierte Geometrie mit verlorenem Bezug (Skizzen 11a): gelb wie die Warnung.
+    pub lost: Color32,
     /// Kurven fertiger Skizzen in der 3D-Ansicht.
     pub finished: Color32,
     /// Widersprüchliche oder fehlerhafte Geometrie.
@@ -801,6 +803,8 @@ pub struct SketchColors {
     pub axis_y: Color32,
     /// Z-Achse (Triade der 3D-Skizze).
     pub axis_z: Color32,
+    /// Krümmungskamm (Skizzen 11a): Zähne und Hüllkurve, magentafarben wie in Fusion.
+    pub comb: Color32,
     /// Fangzeichen am Zeiger.
     pub snap: Color32,
     /// Gestrichelte Ausrichtungslinien beim Zeichnen.
@@ -828,6 +832,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             selected: p.selection,
             construction: p.text_secondary,
             projected: BODY_COLORS[3].dark,
+            lost: p.warning,
             finished: rgb(0x7fb4ff),
             error: p.error,
             text: p.text_primary,
@@ -841,6 +846,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             axis_x: p.axis_x,
             axis_y: p.axis_y,
             axis_z: p.axis_z,
+            comb: rgb(0xd070c8),
             snap: p.selection,
             guide: p.text_secondary,
             plane_fill: with_alpha(rgb(0xe8963c), 0x38),
@@ -855,6 +861,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             selected: rgb(0xa86a00),
             construction: p.text_tertiary,
             projected: BODY_COLORS[3].light,
+            lost: p.warning,
             finished: p.chip_split.1,
             error: p.error,
             text: p.text_primary,
@@ -868,6 +875,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             axis_x: p.axis_x,
             axis_y: p.axis_y,
             axis_z: p.axis_z,
+            comb: rgb(0xa8349c),
             snap: rgb(0xa86a00),
             guide: p.text_tertiary,
             plane_fill: with_alpha(rgb(0xe07b10), 0x30),

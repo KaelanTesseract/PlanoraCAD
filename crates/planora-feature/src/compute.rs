@@ -46,6 +46,10 @@ pub(crate) struct Computed {
     pub(crate) hints: Option<SketchHints>,
     /// Warnung bei sonst gelungener Berechnung (siehe [`crate::Feature::warning`]).
     pub(crate) warning: Option<String>,
+    /// Skizze voll bestimmt und nicht leer: rotes Schloss im Browser (Skizzen 11a, A4).
+    pub(crate) locked: bool,
+    /// Ziele der Kopien mit verlorenem Bezug (siehe [`crate::Feature::lost_projections`]).
+    pub(crate) lost: Vec<crate::model::CopyTarget>,
     /// Koordinatensystem einer Konstruktionsebene.
     pub(crate) plane: Option<planora_math::Frame>,
     /// Koordinatensystem des Trägers einer Leinwand.
@@ -261,7 +265,13 @@ fn compute_unchecked(
     let kernel = &doc.kernel;
     match &feature.kind {
         FeatureKind::Sketch(sf) => {
-            let previous = feature.result.as_ref().and_then(|r| r.sketch.as_ref());
+            // Der letzte berechnete Stand; nach einem vollen Neubau (Rückgängig, Wiederholen)
+            // der Stand vor dem Neubau ([`Document::carried_sketches`]).
+            let previous = feature
+                .result
+                .as_ref()
+                .and_then(|r| r.sketch.as_ref())
+                .or_else(|| doc.carried_sketches.get(&id));
             compute_sketch(doc, idx, sf, visible, previous)
         }
         FeatureKind::Box { size, origin } => primitive(doc, kernel.make_box(*size), *origin, id.0),
@@ -806,7 +816,7 @@ fn refit_formula_arcs(sketch: &mut Sketch, sf: &SketchFeature) {
     }
     let mut trial = sketch.clone();
     for &(id, _) in &refused {
-        let measured = trial.constraint(id).and_then(|c| trial.measure(&c.kind));
+        let measured = trial.measure_constraint(id);
         if measured.is_none_or(|old| trial.set_constraint_value(id, old).is_err()) {
             return;
         }
@@ -863,10 +873,10 @@ fn compute_sketch(
     };
     let followed = follow_copies(&mut sketch, sf, &ctx, previous);
     let copies = followed.copies;
-    if sf.formulas.is_empty() {
+    let report = if sf.formulas.is_empty() {
         // Ohne Formeln wird der Lösungsstatus bewusst nicht ausgewertet (wie bisher): eine
         // unterbestimmte oder vom Nutzer ungelöst gelassene Skizze ist gültig.
-        let _ = sketch.solve();
+        sketch.solve()
     } else {
         // Mit Formeln (Plan P12) ist jedes andere Ergebnis als „gelöst“ ein Fehler, auch wenn die
         // Skizze schon vorher ungelöst war: Ein Parameter kann sie still in eine andere Lage
@@ -881,9 +891,14 @@ fn compute_sketch(
                 return Err(FeatureError::Sketch(tr!("sketch-formula-unsolvable")));
             }
         }
-    }
+        // Der Bericht für das Schloss: Das zweite Lösen kommt aus dem Zwischenspeicher.
+        sketch.solve()
+    };
+    let locked = sketch.is_locked(&report);
     let warning = sketch_warning(&followed.counts, &sketch);
     Ok(Computed {
+        locked,
+        lost: followed.lost,
         bodies: Vec::new(),
         sketch: Some(sketch),
         hints: Some(SketchHints { plane, copies }),
@@ -905,10 +920,12 @@ struct CopyCounts {
     too_slow: usize,
 }
 
-/// Nachgeführte Kopien (in der Reihenfolge der Definition) und die Zählstände.
+/// Nachgeführte Kopien (in der Reihenfolge der Definition), die Zählstände und die Ziele der
+/// Kopien mit verlorenem Bezug (in der Reihenfolge der Kopien, eins je `counts.lost`).
 struct Followed {
     copies: Vec<EdgeCopy>,
     counts: CopyCounts,
+    lost: Vec<crate::model::CopyTarget>,
 }
 
 /// Führt alle Kopien der Skizze nach. Die alten Arten (Kante, Schnitt, Silhouette) einzeln wie
@@ -929,6 +946,8 @@ fn follow_copies(
     let n = sf.copies.len();
     let mut out: Vec<EdgeCopy> = sf.copies.clone();
     let mut done = vec![false; n];
+    // Kopien mit verlorenem Bezug; die Ziele folgen am Ende in der Reihenfolge der Kopien.
+    let mut lost = vec![false; n];
     let mut counts = CopyCounts::default();
     for i in 0..n {
         if done[i] {
@@ -945,6 +964,7 @@ fn follow_copies(
                     // Definition).
                     restore_copy(sketch, c, previous);
                     counts.lost += 1;
+                    lost[i] = true;
                 }
             }
             continue;
@@ -979,7 +999,12 @@ fn follow_copies(
                     restore_copy(sketch, &sf.copies[j], previous);
                 }
                 match why {
-                    crate::include::Unfollowed::Lost => counts.lost += group.len(),
+                    crate::include::Unfollowed::Lost => {
+                        counts.lost += group.len();
+                        for &j in &group {
+                            lost[j] = true;
+                        }
+                    }
                     crate::include::Unfollowed::TooSlow => counts.too_slow += group.len(),
                 }
             }
@@ -1003,15 +1028,68 @@ fn follow_copies(
                         None => {
                             restore_copy(sketch, copy, previous);
                             counts.lost += 1;
+                            lost[j] = true;
                         }
                     }
                 }
             }
         }
     }
+    let lost = sf
+        .copies
+        .iter()
+        .zip(&lost)
+        .filter(|(_, l)| **l)
+        .map(|(c, _)| c.target)
+        .collect();
     Followed {
         copies: out,
         counts,
+        lost,
+    }
+}
+
+impl Document {
+    /// Führt in einem Entwurf `draft` der Skizze `sketch` (offene Skizze der App) die Kopien mit
+    /// den Zielen `targets` nach, genau wie die Neuberechnung (Körper, die vor der Skizze
+    /// sichtbar sind; Ebene des Entwurfs). Für „Neu verknüpfen“ in der offenen Skizze
+    /// (Skizzen 11a). Die übrigen Kopien bleiben unberührt. Liefert die Ziele, deren Bezug dabei
+    /// verloren ist (ihre Lage bleibt die des Entwurfs).
+    pub fn follow_draft_copies(
+        &self,
+        sketch: FeatureId,
+        draft: &mut SketchFeature,
+        targets: &[crate::model::CopyTarget],
+    ) -> Result<Vec<crate::model::CopyTarget>, FeatureError> {
+        let idx = self.index_of(sketch).ok_or(FeatureError::UnknownFeature)?;
+        let visible = self.visible_at(idx);
+        let solids: Vec<&Solid> = visible.iter().filter_map(|r| self.body(*r)).collect();
+        let tol = self.kernel.tolerance;
+        let frame = *draft.sketch.frame();
+        let ctx = crate::include::IncludeCtx {
+            doc: self,
+            idx,
+            solids: &solids,
+            frame: &frame,
+            tol: &tol,
+        };
+        let part = SketchFeature {
+            copies: draft
+                .copies
+                .iter()
+                .filter(|c| targets.contains(&c.target))
+                .cloned()
+                .collect(),
+            ..draft.clone()
+        };
+        let previous = draft.sketch.clone();
+        let followed = follow_copies(&mut draft.sketch, &part, &ctx, Some(&previous));
+        for updated in followed.copies {
+            if let Some(c) = draft.copies.iter_mut().find(|c| c.target == updated.target) {
+                *c = updated;
+            }
+        }
+        Ok(followed.lost)
     }
 }
 

@@ -1216,7 +1216,7 @@ impl Sketch {
     }
 
     /// Die Mitten aller lebenden Kreismuster: Sie gelten als benutzt, auch ohne Kurve.
-    pub(crate) fn pattern_centers(&self) -> Vec<PointId> {
+    pub fn pattern_centers(&self) -> Vec<PointId> {
         self.patterns()
             .filter_map(|(_, d)| match d.kind {
                 PatternKind::Circular { center, .. } => Some(center),

@@ -7,10 +7,14 @@ use crate::formulas::{
     Formulas, check_keys, drop_overwritten_dims, evaluate, field_keys, prune_sketch, same_fields,
     same_values,
 };
-use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus, SketchPlane};
+use crate::model::{
+    CopySource, CopyTarget, Document, FeatureId, FeatureKind, FeatureStatus, SketchFeature,
+    SketchPlane,
+};
 use crate::recompute::RecomputeReport;
 use planora_i18n::tr;
 use planora_kernel::Kernel;
+use planora_sketch::Sketch;
 use planora_sketch::text_shape::TextShaper;
 
 impl Document {
@@ -177,6 +181,111 @@ impl Document {
         changed
     }
 
+    /// Die Definition der Skizze `sketch` mit der berechneten Skizze (letzte Lage der
+    /// Projektionen) statt der gespeicherten, wie beim Öffnen einer Skizze; ohne Ergebnis die
+    /// Definition. Fehler: kein Feature oder keine Skizze.
+    fn sketch_with_result(&self, sketch: FeatureId) -> Result<SketchFeature, FeatureError> {
+        let f = self.feature(sketch).ok_or(FeatureError::UnknownFeature)?;
+        let FeatureKind::Sketch(def) = &f.kind else {
+            return Err(FeatureError::InvalidInput(tr!(
+                "feature-not-sketch",
+                name = f.name.clone()
+            )));
+        };
+        let mut sf = def.clone();
+        if let Some(sk) = self.sketch_of(sketch) {
+            let name = sf.sketch.name.clone();
+            sf.sketch = sk.clone();
+            sf.sketch.name = name;
+        }
+        Ok(sf)
+    }
+
+    /// Übernimmt die geänderte Skizze `sf` als Definition von `sketch` (ein Schritt, neu
+    /// gerechnet; die Formeln der Felder bleiben).
+    fn commit_sketch(&mut self, sketch: FeatureId, sf: SketchFeature) -> Result<(), FeatureError> {
+        let kind = FeatureKind::Sketch(sf);
+        self.update(sketch, |k| *k = kind)
+    }
+
+    /// „Neu verknüpfen“ (Skizzen 11a, Fusion „Relink“): gibt der Kopie mit dem Ziel `target` die
+    /// neue Herkunft `source` und rechnet neu. Bei den Gruppenarten aus Skizzen 10 bekommt die
+    /// ganze Gruppe (gleiche alte Herkunft) die neue; Stückindex und Stückzahl bleiben, damit
+    /// Abhängigkeiten und Maße bleiben, soweit die neue Quelle gleich viele Stücke ergibt. Eine
+    /// Herkunft einer anderen Familie ([`CopySource::same_family`]) lehnt es ab
+    /// ([`FeatureError::Sketch`]), ebenso ein Ziel ohne Kopie und eine Quelle, der die Kurve
+    /// nicht folgen kann (das Ziel bliebe verloren, Ruling T18-2); dann bleibt alles unverändert.
+    /// Eine gleiche Herkunft ändert nichts.
+    pub fn relink_projection(
+        &mut self,
+        sketch: FeatureId,
+        target: CopyTarget,
+        source: CopySource,
+    ) -> Result<(), FeatureError> {
+        let mut sf = self.sketch_with_result(sketch)?;
+        let old = sf
+            .copies
+            .iter()
+            .find(|c| c.target == target)
+            .map(|c| c.source.clone())
+            .ok_or_else(|| FeatureError::Sketch(tr!("feature-relink-no-copy")))?;
+        if !old.same_family(&source) {
+            return Err(FeatureError::Sketch(tr!("feature-relink-kind")));
+        }
+        if old == source {
+            return Ok(());
+        }
+        relink_copies(&mut sf, target, &old, &source);
+        // Erst probieren: Bleibt das Ziel verloren, gilt der Stand davor (auch Zähler und Verlauf
+        // des Dokuments).
+        let before = self.clone();
+        self.commit_sketch(sketch, sf)?;
+        let still_lost = self
+            .feature(sketch)
+            .is_some_and(|f| f.lost_projections().contains(&target));
+        if still_lost {
+            *self = before;
+            return Err(FeatureError::Sketch(tr!("lost-relink-failed")));
+        }
+        Ok(())
+    }
+
+    /// „Verknüpfung aufheben“ für die Ziele `targets` der Skizze `sketch` (Skizzen 11a, Fusion
+    /// „Break Link“, über [`SketchFeature::break_link_target`]): Die Geometrie bleibt an ihrer
+    /// letzten Lage und folgt nichts mehr. Alle zusammen sind eine Änderung; liefert die Zahl der
+    /// gelösten Kopien (0: nichts geändert).
+    pub fn unlink_projections(
+        &mut self,
+        sketch: FeatureId,
+        targets: &[CopyTarget],
+    ) -> Result<usize, FeatureError> {
+        let mut sf = self.sketch_with_result(sketch)?;
+        let n = targets.iter().filter(|t| sf.break_link_target(**t)).count();
+        if n > 0 {
+            self.commit_sketch(sketch, sf)?;
+        }
+        Ok(n)
+    }
+
+    /// „Geometrie löschen“ für die Ziele `targets` der Skizze `sketch` (Skizzen 11a, Fusion
+    /// „Delete“): löscht die Kurven und Punkte samt Kopie-Eintrag; die Enden einer Kurve gehen mit,
+    /// wenn keine andere Kurve sie benutzt. Alle zusammen sind eine Änderung; liefert die Zahl der
+    /// gelöschten Ziele (nur solche mit Kopie; 0: nichts geändert). Lehnt die Skizze ein Löschen
+    /// ab (etwa eine Kurve eines Textes), bleibt alles unverändert.
+    pub fn delete_lost_geometry(
+        &mut self,
+        sketch: FeatureId,
+        targets: &[CopyTarget],
+    ) -> Result<usize, FeatureError> {
+        let mut sf = self.sketch_with_result(sketch)?;
+        let n = delete_lost_targets(&mut sf, targets)
+            .map_err(|e| FeatureError::Sketch(e.to_string()))?;
+        if n > 0 {
+            self.commit_sketch(sketch, sf)?;
+        }
+        Ok(n)
+    }
+
     /// Wie [`Document::update_with_report`], ohne den Bericht.
     pub fn update(
         &mut self,
@@ -205,6 +314,9 @@ impl Document {
 
     /// Alle Features, die direkt oder über andere abhängige Features auf `id` verweisen, in
     /// der Reihenfolge der Zeitleiste. Da Verweise nur nach vorn zeigen, reicht ein Durchlauf.
+    /// Nur harte Bezüge ([`FeatureKind::dependencies`]); schwache Bezüge zählen nicht: Eine
+    /// Skizze, die nur Kanten oder Flächen von `id` projiziert, bleibt beim Löschen stehen, ihr
+    /// Bezug ist danach verloren (Warnung, Skizzen 11a A5).
     pub fn dependents(&self, id: FeatureId) -> Vec<FeatureId> {
         let mut found: Vec<FeatureId> = Vec::new();
         for f in &self.features {
@@ -264,7 +376,9 @@ impl Document {
         Ok(removed)
     }
 
-    /// Prüft, ob alle Verweise von `kind` auf vorhandene Features vor `idx` zeigen.
+    /// Prüft, ob alle harten Verweise von `kind` auf vorhandene Features vor `idx` zeigen.
+    /// Schwache Bezüge ([`FeatureKind::weak_dependencies`]) dürfen fehlen oder dahinter stehen;
+    /// dann ist der Bezug verloren (Warnung), kein Fehler.
     pub(crate) fn check_references(
         &self,
         kind: &FeatureKind,
@@ -480,6 +594,81 @@ impl Document {
             }
         }
         Ok(())
+    }
+}
+
+/// Setzt die Herkunft `source` an die Kopie mit dem Ziel `target`; bei den Gruppenarten aus
+/// Skizzen 10 an alle Kopien mit der alten Herkunft `old` (eine Gruppe). Stückindex und
+/// Stückzahl bleiben. Gemeinsamer Weg für Dokument und offene Skizze (App).
+pub fn relink_copies(
+    sf: &mut SketchFeature,
+    target: CopyTarget,
+    old: &CopySource,
+    source: &CopySource,
+) {
+    let group = old.is_3d_kind();
+    for c in &mut sf.copies {
+        if c.target == target || (group && c.source == *old) {
+            c.source = source.clone();
+        }
+    }
+}
+
+/// „Geometrie löschen“ an der Skizze `sf` (gemeinsamer Weg für Dokument und offene Skizze der
+/// App): je Ziel aus `targets` mit Kopie der Kopie-Eintrag und die projizierte Geometrie. Eine
+/// Kurve geht samt ihren Enden, die keine andere lebende Kurve benutzt. Ein Punkt, an dem noch
+/// eine Kurve hängt (etwa eine Linie des Nutzers an einer eingezogenen Ecke, A7), bleibt als
+/// gewöhnlicher Punkt stehen: Nur seine Fixierung entfällt (wie Fusion, dort fällt nur der Bezug
+/// weg). Liefert die Zahl der gelöschten Ziele. Bei einem Fehler kann `sf` halb geändert sein;
+/// der Aufrufer arbeitet darum an einer Kopie.
+pub fn delete_lost_targets(
+    sf: &mut SketchFeature,
+    targets: &[CopyTarget],
+) -> Result<usize, planora_sketch::SketchError> {
+    let mut n = 0;
+    for t in targets {
+        if !sf.break_link_target(*t) {
+            continue;
+        }
+        delete_target(&mut sf.sketch, *t)?;
+        n += 1;
+    }
+    if n > 0 {
+        sf.prune_copies();
+    }
+    Ok(n)
+}
+
+/// Benutzt eine lebende Kurve den Punkt `p`?
+fn point_used(sk: &Sketch, p: planora_sketch::model::PointId) -> bool {
+    sk.curves().any(|(_, d)| d.kind.points().contains(&p))
+}
+
+/// Löscht das Ziel einer Kopie aus der Skizze (siehe [`delete_lost_targets`]).
+fn delete_target(sk: &mut Sketch, target: CopyTarget) -> Result<(), planora_sketch::SketchError> {
+    match target {
+        CopyTarget::Curve(c) => {
+            let ends = sk.curve(c).map(|d| d.kind.points()).unwrap_or_default();
+            sk.remove_curve(c)?;
+            for p in ends {
+                if !point_used(sk, p) && sk.point_xyz(p).is_ok() {
+                    sk.remove_point(p)?;
+                }
+            }
+            Ok(())
+        }
+        CopyTarget::Point(p) if point_used(sk, p) => {
+            let pins: Vec<_> = sk
+                .constraints()
+                .filter(|(_, c)| c.kind.fixed_point() == Some(p))
+                .map(|(id, _)| id)
+                .collect();
+            for id in pins {
+                sk.remove_constraint(id)?;
+            }
+            Ok(())
+        }
+        CopyTarget::Point(p) => sk.remove_point(p),
     }
 }
 

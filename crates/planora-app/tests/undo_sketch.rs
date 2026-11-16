@@ -1053,6 +1053,9 @@ fn undo_takes_an_unobserved_change_as_a_step() {
 }
 
 /// Lehnt das Dokument den Entwurf beim Beenden ab, bleibt die Skizze offen samt Verlauf.
+/// Abgelehnt wird eine Formel, die sich nicht auswerten lässt (strenge Prüfung, P3); eine
+/// Kantenkopie mit Verweis nach vorn ist seit Skizzen 11a Task 17 ein verlorener schwacher Bezug
+/// und wird angenommen.
 #[test]
 fn rejected_commit_keeps_the_sketch_history() {
     let mut w = ws();
@@ -1066,34 +1069,27 @@ fn rejected_commit_keeps_the_sketch_history() {
     click(&mut w, 1.0, 1.0);
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), 1);
-    let solid = st(&mut w).bodies[0].solid.clone();
-    let tol = st(&mut w).kernel.tolerance;
-    let edge = solid
-        .edges
-        .iter()
-        .find_map(|(e, _)| planora_feature::EdgeRef::from_edge(&solid, e, &tol).ok())
-        .unwrap();
-    let curve = {
+    let dim = {
         let sk = sess(&mut w).1;
         let a = sk.add_point(0.0, 0.0).unwrap();
         let b = sk.add_point(1.0, 0.0).unwrap();
-        sk.add_line(a, b).unwrap()
+        sk.add_line(a, b).unwrap();
+        sk.add_constraint(planora_sketch::ConstraintKind::Distance(a, b, 1.0))
+            .unwrap()
     };
     st(&mut w)
         .sketch_draft
         .as_mut()
         .unwrap()
-        .copies
-        .push(planora_feature::EdgeCopy {
-            target: planora_feature::CopyTarget::Curve(curve),
-            piece: 0,
-            of: 1,
-            source: planora_feature::CopySource::Edge(edge),
-        });
+        .formulas
+        .insert(dim, "gibt_es_nicht * 2".to_string());
     assert!(st(&mut w).try_close_sketch().is_err());
     assert!(st(&mut w).sketch_session.is_some());
     assert_eq!(sk_undo_len(&w), 1, "der Verlauf bleibt");
-    assert_eq!(w.active_tab().undo_label(), Some("Projizieren".to_string()));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Linie zeichnen".to_string())
+    );
     tab(&mut w).undo().unwrap();
     tab(&mut w).undo().unwrap();
     assert_eq!(draft(&w).points().count(), 0);

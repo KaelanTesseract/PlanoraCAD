@@ -276,6 +276,9 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchIntersectionCurve
         | Action::SketchSplineFit
         | Action::SketchSplineControl
+        // Skizzen 11a: Linie und Mittelpunktlinie sind die beiden Arten des Linienwerkzeugs.
+        | Action::SketchLine
+        | Action::SketchMidpointLine
         | Action::SketchConic => {
             if let Some(kind) = a.sketch_kind()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
@@ -296,17 +299,19 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             }
         }
         Action::SketchInsertControlPoint
-        | Action::SketchLine
         | Action::SketchTrim
         | Action::SketchExtend
         | Action::SketchBreak
         | Action::SketchOffset
         | Action::SketchMoveCopy
         | Action::SketchScale
+        | Action::SketchBlendCurve
         | Action::SketchDimension
         | Action::SketchText => {
             if let Some(tool) = a.sketch_tool()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
+                // Die Übergangskurve gibt es nur in 2D-Skizzen (Ruling H1-5, wie Fusion).
+                && !(tool == crate::sketch_state::Tool::BlendCurve && sk.three_d)
             {
                 se.choose_tool(sk, tool);
             }
@@ -357,6 +362,27 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         Action::SketchCenterline => {
             if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
                 se.toggle_centerline_if_possible(sk);
+            }
+        }
+        Action::ManageLostProjections => {
+            // Für die gewählte Skizze (Baum, Verlaufsleiste oder offene Skizze); ohne verlorene
+            // Projektion nichts.
+            let state = &mut ws.active_tab_mut().state;
+            if let Some(id) = state.open_sketch_id().or(state.selected_feature) {
+                state.open_lost_projections(id);
+            }
+        }
+        Action::SketchToggleCurvature => {
+            crate::curvature_dialog::toggle(&mut ws.active_tab_mut().state);
+        }
+        Action::SketchFindUnderConstrained => {
+            if let Some((se, _)) = ws.active_tab_mut().state.session_sketch_mut() {
+                se.open_under_list();
+            }
+        }
+        Action::SketchCompute => {
+            if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
+                se.compute_sketch(sk);
             }
         }
         Action::SketchBreakLink => {

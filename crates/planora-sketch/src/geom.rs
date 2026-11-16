@@ -112,7 +112,7 @@ impl Geom {
     }
 
     /// Zweite Ableitung nach `t`.
-    fn second(&self, t: f64) -> DVec2 {
+    pub(crate) fn second(&self, t: f64) -> DVec2 {
         match self {
             Geom::Line { .. } => DVec2::ZERO,
             Geom::Circle { r, .. } | Geom::Arc { r, .. } => {
@@ -177,7 +177,6 @@ impl Geom {
     }
 
     /// Länge der ganzen Kurve.
-    #[allow(dead_code, reason = "used by trim and extend (later tasks)")]
     pub(crate) fn length(&self) -> f64 {
         let (lo, hi) = self.domain();
         self.arc_length(lo, hi)
@@ -690,6 +689,55 @@ impl Sketch {
             | CurveKind::FixedSpline { .. } => self.nurbs3_of(c)?.derivs_unclamped(t, 1)[0],
         };
         p.is_finite().then_some(p)
+    }
+
+    /// Ort, erste und zweite Ableitung nach dem Parameter einer 3D-Kurve (Parameter und Bereich
+    /// wie [`Sketch::curve_point3`]), für den Krümmungskamm. Kreis, Bogen, Ellipse und Freiform
+    /// rechnen genau; ein Spline durch Stützpunkte mit zentralen Differenzen. Eine Kurve, die
+    /// keine 3D-Kurve ist, rechnet wie in 2D mit z = 0.
+    pub(crate) fn curve_jet3(&self, c: CurveId, t: f64) -> Option<(DVec3, DVec3, DVec3)> {
+        if !t.is_finite() {
+            return None;
+        }
+        if !self.is_3d_curve(c) {
+            let g = self.geom(c)?;
+            let (p, d) = g.eval(t);
+            return Some((p.extend(0.0), d.extend(0.0), g.second(t).extend(0.0)));
+        }
+        let (s, co) = t.sin_cos();
+        let jet = match &self.curves[c].kind {
+            CurveKind::Line { a, b } => {
+                let (a, b) = (self.pos3(*a), self.pos3(*b));
+                (a + (b - a) * t, b - a, DVec3::ZERO)
+            }
+            CurveKind::Circle { .. } | CurveKind::Arc { .. } => {
+                let (m, r, (u, v), _) = self.round3(c)?;
+                let (e, f) = (u * co + v * s, v * co - u * s);
+                (m + e * r, f * r, -e * r)
+            }
+            CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
+                let (m, a, b) = self.ellipse3(c)?;
+                let (e, f) = (a * co + b * s, b * co - a * s);
+                (m + e, f, -e)
+            }
+            CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => {
+                let d = self.nurbs3_of(c)?.derivs_unclamped(t, 2);
+                (d[0], d[1], d[2])
+            }
+            CurveKind::Spline { .. } => {
+                let (lo, hi) = self.curve_domain3(c)?;
+                let h = ((hi - lo).abs() * 1e-3).max(1e-9);
+                let (p, a, b) = (
+                    self.curve_point3(c, t)?,
+                    self.curve_point3(c, t - h)?,
+                    self.curve_point3(c, t + h)?,
+                );
+                (p, (b - a) / (2.0 * h), (a - 2.0 * p + b) / (h * h))
+            }
+        };
+        (jet.0.is_finite() && jet.1.is_finite() && jet.2.is_finite()).then_some(jet)
     }
 
     /// Parameterbereich `(lo, hi)` der lebenden Kurve `c` für [`Sketch::curve_point3`]; bei einer

@@ -36,16 +36,20 @@ impl Document {
     }
 
     /// `tip` und alles, wovon er (auch über Umwege) abhängt, in Listenordnung; Skizzen
-    /// eingeschlossen. Für ein unbekanntes Feature eine leere Liste.
+    /// eingeschlossen. Schwache Bezüge zählen mit, soweit die Quelle existiert und vor dem
+    /// Feature steht ([`Document::present_weak_dependencies`]). Für ein unbekanntes Feature eine
+    /// leere Liste.
     pub fn chain(&self, tip: FeatureId) -> Vec<FeatureId> {
         let Some(end) = self.index_of(tip) else {
             return Vec::new();
         };
+        let pos = self.position_map();
         // Verweise zeigen nur nach vorn: ein Durchlauf rückwärts reicht.
         let mut needed: HashSet<FeatureId> = HashSet::from([tip]);
-        for f in self.features[..=end].iter().rev() {
+        for (idx, f) in self.features[..=end].iter().enumerate().rev() {
             if needed.contains(&f.id) {
                 needed.extend(f.kind.dependencies());
+                needed.extend(weak_before(&f.kind, idx, &pos));
             }
         }
         self.features[..=end]
@@ -146,18 +150,37 @@ impl Document {
     }
 
     /// Alle von einer Rückrollstelle erfassten Features: die Stellen selbst und alles, was von
-    /// ihnen abhängt (Verweise zeigen nur nach vorn, ein Durchlauf reicht).
+    /// ihnen abhängt (Verweise zeigen nur nach vorn, ein Durchlauf reicht). Schwache Bezüge
+    /// zählen mit, soweit die Quelle vor dem Feature steht.
     pub(crate) fn rolled_back(&self) -> HashSet<FeatureId> {
         let mut found: HashSet<FeatureId> = self.rollbacks.iter().copied().collect();
         if found.is_empty() {
             return found;
         }
-        for f in &self.features {
-            if !found.contains(&f.id) && f.kind.dependencies().iter().any(|d| found.contains(d)) {
+        let pos = self.position_map();
+        for (idx, f) in self.features.iter().enumerate() {
+            if !found.contains(&f.id)
+                && (f.kind.dependencies().iter().any(|d| found.contains(d))
+                    || weak_before(&f.kind, idx, &pos).any(|d| found.contains(&d)))
+            {
                 found.insert(f.id);
             }
         }
         found
+    }
+
+    /// Die schwachen Bezüge ([`FeatureKind::weak_dependencies`]) des Features an `idx`, deren
+    /// Quelle existiert und vor `idx` steht; aufsteigend sortiert. Für eine Stelle außerhalb der
+    /// Liste leer.
+    pub fn present_weak_dependencies(&self, idx: usize) -> Vec<FeatureId> {
+        let Some(f) = self.features.get(idx) else {
+            return Vec::new();
+        };
+        f.kind
+            .weak_dependencies()
+            .into_iter()
+            .filter(|id| self.index_of(*id).is_some_and(|i| i < idx))
+            .collect()
     }
 
     /// Stelle jedes Features in der Liste (einmal gebaut, statt `index_of` in Schleifen).
@@ -240,4 +263,16 @@ impl Document {
         kept.retain(|r| !self.chain(*r).iter().any(|c| c != r && all.contains(c)));
         self.rollbacks = kept;
     }
+}
+
+/// Die schwachen Bezüge von `kind` an der Stelle `idx`, deren Quelle vor `idx` steht (`pos`:
+/// Stelle jedes Features, siehe [`Document::position_map`]).
+fn weak_before<'a>(
+    kind: &FeatureKind,
+    idx: usize,
+    pos: &'a std::collections::HashMap<FeatureId, usize>,
+) -> impl Iterator<Item = FeatureId> + 'a {
+    kind.weak_dependencies()
+        .into_iter()
+        .filter(move |id| pos.get(id).is_some_and(|&i| i < idx))
 }

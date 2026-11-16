@@ -79,14 +79,31 @@ impl Activity {
 }
 
 /// Die Stellen `stellen` und alles, was von ihnen abhängt (Verweise zeigen nur nach vorn, ein
-/// Durchlauf in Listenordnung reicht).
+/// Durchlauf in Listenordnung reicht). Wie `Document::rolled_back`: harte Bezüge und schwache,
+/// soweit die Quelle vor dem Feature steht (Skizzen 11a Task 17); eine vor ihre Quelle
+/// geschobene Skizze ist nicht erfasst.
 fn rolled_back(doc: &Document, stellen: &[FeatureId]) -> HashSet<FeatureId> {
     let mut found: HashSet<FeatureId> = stellen.iter().copied().collect();
     if found.is_empty() {
         return found;
     }
-    for f in doc.features() {
-        if !found.contains(&f.id) && f.kind.dependencies().iter().any(|d| found.contains(d)) {
+    let pos: HashMap<FeatureId, usize> = doc
+        .features()
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.id, i))
+        .collect();
+    for (idx, f) in doc.features().iter().enumerate() {
+        if found.contains(&f.id) {
+            continue;
+        }
+        let weak_before = || {
+            f.kind
+                .weak_dependencies()
+                .into_iter()
+                .any(|d| pos.get(&d).is_some_and(|&i| i < idx) && found.contains(&d))
+        };
+        if f.kind.dependencies().iter().any(|d| found.contains(d)) || weak_before() {
             found.insert(f.id);
         }
     }
@@ -286,7 +303,7 @@ pub fn is_locked(state: &AppState, tip: FeatureId) -> bool {
 
 /// Die zentrale Prüfung der Sperre: Warum eine neue Aktion mit den Eingaben `inputs` gerade nicht
 /// geht. Eingaben sind die Kennungen, auf denen das neue Feature aufbaut
-/// ([`FeatureKind::dependencies`]: Körper, Skizzen, Herkunft von Flächen und Kanten).
+/// ([`FeatureKind::all_dependencies`]: Körper, Skizzen, Herkunft von Flächen und Kanten).
 /// [`lock_hint`], wenn eine davon in der Kette eines zurückgesetzten Körpers liegt
 /// ([`is_locked`]); bei mehreren Eingangskörpern reicht einer. Andere Körper und neue
 /// freistehende Körper (ohne Eingaben) sind nie gesperrt.
