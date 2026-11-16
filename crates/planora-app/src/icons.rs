@@ -1728,6 +1728,8 @@ pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
         T::Constraint(action) => sketch_action_icon(action),
         T::InsertControlPoint => IconSource::Hand(HandIcon::SketchSplineControl),
         T::Text => IconSource::Hand(HandIcon::Text),
+        // Wie der Spline mit Kontrollpunkten: Die Übergangskurve ist einer.
+        T::BlendCurve => IconSource::Hand(HandIcon::SketchSplineControl),
     }
 }
 

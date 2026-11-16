@@ -2612,6 +2612,7 @@ fn curve_ink(
 ) -> Color32 {
     let selected = se.selection.contains(&Item::Curve(c))
         || se.pending_curves.contains(&c)
+        || se.blend.first.is_some_and(|e| e.curve == c)
         || dim_picked(se, Item::Curve(c));
     if selected {
         col.selected
@@ -2883,9 +2884,38 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
 
     // Stutzen/Brechen: das Stück rot; Dehnen: der Weg zum neuen Ende rot gestrichelt.
     if let Some(pl) = &se.hover_preview {
-        let stroke = Stroke::new(CURVE_WIDTH + 1.0, col.trim_highlight);
+        // Übergangskurve: die Vorschau der neuen Kurve in der Vorschaufarbe, nicht rot wie das
+        // Stück, das Stutzen entfernt.
+        let ink = if se.tool == Tool::BlendCurve {
+            col.preview
+        } else {
+            col.trim_highlight
+        };
+        let stroke = Stroke::new(CURVE_WIDTH + 1.0, ink);
         for path in map.paths(pl) {
-            draw_path(&painter, path, stroke, se.tool == Tool::Extend);
+            draw_path(
+                &painter,
+                path,
+                stroke,
+                matches!(se.tool, Tool::Extend | Tool::BlendCurve),
+            );
+        }
+    }
+    // Übergangskurve: gewähltes und überfahrenes Ende hervorgehoben (Kurve kräftig, Ende als Ring).
+    if se.tool == Tool::BlendCurve {
+        for (end, ink) in [
+            (se.blend.hover, col.preview),
+            (se.blend.first, col.selected),
+        ] {
+            let Some(end) = end else {
+                continue;
+            };
+            for path in curve_screen_paths(sk, end.curve, &map) {
+                draw_path(&painter, path, Stroke::new(CURVE_WIDTH + 1.0, ink), false);
+            }
+            if let Some(at) = point_screen(sk, end.point, &map) {
+                painter.circle_stroke(at, POINT_PX + 4.0, Stroke::new(2.0, ink));
+            }
         }
     }
 

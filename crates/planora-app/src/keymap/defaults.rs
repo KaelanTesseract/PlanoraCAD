@@ -191,6 +191,8 @@ action_table! {
     SketchExtend, "skizze.dehnen", "action-sketch-extend", Sketch, [];
     /// Fusion „Brechen“: ohne Vorgabetaste wie in Fusion, belegbar.
     SketchBreak, "skizze.brechen", "action-sketch-break", Sketch, [];
+    /// Fusion „Übergangskurve“ (Skizzen 11a): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchBlendCurve, "skizze.uebergangskurve", "action-sketch-blend-curve", Sketch, [];
     // Skizzen 4 (Ändern). F, O und M sind Annahmen nach Fusion; `F` kollidiert nicht mit dem
     // Verrunden des Modells, weil der Bereich ein anderer ist.
     /// Fusion „Skizzenrundung“ (Art Rundung der Liste).
@@ -298,6 +300,7 @@ impl Action {
             Action::SketchOffset => Some(Tool::Offset),
             Action::SketchMoveCopy => Some(Tool::MoveCopy),
             Action::SketchScale => Some(Tool::Scale),
+            Action::SketchBlendCurve => Some(Tool::BlendCurve),
             Action::SketchDimension => Some(Tool::Dimension),
             Action::SketchText => Some(Tool::Text),
             _ => self.sketch_kind().map(crate::sketch_kinds::ToolKind::tool),

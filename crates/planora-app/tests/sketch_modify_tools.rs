@@ -479,7 +479,9 @@ fn menus_show_the_modify_entries_only_with_an_open_sketch() {
     );
     assert_eq!(
         app::SKETCH_MODIFY_TOOLS,
-        [Tool::Offset, Tool::MoveCopy, Tool::Scale],
+        // Skizzen 11a, Task 10 bewusst angepasst: 3 → 4, die Übergangskurve steht wie in Fusion
+        // unter „Ändern“ (nicht in der Leiste).
+        [Tool::Offset, Tool::MoveCopy, Tool::Scale, Tool::BlendCurve],
         "Untermenü „Ändern“, nach Rundung und Fasen"
     );
     for tool in app::SKETCH_MODIFY_TOOLS {

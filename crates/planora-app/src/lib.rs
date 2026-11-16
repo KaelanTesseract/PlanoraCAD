@@ -62,6 +62,7 @@ pub mod settings_window;
 pub mod sheet_dialog;
 pub mod shell;
 pub mod shell_panels;
+pub mod sketch_blend;
 pub mod sketch_cursor;
 pub mod sketch_dimension;
 pub mod sketch_drag3;

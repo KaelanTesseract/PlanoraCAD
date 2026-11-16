@@ -2809,7 +2809,8 @@ fn sketch_create_entries(ui: &mut egui::Ui, ws: &mut Workspace) {
 }
 
 /// Die Werkzeuge im Untermenü „Ändern“ nach Rundung und Fasen (Versatz wie in Fusions „Modify“).
-pub const SKETCH_MODIFY_TOOLS: [Tool; 3] = [Tool::Offset, Tool::MoveCopy, Tool::Scale];
+pub const SKETCH_MODIFY_TOOLS: [Tool; 4] =
+    [Tool::Offset, Tool::MoveCopy, Tool::Scale, Tool::BlendCurve];
 
 /// Bei offener Skizze das Untermenü „Ändern“ im Menü „Bearbeiten“: Skizzenrundung, die drei
 /// Fasen, Versatz, Verschieben/Kopieren und Skizzenmaßstab.

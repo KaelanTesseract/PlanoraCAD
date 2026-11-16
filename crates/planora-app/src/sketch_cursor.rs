@@ -316,6 +316,7 @@ impl SketchSession {
                 | Tool::Trim
                 | Tool::Extend
                 | Tool::Break
+                | Tool::BlendCurve
                 | Tool::Constraint(_)
                 | Tool::InsertControlPoint
         )

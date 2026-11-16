@@ -305,6 +305,7 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchOffset
         | Action::SketchMoveCopy
         | Action::SketchScale
+        | Action::SketchBlendCurve
         | Action::SketchDimension
         | Action::SketchText => {
             if let Some(tool) = a.sketch_tool()

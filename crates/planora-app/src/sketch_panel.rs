@@ -85,6 +85,7 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Constraint(action) => action.label(),
         Tool::InsertControlPoint => tr!("action-sketch-insert-control-point"),
         Tool::Text => tr!("action-sketch-text"),
+        Tool::BlendCurve => tr!("action-sketch-blend-curve"),
     }
 }
 
@@ -114,6 +115,7 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Constraint(action) => command_hint(action),
         Tool::InsertControlPoint => tr!("sketch-tool-insert-control-point-hint"),
         Tool::Text => tr!("sketch-tool-text-hint"),
+        Tool::BlendCurve => tr!("sketch-tool-blend-curve-hint"),
     }
 }
 
@@ -1047,6 +1049,9 @@ fn tool_options(
     if se.tool == Tool::Offset {
         ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
     }
+    if se.tool == Tool::BlendCurve {
+        blend_options(ui, se);
+    }
     if se.tool == Tool::ProjectEdge {
         project_options(ui, se);
     }
@@ -1089,6 +1094,36 @@ fn tool_options(
             }
         });
     }
+}
+
+/// Art der Übergangskurve (Skizzen 11a, Fusion „Continuity“): „Tangential“ (G1) oder „Krümmung“
+/// (G2). Die Art wirkt auf die nächste Kurve; eine laufende Wahl bleibt.
+fn blend_options(ui: &mut egui::Ui, se: &mut SketchSession) {
+    use planora_sketch::blend::BlendKind;
+    ui.horizontal_wrapped(|ui| {
+        for (kind, label, hint) in [
+            (
+                BlendKind::G1,
+                tr!("sketch-blend-kind-g1"),
+                tr!("sketch-blend-kind-g1-hint"),
+            ),
+            (
+                BlendKind::G2,
+                tr!("sketch-blend-kind-g2"),
+                tr!("sketch-blend-kind-g2-hint"),
+            ),
+        ] {
+            let selected = se.blend.kind == kind;
+            if ui
+                .selectable_label(selected, label)
+                .on_hover_text(hint)
+                .clicked()
+                && !selected
+            {
+                se.choose_blend_kind(kind);
+            }
+        }
+    });
 }
 
 /// Umschalter des Linienwerkzeugs (Skizzen 11a, Fusion „Optionen des Features“): „Linie“ oder

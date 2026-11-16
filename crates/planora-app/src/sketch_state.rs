@@ -13,6 +13,7 @@ use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constrain
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3};
 use planora_sketch::SketchError;
+use planora_sketch::blend::{BlendEnd, BlendKind};
 use planora_sketch::constraint::{Axis3, ConstraintId, ConstraintKind, FixToggle, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
@@ -77,6 +78,9 @@ pub enum Tool {
     /// Abschnitt „Text“ im Skizzenfeld; Zustand in [`SketchSession::text`], Ablauf in
     /// [`crate::sketch_text`].
     Text,
+    /// Fusion „Übergangskurve“ (Skizzen 11a): zwei Kurvenenden wählen, der Zeiger entscheidet über
+    /// das Ende; die Art (G1/G2) steht in [`SketchSession::blend`].
+    BlendCurve,
 }
 
 impl Tool {
@@ -92,8 +96,21 @@ impl Tool {
                 | Tool::Offset
                 | Tool::MoveCopy
                 | Tool::Scale
+                | Tool::BlendCurve
         )
     }
+}
+
+/// Zustand der Übergangskurve (Skizzen 11a): die Art, das erste gewählte Ende und das Ende unter
+/// dem Zeiger (gültiges Ziel, je Bild neu bestimmt, siehe [`SketchSession::blend_hover`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BlendState {
+    /// Tangential (G1) oder Krümmung (G2, Vorgabe wie in Fusion).
+    pub kind: BlendKind,
+    /// Das erste gewählte Ende.
+    pub first: Option<BlendEnd>,
+    /// Das Ende, das ein Klick jetzt wählen würde.
+    pub hover: Option<BlendEnd>,
 }
 
 /// Zustand der Skizzenbemaßung ([`crate::sketch_dimension`]): die gewählten Objekte, das gesetzte
@@ -611,6 +628,8 @@ pub struct SketchSession {
     pub dim: DimToolState,
     /// Rechteckige und Kreisförmige Anordnung.
     pub pattern: crate::sketch_pattern::PatternToolState,
+    /// Übergangskurve ([`Tool::BlendCurve`]); gehört dem Werkzeug, die Art bleibt aber für die Sitzung.
+    pub blend: BlendState,
     /// Projizieren (Skizzen 6): Auswahlfilter und „Projektionsverknüpfung“, für die Sitzung.
     pub project: ProjectState,
     /// Abhängigkeitsbefehl: der Bezug, den der letzte Klick gewählt oder abgewählt hat (für einen
@@ -774,6 +793,7 @@ impl SketchSession {
             grip_drag3: None,
             dim: DimToolState::default(),
             pattern: Default::default(),
+            blend: BlendState::default(),
             project: ProjectState::default(),
             constraint_last: None,
             text: None,
@@ -793,6 +813,8 @@ impl SketchSession {
         self.trim_drag = None;
         self.hover_preview = None;
         self.fillet_run = None;
+        self.blend.first = None;
+        self.blend.hover = None;
         if self.transform.blocked_note || self.pattern.blocked_note {
             self.message = None;
         }
@@ -978,6 +1000,8 @@ impl SketchSession {
         self.trim_drag = None;
         self.hover_preview = None;
         self.fillet_run = None;
+        self.blend.first = None;
+        self.blend.hover = None;
         self.transform = TransformState::default();
         self.grip_drag = None;
         self.pattern.reset_after_jump();
@@ -1261,6 +1285,7 @@ impl SketchSession {
                 Tool::Constraint(action) => se.click_constraint(sk, action, Some(at), radius),
                 Tool::InsertControlPoint => se.click_insert_control_point(sk, at, radius, prior),
                 Tool::Text => se.click_text(sk, cur, at, radius),
+                Tool::BlendCurve => se.blend_step(sk, at, prior).map(|_| ()),
             }
         })
     }
@@ -1437,6 +1462,13 @@ impl SketchSession {
     /// Vorschau unter dem Mauszeiger `at` (siehe [`hover_preview`](Self::hover_preview)):
     /// nur bei Stutzen, Dehnen und Brechen.
     pub fn update_hover(&mut self, sk: &Sketch, at: Option<DVec2>, radius: f64) {
+        if self.tool == Tool::BlendCurve {
+            self.hover_preview = at
+                .filter(|a| a.is_finite())
+                .and_then(|at| self.blend_hover_with(sk, at, radius));
+            return;
+        }
+        self.blend.hover = None;
         self.hover_preview = at
             .filter(|a| {
                 a.is_finite() && matches!(self.tool, Tool::Trim | Tool::Extend | Tool::Break)
