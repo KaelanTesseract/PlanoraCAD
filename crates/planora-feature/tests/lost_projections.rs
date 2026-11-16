@@ -1,6 +1,6 @@
-//! Skizzen 11a, Task 18: â€žVerlorene Projektionen verwaltenâ€œ (Fusion â€žManage Lost Projectionsâ€œ)
-//! am Dokument: Neu verknÃ¼pfen, VerknÃ¼pfung aufheben, Geometrie lÃ¶schen. Dazu der Randfall aus
-//! Task 17: Eine verlorene Kurve behÃ¤lt ihre letzte Lage auch Ã¼ber einen vollen Neubau, solange
+//! Skizzen 11a, Task 18: „Verlorene Projektionen verwalten“ (Fusion „Manage Lost Projections“)
+//! am Dokument: Neu verknüpfen, Verknüpfung aufheben, Geometrie löschen. Dazu der Randfall aus
+//! Task 17: Eine verlorene Kurve behält ihre letzte Lage auch über einen vollen Neubau, solange
 //! die Skizze hinter dem Marker steht.
 
 use planora_feature::*;
@@ -36,7 +36,7 @@ fn add_box(d: &mut Document, name: &str, origin: DVec3) -> FeatureId {
     .unwrap()
 }
 
-/// Die Kante des KÃ¶rpers in der Ebene z = 0 und y = `y` (LÃ¤nge 10 in x).
+/// Die Kante des Körpers in der Ebene z = 0 und y = `y` (Länge 10 in x).
 fn bottom_edge(solid: &Solid, y: f64) -> (EdgeRef, planora_kernel::Curve, f64, f64) {
     for (id, e) in solid.edges.iter() {
         let p0 = solid.vertices[e.start].point;
@@ -85,9 +85,9 @@ fn not_lost(d: &Document, s: FeatureId) {
 }
 
 /// Quader A (am Ursprung) und B (bei x = 30), dahinter eine Skizze auf XY mit `n` (1 oder 2)
-/// verknÃ¼pft projizierten Unterkanten von A (y = 0 und y = 20), einem freien Punkt und einem
-/// anzeigenden AbstandsmaÃŸ vom Punkt zur ersten Kurve. Liefert Dokument, A, B, Skizze, Kurven
-/// und das MaÃŸ.
+/// verknüpft projizierten Unterkanten von A (y = 0 und y = 20), einem freien Punkt und einem
+/// anzeigenden Abstandsmaß vom Punkt zur ersten Kurve. Liefert Dokument, A, B, Skizze, Kurven
+/// und das Maß.
 struct Rig {
     d: Document,
     a: FeatureId,
@@ -138,8 +138,8 @@ fn rig(n: usize) -> Rig {
     }
 }
 
-/// Wie [`rig`], danach Quader A 12 lang (die Kurven folgen) und gelÃ¶scht: Alle Kurven sind
-/// verloren und stehen an ihrer letzten Lage (LÃ¤nge 12), nicht an der Definition (LÃ¤nge 10).
+/// Wie [`rig`], danach Quader A 12 lang (die Kurven folgen) und gelöscht: Alle Kurven sind
+/// verloren und stehen an ihrer letzten Lage (Länge 12), nicht an der Definition (Länge 10).
 fn lost_rig(n: usize) -> Rig {
     let mut r = rig(n);
     r.d.update(r.a, |k| {
@@ -180,10 +180,10 @@ fn relink_edge_to_other_edge() {
         same_segment(got, (DVec2::new(30.0, 0.0), DVec2::new(40.0, 0.0))),
         "{got:?}"
     );
-    // Die Herkunft ist die Kante von B, das MaÃŸ an der Kurve bleibt.
+    // Die Herkunft ist die Kante von B, das Maß an der Kurve bleibt.
     assert_eq!(def(&r.d, r.s).copies.len(), 1);
     assert_eq!(def(&r.d, r.s).copies[0].source, CopySource::Edge(edge_b));
-    let c = sk.constraint(r.dim).expect("MaÃŸ bleibt");
+    let c = sk.constraint(r.dim).expect("Maß bleibt");
     assert!(c.kind.curves().contains(&r.curves[0]));
     // Der Quader B ist jetzt ein schwacher Bezug der Skizze.
     assert_eq!(
@@ -208,7 +208,7 @@ fn relink_other_family_refused() {
         )
         .unwrap_err();
     assert_eq!(err, FeatureError::Sketch(tr!("feature-relink-kind")));
-    assert_eq!(r.d.edit_count(), edits, "Dokument unverÃ¤ndert");
+    assert_eq!(r.d.edit_count(), edits, "Dokument unverändert");
     assert!(r.d.snapshot().same_content(&before));
     assert_eq!(r.d.feature(r.s).unwrap().lost_projections().len(), 1);
 }
@@ -258,13 +258,13 @@ fn unlink_keeps_curve_in_place() {
     let before = line_ends(r.d.sketch_of(r.s).unwrap(), r.curves[0]);
     let edits = r.d.edit_count();
     assert_eq!(r.d.unlink_projections(r.s, &targets(&r)).unwrap(), 1);
-    assert_eq!(r.d.edit_count(), edits + 1, "eine Ã„nderung");
+    assert_eq!(r.d.edit_count(), edits + 1, "eine Änderung");
     not_lost(&r.d, r.s);
     assert!(def(&r.d, r.s).copies.is_empty());
-    // An der letzten Lage (LÃ¤nge 12), nicht an der Definition (LÃ¤nge 10).
+    // An der letzten Lage (Länge 12), nicht an der Definition (Länge 10).
     let after = line_ends(r.d.sketch_of(r.s).unwrap(), r.curves[0]);
     assert!(same_segment(after, before), "{after:?} statt {before:?}");
-    // Ohne Eintrag Ã¤ndert nichts.
+    // Ohne Eintrag ändert nichts.
     assert_eq!(r.d.unlink_projections(r.s, &targets(&r)).unwrap(), 0);
     assert_eq!(r.d.edit_count(), edits + 1);
 }
@@ -274,11 +274,11 @@ fn delete_lost_geometry_removes_curve() {
     let mut r = lost_rig(1);
     let edits = r.d.edit_count();
     assert_eq!(r.d.delete_lost_geometry(r.s, &targets(&r)).unwrap(), 1);
-    assert_eq!(r.d.edit_count(), edits + 1, "eine Ã„nderung");
+    assert_eq!(r.d.edit_count(), edits + 1, "eine Änderung");
     not_lost(&r.d, r.s);
     let sk = r.d.sketch_of(r.s).unwrap();
-    assert!(sk.curve(r.curves[0]).is_none(), "Kurve gelÃ¶scht");
-    assert!(sk.constraint(r.dim).is_none(), "das MaÃŸ geht mit");
+    assert!(sk.curve(r.curves[0]).is_none(), "Kurve gelöscht");
+    assert!(sk.constraint(r.dim).is_none(), "das Maß geht mit");
     assert!(def(&r.d, r.s).copies.is_empty(), "Kopie-Eintrag weg");
     // Nur noch der eigene Punkt bleibt (die Enden der Kurve gehen mit).
     assert_eq!(
@@ -302,14 +302,14 @@ fn break_all_and_delete_all() {
     assert!(r.curves.iter().all(|c| sk.curve(*c).is_none()));
 }
 
-/// Randfall aus Task 17: Quelle verloren, Marker vor die Skizze, voller Neubau, Marker zurÃ¼ck.
-/// Die Kurve steht danach an der letzten Lage (LÃ¤nge 12), nicht an der Definition (LÃ¤nge 10).
+/// Randfall aus Task 17: Quelle verloren, Marker vor die Skizze, voller Neubau, Marker zurück.
+/// Die Kurve steht danach an der letzten Lage (Länge 12), nicht an der Definition (Länge 10).
 #[test]
 fn lost_curve_keeps_last_place_behind_marker() {
     let mut r = lost_rig(1);
     let idx = r.d.index_of(r.s).unwrap();
     r.d.set_marker(idx).unwrap();
-    // Voller Neubau: RÃ¼ckgÃ¤ngig auf ein Bild mit anderem Modell.
+    // Voller Neubau: Rückgängig auf ein Bild mit anderem Modell.
     let snap = r.d.snapshot();
     r.d.rename(r.b, "Quader C").unwrap();
     assert_eq!(r.d.restore(snap).unwrap(), RestoreKind::Full);
@@ -327,4 +327,110 @@ fn lost_curve_keeps_last_place_behind_marker() {
         (l - 12.0).abs() < 1e-9,
         "letzte Lage, nicht die Definition: {l}"
     );
+}
+
+/// Quader A und eine Skizze auf XY mit zwei an Ecken von A eingezogenen festen Punkten (A7): An
+/// Punkt `p` hängt eine Linie des Nutzers, Punkt `lone` steht allein. Danach ist A gelöscht,
+/// beide Punkte sind verlorene Projektionen. Liefert Dokument, Skizze, `p`, `lone`, Linie.
+fn lost_vertices() -> (
+    Document,
+    FeatureId,
+    planora_sketch::model::PointId,
+    planora_sketch::model::PointId,
+    CurveId,
+) {
+    use planora_sketch::helpers::Included;
+    let mut d = Document::new();
+    let a = add_box(&mut d, "Quader A", DVec3::ZERO);
+    let solid = body(&d, a);
+    let (edge, ..) = bottom_edge(&solid, 0.0);
+    let (far, ..) = bottom_edge(&solid, 20.0);
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", tol());
+    let mut copies = Vec::new();
+    let mut points = Vec::new();
+    for e in [edge, far] {
+        let r = IncludeRef::Vertex(VertexRef {
+            edge: e,
+            end: false,
+        });
+        let pieces = included_pieces(&d, d.features().len(), &Frame::WORLD, &r).unwrap();
+        let Included::Point(at) = pieces[0] else {
+            panic!("kein Punkt: {:?}", pieces[0]);
+        };
+        let p = sk.add_included(&Included::Point(at)).unwrap().points[0];
+        copies.push(EdgeCopy {
+            target: CopyTarget::Point(p),
+            source: CopySource::Include(r),
+            piece: 0,
+            of: 1,
+        });
+        points.push(p);
+    }
+    let q = sk.add_point(25.0, 25.0).unwrap();
+    let line = sk.add_line(points[0], q).unwrap();
+    let s = d
+        .add_feature(
+            "Skizze",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk,
+                plane: XY,
+                copies,
+                formulas: Default::default(),
+            }),
+        )
+        .unwrap();
+    not_lost(&d, s);
+    d.delete(a).unwrap();
+    assert_eq!(d.feature(s).unwrap().lost_projections().len(), 2);
+    (d, s, points[0], points[1], line)
+}
+
+/// Fusion: „Geometrie löschen“ an einer verlorenen Ecke nimmt nur den projizierten Punkt; eine
+/// Linie des Nutzers an dieser Ecke bleibt, ihr Ende wird ein gewöhnlicher (nicht fester) Punkt.
+#[test]
+fn delete_lost_vertex_keeps_user_line() {
+    let (mut d, s, p, lone, line) = lost_vertices();
+    let targets = [CopyTarget::Point(p), CopyTarget::Point(lone)];
+    assert_eq!(d.delete_lost_geometry(s, &targets).unwrap(), 2);
+    not_lost(&d, s);
+    assert!(def(&d, s).copies.is_empty(), "beide Kopie-Einträge weg");
+    let sk = d.sketch_of(s).unwrap();
+    assert!(sk.curve(line).is_some(), "die Linie des Nutzers bleibt");
+    assert!(sk.point_xy(p).is_ok(), "ihr Ende bleibt");
+    assert!(
+        sk.constraints()
+            .all(|(_, c)| c.kind.fixed_point() != Some(p)),
+        "das Ende ist nicht mehr fest"
+    );
+    assert!(sk.point_xy(lone).is_err(), "der allein stehende Punkt geht");
+}
+
+/// Ruling T18-2: Kann die Kurve der neuen Quelle nicht folgen (senkrechte Kante, die auf XY nur
+/// ein Punkt wäre), lehnt `relink_projection` ab; das Dokument bleibt unverändert.
+#[test]
+fn relink_to_unfollowable_source_refused() {
+    let mut r = lost_rig(1);
+    let solid = body(&r.d, r.b);
+    let vertical = solid
+        .edges
+        .iter()
+        .find(|(_, e)| {
+            let (p0, p1) = (solid.vertices[e.start].point, solid.vertices[e.end].point);
+            (p0.x - p1.x).abs() < 1e-9 && (p0.y - p1.y).abs() < 1e-9
+        })
+        .map(|(id, _)| EdgeRef::from_edge(&solid, id, &tol()).unwrap())
+        .expect("senkrechte Kante");
+    let before = r.d.snapshot();
+    let edits = r.d.edit_count();
+    let err =
+        r.d.relink_projection(
+            r.s,
+            CopyTarget::Curve(r.curves[0]),
+            CopySource::Edge(vertical),
+        )
+        .unwrap_err();
+    assert_eq!(err, FeatureError::Sketch(tr!("lost-relink-failed")));
+    assert_eq!(r.d.edit_count(), edits, "Dokument unverändert");
+    assert!(r.d.snapshot().same_content(&before));
+    assert_eq!(r.d.feature(r.s).unwrap().lost_projections().len(), 1);
 }

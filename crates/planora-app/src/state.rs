@@ -3431,41 +3431,13 @@ impl AppState {
             let Some(draft) = self.sketch_draft.as_mut() else {
                 return Ok(0);
             };
+            // Derselbe Weg wie am Dokument; an einer Kopie, damit ein Fehler nichts ändert.
             let mut trial = draft.clone();
-            let mut n = 0;
-            for t in targets {
-                if !trial.break_link_target(*t) {
-                    continue;
-                }
-                let removed = match *t {
-                    CopyTarget::Curve(c) => {
-                        let ends = trial
-                            .sketch
-                            .curve(c)
-                            .map(|d| d.kind.points())
-                            .unwrap_or_default();
-                        trial.sketch.remove_curve(c).and_then(|()| {
-                            for p in ends {
-                                let used = trial
-                                    .sketch
-                                    .curves()
-                                    .any(|(_, d)| d.kind.points().contains(&p));
-                                if !used && trial.sketch.point_xyz(p).is_ok() {
-                                    trial.sketch.remove_point(p)?;
-                                }
-                            }
-                            Ok(())
-                        })
-                    }
-                    CopyTarget::Point(p) => trial.sketch.remove_point(p),
-                };
-                if let Err(e) = removed {
-                    return self.fail(e.to_string());
-                }
-                n += 1;
-            }
+            let n = match planora_feature::delete_lost_targets(&mut trial, targets) {
+                Ok(n) => n,
+                Err(e) => return self.fail(e.to_string()),
+            };
             if n > 0 {
-                trial.prune_copies();
                 *draft = trial;
                 if let Some(se) = self.sketch_session.as_mut() {
                     se.forget_removed(&draft.sketch);
@@ -3490,17 +3462,22 @@ impl AppState {
 
     /// „Neu verknüpfen“ im Dialog (Ruling F9): öffnet die Skizze `sketch` (falls zu) und setzt
     /// die Wahl der Sitzung ([`crate::sketch_state::RelinkPick`]); der nächste passende Klick in
-    /// der Ansicht (dieselbe Auswahl wie „Projizieren“) ruft [`AppState::relink_pick`]. Esc nimmt
-    /// die Wahl zurück. Fehler (Meldung auch in `message`): keine Kopie, Art nicht wählbar.
+    /// der Ansicht (dieselbe Auswahl wie „Projizieren“ bzw. bei eingezogener 3D-Geometrie wie
+    /// „3D-Geometrie einbeziehen“) ruft [`AppState::relink_pick`] bzw.
+    /// [`AppState::relink_include_pick`]. Esc nimmt
+    /// die Wahl zurück. Fehler (Meldung auch in `message`): keine Kopie, Art nicht wählbar. Bei
+    /// offener Skizze zählen die Kopien des Entwurfs.
     pub fn start_relink(&mut self, sketch: FeatureId, target: CopyTarget) -> Result<(), String> {
-        let family = match self.document.feature(sketch).map(|f| &f.kind) {
-            Some(FeatureKind::Sketch(def)) => def
-                .copies
-                .iter()
-                .find(|c| c.target == target)
-                .map(|c| c.source.clone()),
-            _ => None,
+        let copies = match self.sketch_draft.as_ref() {
+            Some(draft) if self.open_sketch_id() == Some(sketch) => Some(&draft.copies),
+            _ => match self.document.feature(sketch).map(|f| &f.kind) {
+                Some(FeatureKind::Sketch(def)) => Some(&def.copies),
+                _ => None,
+            },
         };
+        let family = copies
+            .and_then(|cs| cs.iter().find(|c| c.target == target))
+            .map(|c| c.source.clone());
         let Some(family) = family else {
             return self.fail(tr!("feature-relink-no-copy"));
         };
@@ -3536,6 +3513,28 @@ impl AppState {
             .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
         let source = self.relink_source(&pick.family, picked)?;
         self.try_relink(pick.target, source)
+    }
+
+    /// Wie [`AppState::relink_pick`] für eingezogene 3D-Geometrie (Ruling T18-1): Der Klick
+    /// `pick` (dieselbe Auswahl wie „3D-Geometrie einbeziehen“: Ecke, Kante, Fläche, Ebene, Achse,
+    /// Ursprung, Kurve einer früheren Skizze) wird über [`AppState::include_ref`] die neue Herkunft.
+    /// Eine andere Art als die verlorene lehnt es ab (die Wahl bleibt).
+    pub fn relink_include_pick(&mut self, pick: IncludePick) -> Result<(), String> {
+        let r = self.try_relink_include(pick);
+        self.report_to_session(r.map(|()| 1)).map(|_| ())
+    }
+
+    fn try_relink_include(&mut self, pick: IncludePick) -> Result<(), Msg> {
+        let relink = self
+            .sketch_session
+            .as_ref()
+            .and_then(|se| se.relink.clone())
+            .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
+        let source = CopySource::Include(self.include_ref(pick)?);
+        if !relink.family.same_family(&source) {
+            return Err(crate::msg!("lost-relink-wrong-pick"));
+        }
+        self.try_relink(relink.target, source)
     }
 
     /// Die neue Herkunft der Familie `family` aus dem Klick `picked`; Schnitt und Silhouette
@@ -3616,6 +3615,14 @@ impl AppState {
             .ok_or_else(|| crate::msg!("feature-relink-no-copy"))?;
         if !old.same_family(&source) {
             return Err(crate::msg!("feature-relink-kind"));
+        }
+        if old == source {
+            // Dieselbe Herkunft: nichts zu tun, die Wahl endet ohne Schritt.
+            if let Some(se) = self.sketch_session.as_mut() {
+                se.relink = None;
+                se.message = None;
+            }
+            return Ok(());
         }
         let mut trial = draft.clone();
         planora_feature::relink_copies(&mut trial, target, &old, &source);
@@ -4692,22 +4699,29 @@ pub fn mesh_locked_hint() -> String {
     tr!("state-mesh-locked")
 }
 
-/// Lässt sich die Herkunft `source` mit „Neu verknüpfen“ über die Auswahl von „Projizieren“
-/// (Kante, Fläche, Kurve einer früheren Skizze; Ruling F9) neu wählen? Ecken, Ebenen, Achsen,
-/// der Ursprung, „Auf Fläche projizieren“ und die Schnittkurve nicht (ihre Herkunft hat mehrere
-/// Teile oder liegt nicht in dieser Auswahl).
+/// Lässt sich die Herkunft `source` mit „Neu verknüpfen“ in der Ansicht neu wählen? Kante,
+/// Schnitt, Silhouette und Skizzenkurve über die Auswahl von „Projizieren“ (Ruling F9),
+/// eingezogene 3D-Geometrie (Kante, Flächenrand, Ecke, Ebene, Achse, Ursprung, Skizzenkurve)
+/// über die Auswahl von „3D-Geometrie einbeziehen“ (Ruling T18-1). Nicht: Konstruktionspunkte
+/// (gibt es noch nicht als Features), „Auf Fläche projizieren“ und die Schnittkurve (mehrteilige
+/// Eingaben ihres Dialogs; Abweichung in offene-punkte).
 pub fn relink_pickable(source: &CopySource) -> bool {
     use planora_feature::IncludeRef;
-    matches!(
-        source,
+    match source {
         CopySource::Edge(_)
-            | CopySource::Section { .. }
-            | CopySource::Silhouette { .. }
-            | CopySource::SketchCurve { .. }
-            | CopySource::Include(
-                IncludeRef::Edge(_) | IncludeRef::FaceBoundary(_) | IncludeRef::SketchCurve { .. }
-            )
-    )
+        | CopySource::Section { .. }
+        | CopySource::Silhouette { .. }
+        | CopySource::SketchCurve { .. } => true,
+        CopySource::Include(r) => !matches!(r, IncludeRef::ConstructionPoint(_)),
+        CopySource::OnSurface(_) | CopySource::Intersection(_) => false,
+    }
+}
+
+/// Wählt „Neu verknüpfen“ für die Herkunft `family` über die Auswahl von „3D-Geometrie
+/// einbeziehen“ (Ecken, Ebenen, Achsen, Ursprung; Ruling T18-1)? Sonst über die von
+/// „Projizieren“.
+pub fn relink_picks_like_include(family: &CopySource) -> bool {
+    matches!(family, CopySource::Include(_))
 }
 
 /// Der Körper, den ein Feature fortführt (sein Ergebnis ist für den Nutzer „derselbe Körper“):

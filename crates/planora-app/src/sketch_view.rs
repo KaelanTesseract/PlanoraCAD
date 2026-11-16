@@ -2473,8 +2473,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY)
         }
     };
-    let hover = if relink_family.is_some() {
-        pointer.and_then(|p| state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY))
+    // „Neu verknüpfen“: Eingezogene 3D-Geometrie wählt wie „3D-Geometrie einbeziehen“ (Ecken,
+    // Ebenen, Achsen, Ursprung; Ruling T18-1), alles andere wie „Projizieren“ (Ruling F9).
+    let relink_filter = |family: &planora_feature::CopySource| {
+        if crate::state::relink_picks_like_include(family) {
+            PickFilter::INCLUDE
+        } else {
+            PickFilter::GEOMETRY
+        }
+    };
+    let hover = if let Some(family) = relink_family.as_ref() {
+        pointer.and_then(|p| state.pick_with(map.local(p), map.viewport(), relink_filter(family)))
     } else if tool == Tool::ProjectEdge {
         pointer.and_then(|p| pick_at(state, p))
     } else {
@@ -2482,17 +2491,21 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     };
     state.set_hover(hover);
     if let (Some(p), Some(family)) = (relink_at, relink_family.as_ref()) {
-        let picked = state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY);
-        let curve = sketch_curve_under(state, &map, p);
-        match relink_target(family, picked, curve) {
-            Some(t) => {
+        let picked = state.pick_with(map.local(p), map.viewport(), relink_filter(family));
+        let done = if crate::state::relink_picks_like_include(family) {
+            include_pick(state, &map, p, picked).map(|pick| {
+                let _ = state.relink_include_pick(pick);
+            })
+        } else {
+            let curve = sketch_curve_under(state, &map, p);
+            relink_target(family, picked, curve).map(|t| {
                 let _ = state.relink_pick(t);
-            }
-            None => {
-                if let Some(se) = state.sketch_session.as_mut() {
-                    se.message = Some(crate::msg!("lost-relink-wrong-pick"));
-                }
-            }
+            })
+        };
+        if done.is_none()
+            && let Some(se) = state.sketch_session.as_mut()
+        {
+            se.message = Some(crate::msg!("lost-relink-wrong-pick"));
         }
         return;
     }

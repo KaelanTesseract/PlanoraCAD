@@ -213,7 +213,8 @@ impl Document {
     /// ganze Gruppe (gleiche alte Herkunft) die neue; Stückindex und Stückzahl bleiben, damit
     /// Abhängigkeiten und Maße bleiben, soweit die neue Quelle gleich viele Stücke ergibt. Eine
     /// Herkunft einer anderen Familie ([`CopySource::same_family`]) lehnt es ab
-    /// ([`FeatureError::Sketch`]), ebenso ein Ziel ohne Kopie; dann bleibt alles unverändert.
+    /// ([`FeatureError::Sketch`]), ebenso ein Ziel ohne Kopie und eine Quelle, der die Kurve
+    /// nicht folgen kann (das Ziel bliebe verloren, Ruling T18-2); dann bleibt alles unverändert.
     /// Eine gleiche Herkunft ändert nichts.
     pub fn relink_projection(
         &mut self,
@@ -235,7 +236,18 @@ impl Document {
             return Ok(());
         }
         relink_copies(&mut sf, target, &old, &source);
-        self.commit_sketch(sketch, sf)
+        // Erst probieren: Bleibt das Ziel verloren, gilt der Stand davor (auch Zähler und Verlauf
+        // des Dokuments).
+        let before = self.clone();
+        self.commit_sketch(sketch, sf)?;
+        let still_lost = self
+            .feature(sketch)
+            .is_some_and(|f| f.lost_projections().contains(&target));
+        if still_lost {
+            *self = before;
+            return Err(FeatureError::Sketch(tr!("lost-relink-failed")));
+        }
+        Ok(())
     }
 
     /// „Verknüpfung aufheben“ für die Ziele `targets` der Skizze `sketch` (Skizzen 11a, Fusion
@@ -266,16 +278,9 @@ impl Document {
         targets: &[CopyTarget],
     ) -> Result<usize, FeatureError> {
         let mut sf = self.sketch_with_result(sketch)?;
-        let mut n = 0;
-        for t in targets {
-            if !sf.break_link_target(*t) {
-                continue;
-            }
-            delete_target(&mut sf.sketch, *t).map_err(|e| FeatureError::Sketch(e.to_string()))?;
-            n += 1;
-        }
+        let n = delete_lost_targets(&mut sf, targets)
+            .map_err(|e| FeatureError::Sketch(e.to_string()))?;
         if n > 0 {
-            sf.prune_copies();
             self.commit_sketch(sketch, sf)?;
         }
         Ok(n)
@@ -609,18 +614,57 @@ pub fn relink_copies(
     }
 }
 
-/// Löscht das Ziel einer Kopie aus der Skizze: eine Kurve samt ihren Enden, die keine andere
-/// lebende Kurve benutzt, oder einen Punkt.
+/// „Geometrie löschen“ an der Skizze `sf` (gemeinsamer Weg für Dokument und offene Skizze der
+/// App): je Ziel aus `targets` mit Kopie der Kopie-Eintrag und die projizierte Geometrie. Eine
+/// Kurve geht samt ihren Enden, die keine andere lebende Kurve benutzt. Ein Punkt, an dem noch
+/// eine Kurve hängt (etwa eine Linie des Nutzers an einer eingezogenen Ecke, A7), bleibt als
+/// gewöhnlicher Punkt stehen: Nur seine Fixierung entfällt (wie Fusion, dort fällt nur der Bezug
+/// weg). Liefert die Zahl der gelöschten Ziele. Bei einem Fehler kann `sf` halb geändert sein;
+/// der Aufrufer arbeitet darum an einer Kopie.
+pub fn delete_lost_targets(
+    sf: &mut SketchFeature,
+    targets: &[CopyTarget],
+) -> Result<usize, planora_sketch::SketchError> {
+    let mut n = 0;
+    for t in targets {
+        if !sf.break_link_target(*t) {
+            continue;
+        }
+        delete_target(&mut sf.sketch, *t)?;
+        n += 1;
+    }
+    if n > 0 {
+        sf.prune_copies();
+    }
+    Ok(n)
+}
+
+/// Benutzt eine lebende Kurve den Punkt `p`?
+fn point_used(sk: &Sketch, p: planora_sketch::model::PointId) -> bool {
+    sk.curves().any(|(_, d)| d.kind.points().contains(&p))
+}
+
+/// Löscht das Ziel einer Kopie aus der Skizze (siehe [`delete_lost_targets`]).
 fn delete_target(sk: &mut Sketch, target: CopyTarget) -> Result<(), planora_sketch::SketchError> {
     match target {
         CopyTarget::Curve(c) => {
             let ends = sk.curve(c).map(|d| d.kind.points()).unwrap_or_default();
             sk.remove_curve(c)?;
             for p in ends {
-                let used = sk.curves().any(|(_, d)| d.kind.points().contains(&p));
-                if !used && sk.point_xyz(p).is_ok() {
+                if !point_used(sk, p) && sk.point_xyz(p).is_ok() {
                     sk.remove_point(p)?;
                 }
+            }
+            Ok(())
+        }
+        CopyTarget::Point(p) if point_used(sk, p) => {
+            let pins: Vec<_> = sk
+                .constraints()
+                .filter(|(_, c)| c.kind.fixed_point() == Some(p))
+                .map(|(id, _)| id)
+                .collect();
+            for id in pins {
+                sk.remove_constraint(id)?;
             }
             Ok(())
         }

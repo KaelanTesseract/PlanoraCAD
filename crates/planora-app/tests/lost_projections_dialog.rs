@@ -8,7 +8,7 @@ use planora_app::commands::run_action;
 use planora_app::detach::DIALOG_KEYS;
 use planora_app::keymap::Action;
 use planora_app::lost_projections_dialog::{LostAction, LostProjectionsDialog};
-use planora_app::state::{AppState, ProjectTarget, StandardPlane};
+use planora_app::state::{AppState, IncludePick, ProjectTarget, StandardPlane};
 use planora_app::surface_project_dialog::DialogOutcome;
 use planora_app::workspace::Workspace;
 use planora_app::{browser, fonts, history_bar, sketch_view, theme};
@@ -650,4 +650,208 @@ fn dialog_has_dock_key() {
     let d = LostProjectionsDialog::new(FeatureId(1));
     assert!(!d.dim_rest);
     assert_eq!(d.relink, None);
+}
+
+// ---- Ruling T18-1: „Neu verknüpfen“ für eingezogene Ecken, Ebenen, Achsen und den Ursprung ----
+
+/// Quader A (am Ursprung) und B (bei x = 30), dahinter „Skizze 1“ auf XY, offen, mit der über
+/// „3D-Geometrie einbeziehen“ eingezogenen Wahl `pick` (von `pick_of`, mit dem Index von A).
+/// Liefert Arbeitsbereich, A, B, Skizze und die Ziele der neuen Kopien.
+fn included(
+    pick_of: impl Fn(&AppState, usize) -> IncludePick,
+) -> (Workspace, FeatureId, FeatureId, FeatureId, Vec<CopyTarget>) {
+    let mut w = Workspace::new(None, Config::default());
+    let s = &mut w.active_tab_mut().state;
+    let a = s.create_box(DVec3::new(10.0, 20.0, 5.0)).unwrap();
+    let b = s
+        .document
+        .add_feature(
+            "Quader B",
+            FeatureKind::Box {
+                size: DVec3::new(10.0, 20.0, 5.0),
+                origin: DVec3::new(30.0, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    s.refresh();
+    let sketch = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(sketch).unwrap();
+    s.observe_sketch(false);
+    let ia = body_index(s, a);
+    let pick = pick_of(s, ia);
+    s.include_into_sketch(pick).unwrap();
+    s.observe_sketch(false);
+    let targets = s
+        .sketch_draft
+        .as_ref()
+        .unwrap()
+        .copies
+        .iter()
+        .map(|c| c.target)
+        .collect();
+    w.observe_history(false);
+    (w, a, b, sketch, targets)
+}
+
+fn vertex_of(s: &AppState, body: usize) -> IncludePick {
+    IncludePick::Vertex {
+        body,
+        edge: bottom_edge(s, body, 0.0),
+        end: false,
+    }
+}
+
+fn draft_sources(s: &AppState) -> Vec<CopySource> {
+    s.sketch_draft
+        .as_ref()
+        .unwrap()
+        .copies
+        .iter()
+        .map(|c| c.source.clone())
+        .collect()
+}
+
+fn steps(s: &AppState) -> usize {
+    s.sketch_history().unwrap().undo_len()
+}
+
+#[test]
+fn relink_lost_vertex_to_other_corner() {
+    let (mut w, a, b, sketch, targets) = included(vertex_of);
+    assert!(matches!(targets[..], [CopyTarget::Point(_)]));
+    let s = &mut w.active_tab_mut().state;
+    s.close_sketch();
+    s.delete_feature(a).unwrap();
+    assert_eq!(s.lost_rows(sketch), targets, "Ecke verloren");
+    s.open_lost_projections(sketch);
+    let rows = s.lost_dialog.clone().unwrap().rows(s);
+    assert!(rows[0].relinkable, "Ecken lassen sich neu wählen");
+    s.start_relink(sketch, targets[0]).unwrap();
+    let before = steps(s);
+    let ib = body_index(s, b);
+    let pick = vertex_of(s, ib);
+    s.relink_include_pick(pick).unwrap();
+    s.observe_sketch(false);
+    assert_eq!(steps(s), before + 1, "ein Schritt");
+    assert_eq!(s.sketch_undo_label().as_deref(), Some("Neu verknüpfen"));
+    let CopyTarget::Point(p) = targets[0] else {
+        unreachable!()
+    };
+    let at = s.sketch_draft.as_ref().unwrap().sketch.point_xy(p).unwrap();
+    assert!(
+        [30.0, 40.0].iter().any(|x| (at.x - x).abs() < 1e-9) && at.y.abs() < 1e-9,
+        "auf einer Ecke von B: {at:?}"
+    );
+    s.close_sketch();
+    assert!(
+        s.document
+            .feature(sketch)
+            .unwrap()
+            .lost_projections()
+            .is_empty()
+    );
+}
+
+#[test]
+fn relink_plane_to_other_plane() {
+    use planora_feature::{IncludeRef, PlaneId};
+    let (mut w, _, _, sketch, targets) =
+        included(|_, _| IncludePick::Plane(PlaneId::Standard(StandardPlane::XZ)));
+    assert_eq!(targets.len(), 4, "vier Randlinien");
+    let s = &mut w.active_tab_mut().state;
+    s.start_relink(sketch, targets[0]).unwrap();
+    let before = steps(s);
+    s.relink_include_pick(IncludePick::Plane(PlaneId::Standard(StandardPlane::YZ)))
+        .unwrap();
+    s.observe_sketch(false);
+    assert_eq!(steps(s), before + 1, "ein Schritt für die ganze Gruppe");
+    let yz = CopySource::Include(IncludeRef::Plane(PlaneId::Standard(StandardPlane::YZ)));
+    assert!(
+        draft_sources(s).iter().all(|src| *src == yz),
+        "{:?}",
+        draft_sources(s)
+    );
+    // Alle vier Linien liegen jetzt in der YZ-Ebene (x = 0).
+    let sk = &s.sketch_draft.as_ref().unwrap().sketch;
+    for t in &targets {
+        let CopyTarget::Curve(c) = *t else { panic!() };
+        for p in sk.curve(c).unwrap().kind.points() {
+            assert!(sk.point_xyz(p).unwrap().x.abs() < 1e-9);
+        }
+    }
+}
+
+#[test]
+fn relink_axis_to_other_axis() {
+    use planora_feature::{AxisId, IncludeRef};
+    let (mut w, _, _, sketch, targets) = included(|_, _| IncludePick::Axis(AxisId::X));
+    let s = &mut w.active_tab_mut().state;
+    s.start_relink(sketch, targets[0]).unwrap();
+    let before = steps(s);
+    s.relink_include_pick(IncludePick::Axis(AxisId::Y)).unwrap();
+    s.observe_sketch(false);
+    assert_eq!(steps(s), before + 1);
+    assert_eq!(
+        draft_sources(s),
+        vec![CopySource::Include(IncludeRef::Axis(AxisId::Y))]
+    );
+    let sk = &s.sketch_draft.as_ref().unwrap().sketch;
+    let CopyTarget::Curve(c) = targets[0] else {
+        panic!()
+    };
+    for p in sk.curve(c).unwrap().kind.points() {
+        assert!(sk.point_xyz(p).unwrap().x.abs() < 1e-9, "auf der y-Achse");
+    }
+}
+
+#[test]
+fn relink_origin_refuses_other_kind() {
+    use planora_feature::IncludeRef;
+    let (mut w, _, b, sketch, targets) = included(|_, _| IncludePick::Origin);
+    let s = &mut w.active_tab_mut().state;
+    s.start_relink(sketch, targets[0]).unwrap();
+    let before = steps(s);
+    // Eine Ecke ist eine andere Art als der Ursprung: nichts geändert, die Wahl bleibt.
+    let ib = body_index(s, b);
+    let pick = vertex_of(s, ib);
+    assert!(s.relink_include_pick(pick).is_err());
+    assert!(s.sketch_session.as_ref().unwrap().relink.is_some());
+    // Der Ursprung selbst passt (gleiche Herkunft: kein Schritt).
+    s.relink_include_pick(IncludePick::Origin).unwrap();
+    s.observe_sketch(false);
+    assert_eq!(steps(s), before);
+    assert_eq!(
+        draft_sources(s),
+        vec![CopySource::Include(IncludeRef::Origin)]
+    );
+    assert!(s.sketch_session.as_ref().unwrap().relink.is_none());
+}
+
+#[test]
+fn surface_kinds_stay_locked() {
+    use planora_app::state::relink_pickable;
+    use planora_feature::{IncludeRef, IntersectionSpec, PlaneId, ProjectType, SurfaceProjection};
+    let on = CopySource::OnSurface(SurfaceProjection {
+        sources: Vec::new(),
+        faces: Vec::new(),
+        kind: ProjectType::AlongVector(DVec3::Z),
+    });
+    let cut = CopySource::Intersection(IntersectionSpec {
+        curves: Vec::new(),
+        targets: Vec::new(),
+    });
+    assert!(!relink_pickable(&on));
+    assert!(!relink_pickable(&cut));
+    assert!(!relink_pickable(&CopySource::Include(
+        IncludeRef::ConstructionPoint(FeatureId(1))
+    )));
+    for r in [
+        IncludeRef::Origin,
+        IncludeRef::Axis(planora_feature::AxisId::Z),
+        IncludeRef::Plane(PlaneId::Standard(StandardPlane::XY)),
+    ] {
+        assert!(relink_pickable(&CopySource::Include(r)));
+    }
 }
