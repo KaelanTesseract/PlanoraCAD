@@ -2,7 +2,7 @@
 
 Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht oben.
 
-## Unveröffentlicht
+## 0.0.2-dev.3
 
 ### Neu
 - Skizzen: Zeichnen und Prüfen wie in Fusion. Neu sind die Mittelpunktlinie (erster Klick ist die Mitte, die getippte Länge gilt für die ganze Linie), die Übergangskurve unter „Bearbeiten → Ändern“ (verbindet zwei Enden glatt, wahlweise nur in der Richtung oder auch in der Krümmung) und der Krümmungskamm (Rechtsklick auf eine Kurve, Dichte und Maßstab einstellbar). Der Bogen „Mittelpunkt“ folgt der Richtung der Maus in beiden Drehrichtungen, und beim Bemaßen zweier Linien wählt die Lage des Zeigers zwischen Winkel und Gegenwinkel.
