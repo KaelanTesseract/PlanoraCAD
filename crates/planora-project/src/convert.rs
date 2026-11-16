@@ -37,6 +37,7 @@ use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DQuat, DVec2, DVec3, Frame, Tolerance};
+use planora_sketch::comb::CombSettings;
 use planora_sketch::pattern::{CircularMode, PatternDir, PatternInstance, PatternKind};
 use planora_sketch::text::{HAlign, TextPlacement, VAlign};
 use planora_sketch::text_shape::TextStyle;
@@ -49,7 +50,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 20;
+pub const FORMAT_VERSION: u32 = 21;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
@@ -60,7 +61,9 @@ const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 /// Einfügen). Ein einzelnes Bild ist zusätzlich auf `MAX_IMAGE_BYTES` begrenzt.
 const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 20
+/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 21
+/// mit Krümmungskamm, Gegenwinkel, Tangente am Ende oder Glatt am Ellipsenbogen in einer Skizze
+/// ([`needs_format_21`], auch in gelöschten Einträgen), 20
 /// mit 3D-Geometrie oder dem Haken „3D-Skizze“ in einer Skizze ([`needs_format_20`]), 19
 /// mit einer Leinwand (auch unterdrückt: ihr Bild muss in der Datei stehen) oder einem
 /// Kontrollpunktrahmen an einer Skizzenkurve ([`needs_format_19`], auch an einem gelöschten
@@ -81,7 +84,7 @@ const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
 /// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
-/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8, 9 und 10).
+/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8, 9, 10 und 11a).
 pub fn required_format(s: &Snapshot) -> u32 {
     format_with(s, &profile_fields(s))
 }
@@ -91,7 +94,9 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
     // Der Ordner „Leinwände“ kann nur mit einer Leinwand ausgeblendet sein (das Dokument räumt
     // ihn mit der letzten Leinwand weg); er braucht darum keine eigene Regel.
-    if has(needs_format_20) {
+    if has(needs_format_21) {
+        21
+    } else if has(needs_format_20) {
         20
     } else if has(needs_format_19) {
         19
@@ -141,6 +146,12 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     } else {
         1
     }
+}
+/// Braucht die Art Format 21 (Skizzen 11a)? Eine Skizze mit Krümmungskamm, Tangente am Ende,
+/// Gegenwinkel oder Glatt an einem Ellipsenbogen, auch in einem gelöschten Eintrag: Er steht in
+/// der Datei ([`Sketch::needs_format_21`]).
+fn needs_format_21(k: &FeatureKind) -> bool {
+    matches!(k, FeatureKind::Sketch(sf) if sf.sketch.needs_format_21())
 }
 /// Braucht die Art Format 20 (Skizzen 10)? Eine Skizze mit 3D-Geometrie (3D-Punkt, Kurve mit
 /// Normale, Freiformkurve im Raum, `AlongZ`, `Fixed3`, die internen `InPlane`/`EllipseAxes3`)
@@ -1146,6 +1157,10 @@ fn sketch_to(s: &Sketch) -> SketchDto {
                 aktiv: c.alive,
                 rahmen: c.show_frame,
                 normale: c.normal.map(v3),
+                kamm: c.comb.map(|k| KammDto {
+                    dichte: k.density,
+                    massstab: k.scale,
+                }),
             })
             .collect(),
         abhaengigkeiten: d
@@ -1159,6 +1174,7 @@ fn sketch_to(s: &Sketch) -> SketchDto {
                 intern: c.internal,
                 extra: c.extra,
                 lebt: c.alive,
+                gegenwinkel: c.supplement,
             })
             .collect(),
         muster: d.patterns.iter().map(pattern_to).collect(),
@@ -1234,8 +1250,11 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
                         .normale
                         .map(|n| dv3(origin, &|| sketch_label(feature, tr!("proj-l-normal")), n))
                         .transpose()?,
-                    // Der Kamm kommt mit Format 21 in die Datei (Skizzen 11a, Task 7).
-                    comb: None,
+                    // Werte und Kurvenart prüft `Sketch::from_data`.
+                    comb: c.kamm.map(|k| CombSettings {
+                        density: k.dichte,
+                        scale: k.massstab,
+                    }),
                     alive: c.aktiv,
                 })
             })
@@ -1246,8 +1265,7 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
             .map(|c| ConstraintRecord {
                 kind: constraint_from(&c.art),
                 branch: c.zweig,
-                // Das Feld kommt mit Format 21 in die Datei (Skizzen 11a, Task 7).
-                supplement: false,
+                supplement: c.gegenwinkel,
                 driven: c.gesteuert,
                 enabled: c.aktiv,
                 internal: c.intern,
@@ -3803,6 +3821,29 @@ fn has_control_frame(k: &KindDto) -> bool {
     matches!(k, KindDto::Skizze(s) if s.skizze.kurven.iter().any(|c| c.rahmen))
 }
 
+/// Inhalt aus Format 21 in einer Feature-Art der Datei (Gegenstück zu [`needs_format_21`]):
+/// Kamm, Gegenwinkel, Tangente am Ende oder Glatt an einem Ellipsenbogen.
+fn has_format_21_data(k: &KindDto) -> bool {
+    let KindDto::Skizze(s) = k else {
+        return false;
+    };
+    let s = &s.skizze;
+    let elliptic = |i: usize| {
+        s.kurven
+            .get(i)
+            .is_some_and(|c| matches!(c.art, CurveKindDto::Ellipsenbogen { .. }))
+    };
+    s.kurven.iter().any(|c| c.kamm.is_some())
+        || s.abhaengigkeiten.iter().any(|c| {
+            c.gegenwinkel
+                || match &c.art {
+                    ConstraintKindDto::TangenteEnde { .. } => true,
+                    ConstraintKindDto::Glatt { a, b, .. } => elliptic(*a) || elliptic(*b),
+                    _ => false,
+                }
+        })
+}
+
 /// 3D-Geometrie in einer Skizze der Datei (Gegenstück zu [`needs_format_20`]).
 fn has_format_20_data(k: &KindDto) -> bool {
     let KindDto::Skizze(s) = k else {
@@ -4042,6 +4083,16 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
                 "proj-since-format",
                 what = tr!("proj-feat-3d-sketch"),
                 format = "20"
+            ),
+        ));
+    }
+    if file.format < 21 && file.features.iter().any(|f| has_format_21_data(&f.art)) {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-sketch-check"),
+                format = "21"
             ),
         ));
     }

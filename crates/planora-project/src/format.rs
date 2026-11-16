@@ -1012,6 +1012,16 @@ pub struct CurveDto {
     /// Skizzenebene.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normale: Option<V3>,
+    /// Ab Format 21: Krümmungskamm der Kurve; fehlt ohne Kamm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kamm: Option<KammDto>,
+}
+
+/// Krümmungskamm einer Kurve (ab Format 21): Zahl der Zähne und Maßstab ihrer Länge.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct KammDto {
+    pub dichte: u32,
+    pub massstab: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -1215,6 +1225,9 @@ pub struct ConstraintDto {
     pub intern: bool,
     pub extra: Option<usize>,
     pub lebt: bool,
+    /// Ab Format 21: Das Winkelmaß misst den Gegenwinkel; fehlt, wenn aus.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gegenwinkel: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

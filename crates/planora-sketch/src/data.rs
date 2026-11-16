@@ -303,6 +303,16 @@ impl Sketch {
             {
                 return Err(bad(tr!("sketch-err-data-show-frame")));
             }
+            // Der Krümmungskamm (Skizzen 11a) liegt an einer gekrümmten Kurve, mit Werten in den
+            // Bereichen; eine Linie hat keinen.
+            if let Some(comb) = &c.comb {
+                if matches!(c.kind, CurveKind::Line { .. }) {
+                    return Err(bad(tr!("sketch-err-comb-line")));
+                }
+                if !comb.is_valid() {
+                    return Err(bad(tr!("sketch-err-comb-range")));
+                }
+            }
             check_curve_normal(c)?;
             // Eine lebende Kurve mit eigener Ebene liegt ganz im Raum: Ein 2D-Punkt (z = 0) und
             // die gekippte Ebene überbestimmten sie (Skizzen 10).
@@ -393,6 +403,10 @@ impl Sketch {
         }
         check_handles(&d)?;
         for c in &d.constraints {
+            // Den Gegenwinkel (Skizzen 11a) gibt es nur am Winkelmaß.
+            if c.supplement && !matches!(c.kind, ConstraintKind::Angle(..)) {
+                return Err(bad(tr!("sketch-supplement-angle-only")));
+            }
             if !(-1..=1).contains(&c.branch) {
                 return Err(bad(tr!("sketch-err-data-constraint-place")));
             }

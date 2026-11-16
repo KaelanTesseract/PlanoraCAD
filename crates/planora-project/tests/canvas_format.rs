@@ -160,7 +160,7 @@ fn err_text(text: &str) -> String {
 
 #[test]
 fn format_version_is_19() {
-    assert_eq!(FORMAT_VERSION, 20);
+    assert_eq!(FORMAT_VERSION, 21);
 }
 
 #[test]
@@ -370,9 +370,9 @@ fn format_21_is_too_new() {
     let text =
         encode_version(&d.snapshot())
             .unwrap()
-            .replacen("\"format\": 19", "\"format\": 21", 1);
+            .replacen("\"format\": 19", "\"format\": 22", 1);
     let e = decode_version(&text, "x.json").unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 21, .. }), "{e:?}");
+    assert!(matches!(e, ProjectError::TooNew { found: 22, .. }), "{e:?}");
 }
 
 #[test]

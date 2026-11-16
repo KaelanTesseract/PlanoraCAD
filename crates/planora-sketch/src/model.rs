@@ -1080,6 +1080,21 @@ impl Sketch {
         self.curves.iter().any(|(_, c)| c.show_frame)
     }
 
+    /// Steht etwas aus Skizzen 11a in der Skizze, auch in einem gelöschten Eintrag: ein
+    /// Krümmungskamm an einem Kurveneintrag, eine Tangente am Ende, ein Winkelmaß mit Gegenwinkel
+    /// oder ein Glatt mit einem Ellipsenbogen als Partner? Dann braucht die Datei Format 21.
+    pub fn needs_format_21(&self) -> bool {
+        self.curves.iter().any(|(_, c)| c.comb.is_some())
+            || self.constraints.iter().any(|(_, c)| {
+                c.supplement
+                    || c.kind.needs_format_21()
+                    || matches!(c.kind, crate::constraint::ConstraintKind::Smooth(a, _, b, _)
+                    if [a, b].iter().any(|k| {
+                        matches!(self.curves[*k].kind, CurveKind::EllipticArc { .. })
+                    }))
+            })
+    }
+
     /// Gibt es einen Mustereintrag oder einen Abhängigkeitseintrag, der Format 15 braucht, auch
     /// einen gelöschten (ein aufgelöstes Muster, ein Musterwert)? Dann braucht die Datei Format
     /// 15.

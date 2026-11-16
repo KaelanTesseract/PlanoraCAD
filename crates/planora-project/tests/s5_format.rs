@@ -236,9 +236,9 @@ fn a_head_newer_than_the_known_format_is_too_new() {
     let (s, _) = all_kinds();
     let text = encode_version(&document(s).snapshot()).unwrap();
     assert!(load(&text).is_ok());
-    let newer = text.replacen("\"format\": 15", "\"format\": 21", 1);
+    let newer = text.replacen("\"format\": 15", "\"format\": 22", 1);
     let e = load(&newer).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 21, .. }), "{e:?}");
+    assert!(matches!(e, ProjectError::TooNew { found: 22, .. }), "{e:?}");
 }
 
 // ---------------------------------------------------------------------------------------------

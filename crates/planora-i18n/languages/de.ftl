@@ -3196,6 +3196,7 @@ proj-feat-text = Texte in Skizzen
 proj-feat-canvas = Leinwände
 proj-feat-control-frame = Kontrollpunktrahmen an Skizzenkurven
 proj-feat-3d-sketch = 3D-Geometrie in Skizzen
+proj-feat-sketch-check = Krümmungskamm, Tangente am Ende, Gegenwinkel und Glatt am Ellipsenbogen in Skizzen
 proj-write-failed = Das Dokument lässt sich nicht schreiben: { $msg }
 proj-invalid-values = Das Dokument enthält ungültige Werte und wird nicht gespeichert: { $msg }
 proj-expect-formula-map = eine Tabelle Feld → Formel
