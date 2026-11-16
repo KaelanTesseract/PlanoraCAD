@@ -614,7 +614,7 @@ pub fn overlay_text(
         K::Parallel(..) => parallel_symbol(ctx).to_string(),
         K::Perpendicular(..) => perpendicular_symbol(ctx),
         K::Equal(..) => "=".to_string(),
-        K::Tangent(..) => "T".to_string(),
+        K::Tangent(..) | K::EndTangent(..) => "T".to_string(),
         // Der Punkt im Ursprung ist „deckungsgleich mit dem Ursprung“, kein Festsetzen von Hand.
         K::Fixed(_, x, y) if *x == 0.0 && *y == 0.0 => return String::new(),
         K::Fixed3(_, x, y, z) if *x == 0.0 && *y == 0.0 && *z == 0.0 => return String::new(),

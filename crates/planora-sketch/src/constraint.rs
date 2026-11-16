@@ -713,7 +713,8 @@ fn signed_distance(ctx: &Ctx, p: &V2, line: CurveId) -> Dual {
     cross(&d, &sub2(p, &a)) / norm_len(&d)
 }
 
-/// Die Enden einer Linie, eines Bogens oder eines Splines (sonst `None`).
+/// Die Enden einer Linie, eines Bogens, eines Splines, eines Kegelschnitts oder einer festen Kurve
+/// (sonst `None`); ohne den Ellipsenbogen, siehe [`open_curve_ends`].
 pub(crate) fn curve_ends(kind: &CurveKind) -> Option<[PointId; 2]> {
     match kind {
         CurveKind::Line { a, b } => Some([*a, *b]),
@@ -2721,8 +2722,8 @@ impl Sketch {
     /// Getrennte Enden legt der Befehl der Oberfläche mit einem `Coincident` zusammen. Die Wahl
     /// hängt nicht von der Reihenfolge ab (Gleichstand: zuerst ein wirklich gemeinsamer Punkt vor
     /// zwei deckenden, dann das Paar mit den kleineren Punktnummern). `None` für dieselbe Kurve
-    /// oder Kurven ohne Enden (wie bei [`curve_ends`]). Die Kurvenarten prüft
-    /// [`Sketch::add_constraint`]: Auch eine Linie und ein Bogen liefern Enden.
+    /// oder Kurven ohne Enden (wie bei [`open_curve_ends`], also auch der Ellipsenbogen). Die
+    /// Kurvenarten prüft [`Sketch::add_constraint`]: Auch eine Linie und ein Bogen liefern Enden.
     pub fn smooth_ends(
         &self,
         a: CurveId,

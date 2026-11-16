@@ -905,21 +905,43 @@ fn a_radius_on_the_bow_moves_the_partner_too() {
 
 // ---- Partner -----------------------------------------------------------------------------------
 
-/// Seit Skizzen 11a geht auch der Ellipsenbogen als Partner eines Splines (Task 4); ohne Spline auf
-/// einer Seite geht es nach wie vor nicht.
+/// Seit Skizzen 11a geht auch der Ellipsenbogen als Partner eines Splines (Task 4); der Spline
+/// durch Stützpunkte bekommt dabei einen Krümmungsgriff und die Fuge ist G2.
 #[test]
 fn elliptic_arc_is_a_partner_of_splines() {
     let mut s = sketch();
-    let p = points(&mut s, &[(0.0, 0.0), (6.0, 0.0), (0.0, 3.0)]);
-    let e = s
-        .add_elliptic_arc(p[0], DVec2::new(6.0, 0.0), 3.0, p[1], p[2])
-        .unwrap();
-    let q = points(&mut s, &[(-3.0, 5.0), (-7.0, 6.0)]);
-    let sp = s.add_spline(&[p[2], q[0], q[1]]).unwrap();
+    let (e, en) = fixed_elliptic_quarter(&mut s);
+    let q = points(&mut s, &[(-3.0, 5.5), (-7.0, 6.0), (-11.0, 4.0)]);
+    let sp = s.add_spline(&[en, q[0], q[1], q[2]]).unwrap();
     assert!(s.smooth_kinds_fit(e, sp));
     assert!(s.smooth_kinds_fit(sp, e));
-    assert!(s.prepare_smooth(e, p[2], sp, p[2]).is_ok());
-    assert!(s.add_constraint(K::Smooth(e, p[2], sp, p[2])).is_ok());
+    let id = smooth(&mut s, e, en, sp, en);
+    assert_eq!(rows(&s, id), 2, "Winkel und Krümmung");
+    solved(&mut s, "Spline am Ellipsenbogen");
+    assert_g2(&s, e, en, sp, en, "Spline am Ellipsenbogen");
+    assert!(matches!(
+        curvature_of(&s, sp, en),
+        Some(HandleCurvature::Arc { .. })
+    ));
+}
+
+/// Der Spline durch Stützpunkte liegt am Anfang des Ellipsenbogens und läuft von dort weg.
+#[test]
+fn spline_at_the_start_of_an_elliptic_arc_is_g2() {
+    let mut s = sketch();
+    let p = points(&mut s, &[(0.0, 0.0), (8.0, 0.0), (0.0, 4.0)]);
+    let e = s
+        .add_elliptic_arc(p[0], DVec2::new(8.0, 0.0), 4.0, p[1], p[2])
+        .unwrap();
+    s.add_constraint(K::Fixed(p[0], 0.0, 0.0)).unwrap();
+    s.add_constraint(K::EllipseMajor(e, 8.0)).unwrap();
+    s.add_constraint(K::EllipseMinor(e, 4.0)).unwrap();
+    s.add_constraint(K::EllipseAngle(e, 0.0)).unwrap();
+    let q = points(&mut s, &[(11.0, -3.0), (15.0, -4.0), (19.0, -1.0)]);
+    let sp = s.add_spline(&[q[2], q[1], q[0], p[1]]).unwrap();
+    smooth(&mut s, e, p[1], sp, p[1]);
+    solved(&mut s, "Anfang des Ellipsenbogens");
+    assert_g2(&s, e, p[1], sp, p[1], "Anfang des Ellipsenbogens");
 }
 
 #[test]

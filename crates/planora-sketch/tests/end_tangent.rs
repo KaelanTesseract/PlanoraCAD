@@ -5,7 +5,7 @@
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::SketchError;
 use planora_sketch::constraint::ConstraintKind as K;
-use planora_sketch::model::{CurveId, PointId, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::solver::{SolveReport, SolveStatus};
 use planora_sketch::sparse::SolverPath;
 
@@ -228,6 +228,95 @@ fn end_tangent_counts_one_dof_in_2d() {
     let after = s.solve();
     assert_eq!(after.status, SolveStatus::Solved, "{after:?}");
     assert_eq!(after.dof, before - 1);
+}
+
+// ---- 3D an Bogen, Kontrollpunkt-Spline und Ellipsenbogen ---------------------------------------
+
+fn p3(s: &mut Sketch, x: f64, y: f64, z: f64) -> PointId {
+    s.add_point3(DVec3::new(x, y, z)).unwrap()
+}
+
+fn at3(s: &Sketch, p: PointId) -> DVec3 {
+    s.point_xyz(p).unwrap()
+}
+
+/// Sinus des Winkels zwischen den Richtungen `u` und `v` (Länge des Kreuzprodukts der Einheiten).
+fn sin3(u: DVec3, v: DVec3) -> f64 {
+    u.normalize().cross(v.normalize()).length()
+}
+
+#[test]
+fn end_tangent_3d_arc_and_line() {
+    let mut s = sketch();
+    // Viertelbogen in der Ebene y = 1 (Normale y), Mitte (4, 1, 7), Radius 5.
+    let m = p3(&mut s, 4.0, 1.0, 7.0);
+    let st = p3(&mut s, 4.0, 1.0, 2.0);
+    let en = p3(&mut s, 7.0, 1.0, 3.0);
+    let arc = s.add_arc3(m, st, en, DVec3::Y).unwrap();
+    let far = p3(&mut s, 12.0, 6.0, 9.0);
+    let line = s.add_line(en, far).unwrap();
+    for p in [m, st, en] {
+        let at = at3(&s, p);
+        s.add_constraint(K::Fixed3(p, at.x, at.y, at.z)).unwrap();
+    }
+    s.add_constraint(K::EndTangent(arc, en, line, en)).unwrap();
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    // Tangente des Bogens am Ende: n × r.
+    let tangent = DVec3::Y.cross(at3(&s, en) - at3(&s, m));
+    let along = at3(&s, far) - at3(&s, en);
+    assert!(sin3(tangent, along) <= 1e-9, "{tangent} / {along}");
+}
+
+#[test]
+fn end_tangent_3d_control_spline_and_line() {
+    let mut s = sketch();
+    let a = p3(&mut s, 0.0, 0.0, 0.0);
+    let b = p3(&mut s, 5.0, 2.0, 1.0);
+    let q: Vec<PointId> = [(8.0, 6.0, 3.0), (12.0, 5.0, 6.0), (15.0, 9.0, 4.0)]
+        .iter()
+        .map(|&(x, y, z)| p3(&mut s, x, y, z))
+        .collect();
+    let sp = s.add_control_spline(&[b, q[0], q[1], q[2]], 3).unwrap();
+    let line = s.add_line(a, b).unwrap();
+    s.add_constraint(K::Fixed3(a, 0.0, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::Fixed3(b, 5.0, 2.0, 1.0)).unwrap();
+    s.add_constraint(K::EndTangent(line, b, sp, b)).unwrap();
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    // Am Anfang eines geklemmten B-Splines zeigt die Ableitung zum zweiten Kontrollpunkt.
+    let leg = at3(&s, q[0]) - at3(&s, b);
+    let dir = at3(&s, b) - at3(&s, a);
+    assert!(sin3(dir, leg) <= 1e-9, "{dir} / {leg}");
+}
+
+#[test]
+fn end_tangent_3d_elliptic_arc_and_line() {
+    let mut s = sketch();
+    let c = p3(&mut s, 0.0, 0.0, -5.0);
+    let st = p3(&mut s, 6.0, 0.0, -5.0);
+    let en = p3(&mut s, 0.0, 3.0, -5.0);
+    let e = s
+        .add_elliptic_arc3(c, DVec3::new(6.0, 0.0, 0.0), 3.0, st, en, DVec3::Z)
+        .unwrap();
+    let far = p3(&mut s, -3.0, 6.0, -2.0);
+    let line = s.add_line(en, far).unwrap();
+    s.add_constraint(K::Fixed3(c, 0.0, 0.0, -5.0)).unwrap();
+    s.add_constraint(K::EndTangent(e, en, line, en)).unwrap();
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    // Tangente der Ellipse (in der Ebene z = −5) am Punkt: senkrecht zum Gradienten.
+    let CurveKind::EllipticArc { ax, ay, minor, .. } = s.curve(e).unwrap().kind else {
+        panic!("kein Ellipsenbogen")
+    };
+    let v = s.variables();
+    let a = DVec3::new(v[ax], v[ay], 0.0);
+    let (u, w) = (a.normalize(), DVec3::Z.cross(a.normalize()));
+    let d = at3(&s, en) - at3(&s, c);
+    let (x, y) = (d.dot(u), d.dot(w));
+    let tangent = u * (-y / (v[minor] * v[minor])) + w * (x / a.length_squared());
+    let along = at3(&s, far) - at3(&s, en);
+    assert!(sin3(tangent, along) <= 1e-9, "{tangent} / {along}");
 }
 
 // ---- Dichter und dünner Weg ----------------------------------------------------------------------

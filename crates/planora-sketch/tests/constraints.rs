@@ -1,4 +1,4 @@
-use planora_math::{DVec2, Frame, Tolerance};
+use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind as K, LineOrPoints};
 use planora_sketch::model::{CurveId, PointId, Sketch};
@@ -349,5 +349,83 @@ fn internal_arc_radius_jacobian_matches_finite_differences() {
             (r.grad(k) - fd).abs() < 1e-5 * (1.0 + fd.abs()),
             "Variable {var}"
         );
+    }
+}
+
+/// „Tangente am Ende“ (Skizzen 11a): Ableitungen in 2D und 3D an Linie, Bogen, Ellipsenbogen, Spline
+/// durch Stützpunkte und Kontrollpunkt-Spline.
+#[test]
+fn jacobians_match_finite_differences_for_end_tangent() {
+    // 2D
+    let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+    let c = s.add_point(0.3, -0.2).unwrap();
+    let st = s.add_point(7.5, 0.4).unwrap();
+    let en = s.add_point(0.2, 4.1).unwrap();
+    let e = s
+        .add_elliptic_arc(c, DVec2::new(8.0, 0.5), 4.0, st, en)
+        .unwrap();
+    let far = s.add_point(-5.0, 7.0).unwrap();
+    let line = s.add_line(en, far).unwrap();
+    let m = s.add_point(-9.0, 1.0).unwrap();
+    let a_end = s.add_point(-12.0, 4.0).unwrap();
+    let arc = s.add_arc(m, far, a_end).unwrap();
+    let q: Vec<PointId> = [(-6.0, 9.0), (-9.0, 10.0), (-12.0, 8.5)]
+        .iter()
+        .map(|&(x, y)| s.add_point(x, y).unwrap())
+        .collect();
+    let sp = s.add_spline(&[far, q[0], q[1], q[2]]).unwrap();
+    let r: Vec<PointId> = [(-15.0, 7.0), (-18.0, 9.0), (-21.0, 6.0)]
+        .iter()
+        .map(|&(x, y)| s.add_point(x, y).unwrap())
+        .collect();
+    let cs = s.add_control_spline(&[q[2], r[0], r[1], r[2]], 3).unwrap();
+    for kind in [
+        K::EndTangent(e, en, line, en),
+        K::EndTangent(e, st, line, far),
+        K::EndTangent(line, far, arc, far),
+        K::EndTangent(arc, far, sp, far),
+        K::EndTangent(sp, q[2], cs, q[2]),
+        K::EndTangent(line, far, sp, far),
+    ] {
+        let mut copy = s.clone();
+        // Getrennte Enden gehen nur nach Deckungsgleich; hier zählt die Ableitung der Zeilen.
+        if let K::EndTangent(_, p1, _, p2) = kind
+            && p1 != p2
+        {
+            copy.add_constraint(K::Coincident(p1, p2)).unwrap();
+        }
+        check_jacobian(&mut copy, kind);
+    }
+
+    // 3D
+    let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+    let a = s.add_point3(DVec3::new(0.0, 0.0, 0.0)).unwrap();
+    let b = s.add_point3(DVec3::new(4.0, 1.0, 2.0)).unwrap();
+    let d = s.add_point3(DVec3::new(9.0, 5.0, 3.0)).unwrap();
+    let l1 = s.add_line(a, b).unwrap();
+    let l2 = s.add_line(b, d).unwrap();
+    let m = s.add_point3(DVec3::new(4.0, 1.0, 7.0)).unwrap();
+    let e = s.add_point3(DVec3::new(7.0, 1.0, 3.0)).unwrap();
+    let arc = s.add_arc3(m, b, e, DVec3::new(0.0, 1.0, 0.0)).unwrap();
+    let cp: Vec<PointId> = [(11.0, 3.0, 6.0), (13.0, 6.0, 3.0), (16.0, 2.0, 5.0)]
+        .iter()
+        .map(|&(x, y, z)| s.add_point3(DVec3::new(x, y, z)).unwrap())
+        .collect();
+    let cs = s.add_control_spline(&[e, cp[0], cp[1], cp[2]], 3).unwrap();
+    let ec = s.add_point3(DVec3::new(0.0, 0.0, -5.0)).unwrap();
+    let es = s.add_point3(DVec3::new(6.0, 0.0, -5.0)).unwrap();
+    let ee = s.add_point3(DVec3::new(0.0, 3.0, -5.0)).unwrap();
+    let ell = s
+        .add_elliptic_arc3(ec, DVec3::new(6.0, 0.0, 0.0), 3.0, es, ee, DVec3::Z)
+        .unwrap();
+    let ef = s.add_point3(DVec3::new(-3.0, 6.0, -4.0)).unwrap();
+    let eline = s.add_line(ee, ef).unwrap();
+    for kind in [
+        K::EndTangent(l1, b, l2, b),
+        K::EndTangent(l2, b, arc, b),
+        K::EndTangent(arc, e, cs, e),
+        K::EndTangent(ell, ee, eline, ee),
+    ] {
+        check_jacobian(&mut s.clone(), kind);
     }
 }

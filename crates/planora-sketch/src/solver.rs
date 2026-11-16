@@ -400,7 +400,7 @@ impl Group {
     fn sparse_order(&self) -> &[usize] {
         self.order
             .as_deref()
-            .expect("dünne Jacobi-Matrix nur mit RCM-Ordnung der Gruppe")
+            .expect("sparse Jacobian only exists together with the group's RCM order")
     }
 }
 
