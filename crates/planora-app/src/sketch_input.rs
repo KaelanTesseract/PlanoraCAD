@@ -274,19 +274,30 @@ pub(crate) fn locked_ray(
     len: Option<f64>,
     angle: f64,
 ) -> DVec2 {
-    let side = if basis.perp_dot(cur.raw - from) < 0.0 {
+    locked_ray_to(from, basis, cur.raw, len, angle)
+}
+
+/// [`locked_ray`] für den rohen Zeiger `raw` (auch in der Ebene einer 3D-Skizze).
+pub(crate) fn locked_ray_to(
+    from: DVec2,
+    basis: DVec2,
+    raw: DVec2,
+    len: Option<f64>,
+    angle: f64,
+) -> DVec2 {
+    let side = if basis.perp_dot(raw - from) < 0.0 {
         -1.0
     } else {
         1.0
     };
     let ray = rotated(basis, side * angle);
-    let projected = (cur.raw - from).dot(ray);
+    let projected = (raw - from).dot(ray);
     // Auf der Rückseite des Strahls (stumpfer Winkel) hätte die Linie sonst keine Länge; dann zählt
     // der Abstand des Zeigers.
     let free = if projected > 0.0 {
         projected
     } else {
-        cur.raw.distance(from)
+        raw.distance(from)
     };
     from + ray * len.unwrap_or(free)
 }
@@ -462,7 +473,10 @@ impl SketchSession {
             return;
         }
         // Ohne offene Punkte läuft kein Werkzeug mehr; was es getippt hatte, gilt nicht mehr.
-        if self.pending.is_empty() && self.pending_pos.is_empty() && self.pending_curves.is_empty()
+        if self.pending.is_empty()
+            && self.pending_pos.is_empty()
+            && self.pending_curves.is_empty()
+            && self.pending3.is_empty()
         {
             self.input.carried.clear();
         }
@@ -504,7 +518,14 @@ impl SketchSession {
             && let Some(kind) = self.planar3()
         {
             let rho = kind == crate::sketch_draw3::Planar3::Conic && self.pending3.len() == 3;
-            return if rho { &[F::Rho] } else { &[] };
+            if rho {
+                return &[F::Rho];
+            }
+            // Kreis, Polygon und Rechteck: dieselben Felder je Stufe wie in 2D (A8).
+            return kind
+                .field_kind()
+                .and_then(|k| k.stages().get(self.pending3.len()).copied())
+                .unwrap_or(&[]);
         }
         if let Some(kind) = self.planned_kind() {
             return kind.stages().get(self.kind_stage()).copied().unwrap_or(&[]);
@@ -621,6 +642,9 @@ impl SketchSession {
         if field.locked.is_some() {
             return field.locked;
         }
+        if self.draw3 && self.planar3().is_some_and(|p| p.field_kind().is_some()) {
+            return self.field_value_planar3(kind);
+        }
         if self.planned_kind().is_some() {
             return self.kind_field_value(sk, kind);
         }
@@ -728,6 +752,100 @@ impl SketchSession {
         }
     }
 
+    /// [`field_value`](Self::field_value) für Kreis, Polygon und Rechteck in 3D: gerechnet in der
+    /// Triadenebene aus den gesetzten Lagen und dem Zeiger, wie in 2D.
+    fn field_value_planar3(&self, kind: FieldKind) -> Option<f64> {
+        use FieldKind as F;
+        if kind == F::Sides {
+            return Some(self.current_sides() as f64);
+        }
+        let tool = self.planar3()?.field_kind()?;
+        let plane = self.plane3?;
+        let q: Vec<DVec2> = self.pending3.iter().map(|h| plane.to2(h.at)).collect();
+        let at = plane.to2(self.cursor3?.at);
+        match (tool, q.as_slice(), kind) {
+            (ToolKind::Rect2P, &[a], F::Width) => Some((at.x - a.x).abs()),
+            (ToolKind::Rect2P, &[a], F::Height) => Some((at.y - a.y).abs()),
+            (ToolKind::RectCenter, &[m], F::Width) => Some(2.0 * (at.x - m.x).abs()),
+            (ToolKind::RectCenter, &[m], F::Height) => Some(2.0 * (at.y - m.y).abs()),
+            (ToolKind::Rect3P, &[from], F::Width) => Some(from.distance(at)),
+            (ToolKind::Rect3P | ToolKind::PolygonEdge, &[from], F::Angle) => {
+                let along = at - from;
+                Some(along.y.abs().atan2(along.x))
+            }
+            (ToolKind::Rect3P, &[a, b], F::Depth) => {
+                Some((b - a).try_normalize()?.perp().dot(at - a).abs())
+            }
+            (ToolKind::Circle2P, &[from], F::Diameter) => Some(from.distance(at)),
+            (ToolKind::CircleCenter, &[m], F::Diameter) => Some(2.0 * m.distance(at)),
+            (ToolKind::PolygonInscribed | ToolKind::PolygonCircumscribed, &[m], F::Radius) => {
+                Some(m.distance(at))
+            }
+            (ToolKind::PolygonEdge, &[from], F::Length) => Some(from.distance(at)),
+            _ => None,
+        }
+    }
+
+    /// Lage mit den gesperrten Größen von Kreis, Polygon und Rechteck in 3D, gerechnet in der
+    /// Triadenebene wie in 2D (`kind_locked_position`); der Zeiger wählt Richtung und Seite.
+    fn locked_planar3(&self, cur: &crate::sketch_draw3::Cursor3) -> Option<DVec3> {
+        use FieldKind as F;
+        let tool = self.planar3()?.field_kind()?;
+        let plane = self.plane3?;
+        let q: Vec<DVec2> = self.pending3.iter().map(|h| plane.to2(h.at)).collect();
+        let (raw, at) = (plane.to2(cur.raw), plane.to2(cur.at));
+        let locked = |kind| self.input.locked(kind);
+        let toward = |from: DVec2| (at - from).try_normalize().or((raw - from).try_normalize());
+        let result = match (tool, q.as_slice()) {
+            (ToolKind::Circle2P, &[from]) => from + toward(from)? * locked(F::Diameter)?,
+            (ToolKind::CircleCenter, &[m]) => m + toward(m)? * (locked(F::Diameter)? / 2.0),
+            (ToolKind::PolygonInscribed | ToolKind::PolygonCircumscribed, &[m]) => {
+                m + toward(m)? * locked(F::Radius)?
+            }
+            (ToolKind::PolygonEdge, &[from]) => match locked(F::Angle) {
+                Some(angle) => locked_ray_to(from, DVec2::X, raw, locked(F::Length), angle),
+                None => from + toward(from)? * locked(F::Length)?,
+            },
+            (ToolKind::Rect2P, &[a]) => {
+                let (w, h) = (locked(F::Width), locked(F::Height));
+                if w.is_none() && h.is_none() {
+                    return None;
+                }
+                let size = at - a;
+                DVec2::new(
+                    w.map_or(at.x, |w| a.x + size.x.signum() * w),
+                    h.map_or(at.y, |h| a.y + size.y.signum() * h),
+                )
+            }
+            (ToolKind::RectCenter, &[m]) => {
+                let (w, h) = (locked(F::Width), locked(F::Height));
+                if w.is_none() && h.is_none() {
+                    return None;
+                }
+                let size = at - m;
+                DVec2::new(
+                    w.map_or(at.x, |w| m.x + size.x.signum() * w / 2.0),
+                    h.map_or(at.y, |h| m.y + size.y.signum() * h / 2.0),
+                )
+            }
+            (ToolKind::Rect3P, &[from]) => {
+                let len = locked(F::Width);
+                match locked(F::Angle) {
+                    Some(angle) => locked_ray_to(from, DVec2::X, raw, len, angle),
+                    None => from + toward(from)? * len?,
+                }
+            }
+            (ToolKind::Rect3P, &[a, b]) => {
+                let depth = locked(F::Depth)?;
+                let normal = (b - a).try_normalize()?.perp();
+                let side = normal.dot(raw - a).signum();
+                at + normal * (side * depth - normal.dot(at - a))
+            }
+            _ => return None,
+        };
+        Some(plane.to3(result))
+    }
+
     /// Lage mit den gesperrten Größen beim Zeichnen in 3D; `None` ohne Sperre. Z-Abstand: von der
     /// Stelle der Z-Sperre entlang der Normale, die Seite wählt der Zeiger. Länge und Winkel der
     /// Linie: in der aktiven Ebene ab dem Anfang, der Winkel zur ersten Achse der Ebene, die Seite
@@ -748,6 +866,9 @@ impl SketchSession {
                 1.0
             };
             return Some(base + n * side * h);
+        }
+        if self.planar3().is_some() {
+            return self.locked_planar3(cur);
         }
         if self.tool != Tool::Line {
             return None;
@@ -1102,13 +1223,20 @@ impl SketchSession {
             self.message = Some(Msg::Raw(e.clone()));
             return Err(e);
         }
-        let typed: Vec<(FieldKind, String)> = self
-            .input
-            .fields
-            .iter()
-            .filter(|f| f.locked.is_some())
-            .map(|f| (f.kind, f.text.clone()))
-            .collect();
+        let planar = self.planar3().is_some();
+        // Kreis, Polygon und Rechteck führen die Werte früherer Stufen mit (wie in 2D).
+        let mut typed: Vec<(FieldKind, String)> = if planar {
+            self.input.carried.clone()
+        } else {
+            Vec::new()
+        };
+        typed.extend(
+            self.input
+                .fields
+                .iter()
+                .filter(|f| f.locked.is_some())
+                .map(|f| (f.kind, f.text.clone())),
+        );
         if typed.is_empty() {
             let result = self.click3(&mut sf.sketch);
             self.sync_input(&sf.sketch);
@@ -1134,33 +1262,77 @@ impl SketchSession {
         scope: &ParamScope,
     ) -> Result<(), Msg> {
         let base = self.lock_from;
+        let key = self.input.key.clone();
+        let planar = self.planar3().is_some();
         if let Err(text) = self.click3(&mut sf.sketch) {
             return Err(self.message.take().unwrap_or(Msg::Raw(text)));
         }
-        let Some(created @ Created::Line(line)) = self.created.take() else {
+        let Some(created) = self.created.take() else {
+            // Nächste Stufe einer ebenen Form: Die Werte warten bis zum Abschluss.
             self.sync_input(&sf.sketch);
+            if planar && self.input.key != key {
+                self.input.carried = typed.to_vec();
+            }
             return Ok(());
         };
-        let (a, b) = line_ends(&sf.sketch, line)?;
-        let tol = sf.sketch.tolerance().linear;
-        let from_start =
-            base.is_some_and(|q| sf.sketch.point_xyz(a).is_ok_and(|s| s.distance(q) <= tol));
         let mut note = None;
-        for (kind, text) in typed {
-            let (value, _) = dimension_input(text, kind.unit(), scope)?;
-            let prior = sf.sketch.clone();
-            let dim = match kind {
-                FieldKind::Length => ConstraintKind::Distance(a, b, 0.0),
-                FieldKind::ZDistance if from_start => ConstraintKind::Distance(a, b, 0.0),
-                FieldKind::Angle => match self.angle3_dimension(&mut sf.sketch, line)? {
-                    Some(dim) => dim,
-                    None => continue,
-                },
-                _ => continue,
-            };
-            note = self
-                .add_dimension_valued(sf, prior, dim, value, *kind, text, scope)?
-                .or(note);
+        if let Created::Line(line) = created {
+            let (a, b) = line_ends(&sf.sketch, line)?;
+            let tol = sf.sketch.tolerance().linear;
+            let from_start =
+                base.is_some_and(|q| sf.sketch.point_xyz(a).is_ok_and(|s| s.distance(q) <= tol));
+            for (kind, text) in typed {
+                let (value, _) = dimension_input(text, kind.unit(), scope)?;
+                let prior = sf.sketch.clone();
+                let dim = match kind {
+                    FieldKind::Length => ConstraintKind::Distance(a, b, 0.0),
+                    FieldKind::ZDistance if from_start => ConstraintKind::Distance(a, b, 0.0),
+                    FieldKind::Angle => match self.angle3_dimension(&mut sf.sketch, line)? {
+                        Some(dim) => dim,
+                        None => continue,
+                    },
+                    _ => continue,
+                };
+                note = self
+                    .add_dimension_valued(sf, prior, dim, value, *kind, text, scope)?
+                    .or(note);
+            }
+        } else {
+            // Kreis, Polygon und Rechteck: dieselben Maße wie in 2D, der Winkel gegen die erste
+            // Achse der Triadenebene (nur eine Achse der Skizze trägt ihn, sonst gilt er allein).
+            for (kind, text) in typed {
+                if matches!(kind, FieldKind::Sides | FieldKind::Rho) {
+                    continue;
+                }
+                let (value, _) = dimension_input(text, kind.unit(), scope)?;
+                let prior = sf.sketch.clone();
+                let first = match &created {
+                    Created::Rectangle(r) => Some(r.lines[0]),
+                    Created::Polygon { ids, .. } => ids.lines.first().copied(),
+                    _ => None,
+                };
+                let dim = match (first, kind) {
+                    (Some(line), FieldKind::Angle) => {
+                        match self.angle3_dimension(&mut sf.sketch, line)? {
+                            Some(dim) => dim,
+                            None => continue,
+                        }
+                    }
+                    // Der Abstand Mitte–Seite des umbeschriebenen Polygons ist der Radius seines
+                    // Kreises an den Seitenmitten; „Abstand Punkt–Linie“ gibt es nicht an
+                    // 3D-Geometrie.
+                    (_, FieldKind::Radius) if matches!(created, Created::Polygon { .. }) => {
+                        let Created::Polygon { ids, .. } = &created else {
+                            continue;
+                        };
+                        ConstraintKind::Radius(ids.circle, 0.0)
+                    }
+                    _ => dimension_kind(&mut sf.sketch, &created, *kind, None, false)?,
+                };
+                note = self
+                    .add_dimension_valued(sf, prior, dim, value, *kind, text, scope)?
+                    .or(note);
+            }
         }
         if note.is_some() {
             self.message = note;
@@ -1272,6 +1444,8 @@ fn dimension_kind(
         (Created::Rectangle(r), F::Height | F::Depth) => K::Distance(r.points[1], r.points[2], 0.0),
         (Created::Rectangle(r), F::Angle) => line_angle(sk, r.lines[0], chain)?,
         (Created::Circle(c), F::Diameter) => K::Diameter(*c, 0.0),
+        // „2 Tangenten“ tippt den Radius (Skizzen 11a).
+        (Created::Circle(c), F::Radius) => K::Radius(*c, 0.0),
         (Created::Arc(c), F::Radius) => K::Radius(*c, 0.0),
         (Created::Arc(c), F::Sweep) => sweep_dimension(sk, *c)?,
         // Umbeschrieben gibt die Größe den Abstand Mitte–Seite an, einbeschrieben den Radius.
@@ -1286,6 +1460,8 @@ fn dimension_kind(
             K::DistancePointLine(ids.center, ids.lines[0], 0.0)
         }
         (Created::Polygon { ids, .. }, F::Length) => K::Distance(ids.points[0], ids.points[1], 0.0),
+        // Der Kantenwinkel ist der Winkel der ersten Kante gegen die Waagerechte, wie bei der Linie.
+        (Created::Polygon { ids, .. }, F::Angle) => line_angle(sk, ids.lines[0], chain)?,
         (Created::Slot(ids), F::Length) if overall => {
             K::SlotOverall(ids.centers[0], ids.centers[1], ids.caps[0], 0.0)
         }

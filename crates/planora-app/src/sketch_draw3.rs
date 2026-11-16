@@ -542,6 +542,24 @@ pub enum Planar3 {
 }
 
 impl Planar3 {
+    /// Die Art, deren Felder am Zeiger die Form in 3D übernimmt (Skizzen 11a, A8): Kreis, Polygon
+    /// und Rechteck haben in der Triadenebene dieselben Felder wie in 2D.
+    pub(crate) fn field_kind(self) -> Option<ToolKind> {
+        match self {
+            Planar3::Circle2P => Some(ToolKind::Circle2P),
+            Planar3::Rect2P => Some(ToolKind::Rect2P),
+            Planar3::Kind(
+                k @ (ToolKind::CircleCenter
+                | ToolKind::RectCenter
+                | ToolKind::Rect3P
+                | ToolKind::PolygonInscribed
+                | ToolKind::PolygonCircumscribed
+                | ToolKind::PolygonEdge),
+            ) => Some(k),
+            _ => None,
+        }
+    }
+
     /// Klicks bis zur fertigen Form.
     fn clicks(self) -> usize {
         match self {

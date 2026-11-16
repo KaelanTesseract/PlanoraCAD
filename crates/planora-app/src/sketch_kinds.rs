@@ -228,12 +228,14 @@ impl ToolKind {
             Rect3P => &[&[], &[F::Width, F::Angle], &[F::Depth]],
             CircleCenter | Circle2P => &[&[], &[F::Diameter]],
             Circle3P | Circle3T => &[&[], &[], &[]],
-            Circle2T => &[&[], &[], &[F::Diameter]],
+            // Fusion: „2 Tangenten“ tippt den Radius (Skizzen 11a, A8).
+            Circle2T => &[&[], &[], &[F::Radius]],
             ArcCenter => &[&[], &[F::Radius], &[F::Sweep]],
             Arc3P => &[&[], &[], &[F::Radius]],
             ArcTangent => &[&[], &[F::Radius, F::Sweep]],
             PolygonCircumscribed | PolygonInscribed => &[&[], &[F::Radius, F::Sides]],
-            PolygonEdge => &[&[], &[F::Length, F::Sides], &[F::Sides]],
+            // Fusion: Kante mit Länge und Winkel, danach die Seitenzahl (Skizzen 11a, A8).
+            PolygonEdge => &[&[], &[F::Length, F::Angle], &[F::Sides]],
             SlotCenterToCenter | SlotOverall | SlotCenterPoint => &[&[], &[F::Length], &[F::Width]],
             SlotThreePointArc => &[&[], &[], &[F::Radius, F::Sweep], &[F::Width]],
             SlotCenterPointArc => &[&[], &[F::Radius], &[F::Sweep], &[F::Width]],
@@ -1380,7 +1382,7 @@ impl SketchSession {
             }
             (ToolKind::Circle3P, &[a, b], _) => shapes::circle_through(a, b, at, tol).map(circle),
             (ToolKind::Circle2T, _, &[l0, l1]) => {
-                let diameter = self.input.locked(FieldKind::Diameter);
+                let diameter = self.input.locked(FieldKind::Radius).map(|r| 2.0 * r);
                 tangent_circles::tangent_circle_two_lines(sk, l0, l1, at, diameter).map(circle)
             }
             (ToolKind::Circle3T, _, &[c0, c1]) => {
@@ -1536,7 +1538,7 @@ impl SketchSession {
                 Some(from + toward_pointer(cur, from) * locked(F::Diameter)?)
             }
             (ToolKind::Circle2T, _) => {
-                let d = locked(F::Diameter)?;
+                let d = 2.0 * locked(F::Radius)?;
                 let &[l0, l1] = self.pending_curves.as_slice() else {
                     return None;
                 };
@@ -1547,9 +1549,12 @@ impl SketchSession {
             (ToolKind::PolygonInscribed | ToolKind::PolygonCircumscribed, &[center]) => {
                 Some(center + toward_pointer(cur, center) * locked(F::Radius)?)
             }
-            (ToolKind::PolygonEdge, &[from]) => {
-                Some(from + toward_pointer(cur, from) * locked(F::Length)?)
-            }
+            // Wie bei der Linie: Ein getippter Winkel gilt gegen die Waagerechte, der Zeiger wählt
+            // die Seite (und ohne Länge diese).
+            (ToolKind::PolygonEdge, &[from]) => match locked(F::Angle) {
+                Some(angle) => Some(locked_ray(from, DVec2::X, cur, locked(F::Length), angle)),
+                None => Some(from + toward_pointer(cur, from) * locked(F::Length)?),
+            },
             (ToolKind::Arc3P, &[start, end]) => {
                 let tol = sk.tolerance().linear;
                 through_at_radius(start, end, locked(F::Radius)?, cur.raw, tol)
@@ -1634,8 +1639,12 @@ impl SketchSession {
                 Some(c.distance(at))
             }
             (ToolKind::PolygonEdge, &[from], F::Length) => Some(from.distance(at)),
-            (ToolKind::Circle2T, _, F::Diameter) => match self.kind_plan(sk, at)? {
-                ShapePlan::Circle(_, r) => Some(2.0 * r),
+            (ToolKind::PolygonEdge, &[from], F::Angle) => {
+                let along = at - from;
+                Some(along.y.abs().atan2(along.x))
+            }
+            (ToolKind::Circle2T, _, F::Radius) => match self.kind_plan(sk, at)? {
+                ShapePlan::Circle(_, r) => Some(r),
                 _ => None,
             },
             (ToolKind::SlotCenterToCenter | ToolKind::SlotOverall, &[from], F::Length) => {

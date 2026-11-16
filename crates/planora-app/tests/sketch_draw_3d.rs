@@ -2095,3 +2095,296 @@ fn circle3_around_a_dimensioned_2d_corner_is_refused_with_a_note() {
     assert!(!v.sk().is_3d_point(p));
     assert_eq!(pending(&v), 1, "Werkzeug wie vor dem Klick");
 }
+
+// ---- Felder am Zeiger für Kreis, Polygon und Rechteck (Skizzen 11a, A8 und A9) --------------------
+
+impl View {
+    /// Die Felder der laufenden Stufe in ihrer Reihenfolge.
+    fn field_kinds(&self) -> Vec<planora_app::sketch_input::FieldKind> {
+        self.s
+            .sketch_session
+            .as_ref()
+            .unwrap()
+            .input
+            .fields
+            .iter()
+            .map(|f| f.kind)
+            .collect()
+    }
+
+    fn type_text(&mut self, text: &str) {
+        self.frame(vec![Event::Text(text.into())]);
+    }
+
+    fn tab(&mut self) {
+        self.frame(vec![key_down(Key::Tab, Modifiers::NONE)]);
+        self.frame(vec![key_up(Key::Tab)]);
+    }
+
+    /// Eingabe bei dem Zeiger `aim`: Die Vorschau steht dort, dann setzt Enter den Punkt.
+    fn enter_at(&mut self, aim: Pos2) {
+        self.hover(aim);
+        self.frame(vec![key_down(Key::Enter, Modifiers::NONE)]);
+        self.frame(vec![key_up(Key::Enter)]);
+        self.frame(vec![]);
+    }
+
+    fn dimensions(&self) -> Vec<ConstraintKind> {
+        self.sk()
+            .constraints()
+            .filter(|(_, c)| c.kind.is_dimension())
+            .map(|(_, c)| c.kind.clone())
+            .collect()
+    }
+
+    fn message(&self) -> Option<String> {
+        self.s
+            .sketch_session
+            .as_ref()
+            .unwrap()
+            .message
+            .as_ref()
+            .map(|m| m.text())
+    }
+}
+
+fn only_circle3(v: &View) -> (CurveId, PointId) {
+    let curves = v.curves();
+    assert_eq!(curves.len(), 1, "ein Kreis: {curves:?} {:?}", v.message());
+    let (c, CurveKind::Circle { center, .. }) = curves[0].clone() else {
+        panic!("kein Kreis: {curves:?}");
+    };
+    (c, center)
+}
+
+#[test]
+fn circle_center_diameter_typed_in_3d() {
+    use planora_app::sketch_input::FieldKind as F;
+    let mut v = View::with_kind(ToolKind::CircleCenter);
+    v.set_plane(TriadPlane::Zx);
+    let m = DVec3::new(50.0, 0.0, 10.0);
+    v.click3(m);
+    let aim = v.at3(m + DVec3::new(5.0, 0.0, 15.0));
+    v.hover(aim);
+    assert_eq!(v.field_kinds(), vec![F::Diameter]);
+    v.type_text("20");
+    v.enter_at(aim);
+    let (c, center) = only_circle3(&v);
+    assert!(same_axis(v.sk().curve_normal(c), DVec3::Y), "Normale Y");
+    assert!((v.sk().radius(c).unwrap() - 10.0).abs() < 1e-6);
+    assert!(near(v.xyz(center), m, 0.1));
+    v.assert_in_plane(c, m, DVec3::Y);
+    assert!(
+        v.dimensions().iter().any(
+            |k| matches!(k, ConstraintKind::Diameter(d, x) if *d == c && (x - 20.0).abs() < 1e-9)
+        ),
+        "{:?}",
+        v.dimensions()
+    );
+    assert_eq!(
+        v.sk().clone().solve().status,
+        planora_sketch::solver::SolveStatus::Solved
+    );
+}
+
+#[test]
+fn circle_2p_diameter_typed_in_3d() {
+    use planora_app::sketch_input::FieldKind as F;
+    let mut v = View::with_kind(ToolKind::Circle2P);
+    v.set_plane(TriadPlane::Yz);
+    let from = DVec3::new(0.0, 10.0, 20.0);
+    v.click3(from);
+    let dir = DVec3::new(0.0, 30.0, 4.0).normalize();
+    let aim = v.at3(from + dir * 30.0);
+    v.hover(aim);
+    assert_eq!(v.field_kinds(), vec![F::Diameter]);
+    v.type_text("20");
+    v.enter_at(aim);
+    let (c, center) = only_circle3(&v);
+    assert!(same_axis(v.sk().curve_normal(c), DVec3::X), "Normale X");
+    assert!((v.sk().radius(c).unwrap() - 10.0).abs() < 1e-6);
+    // Die Mitte liegt einen Radius vom ersten Klick, auf dem Strahl zum Zeiger.
+    assert!(
+        near(v.xyz(center), from + dir * 10.0, 0.3),
+        "{:?}",
+        v.xyz(center)
+    );
+    assert!(v.dimensions().iter().any(
+        |k| matches!(k, ConstraintKind::Diameter(d, x) if *d == c && (x - 20.0).abs() < 1e-9)
+    ));
+}
+
+#[test]
+fn polygon_sides_by_tab_in_3d() {
+    use planora_app::sketch_input::FieldKind as F;
+    for kind in [ToolKind::PolygonInscribed, ToolKind::PolygonCircumscribed] {
+        let mut v = View::with_kind(kind);
+        v.set_plane(TriadPlane::Yz);
+        let m = DVec3::new(0.0, 10.0, 20.0);
+        v.click3(m);
+        let aim = v.at3(m + DVec3::new(0.0, 25.0, 3.0));
+        v.hover(aim);
+        assert_eq!(v.field_kinds(), vec![F::Radius, F::Sides], "{kind:?}");
+        v.type_text("15");
+        v.tab();
+        v.type_text("7");
+        v.enter_at(aim);
+        assert_eq!(v.lines().len(), 7, "{kind:?}: {:?}", v.message());
+        let dims = v.dimensions();
+        assert_eq!(dims.len(), 1, "{kind:?}: nur das Maß der Größe, {dims:?}");
+        // Auch umbeschrieben ein Radius (der Kreis an den Seitenmitten): „Abstand Punkt–Linie“ gibt
+        // es an 3D-Geometrie nicht.
+        assert!(
+            matches!(dims[0], ConstraintKind::Radius(_, r) if (r - 15.0).abs() < 1e-9),
+            "{kind:?}: {dims:?}"
+        );
+        // Die Seitenzahl ist kein Maß; sie gilt für das nächste Polygon als zuletzt benutzte.
+        assert_eq!(v.s.sketch_session.as_ref().unwrap().polygon_sides, 7);
+        assert_eq!(
+            v.sk().clone().solve().status,
+            planora_sketch::solver::SolveStatus::Solved,
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn polygon_edge_length_angle_in_3d() {
+    use planora_app::sketch_input::FieldKind as F;
+    let mut v = View::with_kind(ToolKind::PolygonEdge);
+    v.set_plane(TriadPlane::Yz);
+    let start = DVec3::new(0.0, 10.0, 20.0);
+    v.click3(start);
+    // Ebene YZ: erste Achse Y, zweite Z; der Zeiger liegt oberhalb der ersten Achse.
+    let aim = v.at3(start + DVec3::new(0.0, 20.0, 8.0));
+    v.hover(aim);
+    assert_eq!(v.field_kinds(), vec![F::Length, F::Angle]);
+    v.type_text("12");
+    v.tab();
+    v.type_text("30");
+    v.enter_at(aim);
+    // Die zweite Stufe fragt nach der Seitenzahl; die Werte warten bis zum Abschluss.
+    assert!(v.lines().is_empty(), "{:?}", v.message());
+    assert_eq!(v.field_kinds(), vec![F::Sides]);
+    let end = start
+        + DVec3::new(
+            0.0,
+            12.0 * 30f64.to_radians().cos(),
+            12.0 * 30f64.to_radians().sin(),
+        );
+    let side = v.at3(end + DVec3::new(0.0, -2.0, 9.0));
+    v.hover(side);
+    v.type_text("5");
+    v.enter_at(side);
+    assert_eq!(v.lines().len(), 5, "{:?}", v.message());
+    let dims = v.dimensions();
+    assert!(
+        dims.iter()
+            .any(|k| matches!(k, ConstraintKind::Distance(_, _, l) if (l - 12.0).abs() < 1e-9)),
+        "{dims:?}"
+    );
+    assert!(
+        dims.iter().any(
+            |k| matches!(k, ConstraintKind::Angle(_, _, a) if (a.to_degrees() - 30.0).abs() < 1e-9)
+        ),
+        "{dims:?}"
+    );
+    // Die erste Kante beginnt am ersten Klick, ist 12 lang und liegt unter 30° zur ersten Achse.
+    let first = v
+        .lines()
+        .into_iter()
+        .map(|(_, a, b)| (v.xyz(a), v.xyz(b)))
+        .find(|(a, _)| near(*a, start, 1e-3))
+        .expect("Kante am Anfang");
+    let d = first.1 - first.0;
+    assert!((d.length() - 12.0).abs() < 1e-3, "{d:?}");
+    assert!((d.z.atan2(d.y).to_degrees() - 30.0).abs() < 1e-3, "{d:?}");
+    assert_eq!(
+        v.sk().clone().solve().status,
+        planora_sketch::solver::SolveStatus::Solved
+    );
+}
+
+#[test]
+fn rect_2p_typed_in_3d() {
+    use planora_app::sketch_input::FieldKind as F;
+    let mut v = View::with_kind(ToolKind::Rect2P);
+    v.set_plane(TriadPlane::Zx);
+    let corner = DVec3::new(50.0, 0.0, 10.0);
+    v.click3(corner);
+    // Ebene ZX: erste Achse Z, zweite X.
+    let aim = v.at3(corner + DVec3::new(25.0, 0.0, 40.0));
+    v.hover(aim);
+    assert_eq!(v.field_kinds(), vec![F::Width, F::Height]);
+    v.type_text("30");
+    v.tab();
+    v.type_text("20");
+    v.enter_at(aim);
+    assert_eq!(v.lines().len(), 4, "{:?}", v.message());
+    let mut values: Vec<f64> = v
+        .dimensions()
+        .iter()
+        .filter_map(|k| match k {
+            ConstraintKind::Distance(_, _, d) => Some(*d),
+            _ => None,
+        })
+        .collect();
+    values.sort_by(f64::total_cmp);
+    assert_eq!(values, vec![20.0, 30.0], "{:?}", v.dimensions());
+    let corners: Vec<DVec3> = v.points().iter().map(|&p| v.xyz(p)).collect();
+    for want in [
+        corner,
+        corner + DVec3::new(0.0, 0.0, 30.0),
+        corner + DVec3::new(20.0, 0.0, 30.0),
+    ] {
+        assert!(
+            corners.iter().any(|&q| near(q, want, 1e-3)),
+            "Ecke {want:?} fehlt: {corners:?}"
+        );
+    }
+    assert_eq!(
+        v.sk().clone().solve().status,
+        planora_sketch::solver::SolveStatus::Solved
+    );
+}
+
+/// A9: Die Felder am Zeiger nehmen keinen Mausklick an. Ein Klick auf die Stelle, an der ein Feld
+/// steht, setzt die Form nicht ab, gibt dem Feld keinen Fokus und wählt kein anderes Feld.
+#[test]
+fn fields_follow_pointer_no_click() {
+    let mut v = View::with_kind(ToolKind::CircleCenter);
+    v.set_plane(TriadPlane::Yz);
+    let m = DVec3::new(0.0, 10.0, 20.0);
+    v.click3(m);
+    let aim = v.at3(m + DVec3::new(0.0, 25.0, 3.0));
+    v.hover(aim);
+    let on_field = aim + vec2(50.0, 34.0);
+    {
+        let se = v.s.sketch_session.as_ref().unwrap();
+        assert!(!se.input.fields.is_empty());
+        assert!(planora_app::sketch_inline::over_field(&v.ctx, se, on_field));
+        assert!(!planora_app::sketch_inline::over_field(&v.ctx, se, aim));
+    }
+    let focus = v.ctx.memory(|m| m.focused());
+    let has_keys = planora_app::viewport::draw_field_has_keyboard(&v.ctx);
+    // Der Klick kommt in einem Bild, ohne dass das Feld dem Zeiger schon gefolgt wäre.
+    v.frame(vec![button(on_field, PointerButton::Primary, true)]);
+    v.frame(vec![button(on_field, PointerButton::Primary, false)]);
+    v.frame(vec![]);
+    assert!(
+        v.curves().is_empty(),
+        "keine Form abgesetzt: {:?}",
+        v.message()
+    );
+    assert_eq!(v.s.sketch_session.as_ref().unwrap().pending3.len(), 1);
+    assert_eq!(
+        v.ctx.memory(|m| m.focused()),
+        focus,
+        "kein Fokus durch den Klick"
+    );
+    assert_eq!(
+        planora_app::viewport::draw_field_has_keyboard(&v.ctx),
+        has_keys
+    );
+    assert_eq!(v.s.sketch_session.as_ref().unwrap().input.active, 0);
+}

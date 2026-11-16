@@ -387,7 +387,7 @@ fn stages_follow_the_table() {
         (K::Rect3P, &[empty, &[F::Width, F::Angle], &[F::Depth]]),
         (K::RectCenter, &[empty, &[F::Width, F::Height]]),
         (K::Circle2P, &[empty, &[F::Diameter]]),
-        (K::Circle2T, &[empty, empty, &[F::Diameter]]),
+        (K::Circle2T, &[empty, empty, &[F::Radius]]),
         (K::Circle3P, &[empty, empty, empty]),
         (K::Circle3T, &[empty, empty, empty]),
         (K::Arc3P, &[empty, empty, &[F::Radius]]),
@@ -396,7 +396,7 @@ fn stages_follow_the_table() {
         (K::PolygonCircumscribed, &[empty, &[F::Radius, F::Sides]]),
         (
             K::PolygonEdge,
-            &[empty, &[F::Length, F::Sides], &[F::Sides]],
+            &[empty, &[F::Length, F::Angle], &[F::Sides]],
         ),
         (K::SlotCenterToCenter, &[empty, &[F::Length], &[F::Width]]),
         (K::SlotCenterPoint, &[empty, &[F::Length], &[F::Width]]),
@@ -830,11 +830,11 @@ fn picking_kinds_snap_to_curves_only() {
     assert_eq!(se.kind_stage(), 2);
     assert!(se.pending_pos.is_empty());
     assert_eq!(bits(&sk), start);
-    // `2 tangential`: Die letzte Stufe ist der Durchmesser, keine Kurvenwahl mehr.
+    // `2 tangential`: Die letzte Stufe ist der Radius, keine Kurvenwahl mehr.
     assert!(!se.picks_curves());
     se.sync_input(&sk);
     assert_eq!(se.input.fields.len(), 1);
-    assert_eq!(se.input.fields[0].kind, F::Diameter);
+    assert_eq!(se.input.fields[0].kind, F::Radius);
     // `3 tangential` wählt bis zuletzt.
     se.choose_kind(&mut sk, ToolKind::Circle3T);
     se.pending_curves = vec![a, b];
@@ -852,6 +852,8 @@ fn sides_field_is_a_whole_number_from_three_to_sixty_four() {
     let (mut se, mut sk) = session();
     se.choose_kind(&mut sk, ToolKind::PolygonEdge);
     se.click(&mut sk, at(0.0, 0.0), R, false).unwrap();
+    // Die Seitenzahl steht erst nach der Kante (Skizzen 11a): erst Länge und Winkel.
+    se.click(&mut sk, at(10.0, 0.0), R, false).unwrap();
     se.sync_input(&sk);
     let i = se
         .input
@@ -888,12 +890,10 @@ fn sides_field_is_a_whole_number_from_three_to_sixty_four() {
         copies: Vec::new(),
         formulas: Default::default(),
     };
-    se.commit_input(&mut sf, at(10.0, 0.0), R, false, &scope)
-        .unwrap();
     assert_eq!(se.kind_stage(), 2);
     assert_eq!(se.input.sides, Some(8));
     assert_eq!(se.input.fields[0].kind, F::Sides);
-    assert!(se.input.fields[0].locked.is_none());
+    assert_eq!(se.input.fields[0].locked, Some(8.0));
     assert_eq!(se.field_value(&sf.sketch, F::Sides), Some(8.0));
     assert_eq!(se.polygon_sides, 6);
     assert_eq!(
