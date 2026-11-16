@@ -507,6 +507,8 @@ enum Action {
     PickStandard(StandardPlane),
     /// „Skizzenebene neu festlegen“ für diese Skizze (Wahlmodus).
     RedefinePlane(FeatureId),
+    /// „Verlorene Projektionen verwalten“ dieser Skizze (Skizzen 11a).
+    ManageLostProjections(FeatureId),
     /// „Kalibrieren“ dieser Leinwand (Klickmodus in der Ansicht).
     Calibrate(FeatureId),
 }
@@ -1399,20 +1401,21 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         }
         // Neue Körper aus der Skizze eines zurückgesetzten Körpers sind gesperrt.
         let lock = crate::history_bar::lock_reason(state, &[id]);
+        let lost = crate::lost_projections_dialog::offers(state, id);
         resp.context_menu(|ui| {
-            feature_menu(ui, action, id, r.suppressed, Some(lock));
+            feature_menu(ui, action, id, r.suppressed, Some((lock, lost)));
         });
     }
 }
 
 /// Kontextmenü einer Körper- oder Skizzenzeile für das Feature `id`. `sketch` (nur bei
-/// Skizzen): die Sperre für neue Körper aus ihr.
+/// Skizzen): die Sperre für neue Körper aus ihr und ob sie verlorene Projektionen hat.
 fn feature_menu(
     ui: &mut egui::Ui,
     action: &mut Option<Action>,
     id: FeatureId,
     suppressed: bool,
-    sketch: Option<Option<String>>,
+    sketch: Option<(Option<String>, bool)>,
 ) {
     let pick = |action: &mut Option<Action>, a: Action, ui: &mut egui::Ui| {
         *action = Some(a);
@@ -1433,7 +1436,7 @@ fn feature_menu(
         pick(action, Action::Edit(id), ui);
     }
     rename_and_suppress(ui, action, id, suppressed);
-    if let Some(lock) = sketch {
+    if let Some((lock, lost)) = sketch {
         ui.separator();
         for (label, act, key) in [
             (
@@ -1462,6 +1465,16 @@ fn feature_menu(
         );
         if ui.add(redefine).clicked() {
             pick(action, Action::RedefinePlane(id), ui);
+        }
+        // Nur an Skizzen mit verlorenen Projektionen (Skizzen 11a).
+        if lost {
+            let manage = key_button(
+                &tr!("action-manage-lost-projections"),
+                crate::keymap::Action::ManageLostProjections,
+            );
+            if ui.add(manage).clicked() {
+                pick(action, Action::ManageLostProjections(id), ui);
+            }
         }
     }
     delete_entry(ui, action, id);
@@ -1769,6 +1782,9 @@ fn run(state: &mut AppState, action: Action) {
         }
         Action::RedefinePlane(id) => {
             let _ = state.start_redefine_sketch_plane(id);
+        }
+        Action::ManageLostProjections(id) => {
+            state.open_lost_projections(id);
         }
         // Fehler (offene Skizze, ausgeblendet) stehen in der Meldung.
         Action::Calibrate(id) => {

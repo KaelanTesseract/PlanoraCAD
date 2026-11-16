@@ -1867,7 +1867,7 @@ fn under_section(
         );
     }
     // Nur die sichtbaren Zeilen werden gebaut und gezeichnet (eine DXF-Bogenkette liefert 500).
-    let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+    let row_h = under_row_height(ui);
     egui::ScrollArea::vertical()
         .id_salt("planora-sketch-under-list")
         .max_height(UNDER_LIST_MAX_H)
@@ -1900,6 +1900,14 @@ fn under_section(
     if let Some(it) = delete {
         se.delete_under_item(sk, it);
     }
+}
+
+/// Zeilenhöhe der Liste „Unterbestimmte finden“ für `ScrollArea::show_rows`: nur die Höhe einer
+/// Zeile, denn `show_rows` zählt den Abstand `item_spacing` selbst dazu (sonst wäre die Liste je
+/// Zeile um ihn zu hoch, bei 500 Zeilen rund 2000 Pixel Leerraum).
+#[doc(hidden)]
+pub fn under_row_height(ui: &egui::Ui) -> f32 {
+    ui.spacing().interact_size.y
 }
 
 /// Die Statuszeile als Zeile der Palette; `status_key` hält den Text des letzten Bildes (Tests).

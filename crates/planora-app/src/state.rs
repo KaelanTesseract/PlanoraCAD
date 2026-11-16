@@ -5,9 +5,9 @@ use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
 use planora_feature::planes::{PlaneBase, PlaneDef};
 use planora_feature::{
-    BlendArt, BodyRef, CopySource, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind,
-    FeatureStatus, FieldKey, Formulas, MeshId, NewStepBody, ParamEdit, ParamId, ProfileSel,
-    RestoreKind, SketchFeature, SketchPlane, StepShape, mesh_locked,
+    BlendArt, BodyRef, CopySource, CopyTarget, Document, EdgeCopy, FeatureError, FeatureId,
+    FeatureKind, FeatureStatus, FieldKey, Formulas, MeshId, NewStepBody, ParamEdit, ParamId,
+    ProfileSel, RestoreKind, SketchFeature, SketchPlane, StepShape, mesh_locked,
 };
 use planora_i18n::tr;
 use planora_kernel::boolean::BoolOp;
@@ -345,6 +345,9 @@ pub struct AppState {
     /// Offener Dialog „Krümmungsanzeige einrichten“ der offenen Skizze (Skizzen 11a); seine
     /// Vorschau zeichnet die Ansicht, die Skizze ändert erst OK.
     pub curvature_dialog: Option<crate::curvature_dialog::CurvatureDialog>,
+    /// Offener Dialog „Verlorene Projektionen verwalten“ (Skizzen 11a); bleibt über das Öffnen
+    /// der Skizze für „Neu verknüpfen“ offen.
+    pub lost_dialog: Option<crate::lost_projections_dialog::LostProjectionsDialog>,
     /// Hervorhebungsliste der Ansicht (Task H3): was die Felder des offenen Dialogs
     /// [`AppState::surface_dialog`] gewählt haben. Flächen sind getönt, Kanten, Ecken, Achsen,
     /// Ebenen und Kurven fertiger Skizzen stehen in der Auswahlfarbe. Setzen nur über
@@ -758,6 +761,7 @@ impl AppState {
             sheet_dialog: None,
             surface_dialog: None,
             curvature_dialog: None,
+            lost_dialog: None,
             dialog_marks: Vec::new(),
             pending_delete_dimension: None,
             document_name: tr!("state-unnamed"),
@@ -1270,6 +1274,7 @@ impl AppState {
         self.sheet_dialog = None;
         self.surface_dialog = None;
         self.curvature_dialog = None;
+        self.lost_dialog = None;
         self.dialog_marks.clear();
         self.dimension_tool = crate::dimension_tool::DimensionTool::default();
         self.balloon_tool = crate::balloon_tool::BalloonTool::default();
@@ -3329,6 +3334,314 @@ impl AppState {
         self.break_projection_links(&[curve]).map(|_| ())
     }
 
+    // ---- Verlorene Projektionen verwalten (Skizzen 11a, Fusion „Manage Lost Projections“) ----
+
+    /// Öffnet den Dialog „Verlorene Projektionen verwalten“ für die Skizze `sketch`; nur, wenn
+    /// sie verlorene Projektionen hat (sonst nichts, `false`).
+    pub fn open_lost_projections(&mut self, sketch: FeatureId) -> bool {
+        if !crate::lost_projections_dialog::offers(self, sketch) {
+            return false;
+        }
+        self.selected_feature = Some(sketch);
+        self.lost_dialog = Some(crate::lost_projections_dialog::LostProjectionsDialog::new(
+            sketch,
+        ));
+        true
+    }
+
+    /// Die Ziele der Skizze `sketch` mit verlorenem Bezug, wie der Dialog sie zeigt: aus der
+    /// letzten Berechnung, ohne die in der offenen Skizze schon gelösten, gelöschten oder neu
+    /// verknüpften (dort zählt der Entwurf, das Dokument rechnet erst beim Beenden).
+    pub fn lost_rows(&self, sketch: FeatureId) -> Vec<CopyTarget> {
+        let Some(f) = self.document.feature(sketch) else {
+            return Vec::new();
+        };
+        let FeatureKind::Sketch(def) = &f.kind else {
+            return Vec::new();
+        };
+        let lost = f.lost_projections();
+        let draft = self
+            .sketch_draft
+            .as_ref()
+            .filter(|_| self.open_sketch_id() == Some(sketch));
+        let Some(draft) = draft else {
+            return lost.to_vec();
+        };
+        lost.iter()
+            .copied()
+            .filter(|t| {
+                let old = def
+                    .copies
+                    .iter()
+                    .find(|c| c.target == *t)
+                    .map(|c| &c.source);
+                draft
+                    .copies
+                    .iter()
+                    .any(|c| c.target == *t && Some(&c.source) == old)
+            })
+            .collect()
+    }
+
+    /// „Verknüpfung aufheben“ im Dialog für die Ziele `targets` der Skizze `sketch`: Ist sie
+    /// offen, am Entwurf als ein Skizzen-Schritt, sonst am Dokument als ein Schritt
+    /// ([`Document::unlink_projections`]); eine andere offene Skizze wird vorher beendet.
+    /// Liefert die Zahl der gelösten Kopien (0: nichts geändert, kein Schritt).
+    pub fn unlink_lost_projections(
+        &mut self,
+        sketch: FeatureId,
+        targets: &[CopyTarget],
+    ) -> Result<usize, String> {
+        if self.open_sketch_id() == Some(sketch) {
+            self.observe_sketch(false);
+            let n = self.sketch_draft.as_mut().map_or(0, |d| {
+                targets.iter().filter(|t| d.break_link_target(**t)).count()
+            });
+            if n > 0 {
+                if let Some(se) = self.sketch_session.as_mut() {
+                    se.edit_label = Some(crate::msg!("lost-break-link"));
+                }
+                self.observe_sketch(false);
+            }
+            return Ok(n);
+        }
+        self.try_close_sketch()?;
+        match self.document.unlink_projections(sketch, targets) {
+            Ok(n) => {
+                if n > 0 {
+                    self.undo_label_hint = Some(|| tr!("lost-break-link"));
+                    self.refresh();
+                }
+                Ok(n)
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// „Geometrie löschen“ im Dialog: wie [`AppState::unlink_lost_projections`], löscht aber
+    /// die Kurven und Punkte samt Kopie ([`Document::delete_lost_geometry`]); in der offenen
+    /// Skizze dieselbe Regel am Entwurf. Liefert die Zahl der gelöschten Ziele.
+    pub fn delete_lost_geometry(
+        &mut self,
+        sketch: FeatureId,
+        targets: &[CopyTarget],
+    ) -> Result<usize, String> {
+        if self.open_sketch_id() == Some(sketch) {
+            self.observe_sketch(false);
+            let Some(draft) = self.sketch_draft.as_mut() else {
+                return Ok(0);
+            };
+            let mut trial = draft.clone();
+            let mut n = 0;
+            for t in targets {
+                if !trial.break_link_target(*t) {
+                    continue;
+                }
+                let removed = match *t {
+                    CopyTarget::Curve(c) => {
+                        let ends = trial
+                            .sketch
+                            .curve(c)
+                            .map(|d| d.kind.points())
+                            .unwrap_or_default();
+                        trial.sketch.remove_curve(c).and_then(|()| {
+                            for p in ends {
+                                let used = trial
+                                    .sketch
+                                    .curves()
+                                    .any(|(_, d)| d.kind.points().contains(&p));
+                                if !used && trial.sketch.point_xyz(p).is_ok() {
+                                    trial.sketch.remove_point(p)?;
+                                }
+                            }
+                            Ok(())
+                        })
+                    }
+                    CopyTarget::Point(p) => trial.sketch.remove_point(p),
+                };
+                if let Err(e) = removed {
+                    return self.fail(e.to_string());
+                }
+                n += 1;
+            }
+            if n > 0 {
+                trial.prune_copies();
+                *draft = trial;
+                if let Some(se) = self.sketch_session.as_mut() {
+                    se.forget_removed(&draft.sketch);
+                    se.edit_label = Some(crate::msg!("lost-delete-geometry"));
+                }
+                self.observe_sketch(false);
+            }
+            return Ok(n);
+        }
+        self.try_close_sketch()?;
+        match self.document.delete_lost_geometry(sketch, targets) {
+            Ok(n) => {
+                if n > 0 {
+                    self.undo_label_hint = Some(|| tr!("lost-delete-geometry"));
+                    self.refresh();
+                }
+                Ok(n)
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// „Neu verknüpfen“ im Dialog (Ruling F9): öffnet die Skizze `sketch` (falls zu) und setzt
+    /// die Wahl der Sitzung ([`crate::sketch_state::RelinkPick`]); der nächste passende Klick in
+    /// der Ansicht (dieselbe Auswahl wie „Projizieren“) ruft [`AppState::relink_pick`]. Esc nimmt
+    /// die Wahl zurück. Fehler (Meldung auch in `message`): keine Kopie, Art nicht wählbar.
+    pub fn start_relink(&mut self, sketch: FeatureId, target: CopyTarget) -> Result<(), String> {
+        let family = match self.document.feature(sketch).map(|f| &f.kind) {
+            Some(FeatureKind::Sketch(def)) => def
+                .copies
+                .iter()
+                .find(|c| c.target == target)
+                .map(|c| c.source.clone()),
+            _ => None,
+        };
+        let Some(family) = family else {
+            return self.fail(tr!("feature-relink-no-copy"));
+        };
+        if !relink_pickable(&family) {
+            return self.fail(tr!("lost-relink-unsupported"));
+        }
+        if self.open_sketch_id() != Some(sketch) {
+            self.open_sketch(sketch)?;
+        }
+        let Some((se, sk)) = self.session_sketch_mut() else {
+            return self.fail(tr!("state-no-open-sketch"));
+        };
+        se.set_tool(sk, crate::sketch_state::Tool::Select);
+        se.relink = Some(crate::sketch_state::RelinkPick { target, family });
+        se.message = Some(crate::msg!("lost-relink-pick"));
+        Ok(())
+    }
+
+    /// Der Klick der Wahl „Neu verknüpfen“ auf `picked` (Kante, Fläche oder Kurve einer früheren
+    /// Skizze, wie bei „Projizieren“): Passt er zur Familie, wird er die neue Herkunft
+    /// ([`AppState::relink_projection`]); sonst bleibt die Wahl, und die Meldung der Sitzung nennt
+    /// den Grund.
+    pub fn relink_pick(&mut self, picked: ProjectTarget) -> Result<(), String> {
+        let r = self.try_relink_pick(picked);
+        self.report_to_session(r.map(|()| 1)).map(|_| ())
+    }
+
+    fn try_relink_pick(&mut self, picked: ProjectTarget) -> Result<(), Msg> {
+        let pick = self
+            .sketch_session
+            .as_ref()
+            .and_then(|se| se.relink.clone())
+            .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
+        let source = self.relink_source(&pick.family, picked)?;
+        self.try_relink(pick.target, source)
+    }
+
+    /// Die neue Herkunft der Familie `family` aus dem Klick `picked`; Schnitt und Silhouette
+    /// behalten den Stückindex der alten Herkunft.
+    fn relink_source(&self, family: &CopySource, picked: ProjectTarget) -> Result<CopySource, Msg> {
+        use planora_feature::IncludeRef;
+        let tol = self.kernel.tolerance;
+        let edge = |b: usize, e: Id<Edge>| -> Result<planora_feature::EdgeRef, Msg> {
+            planora_feature::EdgeRef::from_edge(&self.solid_before_sketch(b)?, e, &tol)
+                .map_err(|err| crate::msg!("state-edge-copy-failed", error = err.to_string()))
+        };
+        let face = |b: usize, f: Id<Face>| -> Result<planora_feature::FaceRef, Msg> {
+            planora_feature::FaceRef::from_face(&self.solid_before_sketch(b)?, f, &tol)
+                .map_err(|e| crate::msg!("state-face-link-failed", error = e.to_string()))
+        };
+        Ok(match (family, picked) {
+            (CopySource::Edge(_), ProjectTarget::Edge(b, e)) => CopySource::Edge(edge(b, e)?),
+            (CopySource::Include(IncludeRef::Edge(_)), ProjectTarget::Edge(b, e)) => {
+                CopySource::Include(IncludeRef::Edge(edge(b, e)?))
+            }
+            (CopySource::Section { index, .. }, ProjectTarget::Face(b, f)) => CopySource::Section {
+                face: face(b, f)?,
+                index: *index,
+            },
+            (CopySource::Silhouette { index, .. }, ProjectTarget::Face(b, f)) => {
+                CopySource::Silhouette {
+                    face: face(b, f)?,
+                    index: *index,
+                }
+            }
+            (CopySource::Include(IncludeRef::FaceBoundary(_)), ProjectTarget::Face(b, f)) => {
+                CopySource::Include(IncludeRef::FaceBoundary(face(b, f)?))
+            }
+            (CopySource::SketchCurve { .. }, ProjectTarget::SketchCurve(sketch, curve)) => {
+                self.check_source_sketch(sketch)?;
+                CopySource::SketchCurve { sketch, curve }
+            }
+            (
+                CopySource::Include(IncludeRef::SketchCurve { .. }),
+                ProjectTarget::SketchCurve(sketch, curve),
+            ) => {
+                self.check_source_sketch(sketch)?;
+                CopySource::Include(IncludeRef::SketchCurve { sketch, curve })
+            }
+            _ => return Err(crate::msg!("lost-relink-wrong-pick")),
+        })
+    }
+
+    /// „Neu verknüpfen“ in der offenen Skizze: gibt der Kopie mit dem Ziel `target` (bei Gruppen
+    /// der ganzen Gruppe, [`planora_feature::relink_copies`]) die Herkunft `source` und führt sie
+    /// sofort nach, wie die Neuberechnung ([`Document::follow_draft_copies`]). Genau ein
+    /// Skizzen-Schritt („Neu verknüpfen“); die Wahl endet. Andere Familie, keine Kopie oder eine
+    /// Quelle, der die Kurve nicht folgen kann: Fehler, nichts geändert (die Wahl bleibt).
+    pub fn relink_projection(
+        &mut self,
+        target: CopyTarget,
+        source: CopySource,
+    ) -> Result<(), String> {
+        let r = self.try_relink(target, source);
+        self.report_to_session(r.map(|()| 1)).map(|_| ())
+    }
+
+    fn try_relink(&mut self, target: CopyTarget, source: CopySource) -> Result<(), Msg> {
+        let id = self
+            .open_sketch_id()
+            .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
+        // Offene Änderungen vorher als eigener Schritt, damit dieser nur das Verknüpfen enthält.
+        self.observe_sketch(false);
+        let draft = self
+            .sketch_draft
+            .as_ref()
+            .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
+        let old = draft
+            .copies
+            .iter()
+            .find(|c| c.target == target)
+            .map(|c| c.source.clone())
+            .ok_or_else(|| crate::msg!("feature-relink-no-copy"))?;
+        if !old.same_family(&source) {
+            return Err(crate::msg!("feature-relink-kind"));
+        }
+        let mut trial = draft.clone();
+        planora_feature::relink_copies(&mut trial, target, &old, &source);
+        let group: Vec<CopyTarget> = trial
+            .copies
+            .iter()
+            .filter(|c| c.source == source)
+            .map(|c| c.target)
+            .collect();
+        let lost = self
+            .document
+            .follow_draft_copies(id, &mut trial, &group)
+            .map_err(|e| Msg::Raw(e.to_string()))?;
+        if lost.contains(&target) {
+            return Err(crate::msg!("lost-relink-failed"));
+        }
+        self.sketch_draft = Some(trial);
+        if let Some(se) = self.sketch_session.as_mut() {
+            se.relink = None;
+            se.message = None;
+            se.edit_label = Some(crate::msg!("lost-relink"));
+        }
+        self.observe_sketch(false);
+        Ok(())
+    }
+
     /// Hängt für jeden beim Fang an einer Körperecke eingezogenen Punkt der offenen Skizze, der
     /// noch lebt, seine Verknüpfung mit der Ecke an (`CopySource::Include(Vertex)`, A7) und leert
     /// die Liste der Sitzung.
@@ -4377,6 +4690,24 @@ fn mesh_label() -> String {
 /// Hinweis an ausgegrauten Menüpunkten bei gewähltem Netz-Körper (Spec §6).
 pub fn mesh_locked_hint() -> String {
     tr!("state-mesh-locked")
+}
+
+/// Lässt sich die Herkunft `source` mit „Neu verknüpfen“ über die Auswahl von „Projizieren“
+/// (Kante, Fläche, Kurve einer früheren Skizze; Ruling F9) neu wählen? Ecken, Ebenen, Achsen,
+/// der Ursprung, „Auf Fläche projizieren“ und die Schnittkurve nicht (ihre Herkunft hat mehrere
+/// Teile oder liegt nicht in dieser Auswahl).
+pub fn relink_pickable(source: &CopySource) -> bool {
+    use planora_feature::IncludeRef;
+    matches!(
+        source,
+        CopySource::Edge(_)
+            | CopySource::Section { .. }
+            | CopySource::Silhouette { .. }
+            | CopySource::SketchCurve { .. }
+            | CopySource::Include(
+                IncludeRef::Edge(_) | IncludeRef::FaceBoundary(_) | IncludeRef::SketchCurve { .. }
+            )
+    )
 }
 
 /// Der Körper, den ein Feature fortführt (sein Ergebnis ist für den Nutzer „derselbe Körper“):

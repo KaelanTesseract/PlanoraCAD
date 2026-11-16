@@ -161,6 +161,8 @@ enum Action {
     Delete(FeatureId),
     /// „Skizzenebene neu festlegen“ (nur bei Skizzen).
     RedefinePlane(FeatureId),
+    /// „Verlorene Projektionen verwalten“ (nur bei Skizzen mit verlorenen Projektionen).
+    ManageLostProjections(FeatureId),
 }
 
 /// Stand der Leiste für den gewählten Körper.
@@ -582,38 +584,60 @@ fn step_button(
 /// Kontextmenü eines Schritts: Bearbeiten, Umbenennen, Unterdrücken bzw. Aktivieren, Löschen
 /// (die Befehle, die früher die Schrittzeilen im Feature-Baum hatten).
 fn step_menu(r: &egui::Response, state: &AppState, id: FeatureId, action: &mut Option<Action>) {
+    let items = step_menu_items(state, id);
+    r.context_menu(|ui| {
+        let last = items.len().saturating_sub(1);
+        for (i, (label, a)) in items.iter().enumerate() {
+            // „Löschen“ steht als letzter Eintrag hinter einer Trennlinie.
+            if i == last {
+                ui.separator();
+            }
+            if ui.button(label).clicked() {
+                *action = Some(*a);
+                ui.close();
+            }
+        }
+    });
+}
+
+/// Die Einträge des Kontextmenüs eines Schritts in ihrer Reihenfolge; „Löschen“ zuletzt.
+fn step_menu_items(state: &AppState, id: FeatureId) -> Vec<(String, Action)> {
     let suppressed = state.document.feature(id).is_some_and(|f| f.suppressed);
     let sketch = state
         .document
         .feature(id)
         .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)));
-    r.context_menu(|ui| {
-        let mut pick = |a: Action, ui: &mut egui::Ui| {
-            *action = Some(a);
-            ui.close();
-        };
-        if ui.button(tr!("history-edit")).clicked() {
-            pick(Action::Open(id), ui);
-        }
-        if ui.button(tr!("history-rename")).clicked() {
-            pick(Action::Rename(id), ui);
-        }
-        let toggle = if suppressed {
-            tr!("history-activate")
-        } else {
-            tr!("history-suppress")
-        };
-        if ui.button(&toggle).clicked() {
-            pick(Action::ToggleSuppress(id), ui);
-        }
-        if sketch && ui.button(tr!("tree-redefine-plane")).clicked() {
-            pick(Action::RedefinePlane(id), ui);
-        }
-        ui.separator();
-        if ui.button(tr!("history-delete")).clicked() {
-            pick(Action::Delete(id), ui);
-        }
-    });
+    let toggle = if suppressed {
+        tr!("history-activate")
+    } else {
+        tr!("history-suppress")
+    };
+    let mut items = vec![
+        (tr!("history-edit"), Action::Open(id)),
+        (tr!("history-rename"), Action::Rename(id)),
+        (toggle, Action::ToggleSuppress(id)),
+    ];
+    if sketch {
+        items.push((tr!("tree-redefine-plane"), Action::RedefinePlane(id)));
+    }
+    // Nur an Skizzen mit verlorenen Projektionen (Skizzen 11a).
+    if crate::lost_projections_dialog::offers(state, id) {
+        items.push((
+            tr!("action-manage-lost-projections"),
+            Action::ManageLostProjections(id),
+        ));
+    }
+    items.push((tr!("history-delete"), Action::Delete(id)));
+    items
+}
+
+/// Die Texte des Kontextmenüs eines Schritts (für Tests).
+#[doc(hidden)]
+pub fn step_menu_labels(state: &AppState, id: FeatureId) -> Vec<String> {
+    step_menu_items(state, id)
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect()
 }
 
 /// Die wichtigsten Maße eines Schritts für den Hinweis: höchstens [`HOVER_ROWS`] Zeilen aus
@@ -826,6 +850,10 @@ fn run(ctx: &egui::Context, state: &mut AppState, bar: &Bar, action: Action) {
         Action::RedefinePlane(id) => {
             stop_playing(ctx);
             let _ = state.start_redefine_sketch_plane(id);
+        }
+        Action::ManageLostProjections(id) => {
+            stop_playing(ctx);
+            state.open_lost_projections(id);
         }
     }
 }

@@ -93,6 +93,10 @@ action_table! {
     DeleteSelection, "modell.loeschen", "action-delete", Model, [key(Key::Delete)];
     /// Startet den zuletzt abgeschlossenen wiederholbaren Befehl noch einmal.
     RepeatLast, "modell.befehl_wiederholen", "action-repeat-last", Model, [key(Key::Space)];
+    /// Fusion „Verlorene Projektionen verwalten“ (Skizzen 11a) für die gewählte Skizze; ohne
+    /// Vorgabetaste wie in Fusion, belegbar.
+    ManageLostProjections, "modell.verlorene_projektionen", "action-manage-lost-projections",
+        Model, [];
     /// Öffnet das Fenster „Tastenkürzel“ mit aktivem Suchfeld (Fusion „Shortcuts“); wie
     /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
     ShowShortcuts, "ansicht.tastenkuerzel", "action-show-shortcuts", Model, [key(Key::S)];

@@ -389,3 +389,71 @@ fn under_rows_of_500_arcs_stay_fast() {
     println!("under_rows (500 Bögen): {ms:.3} ms");
     assert!(ms < 2.0, "{ms} ms");
 }
+
+/// Lage (Mitte, y) des ersten Textes `text` im Bild.
+fn text_y(out: &egui::FullOutput, text: &str) -> Option<f32> {
+    fn walk(shape: &egui::epaint::Shape, text: &str) -> Option<f32> {
+        match shape {
+            egui::epaint::Shape::Text(t) if t.galley.text() == text => {
+                Some(t.visual_bounding_rect().center().y)
+            }
+            egui::epaint::Shape::Vec(v) => v.iter().find_map(|s| walk(s, text)),
+            _ => None,
+        }
+    }
+    out.shapes.iter().find_map(|c| walk(&c.shape, text))
+}
+
+/// Offene Skizze mit `n` freien Linien und offener Liste; liefert den Abstand von der letzten
+/// Zeile („Linie n“) zur Überschrift darunter („Abhängigkeiten“) im Skizzenfeld.
+fn gap_below_list(n: u32) -> f32 {
+    let ctx = egui::Context::default();
+    ctx.set_fonts(planora_app::fonts::definitions());
+    theme::apply(&ctx, true);
+    let mut w = ws();
+    let s = state(&mut w);
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        for i in 0..n {
+            let y = f64::from(i) * 3.0;
+            let a = sk.add_point(0.0, y).unwrap();
+            let b = sk.add_point(10.0, y + 1.0).unwrap();
+            sk.add_line(a, b).unwrap();
+        }
+        se.last_report = Some(sk.solve());
+        se.open_under_list();
+    }
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1920.0, 1080.0),
+        )),
+        ..Default::default()
+    };
+    let mut gap = None;
+    for _ in 0..3 {
+        let out = ctx.run_ui(raw.clone(), |ui| sketch_panel::show(ui.ctx(), s));
+        let last = text_y(&out, &format!("Linie {n}"));
+        let below = text_y(&out, "Abhängigkeiten");
+        gap = last.zip(below).map(|(a, b)| b - a);
+        out.drop_without_applying_deltas();
+    }
+    gap.expect("letzte Zeile und Überschrift zu sehen")
+}
+
+/// Task 16, Mitnahme in Task 18: Die Zeilenhöhe für `show_rows` zählt den Abstand nicht doppelt
+/// (`show_rows` addiert `item_spacing` selbst). Sonst wächst die Liste je Zeile um einen Abstand
+/// zu hoch (bei 500 Zeilen rund 2000 Pixel Leerraum): Unter der letzten Zeile bleibt dann umso
+/// mehr Platz, je mehr Zeilen die Liste hat.
+#[test]
+fn under_list_rows_count_spacing_once() {
+    let (two, three) = (gap_below_list(2), gap_below_list(3));
+    assert!(
+        (three - two).abs() < 0.5,
+        "2 Zeilen: {two}, 3 Zeilen: {three}"
+    );
+}

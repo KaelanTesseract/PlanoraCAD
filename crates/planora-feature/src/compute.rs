@@ -1049,6 +1049,50 @@ fn follow_copies(
     }
 }
 
+impl Document {
+    /// Führt in einem Entwurf `draft` der Skizze `sketch` (offene Skizze der App) die Kopien mit
+    /// den Zielen `targets` nach, genau wie die Neuberechnung (Körper, die vor der Skizze
+    /// sichtbar sind; Ebene des Entwurfs). Für „Neu verknüpfen“ in der offenen Skizze
+    /// (Skizzen 11a). Die übrigen Kopien bleiben unberührt. Liefert die Ziele, deren Bezug dabei
+    /// verloren ist (ihre Lage bleibt die des Entwurfs).
+    pub fn follow_draft_copies(
+        &self,
+        sketch: FeatureId,
+        draft: &mut SketchFeature,
+        targets: &[crate::model::CopyTarget],
+    ) -> Result<Vec<crate::model::CopyTarget>, FeatureError> {
+        let idx = self.index_of(sketch).ok_or(FeatureError::UnknownFeature)?;
+        let visible = self.visible_at(idx);
+        let solids: Vec<&Solid> = visible.iter().filter_map(|r| self.body(*r)).collect();
+        let tol = self.kernel.tolerance;
+        let frame = *draft.sketch.frame();
+        let ctx = crate::include::IncludeCtx {
+            doc: self,
+            idx,
+            solids: &solids,
+            frame: &frame,
+            tol: &tol,
+        };
+        let part = SketchFeature {
+            copies: draft
+                .copies
+                .iter()
+                .filter(|c| targets.contains(&c.target))
+                .cloned()
+                .collect(),
+            ..draft.clone()
+        };
+        let previous = draft.sketch.clone();
+        let followed = follow_copies(&mut draft.sketch, &part, &ctx, Some(&previous));
+        for updated in followed.copies {
+            if let Some(c) = draft.copies.iter_mut().find(|c| c.target == updated.target) {
+                *c = updated;
+            }
+        }
+        Ok(followed.lost)
+    }
+}
+
 /// Gibt der Kopie ihr neu gerechnetes Stück; geliefert wird die Zahl der dabei entfallenen
 /// Abhängigkeiten des Benutzers, `None`, wenn Ziel und Stück nicht zusammenpassen (Art
 /// geändert) oder die Skizze das Stück ablehnt (dann bleibt sie unverändert).

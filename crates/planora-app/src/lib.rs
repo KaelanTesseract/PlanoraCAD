@@ -46,6 +46,7 @@ pub mod jobs;
 pub mod keymap;
 pub mod local_time;
 pub mod logo;
+pub mod lost_projections_dialog;
 pub mod mesh_body;
 pub mod msg;
 pub mod parameter_dialog;

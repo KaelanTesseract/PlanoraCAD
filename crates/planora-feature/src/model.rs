@@ -243,6 +243,18 @@ impl CopySource {
         }
     }
 
+    /// Gleiche Familie für „Neu verknüpfen“ (Skizzen 11a, Fusion „Relink“): Kante ↔ Kante,
+    /// Schnitt ↔ Schnitt, Silhouette ↔ Silhouette, Einbeziehen mit gleicher [`IncludeRef`]-Art,
+    /// Skizzenkurve ↔ Skizzenkurve, „Auf Fläche projizieren“ ↔ dasselbe, Schnittkurve ↔
+    /// Schnittkurve.
+    pub fn same_family(&self, other: &CopySource) -> bool {
+        use std::mem::discriminant;
+        match (self, other) {
+            (CopySource::Include(a), CopySource::Include(b)) => discriminant(a) == discriminant(b),
+            _ => discriminant(self) == discriminant(other),
+        }
+    }
+
     /// Eine der Arten aus Skizzen 10 (Format 20)?
     pub fn is_3d_kind(&self) -> bool {
         !matches!(
@@ -352,8 +364,13 @@ impl SketchFeature {
     /// Löst die Verknüpfung der projizierten Kurve `curve` mit ihrer Herkunft: Die Kurve folgt
     /// dem Körper nicht mehr, ihre `Fixed`-Werte bleiben. `true`, wenn es einen Eintrag gab.
     pub fn break_link(&mut self, curve: CurveId) -> bool {
+        self.break_link_target(CopyTarget::Curve(curve))
+    }
+
+    /// Wie [`SketchFeature::break_link`] für ein beliebiges Ziel (Kurve oder Punkt).
+    pub fn break_link_target(&mut self, target: CopyTarget) -> bool {
         let before = self.copies.len();
-        self.copies.retain(|c| c.target != CopyTarget::Curve(curve));
+        self.copies.retain(|c| c.target != target);
         self.copies.len() != before
     }
 
@@ -822,8 +839,9 @@ pub struct Document {
     pub(crate) next_param: u64,
     /// Ergebnis-Skizzen des Dokuments vor einem vollen Neubau ([`Document::restore`]) je
     /// Feature: Rückfall für den letzten berechneten Stand, damit eine Kurve mit verlorenem
-    /// Bezug an ihrer zuletzt nachgeführten Lage bleibt (Skizzen 11a, Ruling T17-1). Gilt nur für
-    /// die erste Neuberechnung nach dem Neubau und ist danach leer.
+    /// Bezug an ihrer zuletzt nachgeführten Lage bleibt (Skizzen 11a, Ruling T17-1). Ein Eintrag
+    /// gilt bis zur ersten Berechnung seiner Skizze (dann entfernt ihn `store`); übrig bleiben nur
+    /// Skizzen ohne Ergebnis (hinter dem Marker, zurückgerollt), auch über weitere Neubauten.
     pub(crate) carried_sketches: std::collections::HashMap<FeatureId, Sketch>,
 }
 

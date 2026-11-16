@@ -3210,6 +3210,8 @@ impl eframe::App for PlanoraApp {
         crate::surface_project_dialog::show_open(&ctx, &mut tab.state);
         // Skizzen 11a: „Krümmungsanzeige einrichten“.
         crate::curvature_dialog::show_open(&ctx, &mut tab.state);
+        // Skizzen 11a: „Verlorene Projektionen verwalten“.
+        crate::lost_projections_dialog::show_open(&ctx, &mut tab.state);
         // Die Fenster „DXF einfügen“ und „SVG einfügen“ nutzen denselben Wahlmodus (sie zeichnen
         // erst danach).
         if tab.plane_dialog.is_none()

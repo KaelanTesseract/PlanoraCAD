@@ -774,6 +774,8 @@ pub struct SketchColors {
     /// Projizierte Geometrie, die ihrer Herkunft folgt (Skizzen 6, lila wie in Fusion; gleich
     /// der violetten Körperfarbe `BODY_COLORS[3]`).
     pub projected: Color32,
+    /// Projizierte Geometrie mit verlorenem Bezug (Skizzen 11a): gelb wie die Warnung.
+    pub lost: Color32,
     /// Kurven fertiger Skizzen in der 3D-Ansicht.
     pub finished: Color32,
     /// Widersprüchliche oder fehlerhafte Geometrie.
@@ -830,6 +832,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             selected: p.selection,
             construction: p.text_secondary,
             projected: BODY_COLORS[3].dark,
+            lost: p.warning,
             finished: rgb(0x7fb4ff),
             error: p.error,
             text: p.text_primary,
@@ -858,6 +861,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             selected: rgb(0xa86a00),
             construction: p.text_tertiary,
             projected: BODY_COLORS[3].light,
+            lost: p.warning,
             finished: p.chip_split.1,
             error: p.error,
             text: p.text_primary,

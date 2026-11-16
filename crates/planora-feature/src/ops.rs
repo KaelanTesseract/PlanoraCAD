@@ -7,10 +7,14 @@ use crate::formulas::{
     Formulas, check_keys, drop_overwritten_dims, evaluate, field_keys, prune_sketch, same_fields,
     same_values,
 };
-use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus, SketchPlane};
+use crate::model::{
+    CopySource, CopyTarget, Document, FeatureId, FeatureKind, FeatureStatus, SketchFeature,
+    SketchPlane,
+};
 use crate::recompute::RecomputeReport;
 use planora_i18n::tr;
 use planora_kernel::Kernel;
+use planora_sketch::Sketch;
 use planora_sketch::text_shape::TextShaper;
 
 impl Document {
@@ -175,6 +179,106 @@ impl Document {
             self.recompute();
         }
         changed
+    }
+
+    /// Die Definition der Skizze `sketch` mit der berechneten Skizze (letzte Lage der
+    /// Projektionen) statt der gespeicherten, wie beim Öffnen einer Skizze; ohne Ergebnis die
+    /// Definition. Fehler: kein Feature oder keine Skizze.
+    fn sketch_with_result(&self, sketch: FeatureId) -> Result<SketchFeature, FeatureError> {
+        let f = self.feature(sketch).ok_or(FeatureError::UnknownFeature)?;
+        let FeatureKind::Sketch(def) = &f.kind else {
+            return Err(FeatureError::InvalidInput(tr!(
+                "feature-not-sketch",
+                name = f.name.clone()
+            )));
+        };
+        let mut sf = def.clone();
+        if let Some(sk) = self.sketch_of(sketch) {
+            let name = sf.sketch.name.clone();
+            sf.sketch = sk.clone();
+            sf.sketch.name = name;
+        }
+        Ok(sf)
+    }
+
+    /// Übernimmt die geänderte Skizze `sf` als Definition von `sketch` (ein Schritt, neu
+    /// gerechnet; die Formeln der Felder bleiben).
+    fn commit_sketch(&mut self, sketch: FeatureId, sf: SketchFeature) -> Result<(), FeatureError> {
+        let kind = FeatureKind::Sketch(sf);
+        self.update(sketch, |k| *k = kind)
+    }
+
+    /// „Neu verknüpfen“ (Skizzen 11a, Fusion „Relink“): gibt der Kopie mit dem Ziel `target` die
+    /// neue Herkunft `source` und rechnet neu. Bei den Gruppenarten aus Skizzen 10 bekommt die
+    /// ganze Gruppe (gleiche alte Herkunft) die neue; Stückindex und Stückzahl bleiben, damit
+    /// Abhängigkeiten und Maße bleiben, soweit die neue Quelle gleich viele Stücke ergibt. Eine
+    /// Herkunft einer anderen Familie ([`CopySource::same_family`]) lehnt es ab
+    /// ([`FeatureError::Sketch`]), ebenso ein Ziel ohne Kopie; dann bleibt alles unverändert.
+    /// Eine gleiche Herkunft ändert nichts.
+    pub fn relink_projection(
+        &mut self,
+        sketch: FeatureId,
+        target: CopyTarget,
+        source: CopySource,
+    ) -> Result<(), FeatureError> {
+        let mut sf = self.sketch_with_result(sketch)?;
+        let old = sf
+            .copies
+            .iter()
+            .find(|c| c.target == target)
+            .map(|c| c.source.clone())
+            .ok_or_else(|| FeatureError::Sketch(tr!("feature-relink-no-copy")))?;
+        if !old.same_family(&source) {
+            return Err(FeatureError::Sketch(tr!("feature-relink-kind")));
+        }
+        if old == source {
+            return Ok(());
+        }
+        relink_copies(&mut sf, target, &old, &source);
+        self.commit_sketch(sketch, sf)
+    }
+
+    /// „Verknüpfung aufheben“ für die Ziele `targets` der Skizze `sketch` (Skizzen 11a, Fusion
+    /// „Break Link“, über [`SketchFeature::break_link_target`]): Die Geometrie bleibt an ihrer
+    /// letzten Lage und folgt nichts mehr. Alle zusammen sind eine Änderung; liefert die Zahl der
+    /// gelösten Kopien (0: nichts geändert).
+    pub fn unlink_projections(
+        &mut self,
+        sketch: FeatureId,
+        targets: &[CopyTarget],
+    ) -> Result<usize, FeatureError> {
+        let mut sf = self.sketch_with_result(sketch)?;
+        let n = targets.iter().filter(|t| sf.break_link_target(**t)).count();
+        if n > 0 {
+            self.commit_sketch(sketch, sf)?;
+        }
+        Ok(n)
+    }
+
+    /// „Geometrie löschen“ für die Ziele `targets` der Skizze `sketch` (Skizzen 11a, Fusion
+    /// „Delete“): löscht die Kurven und Punkte samt Kopie-Eintrag; die Enden einer Kurve gehen mit,
+    /// wenn keine andere Kurve sie benutzt. Alle zusammen sind eine Änderung; liefert die Zahl der
+    /// gelöschten Ziele (nur solche mit Kopie; 0: nichts geändert). Lehnt die Skizze ein Löschen
+    /// ab (etwa eine Kurve eines Textes), bleibt alles unverändert.
+    pub fn delete_lost_geometry(
+        &mut self,
+        sketch: FeatureId,
+        targets: &[CopyTarget],
+    ) -> Result<usize, FeatureError> {
+        let mut sf = self.sketch_with_result(sketch)?;
+        let mut n = 0;
+        for t in targets {
+            if !sf.break_link_target(*t) {
+                continue;
+            }
+            delete_target(&mut sf.sketch, *t).map_err(|e| FeatureError::Sketch(e.to_string()))?;
+            n += 1;
+        }
+        if n > 0 {
+            sf.prune_copies();
+            self.commit_sketch(sketch, sf)?;
+        }
+        Ok(n)
     }
 
     /// Wie [`Document::update_with_report`], ohne den Bericht.
@@ -485,6 +589,42 @@ impl Document {
             }
         }
         Ok(())
+    }
+}
+
+/// Setzt die Herkunft `source` an die Kopie mit dem Ziel `target`; bei den Gruppenarten aus
+/// Skizzen 10 an alle Kopien mit der alten Herkunft `old` (eine Gruppe). Stückindex und
+/// Stückzahl bleiben. Gemeinsamer Weg für Dokument und offene Skizze (App).
+pub fn relink_copies(
+    sf: &mut SketchFeature,
+    target: CopyTarget,
+    old: &CopySource,
+    source: &CopySource,
+) {
+    let group = old.is_3d_kind();
+    for c in &mut sf.copies {
+        if c.target == target || (group && c.source == *old) {
+            c.source = source.clone();
+        }
+    }
+}
+
+/// Löscht das Ziel einer Kopie aus der Skizze: eine Kurve samt ihren Enden, die keine andere
+/// lebende Kurve benutzt, oder einen Punkt.
+fn delete_target(sk: &mut Sketch, target: CopyTarget) -> Result<(), planora_sketch::SketchError> {
+    match target {
+        CopyTarget::Curve(c) => {
+            let ends = sk.curve(c).map(|d| d.kind.points()).unwrap_or_default();
+            sk.remove_curve(c)?;
+            for p in ends {
+                let used = sk.curves().any(|(_, d)| d.kind.points().contains(&p));
+                if !used && sk.point_xyz(p).is_ok() {
+                    sk.remove_point(p)?;
+                }
+            }
+            Ok(())
+        }
+        CopyTarget::Point(p) => sk.remove_point(p),
     }
 }
 

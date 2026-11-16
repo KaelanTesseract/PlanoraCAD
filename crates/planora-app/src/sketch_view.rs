@@ -1260,6 +1260,9 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             Some(FeatureKind::Sketch(def)) => def.copies.iter().filter_map(|c| c.curve()).collect(),
             _ => HashSet::new(),
         };
+        // Verlorene Projektionen gelb, mit „Übrige Geometrie abblenden“ alles andere gedämpft
+        // (Skizzen 11a).
+        let lost = crate::lost_projections_dialog::marks(state, id);
         // Eine fertige Skizze hat keine Auswahl: Griffe ohne Abhängigkeit sind nicht zu sehen (B6).
         let handles_hidden = crate::sketch_handles::hidden_handles_of(sk, &[]);
         for (c, data) in sk.curves() {
@@ -1279,7 +1282,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 sketch: id,
                 curve: c,
             });
-            let color = if marked {
+            let base = if marked {
                 col.selected
             } else if projected.contains(&c) {
                 col.projected
@@ -1288,6 +1291,13 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             } else {
                 col.finished
             };
+            let color = lost_ink(
+                base,
+                marked,
+                lost.curves.contains(&c),
+                lost.dim_rest,
+                col.lost,
+            );
             let stroke = Stroke::new(width, color);
             for path in paths {
                 out.extend(style_shapes(path, stroke, data.style()));
@@ -2235,6 +2245,8 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 
     // Klicks
     let mut project_at = None;
+    // Klick der Wahl „Neu verknüpfen“ (Skizzen 11a).
+    let mut relink_at = None;
     // Doppelklick auf einen Maßtext im Auswahlwerkzeug: öffnet sein Feld wie die Liste (das Feld
     // braucht den ganzen Stand und öffnet darum erst nach der Eingabe dieses Bilds).
     let mut open_label = None;
@@ -2246,6 +2258,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         // Das Loslassen nach dem Abbruch ist kein Klick.
     } else if click_on_field {
         // Der Klick gehört dem Feld der Anordnung.
+    } else if se.relink.is_some() && response.clicked_by(PointerButton::Primary) {
+        // „Neu verknüpfen“ (Skizzen 11a): Der Klick wählt die neue Herkunft in der 3D-Szene wie
+        // „Projizieren“ (Ruling F9), auch wo der Sehstrahl die Skizzenebene nicht trifft.
+        relink_at = pointer;
     } else if (response.double_clicked() || response.triple_clicked()) && !se.click_after_flyout {
         let label = pointer
             .filter(|_| se.tool == Tool::Select)
@@ -2439,6 +2455,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let tool = se.tool;
     let kind = se.kinds.project;
     let settings = se.project;
+    let relink_family = se.relink.as_ref().map(|r| r.family.clone());
 
     // Projizieren: Kante oder Fläche in der 3D-Szene wählen; mit dem Filter „Körper“ zählt der
     // Körper unter dem Zeiger (die Markierung zeigt, was der Zeiger trifft). Schneiden und
@@ -2456,12 +2473,29 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY)
         }
     };
-    let hover = if tool == Tool::ProjectEdge {
+    let hover = if relink_family.is_some() {
+        pointer.and_then(|p| state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY))
+    } else if tool == Tool::ProjectEdge {
         pointer.and_then(|p| pick_at(state, p))
     } else {
         None
     };
     state.set_hover(hover);
+    if let (Some(p), Some(family)) = (relink_at, relink_family.as_ref()) {
+        let picked = state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY);
+        let curve = sketch_curve_under(state, &map, p);
+        match relink_target(family, picked, curve) {
+            Some(t) => {
+                let _ = state.relink_pick(t);
+            }
+            None => {
+                if let Some(se) = state.sketch_session.as_mut() {
+                    se.message = Some(crate::msg!("lost-relink-wrong-pick"));
+                }
+            }
+        }
+        return;
+    }
     if let Some(id) = open_label {
         crate::sketch_panel::open_existing_dimension_editor(ui.ctx(), state, id);
     }
@@ -2661,6 +2695,26 @@ pub fn project_target(pick: Pick, filter: ProjectFilter) -> Option<ProjectTarget
     })
 }
 
+/// Was ein Klick der Wahl „Neu verknüpfen“ (Skizzen 11a) für die alte Herkunft `family` wählt:
+/// dieselbe Auswahl wie „Projizieren“ mit „Angegebene Elemente“ (Ruling F9). Kante oder Fläche
+/// unter dem Zeiger (`picked`); bei einer Skizzenkurve als Herkunft die Kurve einer früheren
+/// Skizze unter dem Zeiger (`curve`). `None`, wenn nichts Passendes getroffen ist.
+pub fn relink_target(
+    family: &planora_feature::CopySource,
+    picked: Option<Pick>,
+    curve: Option<(FeatureId, CurveId)>,
+) -> Option<ProjectTarget> {
+    use planora_feature::{CopySource, IncludeRef};
+    let wants_curve = matches!(
+        family,
+        CopySource::SketchCurve { .. } | CopySource::Include(IncludeRef::SketchCurve { .. })
+    );
+    if wants_curve {
+        return curve.map(|(s, c)| ProjectTarget::SketchCurve(s, c));
+    }
+    picked.and_then(|p| project_target(p, ProjectFilter::Entities))
+}
+
 /// Ist der Punkt vollständig bestimmt (laut letztem Bericht)?
 fn point_determined(report: Option<&SolveReport>, p: PointId) -> bool {
     report.is_some_and(|r| r.status == SolveStatus::Solved && !r.free_points.contains(&p))
@@ -2675,6 +2729,8 @@ fn curve_determined(report: Option<&SolveReport>, c: CurveId) -> bool {
 struct Projected {
     curves: HashSet<CurveId>,
     points: HashSet<PointId>,
+    /// Verlorene Projektionen (gelb) und „Übrige Geometrie abblenden“ (Skizzen 11a).
+    lost: crate::lost_projections_dialog::LostMarks,
 }
 
 impl Projected {
@@ -2687,7 +2743,35 @@ impl Projected {
             .flat_map(|d| d.kind.points())
             .chain(draft.copies.iter().filter_map(|c| c.point()))
             .collect();
-        Projected { curves, points }
+        Projected {
+            curves,
+            points,
+            lost: Default::default(),
+        }
+    }
+
+    /// Wie [`Projected::of`] für die offene Skizze, mit den verlorenen Projektionen und dem
+    /// Abblenden des Dialogs „Verlorene Projektionen verwalten“.
+    fn of_open(state: &AppState, draft: &SketchFeature) -> Projected {
+        let mut p = Projected::of(draft);
+        if let Some(id) = state.open_sketch_id() {
+            p.lost = crate::lost_projections_dialog::marks(state, id);
+        }
+        p
+    }
+}
+
+/// Farbe mit verlorenen Projektionen (gelb) und „Übrige Geometrie abblenden“ (Skizzen 11a):
+/// Gewähltes hat Vorrang, dann die verlorene Geometrie; alles andere ist mit dem Haken gedämpft.
+fn lost_ink(base: Color32, selected: bool, lost: bool, dim_rest: bool, col: Color32) -> Color32 {
+    if selected {
+        base
+    } else if lost {
+        col
+    } else if dim_rest {
+        dimmed(base)
+    } else {
+        base
     }
 }
 
@@ -2712,6 +2796,25 @@ fn curve_ink(
         || se.pending_curves.contains(&c)
         || se.blend.first.is_some_and(|e| e.curve == c)
         || dim_picked(se, Item::Curve(c));
+    let base = curve_ink_base(col, se, sk, projected, c, selected);
+    lost_ink(
+        base,
+        selected,
+        projected.lost.curves.contains(&c),
+        projected.lost.dim_rest,
+        col.lost,
+    )
+}
+
+/// [`curve_ink`] ohne verlorene Projektionen und Abblenden.
+fn curve_ink_base(
+    col: &theme::SketchColors,
+    se: &SketchSession,
+    sk: &Sketch,
+    projected: &Projected,
+    c: CurveId,
+    selected: bool,
+) -> Color32 {
     if selected {
         col.selected
     } else if se.hides_determined() && curve_determined(se.last_report.as_ref(), c) {
@@ -2751,7 +2854,7 @@ fn point_ink(
     let selected = se.selection.contains(&Item::Point(p))
         || se.is_dragged_point(p)
         || dim_picked(se, Item::Point(p));
-    if selected {
+    let base = if selected {
         col.selected
     } else if se.hides_determined() && point_determined(se.last_report.as_ref(), p) {
         dimmed(col.determined)
@@ -2761,7 +2864,14 @@ fn point_ink(
         col.determined
     } else {
         col.free
-    }
+    };
+    lost_ink(
+        base,
+        selected,
+        projected.lost.points.contains(&p),
+        projected.lost.dim_rest,
+        col.lost,
+    )
 }
 
 /// Farbe, in der die Ansicht die Kurve `c` der offenen Skizze zeichnet (ohne Aufhellung unter
@@ -2769,7 +2879,13 @@ fn point_ink(
 pub fn curve_color(state: &AppState, c: CurveId) -> Color32 {
     let col = colors(state.dark);
     match (state.sketch_session.as_ref(), state.sketch_draft.as_ref()) {
-        (Some(se), Some(draft)) => curve_ink(&col, se, &draft.sketch, &Projected::of(draft), c),
+        (Some(se), Some(draft)) => curve_ink(
+            &col,
+            se,
+            &draft.sketch,
+            &Projected::of_open(state, draft),
+            c,
+        ),
         _ => col.free,
     }
 }
@@ -2778,7 +2894,7 @@ pub fn curve_color(state: &AppState, c: CurveId) -> Color32 {
 pub fn point_color(state: &AppState, p: PointId) -> Color32 {
     let col = colors(state.dark);
     match (state.sketch_session.as_ref(), state.sketch_draft.as_ref()) {
-        (Some(se), Some(draft)) => point_ink(&col, se, &Projected::of(draft), p),
+        (Some(se), Some(draft)) => point_ink(&col, se, &Projected::of_open(state, draft), p),
         _ => col.free,
     }
 }
@@ -2789,7 +2905,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         return;
     };
     let sk = &draft.sketch;
-    let projected = Projected::of(draft);
+    let projected = Projected::of_open(state, draft);
     let painter = ui.painter_at(rect);
     let col = colors(state.dark);
     let map = Mapper {

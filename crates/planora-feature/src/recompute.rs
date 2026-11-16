@@ -442,6 +442,9 @@ impl Document {
             canvas,
             canvas_face,
         } = computed;
+        // Der Rückfall nach einem vollen Neubau gilt bis zur ersten Berechnung (Ruling T17-1).
+        let id = self.features[idx].id;
+        self.carried_sketches.remove(&id);
         let f = &mut self.features[idx];
         f.result = Some(FeatureResult {
             bodies,

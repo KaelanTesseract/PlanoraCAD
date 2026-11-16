@@ -507,6 +507,14 @@ pub struct LineArcDrag {
 // Ebene und Achse der Triade (Skizzen 10) liegen mit der Triade in `sketch_triad`.
 pub use crate::sketch_triad::{TriadAxis, TriadPlane};
 
+/// Laufende Wahl „Neu verknüpfen“ (Skizzen 11a): das Ziel der verlorenen Kopie und ihre alte
+/// Herkunft (bestimmt die Familie, die der Klick treffen muss).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelinkPick {
+    pub target: planora_feature::CopyTarget,
+    pub family: planora_feature::CopySource,
+}
+
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
 pub struct SketchSession {
@@ -595,6 +603,10 @@ pub struct SketchSession {
     /// Rechtsklickmenü der gewählten Kurve (Skizzen 11a): Bildschirmlage, an der es steht; nicht
     /// Teil des Dokuments. Esc, ein Klick daneben oder ein Werkzeugwechsel schließen es.
     pub curve_menu: Option<(f32, f32)>,
+    /// „Neu verknüpfen“ aus „Verlorene Projektionen verwalten“ (Skizzen 11a): Der nächste
+    /// passende Klick auf Kante, Fläche oder Kurve einer früheren Skizze wird die neue Herkunft;
+    /// Esc und ein Werkzeugwechsel nehmen die Wahl zurück. Nicht Teil des Dokuments.
+    pub relink: Option<RelinkPick>,
     /// Triade der 3D-Skizze (Skizzen 10; gehört nicht zum Dokument und nicht zum Rückgängig):
     /// Lage, Drehung, aktive Ebene, aktiver Drehgriff (Tab) und „Z sperren“ (Pfeil hoch gehalten,
     /// setzt die Oberfläche je Bild aus der Taste, [`crate::keymap::dispatch::held`]).
@@ -808,6 +820,7 @@ impl SketchSession {
             hover_preview: None,
             edit_label: None,
             curve_menu: None,
+            relink: None,
             triad: Default::default(),
             triad_ui: Default::default(),
             cursor3: None,
@@ -870,6 +883,8 @@ impl SketchSession {
             self.selection.clear();
         }
         self.constraint_last = None;
+        // Die Wahl für „Neu verknüpfen“ endet mit jedem Werkzeugwechsel.
+        self.relink = None;
         self.tool = tool;
         // Ein Werkzeugwechsel beendet die Klick-Auswahl.
         self.drop_curve_picks();
@@ -2093,6 +2108,10 @@ impl SketchSession {
     pub fn cancel(&mut self, sk: &mut Sketch) {
         // Ein offenes Rechtsklickmenü schließt zuerst.
         if self.curve_menu.take().is_some() {
+            return;
+        }
+        // Dann die Wahl für „Neu verknüpfen“: nichts geändert, zurück zur Auswahl.
+        if self.relink.take().is_some() {
             return;
         }
         if self.grip_drag.is_some() {

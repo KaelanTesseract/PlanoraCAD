@@ -247,11 +247,13 @@ impl Document {
         }
         // Die berechneten Skizzen gehen als Rückfall für den letzten Stand mit (Ruling T17-1):
         // Eine verlorene Projektion bleibt so an ihrer zuletzt nachgeführten Lage.
-        let carry = self
-            .features
-            .iter()
-            .filter_map(|f| Some((f.id, f.result.as_ref()?.sketch.clone()?)))
-            .collect();
+        // Dazu die noch nicht wieder gerechneten Rückfälle eines früheren Neubaus.
+        let mut carry: HashMap<FeatureId, Sketch> = self.carried_sketches.clone();
+        carry.extend(
+            self.features
+                .iter()
+                .filter_map(|f| Some((f.id, f.result.as_ref()?.sketch.clone()?))),
+        );
         let mut doc = Document::build(
             s,
             self.chord_tolerance,
@@ -412,7 +414,14 @@ impl Document {
         doc.rollbacks = doc.checked_rollbacks(&s.rollbacks)?;
         doc.carried_sketches = carry;
         doc.recompute_features();
-        doc.carried_sketches.clear();
+        // Gerechnete Skizzen haben ihren Eintrag schon abgegeben (`store`); es bleiben nur die
+        // ohne Ergebnis (hinter dem Marker, zurückgerollt), bis sie wieder gerechnet werden.
+        let features = &doc.features;
+        doc.carried_sketches.retain(|id, _| {
+            features
+                .iter()
+                .any(|f| f.id == *id && f.result.as_ref().is_none_or(|r| r.sketch.is_none()))
+        });
         Ok(doc)
     }
 }

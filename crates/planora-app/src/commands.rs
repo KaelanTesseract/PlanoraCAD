@@ -364,6 +364,14 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 se.toggle_centerline_if_possible(sk);
             }
         }
+        Action::ManageLostProjections => {
+            // Für die gewählte Skizze (Baum, Verlaufsleiste oder offene Skizze); ohne verlorene
+            // Projektion nichts.
+            let state = &mut ws.active_tab_mut().state;
+            if let Some(id) = state.open_sketch_id().or(state.selected_feature) {
+                state.open_lost_projections(id);
+            }
+        }
         Action::SketchToggleCurvature => {
             crate::curvature_dialog::toggle(&mut ws.active_tab_mut().state);
         }
