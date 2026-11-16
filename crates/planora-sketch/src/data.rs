@@ -41,6 +41,8 @@ pub struct CurveRecord {
     /// Normale einer ebenen Kurve außerhalb der Skizzenebene (Skizzen 10), normiert; `None` in
     /// der Skizzenebene.
     pub normal: Option<DVec3>,
+    /// Krümmungskamm (Skizzen 11a); die Datei schreibt ihn ab Format 21 (Task 7).
+    pub comb: Option<crate::comb::CombSettings>,
     pub alive: bool,
 }
 
@@ -185,6 +187,7 @@ impl Sketch {
                     centerline: c.centerline,
                     show_frame: c.show_frame,
                     normal: c.normal,
+                    comb: c.comb,
                     alive: c.alive,
                 })
                 .collect(),
@@ -438,6 +441,7 @@ impl Sketch {
                 centerline: c.centerline,
                 show_frame: c.show_frame,
                 normal: c.normal,
+                comb: c.comb,
                 alive: c.alive,
             });
         }

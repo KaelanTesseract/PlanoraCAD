@@ -1234,6 +1234,8 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
                         .normale
                         .map(|n| dv3(origin, &|| sketch_label(feature, tr!("proj-l-normal")), n))
                         .transpose()?,
+                    // Der Kamm kommt mit Format 21 in die Datei (Skizzen 11a, Task 7).
+                    comb: None,
                     alive: c.aktiv,
                 })
             })

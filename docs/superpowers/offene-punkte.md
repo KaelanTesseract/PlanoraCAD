@@ -2951,3 +2951,7 @@ Release-Build, Fenster 1920 × 1080, mit `tools/gui-drive.ps1`, APPDATA und USER
 - [ ] 7. **Kreis „Mittelpunkt“ in 3D** und Bogen „Mittelpunkt“ in beide Richtungen.
 - [ ] 8. **Speichern und Laden** einer 3D-Skizze: alles steht wieder da; eine 2D-Datei bleibt im alten Format.
 - [ ] 9. **2D-Griffe bei hoher Geometrie** in schräger Ansicht: folgen sie dem Zeiger?
+
+## Teilprojekt Skizzen 11a (Zeichnen und Prüfen)
+
+- **Krümmungskamm an festen Splines (Task 5):** `comb_capable` und die Rechnung gelten auch für feste (projizierte) Splines (`FixedSpline`), denn Fusion zeigt den Kamm an jeder gekrümmten Skizzenkurve. Die Anzeige und der Dialog dazu kommen mit A3 (Task 14); `FixedSpline` darf dort nicht ausgenommen werden. Kopieren gibt es für feste Splines nicht, der Kamm wandert also nur beim Stutzen und Brechen nicht mit (beides lehnt feste Splines ab).

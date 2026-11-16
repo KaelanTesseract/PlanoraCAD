@@ -1341,6 +1341,7 @@ impl Sketch {
         s: &Similarity,
     ) -> Result<CurveId, SketchError> {
         let (construction, centerline) = (self.curves[c].construction, self.curves[c].centerline);
+        let comb = self.curves[c].comb;
         // Eine Kurve in 3D behält ihre Ebene, um z mitgedreht (Skizzen 10).
         let normal = self.curves[c].normal.map(|n| s.turn(n));
         let id = match self.curves[c].kind.clone() {
@@ -1429,6 +1430,7 @@ impl Sketch {
         };
         self.curves[id].construction = construction;
         self.curves[id].centerline = centerline;
+        self.curves[id].comb = comb;
         Ok(id)
     }
 

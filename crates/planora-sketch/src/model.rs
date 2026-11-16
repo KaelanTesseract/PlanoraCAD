@@ -184,6 +184,8 @@ pub struct CurveData {
     /// Skizzenkoordinaten (Skizzen 10). `None`: Die Kurve liegt in der Skizzenebene, alles wie
     /// bisher. Eine Zahl in der Kurve wie `rho` beim Kegelschnitt, keine Löservariable.
     pub normal: Option<DVec3>,
+    /// Krümmungskamm (Skizzen 11a): `None` ohne Kamm. Wandert mit Kopien und Teilstücken.
+    pub comb: Option<crate::comb::CombSettings>,
     pub(crate) alive: bool,
 }
 
@@ -505,6 +507,7 @@ impl Sketch {
             centerline: false,
             show_frame: false,
             normal: None,
+            comb: None,
             alive: true,
         })
     }
