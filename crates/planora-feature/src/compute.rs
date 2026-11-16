@@ -265,7 +265,13 @@ fn compute_unchecked(
     let kernel = &doc.kernel;
     match &feature.kind {
         FeatureKind::Sketch(sf) => {
-            let previous = feature.result.as_ref().and_then(|r| r.sketch.as_ref());
+            // Der letzte berechnete Stand; nach einem vollen Neubau (Rückgängig, Wiederholen)
+            // der Stand vor dem Neubau ([`Document::carried_sketches`]).
+            let previous = feature
+                .result
+                .as_ref()
+                .and_then(|r| r.sketch.as_ref())
+                .or_else(|| doc.carried_sketches.get(&id));
             compute_sketch(doc, idx, sf, visible, previous)
         }
         FeatureKind::Box { size, origin } => primitive(doc, kernel.make_box(*size), *origin, id.0),

@@ -414,12 +414,10 @@ fn deleting_an_edge_copy_source_keeps_the_sketch_with_a_warning() {
     );
     assert!(f.warning().is_some());
     assert_eq!(f.lost_projections().len(), 1);
-    assert!(
-        s.document
-            .features()
-            .iter()
-            .all(|f| !f.kind.dependencies().contains(&a))
-    );
+    // Die Herkunft bleibt gespeichert (Rückgängig lässt die Verknüpfung wieder aufleben); hart
+    // verweist die Skizze nicht auf den Quader.
+    assert_eq!(f.kind.weak_dependencies(), vec![a]);
+    assert!(f.kind.dependencies().is_empty());
     s.document.check_invariants().unwrap();
 }
 

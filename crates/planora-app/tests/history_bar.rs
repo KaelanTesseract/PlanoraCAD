@@ -398,3 +398,86 @@ fn bodies_from_one_sketch_get_different_colours() {
         theme::BODY_COLORS[(e2.0 as usize) % n]
     );
 }
+
+/// Skizzen 11a Task 17 (Fix-Runde 1): Eine Skizze, die vor ihre Projektionsquelle geschoben ist,
+/// gilt in der Leiste wie im Dokument als aktiv, wenn die Quelle eine Rückrollstelle ist; steht
+/// die Quelle davor, ist sie erfasst.
+#[test]
+fn a_sketch_before_its_rolled_back_source_stays_active() {
+    let mut s = AppState::new();
+    let sk = rect_sketch(&mut s);
+    let b = s.create_box(BOX).unwrap();
+    let solid = s.bodies[body_of(&s, b)].solid.clone();
+    let tol = s.kernel.tolerance;
+    let edge = solid
+        .edges
+        .iter()
+        .find_map(|(e, _)| planora_feature::EdgeRef::from_edge(&solid, e, &tol).ok())
+        .unwrap();
+    s.document
+        .update(sk, |k| {
+            if let FeatureKind::Sketch(sf) = k {
+                let p = sf.sketch.add_point(50.0, 0.0).unwrap();
+                let q = sf.sketch.add_point(60.0, 0.0).unwrap();
+                let c = sf.sketch.add_line(p, q).unwrap();
+                sf.copies.push(planora_feature::EdgeCopy {
+                    target: planora_feature::CopyTarget::Curve(c),
+                    piece: 0,
+                    of: 1,
+                    source: planora_feature::CopySource::Edge(edge),
+                });
+            }
+        })
+        .unwrap();
+    s.refresh();
+    let e = s.extrude_sketch(sk, 0, 2.0).unwrap();
+    assert!(s.document.index_of(sk) < s.document.index_of(b));
+    s.document.set_rollback(b, b).unwrap();
+    s.refresh();
+    assert!(s.document.is_active(sk), "Dokument: aktiv");
+    let state = |s: &AppState| {
+        history_bar::steps(s, e)
+            .into_iter()
+            .find(|v| v.id == sk)
+            .unwrap()
+            .state
+    };
+    assert!(
+        matches!(state(&s), StepState::Warning(_)),
+        "Leiste: aktiv mit Warnung, {:?}",
+        state(&s)
+    );
+    // Gegenprobe: Steht die Quelle vor der Skizze, erfasst die Rückrollstelle sie (wie bisher).
+    let mut c = AppState::new();
+    let b2 = c.create_box(BOX).unwrap();
+    let sk2 = rect_sketch(&mut c);
+    let solid = c.bodies[body_of(&c, b2)].solid.clone();
+    let edge = solid
+        .edges
+        .iter()
+        .find_map(|(e, _)| planora_feature::EdgeRef::from_edge(&solid, e, &tol).ok())
+        .unwrap();
+    c.document
+        .update(sk2, |k| {
+            if let FeatureKind::Sketch(sf) = k {
+                let p = sf.sketch.add_point(50.0, 0.0).unwrap();
+                let q = sf.sketch.add_point(60.0, 0.0).unwrap();
+                let l = sf.sketch.add_line(p, q).unwrap();
+                sf.copies.push(planora_feature::EdgeCopy {
+                    target: planora_feature::CopyTarget::Curve(l),
+                    piece: 0,
+                    of: 1,
+                    source: planora_feature::CopySource::Edge(edge),
+                });
+            }
+        })
+        .unwrap();
+    c.refresh();
+    let e2 = c.extrude_sketch(sk2, 0, 2.0).unwrap();
+    c.document.set_rollback(b2, b2).unwrap();
+    c.refresh();
+    assert!(!c.document.is_active(sk2));
+    let v = history_bar::steps(&c, e2);
+    let st = &v.iter().find(|v| v.id == sk2).unwrap().state;
+    assert_eq!(*st, StepState::Inactive);
+}

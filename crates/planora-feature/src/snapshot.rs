@@ -10,8 +10,9 @@ use planora_drawing::sheet_info::{ProjectInfo, validate_project_info};
 use planora_drawing::{BodyKey, Drawing, RowOverride};
 use planora_exchange::ExchangeMesh;
 use planora_i18n::tr;
+use planora_sketch::model::Sketch;
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 thread_local! {
@@ -201,7 +202,7 @@ impl Document {
     /// Rückrollstellen, Netze und Verweise; ungültige Zahlen führen erst bei der Berechnung zu
     /// einem Fehlerstatus am betroffenen Feature (kein Panic, kein Abbruch des Ladens).
     pub fn from_snapshot(s: Snapshot, chord_tolerance: f64) -> Result<Document, FeatureError> {
-        let mut doc = Document::build(s, chord_tolerance, &BTreeMap::new(), 1)?;
+        let mut doc = Document::build(s, chord_tolerance, &BTreeMap::new(), 1, HashMap::new())?;
         doc.edits = 0;
         doc.drawing_edits = 0;
         Ok(doc)
@@ -244,7 +245,20 @@ impl Document {
             self.drawing_edits += 1;
             return Ok(RestoreKind::Annotations);
         }
-        let mut doc = Document::build(s, self.chord_tolerance, &self.meshes, self.next_version)?;
+        // Die berechneten Skizzen gehen als Rückfall für den letzten Stand mit (Ruling T17-1):
+        // Eine verlorene Projektion bleibt so an ihrer zuletzt nachgeführten Lage.
+        let carry = self
+            .features
+            .iter()
+            .filter_map(|f| Some((f.id, f.result.as_ref()?.sketch.clone()?)))
+            .collect();
+        let mut doc = Document::build(
+            s,
+            self.chord_tolerance,
+            &self.meshes,
+            self.next_version,
+            carry,
+        )?;
         doc.edits = self.edits + 1;
         doc.drawing_edits = self.drawing_edits + 1;
         doc.next_mesh = doc.next_mesh.max(self.next_mesh);
@@ -255,12 +269,15 @@ impl Document {
     }
 
     /// Baut und berechnet ein Dokument aus einem Snapshot. Netze, die als derselbe `Arc` in
-    /// `known` liegen, gelten als geprüft; Versionen beginnen bei `first_version`.
+    /// `known` liegen, gelten als geprüft; Versionen beginnen bei `first_version`. `carry`: die
+    /// Ergebnis-Skizzen vor dem Neubau je Feature, Rückfall für die erste Berechnung
+    /// ([`Document::carried_sketches`]).
     fn build(
         s: Snapshot,
         chord_tolerance: f64,
         known: &BTreeMap<MeshId, Arc<ExchangeMesh>>,
         first_version: u64,
+        carry: HashMap<FeatureId, Sketch>,
     ) -> Result<Document, FeatureError> {
         let bad = |m: String| FeatureError::InvalidInput(m);
         if s.next_id == u64::MAX {
@@ -393,7 +410,9 @@ impl Document {
         // Nach den Features, weil die Prüfung die Ketten braucht; ungültige Stellen sind ein
         // Fehler im Bild (die stille Bereinigung in der Neuberechnung greift hier nicht).
         doc.rollbacks = doc.checked_rollbacks(&s.rollbacks)?;
+        doc.carried_sketches = carry;
         doc.recompute_features();
+        doc.carried_sketches.clear();
         Ok(doc)
     }
 }

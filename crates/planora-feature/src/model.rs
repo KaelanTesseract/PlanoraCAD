@@ -820,6 +820,11 @@ pub struct Document {
     pub(crate) param_values: Vec<f64>,
     /// Nächste zu vergebende Parameterkennung (beginnt bei 1).
     pub(crate) next_param: u64,
+    /// Ergebnis-Skizzen des Dokuments vor einem vollen Neubau ([`Document::restore`]) je
+    /// Feature: Rückfall für den letzten berechneten Stand, damit eine Kurve mit verlorenem
+    /// Bezug an ihrer zuletzt nachgeführten Lage bleibt (Skizzen 11a, Ruling T17-1). Gilt nur für
+    /// die erste Neuberechnung nach dem Neubau und ist danach leer.
+    pub(crate) carried_sketches: std::collections::HashMap<FeatureId, Sketch>,
 }
 
 /// Standard-Sehnentoleranz in Millimetern (wie in der App).
@@ -869,6 +874,7 @@ impl Document {
             parameters: Vec::new(),
             param_values: Vec::new(),
             next_param: 1,
+            carried_sketches: std::collections::HashMap::new(),
         }
     }
 

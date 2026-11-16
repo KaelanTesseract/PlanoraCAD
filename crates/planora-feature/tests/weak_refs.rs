@@ -416,15 +416,20 @@ fn undo_restores_link() {
 /// folgt die Kurve wieder der Kante.
 #[test]
 fn move_sketch_before_source_and_back() {
-    // Ohne vorherige Änderung des Quaders: Das Verschieben baut das Dokument neu (wie Laden),
-    // die verlorene Kurve steht dann an der Lage der Definition.
-    let (d, b, s, curve) = box_doc();
+    // Der Quader wird vorher geändert (Länge 12, die Skizze bleibt zu): Die verlorene Kurve
+    // bleibt an der zuletzt nachgeführten Lage, nicht an der Lage der Definition (Länge 10).
+    let (mut d, b, s, curve) = box_doc();
+    set_box_x(&mut d, b, 12.0);
     let before = line_ends(d.sketch_of(s).unwrap(), curve);
+    assert!((length(&d, s, curve) - 12.0).abs() < 1e-7);
     let front = swapped(&d, 0, 1).expect("kein ForwardReference");
     assert_eq!(front.index_of(s), Some(0));
     lost_one(&front, s, curve);
     let after = line_ends(front.sketch_of(s).unwrap(), curve);
-    assert!(close(before.0, after.0) && close(before.1, after.1));
+    assert!(
+        close(before.0, after.0) && close(before.1, after.1),
+        "letzte Lage: {before:?} → {after:?}"
+    );
     assert!(front.present_weak_dependencies(0).is_empty());
     assert_eq!(front.feature(s).unwrap().kind.weak_dependencies(), vec![b]);
     front.check_invariants().unwrap();
@@ -437,6 +442,50 @@ fn move_sketch_before_source_and_back() {
     not_lost(&back, s);
     assert!((length(&back, s, curve) - 14.0).abs() < 1e-7);
     back.check_invariants().unwrap();
+}
+
+/// Fix-Runde 1 (Ruling T17-1): Quelle geändert (Skizze nicht geöffnet), dann gelöscht, dann ein
+/// fremder Schritt rückgängig gemacht (voller Neubau über `restore`): Die verlorene Kurve bleibt
+/// an der zuletzt nachgeführten Lage.
+#[test]
+fn undo_of_another_step_keeps_the_last_position() {
+    let (mut d, b, s, curve) = box_doc();
+    set_box_x(&mut d, b, 12.0);
+    let followed = line_ends(d.sketch_of(s).unwrap(), curve);
+    d.delete(b).unwrap();
+    lost_one(&d, s, curve);
+    let before_other = d.snapshot();
+    add_box(
+        &mut d,
+        "Andere",
+        DVec3::splat(3.0),
+        DVec3::new(40.0, 0.0, 0.0),
+    );
+    // Rückgängig: das Bild vor dem fremden Schritt.
+    assert_eq!(d.restore(before_other.clone()).unwrap(), RestoreKind::Full);
+    lost_one(&d, s, curve);
+    let after = line_ends(d.sketch_of(s).unwrap(), curve);
+    assert!(
+        close(followed.0, after.0) && close(followed.1, after.1),
+        "letzte Lage: {followed:?} → {after:?}"
+    );
+    assert!((length(&d, s, curve) - 12.0).abs() < 1e-7);
+    // Ein zweiter voller Neubau ändert daran nichts.
+    add_box(
+        &mut d,
+        "Noch eine",
+        DVec3::splat(3.0),
+        DVec3::new(60.0, 0.0, 0.0),
+    );
+    assert_eq!(d.restore(before_other).unwrap(), RestoreKind::Full);
+    lost_one(&d, s, curve);
+    assert!((length(&d, s, curve) - 12.0).abs() < 1e-7);
+    // Die Definition bleibt unverändert (Lage beim letzten Schließen, Länge 10).
+    let FeatureKind::Sketch(sf) = &d.feature(s).unwrap().kind else {
+        unreachable!()
+    };
+    assert!((sf.sketch.line_length(curve).unwrap() - 10.0).abs() < 1e-7);
+    d.check_invariants().unwrap();
 }
 
 #[test]
