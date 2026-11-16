@@ -1548,6 +1548,8 @@ fn side_contents(
         palette.changed |= grid.changed() || snap.changed();
         ui.checkbox(show_profiles, small(tr!("sketch-show-profile")));
     });
+    // Skizzenstatus oben im Feld (Skizzen 11a, A4); die Freiheitsgrade stehen weiter im Fußfeld.
+    status_row(ui, se, &sf.sketch);
     tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);
 
@@ -1777,6 +1779,44 @@ fn side_contents(
     // Liste der Abhängigkeiten
     theme::section_header(ui, &tr!("sketch-section-list"), theme::SUB_HEADER_H);
     constraint_list(ui, se, sf, panel, scope);
+}
+
+/// Farbe der Statuszeile oben im Skizzenfeld (Skizzen 11a, A4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusTone {
+    Normal,
+    /// Widerspruch: rote Schrift.
+    Error,
+    /// Nicht gelöst: orange Schrift.
+    Warning,
+}
+
+/// Text und Ton der Statuszeile oben im Skizzenfeld: „Status: Unterbestimmt“, „Bestimmt“,
+/// „Widerspruch“ (rot) oder „nicht gelöst“ (orange).
+pub fn status_line(sk: &Sketch, r: &planora_sketch::solver::SolveReport) -> (String, StatusTone) {
+    use planora_sketch::check::SketchStatus;
+    match sk.status(r) {
+        SketchStatus::Under => (tr!("sketch-check-under"), StatusTone::Normal),
+        SketchStatus::Determined => (tr!("sketch-check-determined"), StatusTone::Normal),
+        SketchStatus::Conflict => (tr!("sketch-check-conflict"), StatusTone::Error),
+        SketchStatus::NotSolved => (tr!("sketch-check-not-solved"), StatusTone::Warning),
+    }
+}
+
+/// Die Statuszeile als Zeile der Palette; `status_key` hält den Text des letzten Bildes (Tests).
+fn status_row(ui: &mut egui::Ui, se: &SketchSession, sk: &Sketch) {
+    let report = match &se.last_report {
+        Some(r) => r.clone(),
+        None => sk.clone().solve(),
+    };
+    let (text, tone) = status_line(sk, &report);
+    let p = theme::palette(ui.visuals().dark_mode);
+    let color = match tone {
+        StatusTone::Normal => p.text_secondary,
+        StatusTone::Error => p.error,
+        StatusTone::Warning => p.warning,
+    };
+    ui.label(RichText::new(text).size(SWITCH_TEXT_PX + 1.0).color(color));
 }
 
 /// Fußfeld: rechts „Skizze beenden“, davor der Zustand der Skizze (Farbe nach Schweregrad und

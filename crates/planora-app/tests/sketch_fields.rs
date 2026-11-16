@@ -610,7 +610,7 @@ fn pointer_on_sketch_fields_does_not_reach_the_sketch() {
         let foot = field(&c, "Fuß");
         for (name, p) in [
             ("Leiste", punkt.center()),
-            ("Skizze", field(&c, "Skizze").center()),
+            ("Skizze", field(&c, "Skizze").center_top() + vec2(0.0, 3.0)),
             ("Fuß", foot.left_center() + vec2(6.0, 0.0)),
             ("oben", field(&c, "oben").left_center() + vec2(6.0, 0.0)),
             ("Status", field(&c, "Status").center()),

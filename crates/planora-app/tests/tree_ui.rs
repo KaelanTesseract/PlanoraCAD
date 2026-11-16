@@ -647,3 +647,89 @@ fn a_skipped_tip_over_an_active_origin_is_marked_grey_with_its_reason() {
     assert_eq!(found.map(|f| f.1), Some(weak), "{colors:?}");
     assert!(!why.is_empty());
 }
+
+// ---- Rotes Schloss am Skizzen-Eintrag (Skizzen 11a, Task 15) ---------------------------------
+
+/// Skizze mit Rechteck; mit `determined` voll bestimmt (zwei Maße, feste Ecke).
+fn state_with_rect_sketch(determined: bool) -> (AppState, planora_feature::FeatureId) {
+    use planora_feature::{FeatureKind, SketchPlane, StandardPlane};
+    use planora_math::DVec2;
+    use planora_sketch::constraint::ConstraintKind as K;
+    let mut s = AppState::new();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.document
+        .update(id, |k| {
+            if let FeatureKind::Sketch(sf) = k {
+                let r = sf
+                    .sketch
+                    .add_rectangle(DVec2::ZERO, DVec2::new(40.0, 30.0))
+                    .unwrap();
+                if determined {
+                    let c = r.points;
+                    sf.sketch
+                        .add_constraint(K::Distance(c[0], c[1], 40.0))
+                        .unwrap();
+                    sf.sketch
+                        .add_constraint(K::Distance(c[1], c[2], 30.0))
+                        .unwrap();
+                    sf.sketch.add_constraint(K::Fixed(c[0], 0.0, 0.0)).unwrap();
+                }
+            }
+        })
+        .unwrap();
+    s.refresh();
+    (s, id)
+}
+
+fn tree_text(s: &mut AppState) -> String {
+    let c = ctx();
+    let mut text = String::new();
+    for _ in 0..3 {
+        let out = c.run_ui(egui::RawInput::default(), |ui| browser::show(ui, s));
+        text = texts(&out);
+        out.drop_without_applying_deltas();
+    }
+    text
+}
+
+fn lock_glyph() -> String {
+    planora_app::icons::glyph(planora_app::icons::Icon::Lock).to_string()
+}
+
+#[test]
+fn locked_sketch_shows_lock_icon() {
+    let (mut s, id) = state_with_rect_sketch(true);
+    assert!(s.document.feature(id).unwrap().sketch_locked());
+    let text = tree_text(&mut s);
+    assert!(text.contains(&lock_glyph()), "Schloss fehlt:\n{text}");
+}
+
+#[test]
+fn under_sketch_shows_no_lock() {
+    let (mut s, id) = state_with_rect_sketch(false);
+    assert!(!s.document.feature(id).unwrap().sketch_locked());
+    let text = tree_text(&mut s);
+    assert!(!text.contains(&lock_glyph()), "{text}");
+}
+
+#[test]
+fn timeline_shows_no_lock() {
+    let (mut s, _) = state_with_rect_sketch(true);
+    let c = ctx();
+    let mut text = String::new();
+    for _ in 0..3 {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        let out = c.run_ui(raw, |ui| planora_app::history_bar::show(ui.ctx(), &mut s));
+        text = texts(&out);
+        out.drop_without_applying_deltas();
+    }
+    assert!(!text.contains(&lock_glyph()), "{text}");
+}

@@ -422,6 +422,7 @@ impl Document {
             sketch,
             hints,
             warning,
+            locked,
             plane,
             canvas,
             canvas_face,
@@ -433,6 +434,7 @@ impl Document {
             result_version,
             key,
             warning,
+            locked,
             plane,
             canvas,
         });

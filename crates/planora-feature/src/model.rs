@@ -677,6 +677,8 @@ pub(crate) struct FeatureResult {
     pub(crate) key: Vec<u64>,
     /// Warnung der Berechnung (siehe [`Feature::warning`]).
     pub(crate) warning: Option<String>,
+    /// Voll bestimmte, nicht leere Skizze (siehe [`Feature::sketch_locked`]).
+    pub(crate) locked: bool,
     /// Koordinatensystem einer Konstruktionsebene (siehe [`Document::plane_frame`]).
     pub(crate) plane: Option<Frame>,
     /// Koordinatensystem des Trägers einer Leinwand (siehe [`Document::canvas_frame`]); bei
@@ -718,6 +720,13 @@ impl Feature {
     /// Skizzenkurven.
     pub fn warning(&self) -> Option<&str> {
         self.warning.as_deref()
+    }
+
+    /// Ist die Skizze nach der letzten Berechnung voll bestimmt (und nicht leer)? Das rote
+    /// Schloss im Browser (Skizzen 11a, A4); `false` für andere Features und ohne Ergebnis.
+    pub fn sketch_locked(&self) -> bool {
+        matches!(self.kind, FeatureKind::Sketch(_))
+            && self.result.as_ref().is_some_and(|r| r.locked)
     }
 
     /// Stand der Parameter (und der Unterdrückung); ändert sich bei jeder solchen Änderung.

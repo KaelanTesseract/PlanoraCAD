@@ -46,6 +46,8 @@ pub(crate) struct Computed {
     pub(crate) hints: Option<SketchHints>,
     /// Warnung bei sonst gelungener Berechnung (siehe [`crate::Feature::warning`]).
     pub(crate) warning: Option<String>,
+    /// Skizze voll bestimmt und nicht leer: rotes Schloss im Browser (Skizzen 11a, A4).
+    pub(crate) locked: bool,
     /// Koordinatensystem einer Konstruktionsebene.
     pub(crate) plane: Option<planora_math::Frame>,
     /// Koordinatensystem des Trägers einer Leinwand.
@@ -863,10 +865,10 @@ fn compute_sketch(
     };
     let followed = follow_copies(&mut sketch, sf, &ctx, previous);
     let copies = followed.copies;
-    if sf.formulas.is_empty() {
+    let report = if sf.formulas.is_empty() {
         // Ohne Formeln wird der Lösungsstatus bewusst nicht ausgewertet (wie bisher): eine
         // unterbestimmte oder vom Nutzer ungelöst gelassene Skizze ist gültig.
-        let _ = sketch.solve();
+        sketch.solve()
     } else {
         // Mit Formeln (Plan P12) ist jedes andere Ergebnis als „gelöst“ ein Fehler, auch wenn die
         // Skizze schon vorher ungelöst war: Ein Parameter kann sie still in eine andere Lage
@@ -881,9 +883,13 @@ fn compute_sketch(
                 return Err(FeatureError::Sketch(tr!("sketch-formula-unsolvable")));
             }
         }
-    }
+        // Der Bericht für das Schloss: Das zweite Lösen kommt aus dem Zwischenspeicher.
+        sketch.solve()
+    };
+    let locked = sketch.is_locked(&report);
     let warning = sketch_warning(&followed.counts, &sketch);
     Ok(Computed {
+        locked,
         bodies: Vec::new(),
         sketch: Some(sketch),
         hints: Some(SketchHints { plane, copies }),
