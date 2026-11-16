@@ -3330,8 +3330,23 @@ impl SketchSession {
 
     /// Löscht die Auswahl samt abhängiger Kurven und Abhängigkeiten. Punkte gelöschter (auch
     /// mitgelöschter) Kurven, die danach nichts mehr benutzt, werden mit entfernt; andere freie
-    /// Punkte bleiben.
+    /// Punkte bleiben. Ohne Kopien des Entwurfs; Entf und das X der Liste nehmen
+    /// [`delete_selection_in`](Self::delete_selection_in).
     pub fn delete_selection(&mut self, sk: &mut Sketch) {
+        self.delete_selection_keeping(sk, &[]);
+    }
+
+    /// [`delete_selection`](Self::delete_selection) am ganzen Entwurf `sf`: Eingezogene Punkte
+    /// (Punktziele in `sf.copies`) bleiben beim Löschen einer Kurve stehen, samt Fixierung und
+    /// Verknüpfung (Schlussprüfung I-1).
+    pub fn delete_selection_in(&mut self, sf: &mut SketchFeature) {
+        let keep = kept_points(sf);
+        self.delete_selection_keeping(&mut sf.sketch, &keep);
+    }
+
+    /// Der gemeinsame Weg: Die Punkte `keep` zählen beim Löschen einer Kurve als benutzt (sie
+    /// gehen nicht mit ihr). Ein ausdrücklich gewählter Punkt aus `keep` wird trotzdem gelöscht.
+    pub(crate) fn delete_selection_keeping(&mut self, sk: &mut Sketch, keep: &[PointId]) {
         // Im Abhängigkeitsbefehl gehört die Auswahl dem Befehl: Entf löscht nichts, es nimmt nur
         // die halbe Auswahl zurück.
         if matches!(self.tool, Tool::Constraint(_)) {
@@ -3413,12 +3428,14 @@ impl SketchSession {
             }
             // Wie in Fusion gehen mit einer Kurve ihre Endpunkte samt Maßen und Abhängigkeiten:
             // Was an einem nun freien Punkt der gelöschten Kurve hängt, fällt mit weg (sonst hielte
-            // es den Punkt am Leben). Punkte, die noch eine andere Kurve benutzt, bleiben mit
+            // es den Punkt am Leben). Punkte, die noch eine andere Kurve benutzt, die Mitte eines
+            // Kreismusters und die geschützten Punkte `keep` (eingezogene Punkte) bleiben mit
             // allem, was an ihnen hängt.
             if !orphans.is_empty() {
                 let mut still_used: std::collections::HashSet<PointId> =
                     sk.curves().flat_map(|(_, c)| c.kind.points()).collect();
                 still_used.extend(sk.pattern_centers());
+                still_used.extend(keep.iter().copied());
                 let gone: Vec<PointId> = orphans
                     .iter()
                     .copied()
@@ -3433,6 +3450,7 @@ impl SketchSession {
                     let _ = sk.remove_constraint(id);
                 }
             }
+            orphans.retain(|p| !keep.contains(p));
             sk.prune_points(&orphans);
             se.pending.retain(|&p| sk.point_xy(p).is_ok());
             se.forget_removed_curves(sk);
@@ -3742,6 +3760,13 @@ pub(crate) fn check_change(
         }
     };
     report.is_worse_than(before).then_some(report.status)
+}
+
+/// Punkte des Entwurfs `sf`, die das Löschen einer Kurve nicht mitnimmt: die Punktziele seiner
+/// Kopien (eingezogene Ecken, Ursprung, Schnittpunkte; Schlussprüfung I-1). Eigenständige
+/// Skizzenpunkte des Punktwerkzeugs kennt das Modell nicht gesondert (siehe `offene-punkte.md`).
+pub(crate) fn kept_points(sf: &SketchFeature) -> Vec<PointId> {
+    sf.copies.iter().filter_map(|c| c.point()).collect()
 }
 
 /// Die Kette um `c`, wie sie der Versatz nimmt: Querlinien und Rollkreise eines früheren Versatzes

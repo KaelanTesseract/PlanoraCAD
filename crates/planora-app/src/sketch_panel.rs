@@ -1566,7 +1566,7 @@ fn side_contents(
     });
     // Skizzenstatus oben im Feld (Skizzen 11a, A4); die Freiheitsgrade stehen weiter im Fußfeld.
     status_row(ui, se, &sf.sketch);
-    under_section(ui, se, &mut sf.sketch, palette);
+    under_section(ui, se, sf, palette);
     tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);
 
@@ -1639,6 +1639,8 @@ fn side_contents(
     let can_break_link = !se.selected_projections(sf).is_empty();
     // „Text bearbeiten“ und „Text auflösen“ nur, wenn ein Text gewählt ist (Spec C8, C9).
     let has_text = !se.selected_texts(&sf.sketch).is_empty();
+    // Eingezogene Punkte bleiben beim Löschen stehen (wie bei Entf).
+    let keep = crate::sketch_state::kept_points(sf);
     let sk = &mut sf.sketch;
     ui.separator();
 
@@ -1780,7 +1782,7 @@ fn side_contents(
         })
         .clicked()
         {
-            se.delete_selection(sk);
+            se.delete_selection_keeping(sk, &keep);
         }
     });
     sections(ui, se, sk, panel);
@@ -1830,9 +1832,10 @@ const UNDER_LIST_MAX_H: f32 = 72.0;
 fn under_section(
     ui: &mut egui::Ui,
     se: &mut SketchSession,
-    sk: &mut Sketch,
+    sf: &mut SketchFeature,
     palette: &mut SketchPalette,
 ) {
+    let sk = &mut sf.sketch;
     let mouse = crate::keymap::mouse::current(ui.ctx());
     ui.horizontal_wrapped(|ui| {
         let find = ui
@@ -1909,7 +1912,7 @@ fn under_section(
         });
     se.under_list = if close { None } else { Some(list) };
     if let Some(it) = delete {
-        se.delete_under_item(sk, it);
+        se.delete_under_item_in(sf, it);
     }
 }
 
@@ -1921,7 +1924,7 @@ pub fn under_row_height(ui: &egui::Ui) -> f32 {
     ui.spacing().interact_size.y
 }
 
-/// Die Statuszeile als Zeile der Palette; `status_key` hält den Text des letzten Bildes (Tests).
+/// Die Statuszeile als Zeile der Palette.
 fn status_row(ui: &mut egui::Ui, se: &SketchSession, sk: &Sketch) {
     let report = match &se.last_report {
         Some(r) => r.clone(),
@@ -2412,7 +2415,7 @@ fn constraint_list(
                 }
                 if delete && !se.runs_pattern() && !se.runs_text() {
                     se.selection = vec![item];
-                    se.delete_selection(&mut sf.sketch);
+                    se.delete_selection_in(sf);
                 }
             }
         },

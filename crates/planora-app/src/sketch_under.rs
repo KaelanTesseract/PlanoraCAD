@@ -8,10 +8,11 @@
 use crate::sketch_state::{Item, SketchSession, Tool};
 use crate::state::AppState;
 use glam::Vec3;
+use planora_feature::SketchFeature;
 use planora_i18n::tr;
 use planora_math::DVec2;
 use planora_sketch::check::CheckItem;
-use planora_sketch::model::{CurveKind, Sketch};
+use planora_sketch::model::{CurveKind, PointId, Sketch};
 
 /// Rand um das Element in der Ansicht: Anteil der Ansichtsgröße je Seite.
 pub const FOCUS_MARGIN: f64 = 0.15;
@@ -161,7 +162,25 @@ impl SketchSession {
 
     /// X in der Zeile: löscht das Element (ein Rückgängig-Schritt). Bei einem veralteten Element
     /// oder einem Skizzenpunkt geschieht nichts.
+    /// Ohne Kopien des Entwurfs; das Skizzenfeld nimmt
+    /// [`delete_under_item_in`](Self::delete_under_item_in).
     pub fn delete_under_item(&mut self, sk: &mut Sketch, it: CheckItem) -> bool {
+        self.delete_under_item_keeping(sk, it, &[])
+    }
+
+    /// Wie [`delete_under_item`](Self::delete_under_item) am ganzen Entwurf `sf`: Eingezogene
+    /// Punkte bleiben wie bei Entf ([`SketchSession::delete_selection_in`]).
+    pub fn delete_under_item_in(&mut self, sf: &mut SketchFeature, it: CheckItem) -> bool {
+        let keep = crate::sketch_state::kept_points(sf);
+        self.delete_under_item_keeping(&mut sf.sketch, it, &keep)
+    }
+
+    fn delete_under_item_keeping(
+        &mut self,
+        sk: &mut Sketch,
+        it: CheckItem,
+        keep: &[PointId],
+    ) -> bool {
         if matches!(it, CheckItem::Point(_)) || !self.focus_item(sk, it) {
             return false;
         }
@@ -171,7 +190,7 @@ impl SketchSession {
         if matches!(tool, Tool::Constraint(_)) {
             self.tool = Tool::Select;
         }
-        self.delete_selection(sk);
+        self.delete_selection_keeping(sk, keep);
         self.tool = tool;
         true
     }

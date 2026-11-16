@@ -2439,7 +2439,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         // In der Anordnung gehört die Auswahl der Vorlage; Entf löscht dort nichts. Ebenso bei
         // offenem Abschnitt „Text“: Beim Ändern ist der Text selbst gewählt.
         if delete && !gesture && !se.runs_pattern() && !se.runs_text() {
-            se.delete_selection(&mut sf.sketch);
+            se.delete_selection_in(sf);
         }
     }
     // Vorschau von Stutzen, Dehnen und Brechen unter dem Mauszeiger (nach den Änderungen
