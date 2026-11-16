@@ -2839,7 +2839,7 @@ impl SketchSession {
                 }
             }
             let smooth = matches!(kind, ConstraintKind::Smooth(..));
-            let id = se.add_checked(sk, prior, kind, action.label_msg())?;
+            let id = se.add_checked(sk, prior, kind, false, action.label_msg())?;
             // Glatt schaltet dabei Griffe ein; der Vergleich der Stände hieße den Schritt danach.
             if smooth {
                 se.edit_label = Some(action.label_msg());
@@ -2910,13 +2910,16 @@ impl SketchSession {
         sk: &mut Sketch,
         prior: &Sketch,
         kind: ConstraintKind,
+        supplement: bool,
         label: Msg,
     ) -> Result<ConstraintId, Msg> {
         let se = self;
         let dimension = kind.is_dimension();
-        let old = sk.measure(&kind);
+        let old = measure_kind(sk, &kind, supplement);
         let value_of = kind.length_value();
-        let id = sk.add_constraint(kind).map_err(err)?;
+        let id = sk
+            .add_constraint_supplement(kind, supplement)
+            .map_err(err)?;
         // Ein Maß nur an Exemplaren eines Musters legt die Skizze anzeigend an (es hätte sonst
         // keine Wirkung, Schlusskorrektur I1); sein Wert ist der gemessene.
         let driven = sk.constraint(id).is_some_and(|c| c.driven);
@@ -2992,11 +2995,11 @@ impl SketchSession {
             // Ein Winkelmaß gilt nur bis 180° im Betrag: Darüber zeigte es einen Wert, den die Form nicht
             // hat. Unverändert bestätigen geht immer (ein getippter Öffnungswinkel darf größer sein).
             if matches!(kind, ConstraintKind::Angle(_, _, v) if v != value)
-                && !angle_value_ok(sk.measure(&kind), value)
+                && !angle_value_ok(sk.measure_constraint(id), value)
             {
                 return Err(crate::msg!("sketch-angle-range"));
             }
-            let old = sk.measure(&kind);
+            let old = sk.measure_constraint(id);
             let users = sk.constraints().count();
             sk.set_constraint_value(id, value).map_err(err)?;
             // Eine kleinere Anzahl eines Musters nimmt die Abhängigkeiten der wegfallenden
@@ -3243,7 +3246,8 @@ impl SketchSession {
             if !kind.is_dimension() {
                 return Err(crate::msg!("sketch-only-dimension-driven"));
             }
-            if let Some(v) = sk.measure(&kind) {
+            // Mit dem Feld des Maßes: Ein Gegenwinkel misst `π − θ`, sonst spränge die Geometrie.
+            if let Some(v) = sk.measure_constraint(id) {
                 sk.set_constraint_value(id, v).map_err(err)?;
             }
             sk.set_driven(id, driven).map_err(err)?;
@@ -3881,6 +3885,15 @@ pub(crate) fn round_center(sk: &Sketch, c: CurveId) -> Option<PointId> {
 /// Freiheitsgrade von `sk`, frisch gerechnet (nicht aus einem möglicherweise älteren Bericht).
 fn dof_of(sk: &Sketch) -> usize {
     sk.clone().solve().dof
+}
+
+/// Der Messwert von `kind`, bei einem Winkel mit der Zeigerseite `supplement` (Gegenwinkel
+/// `π − θ`, Skizzen 11a, A7). Für ein schon angelegtes Maß gilt [`Sketch::measure_constraint`].
+pub fn measure_kind(sk: &Sketch, kind: &ConstraintKind, supplement: bool) -> Option<f64> {
+    match *kind {
+        ConstraintKind::Angle(c1, c2, _) => sk.measure_angle(c1, c2, supplement),
+        _ => sk.measure(kind),
+    }
 }
 
 /// Darf ein Winkelmaß den Wert `value` bekommen? Der Betrag ist höchstens 180°; ein negativer

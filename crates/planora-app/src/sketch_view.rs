@@ -415,10 +415,16 @@ pub fn stored_value(kind: &ConstraintKind) -> Option<f64> {
     kind.value()
 }
 
-/// Anzuzeigender Wert eines Maßes: bei anzeigenden (`driven`) Maßen der gemessene Wert.
-pub fn shown_value(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> Option<f64> {
+/// Anzuzeigender Wert eines Maßes: bei anzeigenden (`driven`) Maßen der gemessene Wert, bei einem
+/// Winkel mit `supplement` der Gegenwinkel (Skizzen 11a, A7).
+pub fn shown_value(
+    sk: &Sketch,
+    kind: &ConstraintKind,
+    driven: bool,
+    supplement: bool,
+) -> Option<f64> {
     if driven {
-        sk.measure(kind).or_else(|| stored_value(kind))
+        crate::sketch_state::measure_kind(sk, kind, supplement).or_else(|| stored_value(kind))
     } else {
         stored_value(kind)
     }
@@ -519,7 +525,7 @@ pub fn constraint_label(centers: &HashSet<PointId>, kind: &ConstraintKind) -> St
 
 /// Eintrag der Abhängigkeitsliste, z. B. „Abstand 40,00 mm“; anzeigende Maße in Klammern.
 pub fn constraint_name(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> String {
-    constraint_name_among(sk, &round_centers(sk), kind, driven)
+    constraint_name_among(sk, &round_centers(sk), kind, driven, false)
 }
 
 /// Wie [`constraint_name`] mit den Mitten aus [`round_centers`] (für die ganze Liste einmal).
@@ -528,9 +534,10 @@ pub fn constraint_name_among(
     centers: &HashSet<PointId>,
     kind: &ConstraintKind,
     driven: bool,
+    supplement: bool,
 ) -> String {
     let label = constraint_label(centers, kind);
-    match shown_value(sk, kind, driven) {
+    match shown_value(sk, kind, driven, supplement) {
         Some(v) if driven => format!("{label} ({})", value_text(kind, v)),
         Some(v) => format!("{label} {}", value_text(kind, v)),
         None => label,
@@ -600,6 +607,17 @@ pub fn overlay_text(
     kind: &ConstraintKind,
     driven: bool,
 ) -> String {
+    overlay_text_with(ctx, sk, kind, driven, false)
+}
+
+/// Wie [`overlay_text`]; `supplement`: das Winkelmaß misst den Gegenwinkel (Skizzen 11a, A7).
+pub fn overlay_text_with(
+    ctx: &egui::Context,
+    sk: &Sketch,
+    kind: &ConstraintKind,
+    driven: bool,
+    supplement: bool,
+) -> String {
     use ConstraintKind as K;
     let plain = match kind {
         K::Coincident(..)
@@ -627,7 +645,7 @@ pub fn overlay_text(
     if !plain.is_empty() {
         return plain;
     }
-    let Some(v) = shown_value(sk, kind, driven) else {
+    let Some(v) = shown_value(sk, kind, driven, supplement) else {
         return String::new();
     };
     let text = match kind {
@@ -2936,7 +2954,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let text = match mark {
             // Nur als Schlüssel für „je Kurve und Art einmal“; gezeichnet wird das Symbol.
             Some(m) => format!("{m:?}"),
-            None => overlay_text(ui.ctx(), sk, &c.kind, c.driven),
+            None => overlay_text_with(ui.ctx(), sk, &c.kind, c.driven, c.supplement()),
         };
         if text.is_empty() {
             continue;
@@ -3102,7 +3120,7 @@ fn dim_picked(se: &SketchSession, item: Item) -> bool {
 /// Text der Vorschau der Skizzenbemaßung, wie das Maß später in der Ansicht steht
 /// (etwa „40,00 mm“, „Ø 30,00 mm“, „R 5,00 mm“, „30,0°“); ein anzeigendes wie in der Ansicht.
 pub fn dimension_text(ctx: &egui::Context, sk: &Sketch, plan: &DimPlan) -> String {
-    overlay_text(ctx, sk, &plan.kind, plan.driven)
+    overlay_text_with(ctx, sk, &plan.kind, plan.driven, plan.supplement)
 }
 
 /// Hilfsstriche der Vorschau der Skizzenbemaßung (Skizzenkoordinaten): waagerecht und senkrecht

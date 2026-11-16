@@ -806,7 +806,7 @@ fn refit_formula_arcs(sketch: &mut Sketch, sf: &SketchFeature) {
     }
     let mut trial = sketch.clone();
     for &(id, _) in &refused {
-        let measured = trial.constraint(id).and_then(|c| trial.measure(&c.kind));
+        let measured = trial.measure_constraint(id);
         if measured.is_none_or(|old| trial.set_constraint_value(id, old).is_err()) {
             return;
         }

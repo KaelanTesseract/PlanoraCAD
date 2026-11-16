@@ -323,7 +323,7 @@ fn existing_editor(
         return None;
     }
     let unit = constraint_unit(&c.kind);
-    let value = shown_value(&sf.sketch, &c.kind, c.driven).unwrap_or(0.0);
+    let value = shown_value(&sf.sketch, &c.kind, c.driven, c.supplement()).unwrap_or(0.0);
     let text = match sf.formulas.get(&id).filter(|_| !c.driven) {
         Some(f) => formula_text(f, unit, scope),
         None => editor_text(value, unit),
@@ -2082,9 +2082,9 @@ fn constraint_list(
     scope: &ParamScope,
 ) {
     let sk = &sf.sketch;
-    let rows: Vec<(ConstraintId, ConstraintKind, bool)> = sk
+    let rows: Vec<(ConstraintId, ConstraintKind, bool, bool)> = sk
         .constraints()
-        .map(|(id, c)| (id, c.kind.clone(), c.driven))
+        .map(|(id, c)| (id, c.kind.clone(), c.driven, c.supplement()))
         .collect();
     if rows.is_empty() {
         ui.label(RichText::new(tr!("sketch-list-empty")).small().weak());
@@ -2103,11 +2103,12 @@ fn constraint_list(
             .max_height(LIST_HEIGHT)
             .auto_shrink([false, true]),
         |ui| {
-            for (id, kind, driven) in rows {
+            for (id, kind, driven, supplement) in rows {
                 let item = Item::Constraint(id);
                 let selected = se.selection.contains(&item);
-                let mut text =
-                    RichText::new(constraint_name_among(&sf.sketch, &centers, &kind, driven));
+                let mut text = RichText::new(constraint_name_among(
+                    &sf.sketch, &centers, &kind, driven, supplement,
+                ));
                 if bad.contains(&id) {
                     text = text.color(theme::palette(ui.visuals().dark_mode).error);
                 }

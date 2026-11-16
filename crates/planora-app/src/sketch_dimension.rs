@@ -8,6 +8,7 @@
 use crate::sketch_grips::{is_plain, is_wrapped, short_factor, split_factor};
 use crate::sketch_state::{
     Item, SketchSession, Snap, Tool, angle_value_ok, checked_value, dimension_input, err,
+    measure_kind,
 };
 use planora_feature::{ParamScope, SketchFeature, constraint_unit};
 use planora_math::DVec2;
@@ -253,7 +254,8 @@ impl SketchSession {
                 return Err(text);
             }
         };
-        let id = self.add_planned(&mut sf.sketch, kind, value, true)?;
+        let supplement = self.planned_supplement();
+        let id = self.add_planned(&mut sf.sketch, kind, value, true, supplement)?;
         let driven = sf.sketch.constraint(id).is_none_or(|c| c.driven);
         match formula {
             Some(f) if !driven => {
@@ -276,10 +278,17 @@ impl SketchSession {
         value: f64,
     ) -> Result<ConstraintId, String> {
         self.message = None;
-        let id = self.add_planned(&mut sf.sketch, kind, value, false)?;
+        let supplement = self.planned_supplement();
+        let id = self.add_planned(&mut sf.sketch, kind, value, false, supplement)?;
         sf.formulas.remove(&id);
         self.note_formula_problem(sf);
         Ok(id)
+    }
+
+    /// Trägt das gesetzte Maß den Gegenwinkel (`DimPlan::supplement`, Skizzen 11a, A7)? Ohne
+    /// gesetztes Maß nein.
+    fn planned_supplement(&self) -> bool {
+        self.dim.plan.as_ref().is_some_and(|p| p.supplement)
     }
 
     fn add_planned(
@@ -288,6 +297,7 @@ impl SketchSession {
         kind: ConstraintKind,
         value: f64,
         typed: bool,
+        supplement: bool,
     ) -> Result<ConstraintId, String> {
         let label = crate::sketch_view::kind_msg(&kind);
         let id = self.atomic(sk, |se, sk, prior| {
@@ -298,11 +308,11 @@ impl SketchSession {
             // Ein getippter Winkel gilt nur bis auf 180° (wie bei `apply`).
             if typed
                 && matches!(kind, ConstraintKind::Angle(..))
-                && !angle_value_ok(sk.measure(&kind), value)
+                && !angle_value_ok(measure_kind(sk, &kind, supplement), value)
             {
                 return Err(crate::msg!("sketch-angle-range"));
             }
-            se.add_checked(sk, prior, kind, label)
+            se.add_checked(sk, prior, kind, supplement, label)
         })?;
         let note = self.message.take();
         self.dim = Default::default();

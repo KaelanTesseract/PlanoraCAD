@@ -14,12 +14,12 @@ use planora_app::workspace::Workspace;
 use planora_app::{fonts, sketch_view, theme};
 use planora_feature::{ParamEdit, ParamUnit, SketchPlane};
 use planora_i18n::{DisplayUnit, german, tr, with_lang, with_unit};
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_sketch::constraint::ConstraintKind as K;
-use planora_sketch::dimension::{DimMode, DimPlan};
-use planora_sketch::model::{CurveKind, HandleCurvature, PointId, Sketch};
+use planora_sketch::dimension::{DimMode, DimPick, DimPlan};
+use planora_sketch::model::{CurveId, CurveKind, HandleCurvature, PointId, Sketch};
 
 const W: f32 = 1920.0;
 const H: f32 = 1080.0;
@@ -1236,4 +1236,260 @@ fn a_big_jump_of_the_curvature_handle_radius_arrives_through_the_dimension_edit(
         );
         assert!(sk.curve(arc.unwrap()).is_some());
     }
+}
+
+// ---- Winkelmaß nach Zeigerseite (Skizzen 11a, A7) ------------------------------------------------
+
+/// Zwei Linien durch den Ursprung: eine längs x, eine unter 60°.
+fn lines_0_and_60(sk: &mut Sketch) -> (CurveId, CurveId) {
+    let (a, b) = (
+        sk.add_point(0.0, 0.0).unwrap(),
+        sk.add_point(10.0, 0.0).unwrap(),
+    );
+    let l1 = sk.add_line(a, b).unwrap();
+    let (c, d) = (
+        sk.add_point(0.0, 0.0).unwrap(),
+        sk.add_point(5.0, 5.0 * 3f64.sqrt()).unwrap(),
+    );
+    (l1, sk.add_line(c, d).unwrap())
+}
+
+/// Wählt beide Linien und setzt das Maß mit dem Zeiger bei `pointer`.
+fn plan_angle(s: &mut AppState, pointer: DVec2) -> DimPlan {
+    pick(s, v(5.0, 0.0));
+    pick(s, v(2.5, 2.5 * 3f64.sqrt()));
+    pick(s, pointer);
+    planned(s).expect("gesetztes Maß")
+}
+
+const OBTUSE: (f64, f64) = (-10.0, 17.32);
+
+#[test]
+fn angle_tool_pointer_in_opposite_field_sets_supplement() {
+    with_lang(&german(), || {
+        let mut s = sketch_with(&[], |sk| {
+            lines_0_and_60(sk);
+        });
+        // Die Vorschau folgt dem Zeiger: im stumpfen Feld 120°.
+        pick(&mut s, v(5.0, 0.0));
+        pick(&mut s, v(2.5, 2.5 * 3f64.sqrt()));
+        let preview = point_to(&mut s, v(OBTUSE.0, OBTUSE.1)).unwrap();
+        assert!(preview.supplement);
+        assert!(
+            matches!(preview.kind, K::Angle(_, _, w) if (w - 120f64.to_radians()).abs() < 1e-9)
+        );
+        s.sketch_session.as_mut().unwrap().cancel_planned();
+        let plan = plan_angle(&mut s, v(OBTUSE.0, OBTUSE.1));
+        assert!(plan.supplement, "{plan:?}");
+        let steps = s.sketch_history().unwrap().undo_len();
+        let id = apply(&mut s, plan.kind, "120").unwrap();
+        let sk = s.session_sketch().unwrap();
+        assert!(sk.constraint(id).unwrap().supplement());
+        let m = sk.measure_constraint(id).unwrap();
+        assert!((m - 120f64.to_radians()).abs() < 1e-9, "{m}");
+        assert_eq!(s.sketch_history().unwrap().undo_len(), steps + 1);
+    });
+}
+
+#[test]
+fn angle_tool_pointer_in_acute_field_unchanged() {
+    with_lang(&german(), || {
+        let mut s = sketch_with(&[], |sk| {
+            lines_0_and_60(sk);
+        });
+        let plan = plan_angle(&mut s, v(10.0, 8.0));
+        assert!(!plan.supplement, "{plan:?}");
+        let id = apply(&mut s, plan.kind, "60").unwrap();
+        let sk = s.session_sketch().unwrap();
+        assert!(!sk.constraint(id).unwrap().supplement());
+        let m = sk.measure_constraint(id).unwrap();
+        assert!((m - 60f64.to_radians()).abs() < 1e-9, "{m}");
+    });
+}
+
+#[test]
+fn supplement_is_one_undo_step() {
+    with_lang(&german(), || {
+        let mut s = sketch_with(&[], |sk| {
+            lines_0_and_60(sk);
+        });
+        let before = s.session_sketch().unwrap().variables().to_vec();
+        let steps = s.sketch_history().unwrap().undo_len();
+        let plan = plan_angle(&mut s, v(OBTUSE.0, OBTUSE.1));
+        // Eine getippte andere Zahl: ein Schritt, Gegenwinkel 100°.
+        let id = apply(&mut s, plan.kind, "100").unwrap();
+        let sk = s.session_sketch().unwrap();
+        assert!((sk.measure_constraint(id).unwrap() - 100f64.to_radians()).abs() < 1e-9);
+        assert_eq!(s.sketch_history().unwrap().undo_len(), steps + 1);
+        assert!(s.undo_sketch());
+        let sk = s.session_sketch().unwrap();
+        assert_eq!(sk.constraints().count(), 0);
+        assert_eq!(sk.variables(), before.as_slice());
+        // Wiederherstellen bringt das Feld mit.
+        assert!(s.redo_sketch());
+        let sk = s.session_sketch().unwrap();
+        let (_, c) = sk.constraints().next().unwrap();
+        assert!(c.supplement());
+    });
+}
+
+/// Umschalten anzeigend/treibend lässt die Geometrie eines Gegenwinkelmaßes stehen.
+#[test]
+fn supplement_switch_driven_keeps_geometry() {
+    with_lang(&german(), || {
+        let mut s = sketch_with(&[], |sk| {
+            lines_0_and_60(sk);
+        });
+        let plan = plan_angle(&mut s, v(OBTUSE.0, OBTUSE.1));
+        let id = apply(&mut s, plan.kind, "120").unwrap();
+        let bits = |s: &AppState| -> Vec<u64> {
+            s.session_sketch()
+                .unwrap()
+                .variables()
+                .iter()
+                .map(|x| x.to_bits())
+                .collect()
+        };
+        let before = bits(&s);
+        for driven in [true, false, true, false] {
+            let (se, sf) = s.session_draft_mut().unwrap();
+            se.set_driven(&mut sf.sketch, id, driven).unwrap();
+            assert_eq!(bits(&s), before, "driven = {driven}");
+        }
+        let sk = s.session_sketch().unwrap();
+        assert!(sk.constraint(id).unwrap().supplement());
+        assert!((sk.measure_constraint(id).unwrap() - 120f64.to_radians()).abs() < 1e-9);
+    });
+}
+
+/// Ein Winkelmaß aus der Knopfleiste (ohne Zeiger) legt keinen Gegenwinkel an; die Vorgabe des
+/// Zahlenfelds ist derselbe Wert wie das angelegte Maß (hier 120°).
+#[test]
+fn measure_action_shows_120() {
+    use planora_app::sketch_state::{ConstraintAction, Item};
+    with_lang(&german(), || {
+        let mut s = sketch_with(&[], |sk| {
+            let (a, b) = (
+                sk.add_point(0.0, 0.0).unwrap(),
+                sk.add_point(10.0, 0.0).unwrap(),
+            );
+            sk.add_line(a, b).unwrap();
+            let (c, d) = (
+                sk.add_point(0.0, 0.0).unwrap(),
+                sk.add_point(-5.0, 5.0 * 3f64.sqrt()).unwrap(),
+            );
+            sk.add_line(c, d).unwrap();
+        });
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        let curves: Vec<_> = sk.curves().map(|(c, _)| c).collect();
+        se.selection = curves.iter().map(|&c| Item::Curve(c)).collect();
+        let shown = se.measure_action(sk, ConstraintAction::Angle).unwrap();
+        assert!((shown - 120f64.to_radians()).abs() < 1e-9, "{shown}");
+        let id = se.apply(sk, ConstraintAction::Angle, None).unwrap();
+        let m = sk.measure_constraint(id).unwrap();
+        assert_eq!(m.to_bits(), shown.to_bits());
+    });
+}
+
+/// 3D-Skizze, zwei geneigte Linien (nicht in der x/y-Ebene): Die Zeigerregel liest die
+/// Projektion auf x/y. Das Feld zwischen den Strahlen +d1 und +d2 ist der Winkel (auch wenn er
+/// im Raum stumpf ist, die Projektion aber spitz aussieht), das Nachbarfeld der Gegenwinkel.
+#[test]
+fn supplement_pointer_in_3d_with_slanted_lines() {
+    with_lang(&german(), || {
+        let mut s = AppState::new();
+        let i = s
+            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
+        s.open_sketch(i).unwrap();
+        let (l1, l2);
+        {
+            let (se, sk) = s.session_sketch_mut().unwrap();
+            se.set_three_d(sk, true);
+            // d1 = (1, 0, 2), d2 = (0.5, √3/2, -2): im Raum stumpf (cos < 0), projiziert 60°.
+            let o = DVec3::new(0.0, 0.0, 0.0);
+            let (a, b) = (
+                sk.add_point3(o).unwrap(),
+                sk.add_point3(DVec3::new(10.0, 0.0, 20.0)).unwrap(),
+            );
+            l1 = sk.add_line(a, b).unwrap();
+            let (c, d) = (
+                sk.add_point3(o).unwrap(),
+                sk.add_point3(DVec3::new(5.0, 5.0 * 3f64.sqrt(), -20.0))
+                    .unwrap(),
+            );
+            l2 = sk.add_line(c, d).unwrap();
+            se.set_tool(sk, Tool::Dimension);
+        }
+        s.observe_sketch(false);
+        let theta = s
+            .session_sketch()
+            .unwrap()
+            .measure_angle(l1, l2, false)
+            .unwrap();
+        assert!(theta.to_degrees() > 90.0, "im Raum stumpf: {theta}");
+        let mut plan_at = |p: DVec2| {
+            let (se, sk) = s.session_sketch_mut().unwrap();
+            se.dim = Default::default();
+            se.dim.picks = vec![
+                DimPick::Curve(l1, DVec2::ZERO),
+                DimPick::Curve(l2, DVec2::ZERO),
+            ];
+            se.click_dimension(sk, p, PICK);
+            se.dim.plan.clone().expect("gesetztes Maß")
+        };
+        // Zeiger zwischen den projizierten Strahlen +d1 und +d2: der Winkel.
+        let inner = plan_at(v(10.0, 8.0));
+        assert!(!inner.supplement, "{inner:?}");
+        assert!(matches!(inner.kind, K::Angle(_, _, w) if (w - theta).abs() < 1e-9));
+        // Zeiger im Nachbarfeld (-d1, +d2): der Gegenwinkel.
+        let outer = plan_at(v(OBTUSE.0, OBTUSE.1));
+        assert!(outer.supplement, "{outer:?}");
+        assert!(matches!(outer.kind, K::Angle(_, _, w)
+            if (w - (std::f64::consts::PI - theta)).abs() < 1e-9));
+        // Das gesetzte Maß legt den Gegenwinkel an.
+        let id = apply(&mut s, outer.kind, "50").unwrap();
+        let sk = s.session_sketch().unwrap();
+        assert!(sk.constraint(id).unwrap().supplement());
+        assert!((sk.measure_constraint(id).unwrap() - 50f64.to_radians()).abs() < 1e-6);
+    });
+}
+
+/// Anzeige und Zahlenfeld eines Gegenwinkelmaßes: gespeichert 120°, anzeigend der gemessene
+/// Gegenwinkel (nicht θ).
+#[test]
+fn supplement_dimension_edit_shows_120() {
+    with_lang(&german(), || {
+        let mut l2 = None;
+        let mut s = sketch_with(&[], |sk| {
+            l2 = Some(lines_0_and_60(sk).1);
+        });
+        let plan = plan_angle(&mut s, v(OBTUSE.0, OBTUSE.1));
+        let id = apply(&mut s, plan.kind, "120").unwrap();
+        let shown = |s: &AppState| {
+            let sk = s.session_sketch().unwrap();
+            let c = sk.constraint(id).unwrap();
+            sketch_view::shown_value(sk, &c.kind, c.driven, c.supplement())
+        };
+        let v120 = 120f64.to_radians();
+        assert!((shown(&s).unwrap() - v120).abs() < 1e-9);
+        // Anzeigend: Die Linie wird auf 40° gedreht, das Maß zeigt 140°, nicht 40°.
+        {
+            let (se, sf) = s.session_draft_mut().unwrap();
+            se.set_driven(&mut sf.sketch, id, true).unwrap();
+            let CurveKind::Line { b: p, .. } = sf.sketch.curve(l2.unwrap()).unwrap().kind else {
+                panic!("Linie");
+            };
+            let t = 40f64.to_radians();
+            sf.sketch
+                .set_point_xy(p, 10.0 * t.cos(), 10.0 * t.sin())
+                .unwrap();
+        }
+        let shown_driven = shown(&s).unwrap();
+        assert!(
+            (shown_driven - 140f64.to_radians()).abs() < 1e-9,
+            "{}°",
+            shown_driven.to_degrees()
+        );
+    });
 }
