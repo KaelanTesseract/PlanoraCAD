@@ -306,16 +306,35 @@ fn end_tangent_3d_elliptic_arc_and_line() {
     let r = s.solve();
     assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
     // Tangente der Ellipse (in der Ebene z = −5) am Punkt: senkrecht zum Gradienten.
-    let CurveKind::EllipticArc { ax, ay, minor, .. } = s.curve(e).unwrap().kind else {
+    let CurveKind::EllipticArc {
+        ax, ay, az, minor, ..
+    } = s.curve(e).unwrap().kind
+    else {
         panic!("kein Ellipsenbogen")
     };
     let v = s.variables();
-    let a = DVec3::new(v[ax], v[ay], 0.0);
+    // Die Hauptachse mit ihrem z-Anteil (3D-Ellipsenbogen): Sie bleibt in der Ebene z = −5.
+    let az = v[az.expect("3D-Ellipsenbogen hat eine z-Achse")];
+    assert!(
+        az.abs() <= 1e-9,
+        "Hauptachse kippt aus der Ebene: z = {az:e}"
+    );
+    let a = DVec3::new(v[ax], v[ay], az);
     let (u, w) = (a.normalize(), DVec3::Z.cross(a.normalize()));
+    // Mitte und Ende bleiben in der Ebene z = −5.
+    for p in [c, st, en] {
+        let z = at3(&s, p).z;
+        assert!((z + 5.0).abs() <= 1e-9, "Punkt {p:?} bei z = {z}");
+    }
     let d = at3(&s, en) - at3(&s, c);
     let (x, y) = (d.dot(u), d.dot(w));
     let tangent = u * (-y / (v[minor] * v[minor])) + w * (x / a.length_squared());
     let along = at3(&s, far) - at3(&s, en);
+    // Die Linie läuft in der Ebene der Ellipse weiter: auch in z tangential.
+    assert!(
+        along.z.abs() <= 1e-9 * along.length(),
+        "Linie verlässt die Ebene: {along}"
+    );
     assert!(sin3(tangent, along) <= 1e-9, "{tangent} / {along}");
 }
 
