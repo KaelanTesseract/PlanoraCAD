@@ -99,6 +99,11 @@ pub enum ConstraintKind {
     /// Glatter Übergang: Kurve, ihr Ende, Kurve, ihr Ende. Mindestens eine Kurve ist ein Spline,
     /// die andere Linie, Bogen oder Spline (ab Format 15).
     Smooth(CurveId, PointId, CurveId, PointId),
+    /// Tangente am Ende (Skizzen 11a): Kurve, ihr Ende, Kurve, ihr Ende. Die Richtungen am
+    /// gemeinsamen Punkt sind gleich oder entgegengesetzt; es gibt keine Krümmungszeile. In 2D
+    /// eine Zeile `cross(t₁, t₂) / (|t₁|·|t₂|)` mit `t` in die Kurve hinein, in 3D zwei Zeilen wie
+    /// bei `Parallel` (ab Format 21).
+    EndTangent(CurveId, PointId, CurveId, PointId),
     /// Waagerechter Abstand `|b − a|ₓ` zweier Punkte; die Seite steht in `branch` (ab Format 15).
     DistanceX(PointId, PointId, f64),
     /// Senkrechter Abstand `|b − a|ᵧ` zweier Punkte; die Seite steht in `branch` (ab Format 15).
@@ -174,6 +179,12 @@ impl ConstraintKind {
         )
     }
 
+    /// Braucht ein Eintrag dieser Art Dateiformat 21? Gilt für „Tangente am Ende“. Ein `Smooth`
+    /// mit Ellipsenbogen weiß die Art allein nicht; das prüft `Sketch::needs_format_21`.
+    pub fn needs_format_21(&self) -> bool {
+        matches!(self, ConstraintKind::EndTangent(..))
+    }
+
     /// Lässt sich die Art an 3D-Geometrie setzen (Skizzen 10)? Die Liste von Fusion:
     /// Deckungsgleich (auch Konzentrisch), Punkt auf Kurve, Waagerecht/Senkrecht/`AlongZ`,
     /// Parallel, Rechtwinklig, Kollinear, Tangential, Gleich, Fixieren, Mittelpunkt, dazu die Maße
@@ -192,6 +203,7 @@ impl ConstraintKind {
                 | Perpendicular(..)
                 | Collinear(..)
                 | Tangent(..)
+                | EndTangent(..)
                 | Equal(..)
                 | Fixed(..)
                 | Fixed3(..)
@@ -303,7 +315,8 @@ impl ConstraintKind {
             | DistanceX(a, b, _)
             | DistanceY(a, b, _)
             | SlotOverall(a, b, ..)
-            | Smooth(_, a, _, b) => ([*a, *b], 2),
+            | Smooth(_, a, _, b)
+            | EndTangent(_, a, _, b) => ([*a, *b], 2),
             Horizontal(LineOrPoints::Points(a, b))
             | Vertical(LineOrPoints::Points(a, b))
             | AlongZ(LineOrPoints::Points(a, b)) => ([*a, *b], 2),
@@ -354,7 +367,8 @@ impl ConstraintKind {
             | Equal(a, b)
             | Angle(a, b, _)
             | Collinear(a, b)
-            | Smooth(a, _, b, _) => ([*a, *b], 2),
+            | Smooth(a, _, b, _)
+            | EndTangent(a, _, b, _) => ([*a, *b], 2),
             _ => ([z, z], 0),
         }
     }
@@ -714,6 +728,16 @@ pub(crate) fn curve_ends(kind: &CurveKind) -> Option<[PointId; 2]> {
     }
 }
 
+/// Wie [`curve_ends`], dazu der Ellipsenbogen: die Kurven mit zwei Enden für Glatt und „Tangente am
+/// Ende“. `curve_ends` bleibt ohne ihn, denn Tangent, Stutzen und Brechen lösen den Ellipsenbogen
+/// anders.
+pub(crate) fn open_curve_ends(kind: &CurveKind) -> Option<[PointId; 2]> {
+    match kind {
+        CurveKind::EllipticArc { start, end, .. } => Some([*start, *end]),
+        k => curve_ends(k),
+    }
+}
+
 /// Der Punkt der Linie `l2`, der kein Punkt der Linie `l1` ist (für Kollinear); `None`, wenn
 /// beide Punkte geteilt sind oder eine der Kurven keine Linie ist.
 pub(crate) fn collinear_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> Option<PointId> {
@@ -738,7 +762,7 @@ pub(crate) fn lines_share_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> bool {
 /// Richtung aus dem Ende `p` in die Linie, den Bogen oder den Spline `c` hinein; `None`, wenn `p`
 /// (nicht mehr) ein Ende von `c` ist, etwa nach Stutzen, Brechen oder Rundung.
 fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> Option<V2> {
-    let [first, last] = curve_ends(&ctx.sk.curves[c].kind)?;
+    let [first, last] = open_curve_ends(&ctx.sk.curves[c].kind)?;
     if p != first && p != last {
         return None;
     }
@@ -795,8 +819,29 @@ fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> Option<V2> {
                 (-&d.0, -&d.1)
             }
         }
+        // Gegen den Uhrzeigersinn vom Start zum Ende; der Parameter folgt dem Punkt.
+        CurveKind::EllipticArc { .. } => {
+            let t = ellipse_param_dual(ctx, c, &ctx.pt(p));
+            let d = param_curve(ctx, c, &t).1;
+            if p == first { d } else { (-&d.0, -&d.1) }
+        }
         _ => return None,
     })
+}
+
+/// Parameter `t` des Punktes `p` auf der (geprüften) Ellipse oder dem Ellipsenbogen `c`: Winkel
+/// seiner Achskoordinaten `(cos t, sin t)`, mit Ableitung nach Punkt und Achsen.
+fn ellipse_param_dual(ctx: &Ctx, c: CurveId, p: &V2) -> Dual {
+    let (m, a, len, minor) = ellipse_of(ctx, c);
+    let minor = if minor.v < MIN_LEN {
+        Dual::constant(MIN_LEN)
+    } else {
+        minor
+    };
+    let v = sub2(p, &m);
+    let x = dot(&v, &a) / &len / &len;
+    let y = cross(&a, &v) / &len / &minor;
+    y.atan2(&x)
 }
 
 fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
@@ -1088,6 +1133,14 @@ fn eval_kind_2d(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             }
             rows
         }
+        // Nur die Richtung, gleich oder gegenläufig (Sinus des Winkels); keine Krümmungszeile. Ohne
+        // gültige Enden keine Zeile (`settle_constraints` lässt die Abhängigkeit dann entfallen).
+        EndTangent(c1, p1, c2, p2) => {
+            let (Some(u), Some(v)) = (into_curve(ctx, *c1, *p1), into_curve(ctx, *c2, *p2)) else {
+                return Vec::new();
+            };
+            vec![cross(&u, &v) / (norm_len(&u) * norm_len(&v))]
+        }
         DistanceX(a, b, v) | DistanceY(a, b, v) => {
             let d = sub2(&ctx.pt(*b), &ctx.pt(*a));
             let along = if matches!(data.kind, DistanceX(..)) {
@@ -1195,7 +1248,7 @@ fn clamped_start_derivatives(degree: usize, knots: &[f64], pts: &[V2]) -> (V2, V
 /// von `p` in die Kurve hinein: positiv bei Linksdrehung. `None`, wenn `p` kein Ende von `c` ist oder
 /// die Kurve keine Enden hat.
 pub(crate) fn end_curvature_dual(ctx: &Ctx, c: CurveId, p: PointId) -> Option<Dual> {
-    let [first, last] = curve_ends(&ctx.sk.curves[c].kind)?;
+    let [first, last] = open_curve_ends(&ctx.sk.curves[c].kind)?;
     if p != first && p != last {
         return None;
     }
@@ -1267,10 +1320,16 @@ pub(crate) fn end_curvature_dual(ctx: &Ctx, c: CurveId, p: PointId) -> Option<Du
                 0.0
             }))
         }
-        // Diese Arten haben keine Enden; `curve_ends` oben hat sie schon abgewiesen.
-        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
-            return None;
+        // Aus der zweiten Ableitung nach dem Winkel: `P'' = m − P`.
+        CurveKind::EllipticArc { .. } => {
+            let at = ctx.pt(p);
+            let t = ellipse_param_dual(ctx, c, &at);
+            let d1 = param_curve(ctx, c, &t).1;
+            let d2 = sub2(&ellipse_of(ctx, c).0, &at);
+            along(kappa_of(&d1, &d2))
         }
+        // Diese Arten haben keine Enden; `open_curve_ends` oben hat sie schon abgewiesen.
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => return None,
     })
 }
 
@@ -1289,6 +1348,8 @@ pub(crate) enum SmoothEnd {
     /// Griff `Arc`.
     ArcHandle,
     Arc,
+    /// Ellipsenbogen: eigene Krümmung wie beim Bogen.
+    EllipticArc,
     /// Die Kontrollpunkte passen sich an, auch auf Krümmung 0.
     ControlSpline,
     Conic,
@@ -1299,12 +1360,13 @@ pub(crate) enum SmoothEnd {
 /// Die Art der Seite `c` am Ende `p`; `None` ohne Enden oder wenn `p` keines ist.
 pub(crate) fn smooth_end(sk: &Sketch, c: CurveId, p: PointId) -> Option<SmoothEnd> {
     let kind = &sk.curves[c].kind;
-    if !curve_ends(kind)?.contains(&p) {
+    if !open_curve_ends(kind)?.contains(&p) {
         return None;
     }
     Some(match kind {
         CurveKind::Line { .. } => SmoothEnd::Line,
         CurveKind::Arc { .. } => SmoothEnd::Arc,
+        CurveKind::EllipticArc { .. } => SmoothEnd::EllipticArc,
         CurveKind::ControlSpline { .. } => SmoothEnd::ControlSpline,
         CurveKind::Conic { .. } => SmoothEnd::Conic,
         CurveKind::FixedSpline { .. } => SmoothEnd::FixedSpline,
@@ -1316,9 +1378,7 @@ pub(crate) fn smooth_end(sk: &Sketch, c: CurveId, p: PointId) -> Option<SmoothEn
                 HandleCurvature::Arc { .. } => SmoothEnd::ArcHandle,
             },
         },
-        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
-            return None;
-        }
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => return None,
     })
 }
 
@@ -1337,6 +1397,7 @@ fn smooth_row_kappa(ctx: &Ctx, c: CurveId, p: PointId, end: SmoothEnd) -> Option
         SmoothEnd::Line | SmoothEnd::Straight => Some(Dual::constant(0.0)),
         SmoothEnd::ArcHandle
         | SmoothEnd::Arc
+        | SmoothEnd::EllipticArc
         | SmoothEnd::ControlSpline
         | SmoothEnd::Conic
         | SmoothEnd::FixedSpline => end_curvature_dual(ctx, c, p),
@@ -1364,17 +1425,17 @@ pub(crate) fn smooth_step(me: SmoothEnd, other: SmoothEnd) -> SmoothStep {
     match (me, other) {
         // Nur ein Spline durch Stützpunkte hat Griffe. Der Kontrollpunkt-Spline passt sich über die
         // Krümmungszeile an, der feste Spline nie.
-        (Line | Arc | ControlSpline | Conic | FixedSpline, _) => Keep,
-        (Natural, Arc | ArcHandle | ControlSpline | Conic | FixedSpline) => Follow,
+        (Line | Arc | EllipticArc | ControlSpline | Conic | FixedSpline, _) => Keep,
+        (Natural, Arc | EllipticArc | ArcHandle | ControlSpline | Conic | FixedSpline) => Follow,
         (Natural, Line | Natural | Straight | Form) => Keep,
         // Gegen einen Bogen oder Kegelschnitt ginge Krümmung 0 nie; ein Kontrollpunkt-Spline kann sie.
-        (Straight, Arc | ArcHandle | Conic | FixedSpline) => Follow,
+        (Straight, Arc | EllipticArc | ArcHandle | Conic | FixedSpline) => Follow,
         (Straight, Line | Natural | Straight | Form | ControlSpline) => Keep,
-        (Form, Arc | ArcHandle | ControlSpline | Conic | FixedSpline) => Follow,
+        (Form, Arc | EllipticArc | ArcHandle | ControlSpline | Conic | FixedSpline) => Follow,
         (Form, Line | Natural | Straight) => Straighten,
         (Form, Form) | (ArcHandle, ArcHandle) => Mean,
         (ArcHandle, Line) => Straighten,
-        (ArcHandle, Arc | ControlSpline | Conic | FixedSpline) => Follow,
+        (ArcHandle, Arc | EllipticArc | ControlSpline | Conic | FixedSpline) => Follow,
         (ArcHandle, Natural | Straight | Form) => Keep,
     }
 }
@@ -1394,18 +1455,17 @@ fn smooth_leader(k: &CurveKind) -> bool {
     }
 }
 
-/// Kann diese Art überhaupt an einem Glatt teilhaben (C5)? Ellipsenbogen bleibt abgelehnt.
+/// Kann diese Art überhaupt an einem Glatt teilhaben (C5)? Seit Skizzen 11a auch der Ellipsenbogen.
 fn smooth_partner_kind(k: &CurveKind) -> bool {
     match k {
         CurveKind::Line { .. }
         | CurveKind::Arc { .. }
+        | CurveKind::EllipticArc { .. }
         | CurveKind::Spline { .. }
         | CurveKind::ControlSpline { .. }
         | CurveKind::Conic { .. }
         | CurveKind::FixedSpline { .. } => true,
-        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
-            false
-        }
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => false,
     }
 }
 
@@ -1671,6 +1731,15 @@ impl Sketch {
         self.check_types(kind)?;
         // Nicht in `check_types`: Ein gelöschtes Glatt behält nach Stutzen oder Rundung einen
         // Punkt, der kein Ende mehr ist, und die Datei muss trotzdem laden.
+        if matches!(kind, ConstraintKind::EndTangent(..)) {
+            // Nur die Enden; ob die Punkte verbunden sind, prüft erst das Anlegen (ein gelöschtes
+            // Deckungsgleich darf eine geladene Tangente nicht verhindern).
+            return if self.smooth_ends_hold(kind) {
+                Ok(())
+            } else {
+                Err(SketchError::InvalidInput(tr!("sketch-end-tangent-ends")))
+            };
+        }
         if self.smooth_ends_hold(kind) {
             Ok(())
         } else {
@@ -1767,7 +1836,9 @@ impl Sketch {
             Collinear(a, b) if a == b || collinear_point(self, *a, *b).is_none() => {
                 degenerate(tr!("sketch-err-two-objects"))
             }
-            Smooth(a, _, b, _) if a == b => degenerate(tr!("sketch-err-two-objects")),
+            Smooth(a, _, b, _) | EndTangent(a, _, b, _) if a == b => {
+                degenerate(tr!("sketch-err-two-objects"))
+            }
             Smooth(a, _, b, _) => {
                 if self.smooth_fixed_against_line(*a, *b) {
                     wrong(tr!("sketch-smooth-fixed-line"))
@@ -2185,7 +2256,7 @@ impl Sketch {
         let angular_row = |row: usize| match kind {
             _ if is_3d => crate::constraint3d::angular_row(self, kind, row),
             Parallel(..) | Perpendicular(..) | Angle(..) | EllipseAngle(..) => true,
-            Collinear(..) | Smooth(..) => row == 0,
+            Collinear(..) | Smooth(..) | EndTangent(..) => row == 0,
             SplineCurvatureHandle(..) => true,
             Tangent(a, b) => row == 1 && line_and_param(self, *a, *b).is_some(),
             _ => false,
@@ -2309,6 +2380,9 @@ impl Sketch {
             k => k,
         };
         self.check_refs(&kind)?;
+        if !self.end_tangent_fits(&kind) {
+            return Err(SketchError::InvalidInput(tr!("sketch-end-tangent-ends")));
+        }
         self.check_centerline(&kind)?;
         self.refuse_text_glyphs(&kind)?;
         let lift = self.check_3d(&kind)?;
@@ -2615,13 +2689,28 @@ impl Sketch {
     /// (`settle_constraints`), sonst bliebe ein lebendes Glatt ohne Zeile, das `add_constraint`
     /// ablehnen würde.
     pub(crate) fn smooth_ends_hold(&self, kind: &ConstraintKind) -> bool {
-        let ConstraintKind::Smooth(a, pa, b, pb) = *kind else {
+        let (ConstraintKind::Smooth(a, pa, b, pb) | ConstraintKind::EndTangent(a, pa, b, pb)) =
+            *kind
+        else {
             return true;
         };
         let is_end = |c: CurveId, p: PointId| {
-            curve_ends(&self.curves[c].kind).is_some_and(|e| e.contains(&p))
+            open_curve_ends(&self.curves[c].kind).is_some_and(|e| e.contains(&p))
         };
         is_end(a, pa) && is_end(b, pb)
+    }
+
+    /// Die Prüfung von „Tangente am Ende“ beim Anlegen: beide Punkte sind Enden ihrer Kurve, keine
+    /// der Kurven ist geschlossen (beide Enden derselbe Punkt), und beide Punkte sind derselbe
+    /// Punkt oder per Deckungsgleich verbunden. `true` für alle anderen Arten.
+    fn end_tangent_fits(&self, kind: &ConstraintKind) -> bool {
+        let ConstraintKind::EndTangent(a, pa, b, pb) = *kind else {
+            return true;
+        };
+        let open = |c: CurveId| {
+            open_curve_ends(&self.curves[c].kind).is_some_and(|[first, last]| first != last)
+        };
+        self.smooth_ends_hold(kind) && open(a) && open(b) && self.coincident_chain(pa, pb)
     }
 
     /// Die Enden, an denen Glatt die Kurven `a` und `b` verbindet. Hängen sie schon an Enden
@@ -2645,8 +2734,8 @@ impl Sketch {
             return None;
         }
         let (ea, eb) = (
-            curve_ends(&self.curve(a)?.kind)?,
-            curve_ends(&self.curve(b)?.kind)?,
+            open_curve_ends(&self.curve(a)?.kind)?,
+            open_curve_ends(&self.curve(b)?.kind)?,
         );
         let dist = |p: PointId, q: DVec2| self.pos(p).distance(q);
         // Mit Klick bleibt nur das Ende nächst dem Klick.

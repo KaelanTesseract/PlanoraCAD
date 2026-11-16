@@ -1184,6 +1184,14 @@ pub enum ConstraintKindDto {
         z: f64,
         klein: f64,
     },
+    /// Ab Format 21: Tangente am Ende, Kurve und ihr Ende, Kurve und ihr Ende; die Richtungen am
+    /// gemeinsamen Punkt sind gleich oder entgegengesetzt.
+    TangenteEnde {
+        a: usize,
+        punkt_a: usize,
+        b: usize,
+        punkt_b: usize,
+    },
 }
 
 /// Feld eines Musterwerts.

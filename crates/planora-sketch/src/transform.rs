@@ -269,6 +269,7 @@ fn map_ids(
         EllipseAxes3(x, ax, ay, az, m) => EllipseAxes3(c(*x), *ax, *ay, *az, *m),
         Collinear(a, b) => Collinear(c(*a), c(*b)),
         Smooth(a, pa, b, pb) => Smooth(c(*a), p(*pa), c(*b), p(*pb)),
+        EndTangent(a, pa, b, pb) => EndTangent(c(*a), p(*pa), c(*b), p(*pb)),
         DistanceX(a, b, v) => DistanceX(p(*a), p(*b), *v),
         DistanceY(a, b, v) => DistanceY(p(*a), p(*b), *v),
         CenterlineDiameter(a, x, v) => CenterlineDiameter(p(*a), c(*x), *v),

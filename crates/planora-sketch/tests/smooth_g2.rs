@@ -905,8 +905,10 @@ fn a_radius_on_the_bow_moves_the_partner_too() {
 
 // ---- Partner -----------------------------------------------------------------------------------
 
+/// Seit Skizzen 11a geht auch der Ellipsenbogen als Partner eines Splines (Task 4); ohne Spline auf
+/// einer Seite geht es nach wie vor nicht.
 #[test]
-fn elliptic_arc_refused() {
+fn elliptic_arc_is_a_partner_of_splines() {
     let mut s = sketch();
     let p = points(&mut s, &[(0.0, 0.0), (6.0, 0.0), (0.0, 3.0)]);
     let e = s
@@ -914,11 +916,10 @@ fn elliptic_arc_refused() {
         .unwrap();
     let q = points(&mut s, &[(-3.0, 5.0), (-7.0, 6.0)]);
     let sp = s.add_spline(&[p[2], q[0], q[1]]).unwrap();
-    let before = s.to_data();
-    assert!(s.prepare_smooth(e, p[2], sp, p[2]).is_err());
-    assert!(s.add_constraint(K::Smooth(e, p[2], sp, p[2])).is_err());
-    assert_eq!(s.to_data(), before, "nichts angelegt");
-    assert!(!s.smooth_kinds_fit(e, sp));
+    assert!(s.smooth_kinds_fit(e, sp));
+    assert!(s.smooth_kinds_fit(sp, e));
+    assert!(s.prepare_smooth(e, p[2], sp, p[2]).is_ok());
+    assert!(s.add_constraint(K::Smooth(e, p[2], sp, p[2])).is_ok());
 }
 
 #[test]
@@ -1013,4 +1014,50 @@ fn g2_holds_while_dragging_and_through_big_radii() {
         assert_eq!(report.status, SolveStatus::Solved, "r = {r}: {report:?}");
         assert_g2(&s, arc, en, sp, en, &format!("r = {r}"));
     }
+}
+
+// ---- Ellipsenbogen (Skizzen 11a, Task 4) --------------------------------------------------------
+
+/// Ellipsenbogen um den Ursprung (a = 8, b = 4) von (8, 0) nach (0, 4), mit festen Maßen, damit
+/// sich der Spline anpasst und nicht der Bogen.
+fn fixed_elliptic_quarter(s: &mut Sketch) -> (CurveId, PointId) {
+    let p = points(s, &[(0.0, 0.0), (8.0, 0.0), (0.0, 4.0)]);
+    let e = s
+        .add_elliptic_arc(p[0], DVec2::new(8.0, 0.0), 4.0, p[1], p[2])
+        .unwrap();
+    s.add_constraint(K::Fixed(p[0], 0.0, 0.0)).unwrap();
+    s.add_constraint(K::EllipseMajor(e, 8.0)).unwrap();
+    s.add_constraint(K::EllipseMinor(e, 4.0)).unwrap();
+    s.add_constraint(K::EllipseAngle(e, 0.0)).unwrap();
+    (e, p[2])
+}
+
+#[test]
+fn smooth_on_elliptic_arc_matches_curvature() {
+    let mut s = sketch();
+    let (e, en) = fixed_elliptic_quarter(&mut s);
+    let sp = control(&mut s, en, &CONTROL, 5);
+    let id = smooth(&mut s, e, en, sp, en);
+    assert_eq!(rows(&s, id), 2, "Winkel und Krümmung");
+    solved(&mut s, "Ellipsenbogen");
+    assert_g2(&s, e, en, sp, en, "Ellipsenbogen");
+    // Das Ende gleitet auf der Ellipse; dort gilt κ = a·b / (a² sin²t + b² cos²t)^{3/2} mit dem
+    // Winkel t des Punkts (a = 8, b = 4, große Halbachse auf x).
+    let at = pos(&s, en);
+    let t = (at.y / 4.0).atan2(at.x / 8.0);
+    let exact = 32.0 / (64.0 * t.sin().powi(2) + 16.0 * t.cos().powi(2)).powf(1.5);
+    assert!((kappa_into(&s, e, en).abs() - exact).abs() < 1e-6);
+}
+
+#[test]
+fn smooth_elliptic_arc_needs_spline_leader() {
+    let mut s = sketch();
+    let (e, en) = fixed_elliptic_quarter(&mut s);
+    let q = points(&mut s, &[(-4.0, 6.0)]);
+    let line = s.add_line(en, q[0]).unwrap();
+    let before = s.to_data();
+    assert!(s.prepare_smooth(e, en, line, en).is_err());
+    assert!(s.add_constraint(K::Smooth(e, en, line, en)).is_err());
+    assert_eq!(s.to_data(), before, "nichts angelegt");
+    assert!(!s.smooth_kinds_fit(e, line));
 }

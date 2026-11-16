@@ -466,6 +466,7 @@ pub fn kind_msg(kind: &ConstraintKind) -> crate::msg::Msg {
         K::EllipseAngle(..) => crate::msg!("sketch-constraint-ellipse-angle"),
         K::Collinear(..) => crate::msg!("sketch-constraint-collinear"),
         K::Smooth(..) => crate::msg!("sketch-constraint-smooth"),
+        K::EndTangent(..) => crate::msg!("sketch-constraint-end-tangent"),
         K::DistanceX(..) => crate::msg!("sketch-constraint-distance-x"),
         K::DistanceY(..) => crate::msg!("sketch-constraint-distance-y"),
         K::CenterlineDiameter(..) => crate::msg!("sketch-constraint-centerline-diameter"),
@@ -765,7 +766,7 @@ pub fn constraint_anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec3> {
             vec![curve_anchor3(sk, *a), curve_anchor3(sk, *b)]
         }
         // Am gemeinsamen (oder zusammengelegten) Ende ein Zeichen, nicht zwei übereinander.
-        K::Smooth(_, a, _, b) => {
+        K::Smooth(_, a, _, b) | K::EndTangent(_, a, _, b) => {
             let (pa, pb) = (pos3(sk, *a), pos3(sk, *b));
             match pa.zip(pb) {
                 Some((x, y)) if x.distance(y) <= sk.tolerance().linear => vec![pa],

@@ -674,6 +674,12 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
             b: c(b),
             punkt_b: p(pb),
         },
+        K::EndTangent(a, pa, b, pb) => D::TangenteEnde {
+            a: c(a),
+            punkt_a: p(pa),
+            b: c(b),
+            punkt_b: p(pb),
+        },
         K::DistanceX(a, b, v) => D::AbstandWaagerecht {
             a: p(a),
             b: p(b),
@@ -761,6 +767,12 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
             b,
             punkt_b,
         } => K::Smooth(c(*a), p(*punkt_a), c(*b), p(*punkt_b)),
+        D::TangenteEnde {
+            a,
+            punkt_a,
+            b,
+            punkt_b,
+        } => K::EndTangent(c(*a), p(*punkt_a), c(*b), p(*punkt_b)),
         D::AbstandWaagerecht { a, b, wert } => K::DistanceX(p(*a), p(*b), *wert),
         D::AbstandSenkrecht { a, b, wert } => K::DistanceY(p(*a), p(*b), *wert),
         D::DurchmesserZurAchse { punkt, kurve, wert } => {
