@@ -1411,7 +1411,7 @@ impl AppState {
         kind: FeatureKind,
         formulas: Formulas,
     ) -> Result<FeatureId, String> {
-        crate::history_bar::refuse_if_locked(self, &kind.dependencies())?;
+        crate::history_bar::refuse_if_locked(self, &kind.all_dependencies())?;
         let label = base_name.map_or_else(|| kind.label(), str::to_string);
         let name = self.next_name(&label);
         match self
@@ -1676,7 +1676,7 @@ impl AppState {
         kind: FeatureKind,
         formulas: Formulas,
     ) -> Result<FeatureId, String> {
-        crate::history_bar::refuse_if_locked(self, &kind.dependencies())?;
+        crate::history_bar::refuse_if_locked(self, &kind.all_dependencies())?;
         let id = match self
             .document
             .add_feature_with_formulas(name, kind, formulas)
@@ -1799,9 +1799,12 @@ impl AppState {
         };
         // Auch Features hinter dem Marker zählen: Sie wanderten sonst beim Vorrücken des Markers
         // mit dem erweiterten Verschieben mit.
-        self.document.features()[start + 1..]
-            .iter()
-            .any(|f| f.kind.dependencies().iter().any(|d| origins.contains(d)))
+        self.document.features()[start + 1..].iter().any(|f| {
+            f.kind
+                .all_dependencies()
+                .iter()
+                .any(|d| origins.contains(d))
+        })
     }
 
     /// Erhöht die Verschiebung des Features `id` um `delta`. Ist das Verschieben danach nicht

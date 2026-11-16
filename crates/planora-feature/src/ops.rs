@@ -205,6 +205,9 @@ impl Document {
 
     /// Alle Features, die direkt oder über andere abhängige Features auf `id` verweisen, in
     /// der Reihenfolge der Zeitleiste. Da Verweise nur nach vorn zeigen, reicht ein Durchlauf.
+    /// Nur harte Bezüge ([`FeatureKind::dependencies`]); schwache Bezüge zählen nicht: Eine
+    /// Skizze, die nur Kanten oder Flächen von `id` projiziert, bleibt beim Löschen stehen, ihr
+    /// Bezug ist danach verloren (Warnung, Skizzen 11a A5).
     pub fn dependents(&self, id: FeatureId) -> Vec<FeatureId> {
         let mut found: Vec<FeatureId> = Vec::new();
         for f in &self.features {
@@ -264,7 +267,9 @@ impl Document {
         Ok(removed)
     }
 
-    /// Prüft, ob alle Verweise von `kind` auf vorhandene Features vor `idx` zeigen.
+    /// Prüft, ob alle harten Verweise von `kind` auf vorhandene Features vor `idx` zeigen.
+    /// Schwache Bezüge ([`FeatureKind::weak_dependencies`]) dürfen fehlen oder dahinter stehen;
+    /// dann ist der Bezug verloren (Warnung), kein Fehler.
     pub(crate) fn check_references(
         &self,
         kind: &FeatureKind,

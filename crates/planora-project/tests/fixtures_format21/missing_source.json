@@ -1,0 +1,137 @@
+{
+  "format": 1,
+  "marker": 1,
+  "naechste_id": 3,
+  "features": [
+    {
+      "id": 2,
+      "name": "Skizze1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "skizze",
+        "skizze": {
+          "name": "Skizze1",
+          "ebene": {
+            "ursprung": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              1.0,
+              0.0
+            ],
+            "z": [
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "linear": 1e-6,
+          "winkel": 1e-9,
+          "werte": [
+            0.0,
+            0.0,
+            10.0,
+            0.0
+          ],
+          "punkte": [
+            {
+              "x": 0,
+              "y": 1,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 2,
+              "y": 3,
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "kurven": [
+            {
+              "art": {
+                "typ": "linie",
+                "a": 0,
+                "b": 1
+              },
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "abhaengigkeiten": [
+            {
+              "art": {
+                "typ": "fest",
+                "punkt": 0,
+                "x": 0.0,
+                "y": 0.0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "fest",
+                "punkt": 1,
+                "x": 10.0,
+                "y": 0.0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            }
+          ]
+        },
+        "lage": {
+          "typ": "standard",
+          "ebene": "xy"
+        },
+        "kopien": [
+          {
+            "kurve": 0,
+            "kante": {
+              "a": {
+                "herkunft": 1,
+                "rolle": "Wand 1",
+                "hinweis": [
+                  2.7083333333333335,
+                  0.0,
+                  2.3958333333333335
+                ]
+              },
+              "b": {
+                "herkunft": 1,
+                "rolle": "Boden",
+                "hinweis": [
+                  4.791666666666667,
+                  5.416666666666667,
+                  0.0
+                ]
+              },
+              "hinweis": [
+                5.0,
+                0.0,
+                0.0
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

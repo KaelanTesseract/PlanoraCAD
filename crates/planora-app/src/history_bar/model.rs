@@ -86,7 +86,7 @@ fn rolled_back(doc: &Document, stellen: &[FeatureId]) -> HashSet<FeatureId> {
         return found;
     }
     for f in doc.features() {
-        if !found.contains(&f.id) && f.kind.dependencies().iter().any(|d| found.contains(d)) {
+        if !found.contains(&f.id) && f.kind.all_dependencies().iter().any(|d| found.contains(d)) {
             found.insert(f.id);
         }
     }
@@ -286,7 +286,7 @@ pub fn is_locked(state: &AppState, tip: FeatureId) -> bool {
 
 /// Die zentrale Prüfung der Sperre: Warum eine neue Aktion mit den Eingaben `inputs` gerade nicht
 /// geht. Eingaben sind die Kennungen, auf denen das neue Feature aufbaut
-/// ([`FeatureKind::dependencies`]: Körper, Skizzen, Herkunft von Flächen und Kanten).
+/// ([`FeatureKind::all_dependencies`]: Körper, Skizzen, Herkunft von Flächen und Kanten).
 /// [`lock_hint`], wenn eine davon in der Kette eines zurückgesetzten Körpers liegt
 /// ([`is_locked`]); bei mehreren Eingangskörpern reicht einer. Andere Körper und neue
 /// freistehende Körper (ohne Eingaben) sind nie gesperrt.

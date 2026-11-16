@@ -131,6 +131,7 @@ fn old_file_bytes_unchanged() {
         "fixtures",
         "fixtures_format18",
         "fixtures_old_smooth",
+        "fixtures_format21",
         "step_fixtures",
     ] {
         let mut entries: Vec<_> = std::fs::read_dir(root.join(dir))
@@ -386,4 +387,38 @@ fn supplement_on_other_kind_rejected_on_load() {
     });
     let e = err_text(&text);
     assert!(e.contains(&tr!("sketch-supplement-angle-only")), "{e}");
+}
+
+/// Skizzen 11a, Task 17 (Spec „Verlorene Projektionen“): Eine Datei, in der die Quelle einer
+/// Kantenprojektion fehlt (etwa nach dem Löschen des Quaders gespeichert), lädt ohne Fehler. Nach
+/// der Neuberechnung warnt die Skizze, die Kurve bleibt, und das Speichern ist bytegleich. Die
+/// Datei ist Format 1: Kantenprojektionen gibt es seit dem ersten Format.
+#[test]
+fn load_file_with_missing_weak_source() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures_format21/missing_source.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("\r\n", "\n");
+    let text = raw.trim_end_matches('\n');
+    assert_eq!(format_of(text), 1);
+    let snap = decode_version(text, "missing_source.json").unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(encode_version(&snap).unwrap(), text, "bytegleich");
+    let doc = Document::from_snapshot(snap, 0.05).unwrap_or_else(|e| panic!("{e}"));
+    let s = doc.features()[0].id;
+    let f = doc.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    let w = f.warning().unwrap_or_default();
+    assert!(
+        w.contains(&tr!("feature-sketch-projection-lost", count = 1)),
+        "{w}"
+    );
+    assert_eq!(f.lost_projections().len(), 1);
+    // Die Kurve steht an der Lage der Definition (0, 0)–(10, 0).
+    let sk = doc.sketch_of(s).unwrap();
+    let c = sk.curves().next().unwrap().0;
+    assert!((sk.line_length(c).unwrap() - 10.0).abs() < 1e-9);
+    doc.check_invariants().unwrap();
+    // Gespeichert nach der Neuberechnung: dieselben Bytes.
+    assert_eq!(encode_version(&doc.snapshot()).unwrap(), text, "bytegleich");
 }

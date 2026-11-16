@@ -575,21 +575,17 @@ impl FeatureKind {
         }
     }
 
-    /// Alle Features, auf die dieses verweist; aufsteigend sortiert, ohne Doppelte.
+    /// Die harten Bezüge: alle Features, auf die dieses verweist und ohne die es nicht
+    /// bestehen kann; aufsteigend sortiert, ohne Doppelte. Bei Skizzen nur die Herkunft der
+    /// Skizzenebene (Fläche, Konstruktionsebene); die Herkunft der Kopien ist ein schwacher
+    /// Bezug ([`FeatureKind::weak_dependencies`], Skizzen 11a A5).
     pub fn dependencies(&self) -> Vec<FeatureId> {
         let mut deps = match self {
-            FeatureKind::Sketch(s) => {
-                let mut d = Vec::new();
-                match &s.plane {
-                    SketchPlane::Standard(_) => {}
-                    SketchPlane::OnFace(r) => d.push(FeatureId(r.origin)),
-                    SketchPlane::OnPlane(id) => d.push(*id),
-                }
-                for c in &s.copies {
-                    d.extend(c.source.origins());
-                }
-                d
-            }
+            FeatureKind::Sketch(s) => match &s.plane {
+                SketchPlane::Standard(_) => Vec::new(),
+                SketchPlane::OnFace(r) => vec![FeatureId(r.origin)],
+                SketchPlane::OnPlane(id) => vec![*id],
+            },
             FeatureKind::Box { .. }
             | FeatureKind::Cylinder { .. }
             | FeatureKind::Sphere { .. }
@@ -612,6 +608,33 @@ impl FeatureKind {
             FeatureKind::Plane(p) => p.dependencies(),
             FeatureKind::Canvas(c) => c.dependencies(),
         };
+        deps.sort();
+        deps.dedup();
+        deps
+    }
+
+    /// Die schwachen Bezüge (Skizzen 11a A5): bei Skizzen die Herkunft aller Kopien
+    /// (Projektion, Schnitt, Silhouette, einbezogene 3D-Geometrie, „Auf Fläche projizieren“,
+    /// Schnittkurve), aufsteigend sortiert, ohne Doppelte; sonst leer. Fehlt die Quelle, steht sie
+    /// hinter dem Feature, ist sie unterdrückt oder fehlerhaft, ist der Bezug verloren (Warnung,
+    /// die Kurve bleibt stehen), kein Fehler. Die losen Verweise ([`CopySource::loose_origins`])
+    /// gehören nicht dazu.
+    pub fn weak_dependencies(&self) -> Vec<FeatureId> {
+        let FeatureKind::Sketch(s) = self else {
+            return Vec::new();
+        };
+        let mut deps: Vec<FeatureId> = s.copies.iter().flat_map(|c| c.source.origins()).collect();
+        deps.sort();
+        deps.dedup();
+        deps
+    }
+
+    /// Harte und schwache Bezüge zusammen ([`FeatureKind::dependencies`] und
+    /// [`FeatureKind::weak_dependencies`]); aufsteigend sortiert, ohne Doppelte. Für Hervorhebung
+    /// und Sperren im Verlauf.
+    pub fn all_dependencies(&self) -> Vec<FeatureId> {
+        let mut deps = self.dependencies();
+        deps.extend(self.weak_dependencies());
         deps.sort();
         deps.dedup();
         deps
@@ -677,6 +700,8 @@ pub(crate) struct FeatureResult {
     pub(crate) key: Vec<u64>,
     /// Warnung der Berechnung (siehe [`Feature::warning`]).
     pub(crate) warning: Option<String>,
+    /// Ziele der Kopien mit verlorenem Bezug (siehe [`Feature::lost_projections`]).
+    pub(crate) lost: Vec<CopyTarget>,
     /// Voll bestimmte, nicht leere Skizze (siehe [`Feature::sketch_locked`]).
     pub(crate) locked: bool,
     /// Koordinatensystem einer Konstruktionsebene (siehe [`Document::plane_frame`]).
@@ -720,6 +745,13 @@ impl Feature {
     /// Skizzenkurven.
     pub fn warning(&self) -> Option<&str> {
         self.warning.as_deref()
+    }
+
+    /// Ziele der Kopien einer Skizze, deren Bezug bei der letzten Berechnung verloren war (die
+    /// Kurven der Warnung „verlorene Projektion“), in der Reihenfolge der Kopien; leer ohne
+    /// Ergebnis und für andere Features.
+    pub fn lost_projections(&self) -> &[CopyTarget] {
+        self.result.as_ref().map_or(&[], |r| r.lost.as_slice())
     }
 
     /// Ist die Skizze nach der letzten Berechnung voll bestimmt (und nicht leer)? Das rote

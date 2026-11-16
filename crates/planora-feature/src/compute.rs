@@ -48,6 +48,8 @@ pub(crate) struct Computed {
     pub(crate) warning: Option<String>,
     /// Skizze voll bestimmt und nicht leer: rotes Schloss im Browser (Skizzen 11a, A4).
     pub(crate) locked: bool,
+    /// Ziele der Kopien mit verlorenem Bezug (siehe [`crate::Feature::lost_projections`]).
+    pub(crate) lost: Vec<crate::model::CopyTarget>,
     /// Koordinatensystem einer Konstruktionsebene.
     pub(crate) plane: Option<planora_math::Frame>,
     /// Koordinatensystem des Trägers einer Leinwand.
@@ -890,6 +892,7 @@ fn compute_sketch(
     let warning = sketch_warning(&followed.counts, &sketch);
     Ok(Computed {
         locked,
+        lost: followed.lost,
         bodies: Vec::new(),
         sketch: Some(sketch),
         hints: Some(SketchHints { plane, copies }),
@@ -911,10 +914,12 @@ struct CopyCounts {
     too_slow: usize,
 }
 
-/// Nachgeführte Kopien (in der Reihenfolge der Definition) und die Zählstände.
+/// Nachgeführte Kopien (in der Reihenfolge der Definition), die Zählstände und die Ziele der
+/// Kopien mit verlorenem Bezug (in der Reihenfolge der Kopien, eins je `counts.lost`).
 struct Followed {
     copies: Vec<EdgeCopy>,
     counts: CopyCounts,
+    lost: Vec<crate::model::CopyTarget>,
 }
 
 /// Führt alle Kopien der Skizze nach. Die alten Arten (Kante, Schnitt, Silhouette) einzeln wie
@@ -935,6 +940,8 @@ fn follow_copies(
     let n = sf.copies.len();
     let mut out: Vec<EdgeCopy> = sf.copies.clone();
     let mut done = vec![false; n];
+    // Kopien mit verlorenem Bezug; die Ziele folgen am Ende in der Reihenfolge der Kopien.
+    let mut lost = vec![false; n];
     let mut counts = CopyCounts::default();
     for i in 0..n {
         if done[i] {
@@ -951,6 +958,7 @@ fn follow_copies(
                     // Definition).
                     restore_copy(sketch, c, previous);
                     counts.lost += 1;
+                    lost[i] = true;
                 }
             }
             continue;
@@ -985,7 +993,12 @@ fn follow_copies(
                     restore_copy(sketch, &sf.copies[j], previous);
                 }
                 match why {
-                    crate::include::Unfollowed::Lost => counts.lost += group.len(),
+                    crate::include::Unfollowed::Lost => {
+                        counts.lost += group.len();
+                        for &j in &group {
+                            lost[j] = true;
+                        }
+                    }
                     crate::include::Unfollowed::TooSlow => counts.too_slow += group.len(),
                 }
             }
@@ -1009,15 +1022,24 @@ fn follow_copies(
                         None => {
                             restore_copy(sketch, copy, previous);
                             counts.lost += 1;
+                            lost[j] = true;
                         }
                     }
                 }
             }
         }
     }
+    let lost = sf
+        .copies
+        .iter()
+        .zip(&lost)
+        .filter(|(_, l)| **l)
+        .map(|(c, _)| c.target)
+        .collect();
     Followed {
         copies: out,
         counts,
+        lost,
     }
 }
 
