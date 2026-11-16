@@ -1827,7 +1827,7 @@ fn under_section(
         let find = ui
             .add(egui::Button::selectable(
                 se.under_list.is_some(),
-                tr!("sketch-check-find"),
+                egui::RichText::new(tr!("sketch-check-find")).size(SWITCH_TEXT_PX),
             ))
             .on_hover_text(with_hint(
                 &mouse,

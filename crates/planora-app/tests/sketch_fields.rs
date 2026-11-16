@@ -21,7 +21,7 @@ use planora_project::library::Library;
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::CurveId;
 
-const SIZE: Vec2 = vec2(1400.0, 900.0);
+const SIZE: Vec2 = vec2(1400.0, 1080.0);
 const SMALL: Vec2 = vec2(800.0, 600.0);
 
 fn context() -> egui::Context {
