@@ -1338,3 +1338,18 @@ fn messages_exist_in_both_languages() {
         });
     }
 }
+
+/// Handtest 11a, Fund 7b: Der Hinweis zum Kreis „2 Tangenten“ nennt das Feld, das die Stufe zeigt
+/// (Radius), nicht den Durchmesser; deutsch und englisch.
+#[test]
+fn circle_2t_hint_names_the_radius_field() {
+    for lang in [planora_i18n::german(), planora_i18n::english()] {
+        planora_i18n::with_lang(&lang, || {
+            let hint = ToolKind::Circle2T.hint().to_lowercase();
+            let field = F::Radius.label().to_lowercase();
+            let other = F::Diameter.label().to_lowercase();
+            assert!(hint.contains(&field), "{hint}");
+            assert!(!hint.contains(&other), "{hint}");
+        });
+    }
+}
