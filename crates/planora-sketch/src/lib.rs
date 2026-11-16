@@ -1,6 +1,7 @@
 //! 2D-Skizzen mit Constraint-Solver für PlanoraCAD.
 
 pub(crate) mod arrangement;
+pub mod blend;
 pub mod comb;
 pub mod constraint;
 pub(crate) mod constraint3d;
