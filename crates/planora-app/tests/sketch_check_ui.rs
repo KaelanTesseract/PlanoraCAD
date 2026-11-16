@@ -108,3 +108,35 @@ fn status_follows_live_edit() {
     assert!(text.contains("Status: Bestimmt"), "{text}");
     assert!(!text.contains("Status: Unterbestimmt"), "{text}");
 }
+
+#[test]
+fn status_without_report_solves_at_most_once() {
+    // M-7: Ohne `last_report` lösen Statuszeile und Fußfeld eine Kopie der Skizze; der Bericht
+    // wird in der Sitzung abgelegt und je Bild wiederverwendet, solange die Skizze gleich bleibt.
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts::definitions());
+    theme::apply(&ctx, true);
+    let mut s = AppState::new();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        let a = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(5.0, 1.0).unwrap();
+        sk.add_line(a, b).unwrap();
+        se.last_report = None;
+    }
+    let before = s.session_sketch_mut().unwrap().0.status_solves();
+    // Drei Bilder mit Statuszeile und Fußfeld.
+    let text = frame_text(&ctx, &mut s);
+    assert!(text.contains("Status: Unterbestimmt"), "{text}");
+    let (se, _) = s.session_sketch_mut().unwrap();
+    assert!(se.last_report.is_none());
+    assert!(
+        se.status_solves() - before <= 1,
+        "{} Lösungen",
+        se.status_solves() - before
+    );
+}
