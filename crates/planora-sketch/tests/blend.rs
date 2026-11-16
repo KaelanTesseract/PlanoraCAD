@@ -3,12 +3,16 @@
 
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
+use planora_sketch::HandleCurvature;
 use planora_sketch::SketchError;
 use planora_sketch::blend::{BlendEnd, BlendKind, BlendRefusal};
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::solver::SolveStatus;
 use planora_sketch::sparse::SolverPath;
+use planora_sketch::text::{HAlign, TextParams, VAlign};
+use planora_sketch::text_shape::{Contour, Glyph, Seg, ShapedLine, TextShape, TextStyle};
+use std::sync::Arc;
 
 fn sketch() -> Sketch {
     Sketch::new(Frame::WORLD, "S", Tolerance::default())
@@ -386,4 +390,136 @@ fn initial_inner_points_follow_tangents() {
     assert!(q[2].distance(p0 + 2.0 * h * DVec2::X) <= 1e-12);
     assert!(q[3].distance(p3 - 2.0 * h * DVec2::X) <= 1e-12);
     assert!(q[4].distance(p3 - h * DVec2::X) <= 1e-12);
+}
+
+/// Sechs-Punkt-Formeln an einem Kurvenende (wie in `smooth_g2.rs`); `side` = +1 vom Anfang des
+/// Bereichs aus, sonst −1.
+fn ends_of(s: &Sketch, c: CurveId, side: f64) -> (DVec2, DVec2) {
+    let (lo, hi) = s.curve_domain(c).unwrap();
+    let h = (hi - lo) * 2e-3;
+    let t = if side > 0.0 { lo } else { hi };
+    let f: [DVec2; 6] = std::array::from_fn(|k| s.curve_eval(c, t + side * k as f64 * h).unwrap());
+    let d = (f[0] * (-137.0 / 60.0) + f[1] * 5.0 - f[2] * 5.0 + f[3] * (10.0 / 3.0) - f[4] * 1.25
+        + f[5] * 0.2)
+        / h
+        * side;
+    let a = (f[0] * (15.0 / 4.0) - f[1] * (77.0 / 6.0) + f[2] * (107.0 / 6.0) - f[3] * 13.0
+        + f[4] * (61.0 / 12.0)
+        - f[5] * (5.0 / 6.0))
+        / (h * h);
+    (d, a)
+}
+
+/// Krümmung am Ende `p` in Richtung in die Kurve hinein.
+fn kappa_into(s: &Sketch, c: CurveId, p: PointId) -> f64 {
+    let (lo, hi) = s.curve_domain(c).unwrap();
+    let q = pos(s, p);
+    let first = s.curve_eval(c, lo).unwrap().distance(q) < s.curve_eval(c, hi).unwrap().distance(q);
+    let (d, a) = ends_of(s, c, if first { 1.0 } else { -1.0 });
+    let k = d.perp_dot(a) / d.length().powi(3);
+    if first { k } else { -k }
+}
+
+fn handle_curvature(s: &Sketch, c: CurveId, at: PointId) -> Option<HandleCurvature> {
+    let CurveKind::Spline { handles, .. } = &s.curve(c).unwrap().kind else {
+        panic!("kein Spline");
+    };
+    handles.iter().find(|h| h.at == at).map(|h| h.curvature)
+}
+
+/// Prüfung I1: G2 an einem Spline mit Stützpunkten, Ende ohne Griff (`Natural`) und mit Griff
+/// `Form`. Die Fuge bleibt G2, auch nachdem ein Stützpunkt der Quelle verschoben und neu gelöst
+/// wurde (die Krümmungszeile muss also bestehen, nicht nur die Anfangslage stimmen).
+#[test]
+fn g2_blend_keeps_curvature_at_fit_spline_ends() {
+    for form in [false, true] {
+        let mut s = sketch();
+        let q: Vec<PointId> = [(0.0, 0.0), (10.0, 6.0), (20.0, 0.0)]
+            .iter()
+            .map(|&(x, y)| pt(&mut s, x, y))
+            .collect();
+        let spline = s.add_spline(&q).unwrap();
+        s.add_constraint(K::Fixed(q[0], 0.0, 0.0)).unwrap();
+        if form {
+            s.activate_tangent_handle(spline, q[2]).unwrap();
+            assert_eq!(
+                handle_curvature(&s, spline, q[2]),
+                Some(HandleCurvature::Form)
+            );
+        }
+        let (l0, l1) = (pt(&mut s, 40.0, -5.0), pt(&mut s, 50.0, -5.0));
+        let line = s.add_line(l0, l1).unwrap();
+        s.add_constraint(K::Fixed(l0, 40.0, -5.0)).unwrap();
+        s.add_constraint(K::Fixed(l1, 50.0, -5.0)).unwrap();
+        let c = s
+            .add_blend_curve(end(spline, q[2]), end(line, l0), BlendKind::G2)
+            .unwrap();
+        let joint = |s: &Sketch| kappa_into(s, c, q[2]) + kappa_into(s, spline, q[2]);
+        assert!(joint(&s).abs() <= 1e-6, "{form}: Anlage {}", joint(&s));
+        // Stützpunkt der Quelle verschieben und neu lösen.
+        s.set_point_xy(q[1], 9.0, 11.0).unwrap();
+        let r = s.solve();
+        assert_eq!(r.status, SolveStatus::Solved, "{form}: {r:?}");
+        let (kb, ks) = (kappa_into(&s, c, q[2]), kappa_into(&s, spline, q[2]));
+        assert!((kb + ks).abs() <= 1e-6, "{form}: κ {kb} und {ks}");
+    }
+}
+
+/// Minor M2: Kurven eines Textes sind keine Quelle, auch nicht im Raum geprüft (Text vor 3D).
+#[test]
+fn blend_from_text_curve_refused() {
+    let mut s = sketch();
+    let p = |x: f64, y: f64| DVec2::new(x, y);
+    let shape = TextShape {
+        lines: vec![ShapedLine {
+            glyphs: vec![Glyph {
+                origin: p(0.0, 0.0),
+                advance: 0.8,
+                contours: vec![Contour {
+                    start: p(0.0, 0.0),
+                    segs: vec![
+                        Seg::Line(p(0.6, 0.0)),
+                        Seg::Line(p(0.6, 0.7)),
+                        Seg::Line(p(0.0, 0.7)),
+                        Seg::Line(p(0.0, 0.0)),
+                    ],
+                }],
+            }],
+            width: 0.8,
+        }],
+        ascender: 0.9,
+        descender: -0.2,
+        line_height: 1.2,
+        substituted: None,
+        synthetic: false,
+        missing_chars: false,
+    };
+    let params = TextParams {
+        content: "A".into(),
+        style: TextStyle {
+            font: "Test".into(),
+            bold: false,
+            italic: false,
+            spacing: 0.0,
+        },
+        height: 5.0,
+        flip_h: false,
+        flip_v: false,
+    };
+    let t = s
+        .add_text_box(
+            p(0.0, 0.0),
+            p(40.0, 10.0),
+            params,
+            HAlign::Left,
+            VAlign::Bottom,
+            Arc::new(shape),
+        )
+        .unwrap();
+    let curves = s.text(t).unwrap().curves.clone();
+    assert!(!curves.is_empty());
+    for c in curves {
+        assert_eq!(s.blend_source(c), Err(BlendRefusal::Text));
+        assert_eq!(s.blend_end_near(c, DVec2::ZERO), None);
+    }
 }

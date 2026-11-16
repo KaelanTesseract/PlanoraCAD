@@ -101,7 +101,9 @@ impl Sketch {
         Some(BlendEnd { curve: c, point })
     }
 
-    /// Die Kontrollpunkte der Anfangslage (vor dem Lösen), von `a` nach `b`. Hebel `h` ist ein
+    /// Die Kontrollpunkte der Anfangslage (vor dem Lösen), von `a` nach `b`; für die Vorschau des
+    /// Werkzeugs und die Tests öffentlich. Gerechnet wird mit den jetzigen Lagen, auch wenn die
+    /// Skizze noch nicht gelöst ist. Hebel `h` ist ein
     /// Drittel des Endabstands, `t` die Einheitsrichtung aus dem Ende von der Quelle weg. G1:
     /// `P1 = P0 + h·t_a`, `P2 = P3 + h·t_b`. G2 dazu die Krümmung der Quelle: `P2 = P0 + 2h·t_a +
     /// (5/4)·κ·h²·N_a`, ebenso `P3` von `b` aus. Dabei ist `κ·N` der Krümmungsvektor der Quelle,
@@ -173,6 +175,13 @@ impl Sketch {
             points.push(b.point);
             let spline = s.add_control_spline(&points, kind.degree())?;
             for end in [a, b] {
+                // Wie der Befehl Glatt (Spec C3): An einem Spline mit Stützpunkten (Ende ohne
+                // Griff oder Griff `Form`) gäbe es sonst keine Krümmungszeile, die Fuge wäre nach
+                // dem nächsten Lösen nur G1. Die Quelle bekommt Griffe auf den Werten der
+                // Übergangskurve; bei allen anderen Quellen tut das nichts.
+                if kind == BlendKind::G2 {
+                    s.prepare_smooth(spline, end.point, end.curve, end.point)?;
+                }
                 s.add_constraint(match kind {
                     BlendKind::G1 => {
                         ConstraintKind::EndTangent(spline, end.point, end.curve, end.point)
