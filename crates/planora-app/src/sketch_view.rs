@@ -1939,27 +1939,14 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             || pointer
                 .zip(pattern_layout.as_ref())
                 .is_some_and(|(p, l)| sketch_pattern::pattern_hit(l, p).is_some()));
-    // Ein Klick auf ein Feld (die Felder nehmen keine Mausereignisse an) gehört dem Feld: Er schaltet
-    // kein Exemplar der Anordnung um (Handtest Skizzen 5) und setzt keine Form ab; den Fokus gibt
-    // er ihm auch nicht (Skizzen 11a, A9, wie Fusion). Die Felder am Zeiger stehen neben ihm, dort
-    // trifft ein Klick nur, wenn der Zeiger im selben Bild auf die alte Lage des Felds springt.
-    let over_field_now = state.sketch_session.as_ref().is_some_and(|se| {
-        (se.runs_pattern() || se.is_drawing_tool())
-            && pointer.is_some_and(|p| crate::sketch_inline::over_field(ui.ctx(), se, p))
-    });
-    // Das Feld folgt dem Zeiger schon im Bild des Drückens: Gilt der Klick dem Feld, entscheidet
-    // darum der Ort des Drückens.
-    let press_key = egui::Id::new("planora-draw-field-press");
-    if ui.input(|i| i.pointer.primary_pressed()) {
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(press_key, over_field_now));
-    }
-    let pressed_on_field = ui
-        .ctx()
-        .data(|d| d.get_temp::<bool>(press_key))
-        .unwrap_or(false);
+    // Ein Klick auf ein Feld der Anordnung (die Felder nehmen keine Mausereignisse an) schaltet
+    // kein Exemplar darunter (Handtest Skizzen 5). Die anderen Befehle führen ihre Felder neben
+    // dem Zeiger: Sie nehmen keinen Klick an, er wirkt auf die Zeichnung (Skizzen 11a, A9, Fusion).
     let click_on_field = (primary_click || response.double_clicked() || response.triple_clicked())
-        && (over_field_now || pressed_on_field);
+        && state.sketch_session.as_ref().is_some_and(|se| {
+            se.runs_pattern()
+                && pointer.is_some_and(|p| crate::sketch_inline::over_field(ui.ctx(), se, p))
+        });
 
     // Getippte Werte werden beim Klick und bei der Eingabe zu Maßen; die Formeln darin brauchen die
     // Parameter.
