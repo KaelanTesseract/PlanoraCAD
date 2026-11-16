@@ -192,6 +192,24 @@ fn relink_edge_to_other_edge() {
     );
 }
 
+/// M-8: „Neu verknüpfen“ probt an der Skizze und übernimmt dann in genau einer Änderung; das
+/// Ergebnis gleicht dem der Neuberechnung (das Ziel ist nicht mehr verloren).
+#[test]
+fn relink_is_one_edit_without_document_copy() {
+    let mut r = lost_rig(1);
+    let (edge_b, ..) = bottom_edge(&body(&r.d, r.b), 0.0);
+    let edits = r.d.edit_count();
+    r.d.relink_projection(
+        r.s,
+        CopyTarget::Curve(r.curves[0]),
+        CopySource::Edge(edge_b),
+    )
+    .unwrap();
+    assert_eq!(r.d.edit_count(), edits + 1, "genau eine Änderung");
+    not_lost(&r.d, r.s);
+    assert_eq!(r.d.feature(r.s).unwrap().status, FeatureStatus::Ok);
+}
+
 #[test]
 fn relink_other_family_refused() {
     let mut r = lost_rig(1);

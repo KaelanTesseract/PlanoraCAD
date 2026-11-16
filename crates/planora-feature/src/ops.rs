@@ -236,18 +236,21 @@ impl Document {
             return Ok(());
         }
         relink_copies(&mut sf, target, &old, &source);
-        // Erst probieren: Bleibt das Ziel verloren, gilt der Stand davor (auch Zähler und Verlauf
-        // des Dokuments).
-        let before = self.clone();
-        self.commit_sketch(sketch, sf)?;
-        let still_lost = self
-            .feature(sketch)
-            .is_some_and(|f| f.lost_projections().contains(&target));
-        if still_lost {
-            *self = before;
+        // Erst an einer Kopie der Skizze probieren, wie die Neuberechnung (M-8): Bleibt das Ziel
+        // verloren, ändert sich am Dokument nichts (auch Zähler und Verlauf nicht). Geprobt
+        // werden alle Kopien mit der neuen Herkunft, also auch die übrige Gruppe.
+        let relinked: Vec<CopyTarget> = sf
+            .copies
+            .iter()
+            .filter(|c| c.source == source)
+            .map(|c| c.target)
+            .collect();
+        let mut probe = sf.clone();
+        let lost = self.follow_draft_copies(sketch, &mut probe, &relinked)?;
+        if lost.contains(&target) {
             return Err(FeatureError::Sketch(tr!("lost-relink-failed")));
         }
-        Ok(())
+        self.commit_sketch(sketch, sf)
     }
 
     /// „Verknüpfung aufheben“ für die Ziele `targets` der Skizze `sketch` (Skizzen 11a, Fusion
