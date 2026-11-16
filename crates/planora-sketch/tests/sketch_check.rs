@@ -356,3 +356,28 @@ fn recompute_all_unchanged_values_bitwise() {
         assert_eq!(b.1.to_bits(), a.1.to_bits());
     }
 }
+
+#[test]
+fn item_ordinals_equal_the_single_ones() {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(5.0, 1.0).unwrap();
+    let l1 = s.add_line(a, b).unwrap();
+    let m = s.add_point(0.0, 9.0).unwrap();
+    let c = s.add_point(3.0, 9.0).unwrap();
+    let d = s.add_point(0.0, 12.0).unwrap();
+    let arc = s.add_arc(m, c, d).unwrap();
+    let e = s.add_point(7.0, 7.0).unwrap();
+    let f = s.add_point(9.0, 7.0).unwrap();
+    let l2 = s.add_line(e, f).unwrap();
+    let lone = s.add_point(20.0, 20.0).unwrap();
+    let items = [
+        CheckItem::Curve(l2),
+        CheckItem::Curve(arc),
+        CheckItem::Curve(l1),
+        CheckItem::Point(lone),
+    ];
+    let want: Vec<usize> = items.iter().map(|&i| s.item_ordinal(i)).collect();
+    assert_eq!(s.item_ordinals(&items), want);
+    assert_eq!(want, [2, 1, 1, 1]);
+}

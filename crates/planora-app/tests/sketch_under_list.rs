@@ -358,3 +358,34 @@ fn actions_have_no_default_binding() {
             .is_some()
     );
 }
+
+/// Messtest (Release): 500 freie Bögen, wie eine eingefügte DXF-Bogenkette.
+/// `cargo test -p planora-app --release --test sketch_under_list -- --ignored --nocapture`
+#[test]
+#[ignore = "Messtest, nur im Release"]
+fn under_rows_of_500_arcs_stay_fast() {
+    let mut w = ws();
+    let s = state(&mut w);
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    for i in 0..500 {
+        let x = f64::from(i) * 30.0;
+        let m = sk.add_point(x, 0.0).unwrap();
+        let a = sk.add_point(x + 10.0, 0.0).unwrap();
+        let b = sk.add_point(x, 10.0).unwrap();
+        sk.add_arc(m, a, b).unwrap();
+    }
+    se.last_report = Some(sk.solve());
+    assert_eq!(se.under_rows(sk).len(), 500);
+    let runs = 20;
+    let t = std::time::Instant::now();
+    for _ in 0..runs {
+        assert_eq!(se.under_rows(sk).len(), 500);
+    }
+    let ms = t.elapsed().as_secs_f64() * 1000.0 / f64::from(runs);
+    println!("under_rows (500 Bögen): {ms:.3} ms");
+    assert!(ms < 2.0, "{ms} ms");
+}

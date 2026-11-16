@@ -5,7 +5,7 @@
 use crate::model::{CurveId, PointId, Sketch};
 use crate::solver::{SolveReport, SolveStatus};
 use crate::text::{TextId, TextPlacement};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::mem::discriminant;
 
 /// Der Zustand der Skizze wie in Fusion: unterbestimmt, bestimmt, Widerspruch, nicht gelöst.
@@ -56,11 +56,12 @@ impl Sketch {
         curves.dedup();
 
         let owned = self.owned_points();
+        let alive: HashSet<PointId> = self.points().map(|(q, _)| q).collect();
         let mut points: Vec<PointId> = r
             .free_points
             .iter()
             .copied()
-            .filter(|p| self.points().any(|(q, _)| q == *p) && !owned.contains(p))
+            .filter(|p| alive.contains(p) && !owned.contains(p))
             .collect();
         points.sort();
         points.dedup();
@@ -105,6 +106,44 @@ impl Sketch {
             && (self.curves().next().is_some()
                 || self.points().next().is_some()
                 || self.texts().next().is_some())
+    }
+
+    /// Wie [`item_ordinal`](Self::item_ordinal) für viele Elemente auf einmal: ein Durchlauf über
+    /// die Skizze statt einer je Element. Die Zahlen stehen in der Reihenfolge von `items`.
+    pub fn item_ordinals(&self, items: &[CheckItem]) -> Vec<usize> {
+        let mut curve_n: HashMap<CurveId, usize> = HashMap::new();
+        let mut per_kind: HashMap<std::mem::Discriminant<crate::model::CurveKind>, usize> =
+            HashMap::new();
+        for (c, d) in self.curves() {
+            let n = per_kind.entry(discriminant(&d.kind)).or_insert(0);
+            *n += 1;
+            curve_n.insert(c, *n);
+        }
+        let owned = self.owned_points();
+        let mut point_n: HashMap<PointId, usize> = HashMap::new();
+        for (i, (p, _)) in self
+            .points()
+            .filter(|(p, _)| !owned.contains(p))
+            .enumerate()
+        {
+            point_n.insert(p, i + 1);
+        }
+        let text_n: HashMap<TextId, usize> = self
+            .texts()
+            .enumerate()
+            .map(|(i, (t, _))| (t, i + 1))
+            .collect();
+        items
+            .iter()
+            .map(|&it| match it {
+                CheckItem::Curve(c) => curve_n.get(&c).copied(),
+                CheckItem::Point(p) => point_n.get(&p).copied(),
+                CheckItem::Text(t) => text_n.get(&t).copied(),
+            })
+            // Ein totes Element zählt wie bei `item_ordinal` als nächste freie Nummer.
+            .enumerate()
+            .map(|(i, n)| n.unwrap_or_else(|| self.item_ordinal(items[i])))
+            .collect()
     }
 
     /// Laufende Nummer ab 1 des Elements unter den lebenden Elementen derselben Art (Kurven:

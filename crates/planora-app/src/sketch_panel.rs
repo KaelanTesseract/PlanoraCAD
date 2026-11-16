@@ -1827,7 +1827,7 @@ fn under_section(
         let find = ui
             .add(egui::Button::selectable(
                 se.under_list.is_some(),
-                egui::RichText::new(tr!("sketch-check-find")).size(SWITCH_TEXT_PX),
+                tr!("sketch-check-find"),
             ))
             .on_hover_text(with_hint(
                 &mouse,
@@ -1851,31 +1851,31 @@ fn under_section(
     let Some(mut list) = se.under_list else {
         return;
     };
-    let rows = se.under_rows(sk);
-    let mut close = false;
+    let rows = se.under_row_items(sk);
     let mut delete = None;
     ui.horizontal(|ui| {
         ui.checkbox(
             &mut list.hide_determined,
-            egui::RichText::new(tr!("sketch-check-hide-determined")).size(SWITCH_TEXT_PX),
+            tr!("sketch-check-hide-determined"),
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            close = ui.button(tr!("sketch-check-close")).clicked();
-        });
     });
+    // „Schließen“ darunter, so bleibt die Zeile des Hakens auch in der schmalen Spalte ganz.
+    let close = ui.button(tr!("sketch-check-close")).clicked();
     if rows.is_empty() {
         ui.label(
-            egui::RichText::new(tr!("sketch-check-none"))
-                .size(SWITCH_TEXT_PX)
-                .color(ui.visuals().weak_text_color()),
+            egui::RichText::new(tr!("sketch-check-none")).color(ui.visuals().weak_text_color()),
         );
     }
+    // Nur die sichtbaren Zeilen werden gebaut und gezeichnet (eine DXF-Bogenkette liefert 500).
+    let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
     egui::ScrollArea::vertical()
         .id_salt("planora-sketch-under-list")
         .max_height(UNDER_LIST_MAX_H)
         .auto_shrink([false, true])
-        .show(ui, |ui| {
-            for (it, text, deletable) in &rows {
+        .show_rows(ui, row_h, rows.len(), |ui, range| {
+            for (it, n, deletable) in &rows[range] {
+                use planora_sketch::check::CheckItem;
+                let text = crate::sketch_under::row_text(sk, *it, *n);
                 ui.horizontal(|ui| {
                     if *deletable {
                         let x = ui
@@ -1885,7 +1885,6 @@ fn under_section(
                             delete = Some(*it);
                         }
                     }
-                    use planora_sketch::check::CheckItem;
                     let picked = match (se.selection.as_slice(), it) {
                         ([Item::Curve(a)], CheckItem::Curve(b)) => a == b,
                         ([Item::Point(a)], CheckItem::Point(b)) => a == b,

@@ -105,12 +105,31 @@ impl SketchSession {
         let Some(r) = self.last_report.as_ref() else {
             return Vec::new();
         };
-        sk.under_items(r)
+        let items = sk.under_items(r);
+        let numbers = sk.item_ordinals(&items);
+        items
             .into_iter()
-            .map(|it| {
+            .zip(numbers)
+            .map(|(it, n)| {
                 let deletable = !matches!(it, CheckItem::Point(_));
-                (it, row_text(sk, it), deletable)
+                (it, row_text(sk, it, n), deletable)
             })
+            .collect()
+    }
+
+    /// Wie [`under_rows`](Self::under_rows), aber ohne Texte: Element, Nummer und ob ein X dabei
+    /// ist. Die Liste im Skizzenfeld setzt den Text nur für die sichtbaren Zeilen
+    /// ([`row_text`]).
+    pub fn under_row_items(&self, sk: &Sketch) -> Vec<(CheckItem, usize, bool)> {
+        let Some(r) = self.last_report.as_ref() else {
+            return Vec::new();
+        };
+        let items = sk.under_items(r);
+        let numbers = sk.item_ordinals(&items);
+        items
+            .into_iter()
+            .zip(numbers)
+            .map(|(it, n)| (it, n, !matches!(it, CheckItem::Point(_))))
             .collect()
     }
 
@@ -183,8 +202,7 @@ impl SketchSession {
 }
 
 /// „Linie 3“, „Punkt 7“, „Text 1“.
-fn row_text(sk: &Sketch, it: CheckItem) -> String {
-    let n = sk.item_ordinal(it);
+pub fn row_text(sk: &Sketch, it: CheckItem, n: usize) -> String {
     match it {
         CheckItem::Point(_) => tr!("sketch-check-row-point", n = n),
         CheckItem::Text(_) => tr!("sketch-check-row-text", n = n),
