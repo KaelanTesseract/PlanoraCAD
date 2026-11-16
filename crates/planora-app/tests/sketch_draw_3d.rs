@@ -103,6 +103,15 @@ impl View {
             sketch_view::show_overlay(ui, SCREEN, s);
             gesture = ui.input(|i| i.pointer.any_down());
         });
+        // Mit eingeschalteter Barrierefreiheit (accesskit) muss der Fokus auf einem Knoten dieses
+        // Bilds stehen; sonst bricht accesskit_consumer im Fenster ab (Handtest 11a, Fund 7a).
+        if let Some(update) = &out.platform_output.accesskit_update {
+            assert!(
+                update.nodes.iter().any(|(id, _)| *id == update.focus),
+                "Fokus {:?} steht auf keinem Knoten dieses Bilds",
+                update.focus
+            );
+        }
         out.drop_without_applying_deltas();
         self.s.observe_sketch(gesture);
     }
@@ -2378,4 +2387,122 @@ fn fields_follow_pointer_no_click() {
     // Das Feld verschwindet mit der Form; der Klick hat ihm keinen Fokus gegeben.
     assert!(!planora_app::viewport::draw_field_has_keyboard(&v.ctx) || has_keys);
     let _ = focus;
+}
+
+// ---- Fokus der Felder am Zeiger beim Stufenwechsel (Handtest 11a, Fund 7a) ------------------------
+
+impl View {
+    /// Wie [`View::with_kind`], aber in einer 2D-Skizze (`three_d` aus) und mit eingeschalteter
+    /// accesskit-Ausgabe, die [`View::frame`] in jedem Bild prüft.
+    fn with_kind_accesskit(kind: ToolKind, three_d: bool) -> View {
+        let mut v = View::with_kind(kind);
+        v.ctx.enable_accesskit();
+        if !three_d {
+            let (se, sk) = v.se_sk();
+            se.set_three_d(sk, false);
+            se.choose_tool(sk, kind.tool());
+            se.choose_kind(sk, kind);
+        }
+        v.frame(vec![]);
+        v
+    }
+
+    /// Strg+A wie im Fenster: Taste gedrückt und losgelassen.
+    fn select_all(&mut self) {
+        self.frame(vec![key_down(Key::A, Modifiers::COMMAND)]);
+        self.frame(vec![Event::Key {
+            key: Key::A,
+            physical_key: Some(Key::A),
+            pressed: false,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }]);
+    }
+}
+
+/// Polygon Kante: 15, Tab, Strg+A und 45 im Winkelfeld, Eingabe. Die Stufe wechselt zur Seitenzahl;
+/// der Fokus darf in keinem Bild auf einem Feld stehen, das es im Bild nicht gibt (sonst bricht
+/// accesskit ab). In 2D und 3D, mit und ohne Strg+A.
+#[test]
+fn polygon_edge_stage_change_keeps_focus_on_drawn_field() {
+    use planora_app::sketch_input::FieldKind as F;
+    for three_d in [true, false] {
+        for ctrl_a in [true, false] {
+            // Zweimal hintereinander: Beim zweiten Polygon kennt die Sitzung das Seitenzahlfeld schon.
+            let mut v = View::with_kind_accesskit(ToolKind::PolygonEdge, three_d);
+            for round in 0..2 {
+                let start = DVec3::new(10.0 + 40.0 * round as f64, 10.0, 0.0);
+                v.click3(start);
+                let aim = v.at3(start + DVec3::new(20.0, 8.0, 0.0));
+                v.hover(aim);
+                assert_eq!(v.field_kinds(), vec![F::Length, F::Angle], "3D {three_d}");
+                v.type_text("15");
+                v.tab();
+                if ctrl_a {
+                    v.select_all();
+                }
+                v.type_text("45");
+                v.enter_at(aim);
+                assert_eq!(
+                    v.field_kinds(),
+                    vec![F::Sides],
+                    "3D {three_d}, Strg+A {ctrl_a}"
+                );
+                v.type_text("7");
+                v.enter_at(aim);
+            }
+            assert_eq!(
+                v.lines().len(),
+                14,
+                "3D {three_d}, Strg+A {ctrl_a}: {:?}",
+                v.message()
+            );
+        }
+    }
+}
+
+/// Dieselbe Grundregel für alle Werkzeuge mit Feldern am Zeiger, in 2D und 3D: Jedes Feld bekommt
+/// „7“ (nach Strg+A), Tab geht zum nächsten, Eingabe setzt die Stufe ab, bis keine Felder mehr da
+/// sind; zweimal hintereinander. [`View::frame`] prüft in jedem Bild den Fokus im accesskit-Baum.
+#[test]
+fn stage_changes_keep_focus_on_drawn_fields_for_all_tools() {
+    for kind in [
+        ToolKind::PolygonEdge,
+        ToolKind::PolygonInscribed,
+        ToolKind::PolygonCircumscribed,
+        ToolKind::Rect2P,
+        ToolKind::Rect3P,
+        ToolKind::RectCenter,
+        ToolKind::CircleCenter,
+        ToolKind::Circle2P,
+    ] {
+        for three_d in [true, false] {
+            let mut v = View::with_kind_accesskit(kind, three_d);
+            for round in 0..2 {
+                let start = DVec3::new(10.0 + 40.0 * round as f64, 10.0, 0.0);
+                v.click3(start);
+                let aim = v.at3(start + DVec3::new(20.0, 8.0, 0.0));
+                v.hover(aim);
+                let mut stages = 0;
+                while !v.field_kinds().is_empty() {
+                    stages += 1;
+                    assert!(stages <= 3, "{kind:?} 3D {three_d}: {:?}", v.field_kinds());
+                    for i in 0..v.field_kinds().len() {
+                        if i > 0 {
+                            v.tab();
+                        }
+                        v.select_all();
+                        v.type_text("7");
+                    }
+                    v.enter_at(aim);
+                }
+                assert!(stages >= 1, "{kind:?} 3D {three_d}: keine Felder");
+            }
+            assert!(
+                v.curves().len() >= 2,
+                "{kind:?} 3D {three_d}: {:?}",
+                v.message()
+            );
+        }
+    }
 }

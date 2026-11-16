@@ -233,12 +233,111 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
         .is_none_or(|last| last + 1 < frame);
     ctx.data_mut(|d| d.insert_temp(frame_key, frame));
 
+    let place = Place {
+        rect,
+        anchor,
+        fixed,
+    };
+    let first = draw_rows(&ctx, se, sf, &scope, place, &[]);
+    let (enter, esc, typed) = (first.enter, first.esc, first.typed);
+    let mut drawn = first.drawn;
+    // Offene Liste der Arten: Eingabe und Esc gehören ihr, nicht der Form.
+    let flyout = crate::sketch_panel::flyout_open(&ctx);
+    if enter && !flyout && se.runs_transform() {
+        // Fehler stehen in der Meldung der Sitzung und im Feld.
+        let _ = se.confirm_transform(sf);
+    } else if enter && !flyout && se.runs_pattern() {
+        let _ = se.confirm_pattern(sf);
+    } else if enter && !flyout {
+        // Fehler stehen in der Meldung der Sitzung und im Feld.
+        let _ = se.commit_at_cursor(sf, radius, &scope);
+    }
+    if esc && !flyout {
+        se.cancel(&mut sf.sketch);
+        return true;
+    }
+    se.sync_input(&sf.sketch);
+    // Hat die Eingabe die Stufe gewechselt (etwa Länge/Winkel → Seitenzahl), stehen die Felder der
+    // neuen Stufe schon in diesem Bild: Nur so gibt es das Feld, das gleich den Fokus bekommt, im
+    // Bild (Handtest 11a, Fund 7a). Die Felder nehmen dabei keine Eingabe an, sie haben keinen Fokus.
+    if se
+        .input
+        .fields
+        .iter()
+        .any(|f| !drawn.iter().any(|(k, _)| *k == f.kind))
+    {
+        let done: Vec<FieldKind> = drawn.iter().map(|(k, _)| *k).collect();
+        drawn.extend(draw_rows(&ctx, se, sf, &scope, place, &done).drawn);
+    }
+    // Nach dem Bearbeiten: Eingabe und ein Klick neben das Feld nehmen ihm den Fokus. Das nächste
+    // Bild soll trotzdem wieder hier tippen; ein anderes Eingabefeld behält seinen. Nur wenn er
+    // fehlt: Eine neue Anforderung löschte die Fokussperre, und Tab spränge aus dem Feld.
+    if may_take_keyboard(&ctx, appeared)
+        && let Some(field) = se.input.fields.get(se.input.active)
+        && let Some(id) = widget_id(&ctx, field.kind)
+        && !ctx.memory(|m| m.has_focus(id))
+    {
+        ctx.memory_mut(|m| m.request_focus(id));
+    }
+    keep_focus_on_drawn(&ctx, &drawn);
+    typed || enter
+}
+
+/// Wohin die Felder dieses Bilds kommen: an den Zeiger `anchor` oder an den festen Platz `fixed`
+/// der Anordnung, beides in `rect`.
+#[derive(Clone, Copy)]
+struct Place {
+    rect: Rect,
+    anchor: Pos2,
+    fixed: Option<(Pos2, Vec2)>,
+}
+
+/// Was die Felder eines Durchgangs gemeldet haben.
+struct Rows {
+    enter: bool,
+    esc: bool,
+    typed: bool,
+    /// Die gezeichneten Felder mit der Kennung ihres Textfelds.
+    drawn: Vec<(FieldKind, egui::Id)>,
+}
+
+/// Grundregel für den Fokus (Handtest 11a, Fund 7a): Ein Feld am Zeiger, das in diesem Bild nicht
+/// gezeichnet wurde, darf ihn nicht halten. Sonst zeigte der Barrierefreiheitsbaum (accesskit) auf
+/// einen Knoten, den es im Bild nicht gibt, und bräche ab; egui selbst ließe eine eben gestellte
+/// Anforderung ein Bild lang stehen.
+fn keep_focus_on_drawn(ctx: &egui::Context, drawn: &[(FieldKind, egui::Id)]) {
+    if let Some(id) = ctx.memory(|m| m.focused())
+        && viewport::draw_field_has_keyboard(ctx)
+        && !drawn.iter().any(|(_, d)| *d == id)
+    {
+        ctx.memory_mut(|m| m.surrender_focus(id));
+    }
+}
+
+/// Zeichnet die Felder der laufenden Stufe außer denen in `skip` und verarbeitet ihre Eingaben.
+fn draw_rows(
+    ctx: &egui::Context,
+    se: &mut SketchSession,
+    sf: &mut SketchFeature,
+    scope: &planora_feature::ParamScope,
+    place: Place,
+    skip: &[FieldKind],
+) -> Rows {
+    let Place {
+        rect,
+        anchor,
+        fixed,
+    } = place;
+    let mut drawn = Vec::new();
     let rows = se.input.fields.len();
     let (mut enter, mut esc, mut typed) = (false, false, false);
     for i in 0..rows {
         let (kind, touched) = (se.input.fields[i].kind, se.input.fields[i].touched);
+        if skip.contains(&kind) {
+            continue;
+        }
         let error = se.input.fields[i].error.clone();
-        let has_keys = widget_id(&ctx, kind).is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+        let has_keys = widget_id(ctx, kind).is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
         let mut text = if touched {
             se.input.fields[i].text.clone()
         } else {
@@ -267,7 +366,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
             // Am Zeiger nehmen die Felder keine Maus an (sie liefen ihr sonst in den Weg); am
             // festen Platz der Anordnung setzt ein Klick in ein Feld dort den Fokus (wie Fusion).
             .interactable(fixed.is_some())
-            .show(&ctx, |ui| {
+            .show(ctx, |ui| {
                 let p = theme::palette(ui.visuals().dark_mode);
                 egui::Frame::new()
                     .fill(p.bg_panel)
@@ -285,7 +384,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
                             .error_below(false)
                             .width(FIELD_WIDTH)
                             .label(kind.label())
-                            .show(ui, &scope);
+                            .show(ui, scope);
                             if let Some(e) = &error {
                                 ui.colored_label(p.error, e);
                             }
@@ -296,15 +395,16 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
                     .inner
             })
             .inner;
-        viewport::set_draw_field(&ctx, response.id);
+        viewport::set_draw_field(ctx, response.id);
         ctx.data_mut(|d| d.insert_temp(widget_id_key(kind), response.id));
+        drawn.push((kind, response.id));
         // Ein Klick hat diesem Feld die Tastatur gegeben: Es ist jetzt das aktive (Tab geht von
         // hier weiter, und unten holt sich das alte den Fokus nicht zurück).
         if response.has_focus() {
             se.input.active = i;
         }
         if response.changed() || wipe {
-            se.type_field(i, &text, &scope);
+            se.type_field(i, &text, scope);
             typed = true;
         }
         if response.lost_focus() {
@@ -313,31 +413,10 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
         }
     }
 
-    // Offene Liste der Arten: Eingabe und Esc gehören ihr, nicht der Form.
-    let flyout = crate::sketch_panel::flyout_open(&ctx);
-    if enter && !flyout && se.runs_transform() {
-        // Fehler stehen in der Meldung der Sitzung und im Feld.
-        let _ = se.confirm_transform(sf);
-    } else if enter && !flyout && se.runs_pattern() {
-        let _ = se.confirm_pattern(sf);
-    } else if enter && !flyout {
-        // Fehler stehen in der Meldung der Sitzung und im Feld.
-        let _ = se.commit_at_cursor(sf, radius, &scope);
+    Rows {
+        enter,
+        esc,
+        typed,
+        drawn,
     }
-    if esc && !flyout {
-        se.cancel(&mut sf.sketch);
-        return true;
-    }
-    se.sync_input(&sf.sketch);
-    // Nach dem Bearbeiten: Eingabe und ein Klick neben das Feld nehmen ihm den Fokus. Das nächste
-    // Bild soll trotzdem wieder hier tippen; ein anderes Eingabefeld behält seinen. Nur wenn er
-    // fehlt: Eine neue Anforderung löschte die Fokussperre, und Tab spränge aus dem Feld.
-    if may_take_keyboard(&ctx, appeared)
-        && let Some(field) = se.input.fields.get(se.input.active)
-        && let Some(id) = widget_id(&ctx, field.kind)
-        && !ctx.memory(|m| m.has_focus(id))
-    {
-        ctx.memory_mut(|m| m.request_focus(id));
-    }
-    typed || enter
 }
