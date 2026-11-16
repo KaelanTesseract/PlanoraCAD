@@ -369,3 +369,72 @@ fn auto_takes_sparse_from_threshold_on() {
         assert_eq!(t.sparse_groups, sparse, "{vars} Variablen");
     }
 }
+
+/// Treppe aus `segments` Linien mit gemeinsamen Ecken, abwechselnd waagerecht und senkrecht:
+/// eine rein lineare Gruppe (nur Waagerecht/Senkrecht), leicht schief gestartet.
+fn hv_staircase(s: &mut Sketch, segments: usize) -> planora_sketch::model::PointId {
+    let mut prev = s.add_point(0.0, 0.0).unwrap();
+    let (mut x, mut y) = (0.0, 0.0);
+    for i in 0..segments {
+        let f = i as f64;
+        if i % 2 == 0 {
+            x += 2.0;
+        } else {
+            y += 1.5;
+        }
+        let p = s
+            .add_point(x + 1e-3 * f.sin(), y + 1e-3 * (1.7 * f).cos())
+            .unwrap();
+        let l = s.add_line(prev, p).unwrap();
+        let kind = if i % 2 == 0 {
+            K::Horizontal(LineOrPoints::Line(l))
+        } else {
+            K::Vertical(LineOrPoints::Line(l))
+        };
+        s.add_constraint(kind).unwrap();
+        prev = p;
+    }
+    prev
+}
+
+#[test]
+fn sparse_linear_drag_reaches_target() {
+    // M-5: In einer rein linearen Gruppe sind die harten Residuen nach einem gedämpften Schritt
+    // proportional zum Restzug; der Abbruch der weichen Phase darf dort nicht vor dem Zugziel
+    // greifen. 16 Linien, 17 Punkte = 34 Variablen (über `SPARSE_MIN_VARS`).
+    let last = hv_staircase(&mut sketch(), 16);
+    let (mut d, mut s) = both(|| {
+        let mut s = sketch();
+        hv_staircase(&mut s, 16);
+        s
+    });
+    let (rd, rs) = (d.solve(), s.solve());
+    same(&rd, &rs, &d, &s);
+    // Kleine Züge: Die harten Residuen fallen schon nach dem ersten gedämpften Schritt unter die
+    // Toleranz, obwohl der Punkt noch weit vom Ziel ist.
+    for (dx, dy) in [(0.7, -0.4), (1e-4, -5e-5), (2e-5, 3e-5)] {
+        let at = d.point_xyz(last).unwrap();
+        let drag = [Drag {
+            point: last,
+            target: at + DVec3::new(dx, dy, 0.0),
+            plane: None,
+        }];
+        let (rd, rs) = (d.drag(&drag).unwrap(), s.drag(&drag).unwrap());
+        assert_eq!(rd.status, SolveStatus::Solved, "{rd:?}");
+        assert_eq!(rs.status, SolveStatus::Solved, "{rs:?}");
+        let target = drag[0].target;
+        for sk in [&d, &s] {
+            let e = (sk.point_xyz(last).unwrap() - target).abs().max_element();
+            assert!(e <= 1e-9, "Zug ({dx}, {dy}): Zugziel um {e:e} verfehlt");
+        }
+        for (p, _) in d.points() {
+            let e = (d.point_xyz(p).unwrap() - s.point_xyz(p).unwrap())
+                .abs()
+                .max_element();
+            assert!(
+                e <= 5e-6,
+                "Zug ({dx}, {dy}): Punkt {p:?} weicht um {e:e} ab"
+            );
+        }
+    }
+}
