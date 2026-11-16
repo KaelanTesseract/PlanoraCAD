@@ -23,6 +23,7 @@ use egui::RichText;
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_math::DVec2;
+use planora_sketch::comb::{COMB_DENSITY, COMB_SCALE_MAX, COMB_SCALE_MIN};
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::model::{CurveId, CurveKind, Sketch};
 
@@ -1161,6 +1162,55 @@ fn spline_options(ui: &mut egui::Ui, se: &mut SketchSession) {
     ui.data_mut(|d| d.insert_temp(degree_buttons_key(), rects));
 }
 
+/// Schalter „Krümmungskamm“ und, bei genau einer gewählten Kurve mit Kamm, die Felder „Dichte“
+/// und „Maßstab“ (Skizzen 11a, wie Fusions Krümmungsanzeige). Ohne gewählte Kurve, die keine
+/// Linie ist, gibt es beides nicht (wie „Verknüpfung aufheben“ nur bei einer Projektion).
+fn comb_fields(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch) {
+    if !se.can_toggle_curvature(sk) {
+        return;
+    }
+    let on = se
+        .selection
+        .iter()
+        .filter_map(|i| match i {
+            Item::Curve(c) if sk.comb_capable(*c) => Some(*c),
+            _ => None,
+        })
+        .all(|c| sk.comb(c).is_some());
+    let tip = with_hint(
+        &crate::keymap::mouse::current(ui.ctx()),
+        Action::SketchToggleCurvature,
+        &tr!("sketch-comb-switch-hint"),
+    );
+    let switch = ui
+        .add(egui::Button::selectable(on, tr!("sketch-comb-switch")))
+        .on_hover_text(tip);
+    if switch.clicked() {
+        se.set_comb_selected(sk, !on);
+    }
+    if let Some((c, comb)) = se.single_comb(sk) {
+        let (mut density, mut scale) = (comb.density, comb.scale);
+        ui.horizontal(|ui| {
+            ui.label(tr!("sketch-comb-density"));
+            theme::field(ui, egui::DragValue::new(&mut density).range(COMB_DENSITY));
+            ui.label(tr!("sketch-comb-scale"));
+            theme::field(
+                ui,
+                egui::DragValue::new(&mut scale)
+                    .range(COMB_SCALE_MIN..=COMB_SCALE_MAX)
+                    .speed(0.01)
+                    .max_decimals(2),
+            );
+        });
+        if density != comb.density {
+            se.edit_comb(sk, c, Some(density), None);
+        }
+        if scale != comb.scale {
+            se.edit_comb(sk, c, None, Some(scale));
+        }
+    }
+}
+
 /// Abschnitt „Bearbeiten“ (Skizzen 7, B7, D3, D4): Griff-Knöpfe am gewählten Stützpunkt, Grad und
 /// „Kontrollpunkt einfügen“ am gewählten Spline mit Kontrollpunkten, Rho am gewählten Kegelschnitt.
 /// Alle Felder stehen nur da, wenn die Auswahl passt: Die Spalte bleibt sonst, wie sie ist.
@@ -1595,6 +1645,7 @@ fn side_contents(
         Action::SketchCenterline,
         &centerline,
     );
+    comb_fields(ui, se, sk);
     ui.horizontal_wrapped(|ui| {
         if tool_button(
             ui,

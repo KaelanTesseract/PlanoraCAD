@@ -801,6 +801,8 @@ pub struct SketchColors {
     pub axis_y: Color32,
     /// Z-Achse (Triade der 3D-Skizze).
     pub axis_z: Color32,
+    /// Krümmungskamm (Skizzen 11a): Zähne und Hüllkurve, magentafarben wie in Fusion.
+    pub comb: Color32,
     /// Fangzeichen am Zeiger.
     pub snap: Color32,
     /// Gestrichelte Ausrichtungslinien beim Zeichnen.
@@ -841,6 +843,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             axis_x: p.axis_x,
             axis_y: p.axis_y,
             axis_z: p.axis_z,
+            comb: rgb(0xd070c8),
             snap: p.selection,
             guide: p.text_secondary,
             plane_fill: with_alpha(rgb(0xe8963c), 0x38),
@@ -868,6 +871,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             axis_x: p.axis_x,
             axis_y: p.axis_y,
             axis_z: p.axis_z,
+            comb: rgb(0xa8349c),
             snap: rgb(0xa86a00),
             guide: p.text_tertiary,
             plane_fill: with_alpha(rgb(0xe07b10), 0x30),

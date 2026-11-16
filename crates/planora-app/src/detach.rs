@@ -57,6 +57,8 @@ pub const DIALOG_KEYS: &[&str] = &[
     // Auf Fläche projizieren und Schnittkurve (Skizzen 10)
     "sketch_project_to_surface",
     "sketch_intersection_curve",
+    // Krümmungsanzeige einrichten (Skizzen 11a)
+    "curvature_display",
     // Baum und Zeichnung
     "tree_rename",
     "tree_delete",

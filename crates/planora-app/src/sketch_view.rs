@@ -1179,6 +1179,27 @@ pub fn insert_preview_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     out
 }
 
+/// Bildpunkte je Millimeter der Skizze in der Mitte der Ansicht (für die Mindestlänge der Zähne
+/// des Krümmungskamms); `None`, wenn die Ansicht sie dort nicht bestimmen kann.
+fn px_per_mm(map: &Mapper) -> Option<f64> {
+    let r = map.radius_at(map.rect.center())?;
+    (r.is_finite() && r > 0.0).then(|| f64::from(PICK_RADIUS_PX) / r)
+}
+
+/// Bildschirmlage für den Kamm: Punkte hinter der Kamera werden zu einem nicht endlichen Punkt,
+/// den die Zeichnung auslässt.
+fn comb_screen(map: &Mapper) -> impl Fn(DVec3) -> Pos2 + '_ {
+    |p| map.to_screen3(p).unwrap_or(Pos2::new(f32::NAN, f32::NAN))
+}
+
+/// Krümmungskämme der Skizze `sk` (Skizzen 11a) für die Ansicht `map`.
+fn comb_overlay(sk: &Sketch, map: &Mapper, color: Color32) -> Vec<Shape> {
+    let Some(scale) = px_per_mm(map) else {
+        return Vec::new();
+    };
+    crate::curvature_dialog::comb_shapes(sk, comb_screen(map), scale, color)
+}
+
 /// Strichstärke fertiger Skizzen in der 3D-Ansicht (dünner als im Skizzen-Modus).
 const FINISHED_WIDTH: f32 = 1.2;
 /// Strichstärke der Konstruktionsgeometrie fertiger Skizzen.
@@ -1267,6 +1288,8 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 out.extend(style_shapes(path, stroke, data.style()));
             }
         }
+        // Krümmungskamm (Skizzen 11a), auch außerhalb des Skizzen-Modus.
+        out.extend(comb_overlay(sk, &map, col.comb));
         // Kontrollpunktrahmen (Skizzen 9) dünn und gestrichelt.
         let frame_stroke = Stroke::new(FINISHED_CONSTRUCTION_WIDTH, col.construction);
         for line in frame_polygons3(sk) {
@@ -1474,8 +1497,50 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
         cursor_after_fields(rect, state, pointer);
     }
     draw(ui, rect, state, response.hover_pos());
+    show_curve_menu(ui, state);
     crate::sketch_triad::show(ui, state);
     response.hovered()
+}
+
+/// Rechtsklickmenü der gewählten Kurve (Skizzen 11a): „Krümmungsanzeige ein/aus“, gedämpft, wenn
+/// nur Linien gewählt sind. Ein Klick auf den Punkt führt ihn aus; ein Linksklick daneben schließt
+/// das Menü (Esc und ein neuer Rechtsklick über die Sitzung).
+fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
+    let Some(at) = state.sketch_session.as_ref().and_then(|se| se.curve_menu) else {
+        return;
+    };
+    let can = state
+        .session_sketch()
+        .zip(state.sketch_session.as_ref())
+        .is_some_and(|(sk, se)| se.can_toggle_curvature(sk));
+    let mut run = false;
+    let response = theme::field_area(egui::Id::new("planora-sketch-curve-menu"), pos2(at.0, at.1))
+        .order(egui::Order::Foreground)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.scope(|ui| {
+                    theme::menu_style(ui.style_mut());
+                    let item = ui.add_enabled(
+                        can,
+                        egui::Button::new(tr!("action-sketch-toggle-curvature")),
+                    );
+                    if !can {
+                        item.on_disabled_hover_text(tr!("sketch-comb-select-curve"));
+                    } else if item.clicked() {
+                        run = true;
+                    }
+                });
+            });
+        });
+    let outside = ui.input(|i| i.pointer.primary_pressed())
+        && ui
+            .input(|i| i.pointer.interact_pos())
+            .is_some_and(|p| !response.response.rect.contains(p));
+    if run {
+        crate::curvature_dialog::toggle(state);
+    } else if outside && let Some(se) = state.sketch_session.as_mut() {
+        se.curve_menu = None;
+    }
 }
 
 /// Die Abbildung auf die Skizze im Rechteck `rect` für dieses Bild.
@@ -2299,7 +2364,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         se.click_after_flyout = false;
     }
     if response.clicked_by(PointerButton::Secondary) && !se.box_aborted {
-        se.cancel(&mut sf.sketch);
+        // Im Auswahlwerkzeug mit gewählter Kurve öffnet der Rechtsklick das Menü, sonst bricht er
+        // ab wie bisher.
+        let at = pointer.unwrap_or(Pos2::ZERO);
+        se.secondary_click(&mut sf.sketch, (at.x, at.y));
     }
     if !ui.input(|i| i.pointer.any_down()) {
         se.box_aborted = false;
@@ -2805,6 +2873,19 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         for path in paths {
             painter.extend(style_shapes(path, Stroke::new(width, color), data.style()));
         }
+    }
+
+    // Krümmungskamm (Skizzen 11a) und die Vorschau des offenen Dialogs „Krümmungsanzeige
+    // einrichten“; die Vorschau ändert die Skizze nicht.
+    painter.extend(comb_overlay(sk, &map, col.comb));
+    if let (Some(d), Some(scale)) = (state.curvature_dialog.as_ref(), px_per_mm(&map)) {
+        painter.extend(crate::curvature_dialog::preview_shapes(
+            sk,
+            d,
+            comb_screen(&map),
+            scale,
+            col.comb,
+        ));
     }
 
     // Hilfslinien der gewählten Kurve (Kontrollpolygon, Kegelschnitt), gestrichelt unter den Punkten.

@@ -14,6 +14,7 @@ use planora_i18n::tr;
 use planora_math::{DVec2, DVec3};
 use planora_sketch::SketchError;
 use planora_sketch::blend::{BlendEnd, BlendKind};
+use planora_sketch::comb::{COMB_DENSITY, COMB_SCALE_MAX, COMB_SCALE_MIN, CombSettings};
 use planora_sketch::constraint::{Axis3, ConstraintId, ConstraintKind, FixToggle, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
@@ -188,6 +189,30 @@ impl Default for TransformState {
             selection_before: Vec::new(),
             blocked_note: false,
         }
+    }
+}
+
+/// Ergebnis von [`SketchSession::toggle_curvature`].
+#[derive(Clone, Debug)]
+pub enum CombToggle {
+    /// Der Dialog „Krümmungsanzeige einrichten“ soll für diese Kurven (ohne Kamm) öffnen.
+    Dialog(Vec<CurveId>),
+    /// Der Kamm wurde bei so vielen Kurven entfernt.
+    Off(usize),
+    /// Nichts zu tun, mit Meldung (nur Linien oder keine Kurve gewählt).
+    Refused(Msg),
+}
+
+/// Einstellungen in die erlaubten Bereiche gezwungen (nicht endliche Maßstäbe werden zur Vorgabe).
+pub fn clamp_comb(s: CombSettings) -> CombSettings {
+    let scale = if s.scale.is_finite() {
+        s.scale.clamp(COMB_SCALE_MIN, COMB_SCALE_MAX)
+    } else {
+        CombSettings::default().scale
+    };
+    CombSettings {
+        density: s.density.clamp(*COMB_DENSITY.start(), *COMB_DENSITY.end()),
+        scale,
     }
 }
 
@@ -564,6 +589,9 @@ pub struct SketchSession {
     /// Name des nächsten Schritts für Rückgängig, wenn ein Werkzeug ihn besser kennt als der
     /// Vergleich der Stände (Stutzen, Dehnen, Brechen); der Verlauf nimmt und leert ihn.
     pub edit_label: Option<Msg>,
+    /// Rechtsklickmenü der gewählten Kurve (Skizzen 11a): Bildschirmlage, an der es steht; nicht
+    /// Teil des Dokuments. Esc, ein Klick daneben oder ein Werkzeugwechsel schließen es.
+    pub curve_menu: Option<(f32, f32)>,
     /// Triade der 3D-Skizze (Skizzen 10; gehört nicht zum Dokument und nicht zum Rückgängig):
     /// Lage, Drehung, aktive Ebene, aktiver Drehgriff (Tab) und „Z sperren“ (Pfeil hoch gehalten,
     /// setzt die Oberfläche je Bild aus der Taste, [`crate::keymap::dispatch::held`]).
@@ -775,6 +803,7 @@ impl SketchSession {
             history_jumps: 0,
             hover_preview: None,
             edit_label: None,
+            curve_menu: None,
             triad: Default::default(),
             triad_ui: Default::default(),
             cursor3: None,
@@ -2058,6 +2087,10 @@ impl SketchSession {
     /// (gewählter Bezug oder gesetztes Maß) und endet erst, wenn nichts mehr offen ist. Ein
     /// Abhängigkeitsbefehl ([`Tool::Constraint`]) endet ganz, ohne seine halbe Auswahl.
     pub fn cancel(&mut self, sk: &mut Sketch) {
+        // Ein offenes Rechtsklickmenü schließt zuerst.
+        if self.curve_menu.take().is_some() {
+            return;
+        }
         if self.grip_drag.is_some() {
             self.abort_grip();
             return;
@@ -3438,6 +3471,127 @@ impl SketchSession {
             {
                 let _ = sk.set_centerline(c, !on);
             }
+        }
+    }
+
+    // ---- Krümmungskamm (Skizzen 11a) -----------------------------------------------------------
+
+    /// Die gewählten Kurven, die einen Kamm tragen können (ohne Linien), je einmal.
+    fn comb_curves(&self, sk: &Sketch) -> Vec<CurveId> {
+        let mut out: Vec<CurveId> = Vec::new();
+        for c in self.selected_curves() {
+            if sk.comb_capable(c) && !out.contains(&c) {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// Lässt sich „Krümmungsanzeige ein/aus“ anwenden (mindestens eine gewählte Kurve, die
+    /// keine Linie ist)? Gilt für Menüpunkt, Aktion und Schalter im Skizzenfeld.
+    pub fn can_toggle_curvature(&self, sk: &Sketch) -> bool {
+        !self.comb_curves(sk).is_empty()
+    }
+
+    /// Fusion „Toggle Curvature Display“: Haben alle gewählten kammfähigen Kurven einen Kamm,
+    /// wird er bei allen entfernt (ein Rückgängig-Schritt). Sonst kommt der Dialog für die ohne
+    /// Kamm (den öffnet die Oberfläche, hier ändert sich nichts). Nur Linien oder keine Kurve
+    /// gewählt: abgelehnt.
+    pub fn toggle_curvature(&mut self, sk: &mut Sketch) -> CombToggle {
+        let curves = self.comb_curves(sk);
+        if curves.is_empty() {
+            return CombToggle::Refused(crate::msg!("sketch-comb-select-curve"));
+        }
+        let without: Vec<CurveId> = curves
+            .iter()
+            .copied()
+            .filter(|c| sk.comb(*c).is_none())
+            .collect();
+        if without.is_empty() {
+            for c in &curves {
+                let _ = sk.set_comb(*c, None);
+            }
+            self.edit_label = Some(crate::msg!("undo-comb-toggle"));
+            return CombToggle::Off(curves.len());
+        }
+        CombToggle::Dialog(without)
+    }
+
+    /// Setzt `settings` bei allen `curves` in einem Schritt (OK im Dialog); Kurven, die es nicht
+    /// mehr gibt, bleiben außen vor. Gibt an, bei wie vielen es geklappt hat.
+    pub fn apply_comb(
+        &mut self,
+        sk: &mut Sketch,
+        curves: &[CurveId],
+        settings: CombSettings,
+    ) -> usize {
+        let settings = clamp_comb(settings);
+        let done = curves
+            .iter()
+            .filter(|c| sk.set_comb(**c, Some(settings)).is_ok())
+            .count();
+        if done > 0 {
+            self.edit_label = Some(crate::msg!("undo-comb-toggle"));
+        }
+        done
+    }
+
+    /// Schalter „Krümmungskamm“ im Skizzenfeld: schaltet bei allen gewählten kammfähigen Kurven
+    /// den Kamm ein (mit den Vorgaben, wo noch keiner ist) oder aus.
+    pub fn set_comb_selected(&mut self, sk: &mut Sketch, on: bool) {
+        let curves = self.comb_curves(sk);
+        for c in &curves {
+            let has = sk.comb(*c).is_some();
+            if on && !has {
+                let _ = sk.set_comb(*c, Some(CombSettings::default()));
+            } else if !on && has {
+                let _ = sk.set_comb(*c, None);
+            }
+        }
+        if !curves.is_empty() {
+            self.edit_label = Some(crate::msg!("undo-comb-toggle"));
+        }
+    }
+
+    /// Ist genau eine Kurve gewählt und trägt sie einen Kamm: ihre Einstellungen (für die Felder
+    /// „Dichte“ und „Maßstab“ im Skizzenfeld).
+    pub fn single_comb(&self, sk: &Sketch) -> Option<(CurveId, CombSettings)> {
+        let [Item::Curve(c)] = self.selection.as_slice() else {
+            return None;
+        };
+        Some((*c, sk.comb(*c)?))
+    }
+
+    /// Ändert Dichte und/oder Maßstab des Kamms von `c` (auf die Bereiche begrenzt); ohne Kamm
+    /// nichts.
+    pub fn edit_comb(
+        &mut self,
+        sk: &mut Sketch,
+        c: CurveId,
+        density: Option<u32>,
+        scale: Option<f64>,
+    ) {
+        let Some(old) = sk.comb(c) else {
+            return;
+        };
+        let new = clamp_comb(CombSettings {
+            density: density.unwrap_or(old.density),
+            scale: scale.unwrap_or(old.scale),
+        });
+        if new != old && sk.set_comb(c, Some(new)).is_ok() {
+            self.edit_label = Some(crate::msg!("undo-comb-settings"));
+        }
+    }
+
+    /// Rechtsklick in der Zeichnung an der Bildschirmlage `at`: Im Auswahlwerkzeug mit gewählter
+    /// Kurve öffnet er das Menü ([`curve_menu`](Self::curve_menu)), sonst bricht er wie bisher ab.
+    pub fn secondary_click(&mut self, sk: &mut Sketch, at: (f32, f32)) {
+        let curve_selected = self.selection.iter().any(|i| matches!(i, Item::Curve(_)));
+        if self.tool == Tool::Select && curve_selected && !self.in_gesture() {
+            self.curve_menu = Some(at);
+        } else {
+            self.curve_menu = None;
+            self.cancel(sk);
         }
     }
 

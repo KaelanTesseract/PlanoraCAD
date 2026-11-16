@@ -364,6 +364,9 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 se.toggle_centerline_if_possible(sk);
             }
         }
+        Action::SketchToggleCurvature => {
+            crate::curvature_dialog::toggle(&mut ws.active_tab_mut().state);
+        }
         Action::SketchBreakLink => {
             // Wie der Knopf: alle gewählten Projektionen in einem Schritt; ohne passende
             // Auswahl nichts (wie „Konstruktion umschalten“).

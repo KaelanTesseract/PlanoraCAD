@@ -342,6 +342,9 @@ pub struct AppState {
     /// Offener Dialog „Auf Fläche projizieren“ oder „Schnittkurve“ der offenen Skizze
     /// (Skizzen 10); er folgt der gewählten Art ([`crate::surface_project_dialog::sync`]).
     pub surface_dialog: Option<crate::surface_project_dialog::SurfaceDialog>,
+    /// Offener Dialog „Krümmungsanzeige einrichten“ der offenen Skizze (Skizzen 11a); seine
+    /// Vorschau zeichnet die Ansicht, die Skizze ändert erst OK.
+    pub curvature_dialog: Option<crate::curvature_dialog::CurvatureDialog>,
     /// Hervorhebungsliste der Ansicht (Task H3): was die Felder des offenen Dialogs
     /// [`AppState::surface_dialog`] gewählt haben. Flächen sind getönt, Kanten, Ecken, Achsen,
     /// Ebenen und Kurven fertiger Skizzen stehen in der Auswahlfarbe. Setzen nur über
@@ -754,6 +757,7 @@ impl AppState {
             dimension_dialog: None,
             sheet_dialog: None,
             surface_dialog: None,
+            curvature_dialog: None,
             dialog_marks: Vec::new(),
             pending_delete_dimension: None,
             document_name: tr!("state-unnamed"),
@@ -1265,6 +1269,7 @@ impl AppState {
         self.dimension_dialog = None;
         self.sheet_dialog = None;
         self.surface_dialog = None;
+        self.curvature_dialog = None;
         self.dialog_marks.clear();
         self.dimension_tool = crate::dimension_tool::DimensionTool::default();
         self.balloon_tool = crate::balloon_tool::BalloonTool::default();

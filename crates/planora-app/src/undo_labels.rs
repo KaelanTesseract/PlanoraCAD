@@ -395,6 +395,19 @@ pub fn describe_sketch_change_beside(
             tr!("undo-constraint")
         };
     }
+    // Krümmungskamm (Skizzen 11a): ein- oder ausgeschaltet, sonst nur Dichte/Maßstab geändert.
+    let comb_changed =
+        |id, c: &planora_sketch::model::CurveData| bs.curve(id).is_some_and(|o| o.comb != c.comb);
+    if as_.curves().any(|(id, c)| comb_changed(id, c)) {
+        let toggled = as_
+            .curves()
+            .any(|(id, c)| comb_changed(id, c) && bs.comb(id).is_some() != c.comb.is_some());
+        return if toggled {
+            tr!("undo-comb-toggle")
+        } else {
+            tr!("undo-comb-settings")
+        };
+    }
     if as_
         .curves()
         .any(|(id, c)| bs.curve(id).is_some_and(|o| o.centerline != c.centerline))

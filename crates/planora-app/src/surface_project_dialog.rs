@@ -569,7 +569,7 @@ fn pick_row(
 }
 
 /// Meldung, OK und Abbrechen; liefert (OK, Abbrechen).
-fn footer(ui: &mut egui::Ui, error: Option<String>, ready: bool) -> (bool, bool) {
+pub(crate) fn footer(ui: &mut egui::Ui, error: Option<String>, ready: bool) -> (bool, bool) {
     if let Some(e) = error {
         ui.add_space(4.0);
         let dark = ui.visuals().dark_mode;
@@ -594,7 +594,7 @@ fn footer(ui: &mut egui::Ui, error: Option<String>, ready: bool) -> (bool, bool)
 /// Eingabe (übernehmen, wenn `ready`) und Esc (abbrechen), im Inhalt des Dialogs gelesen: im
 /// Fenster, in dem der Dialog steht, solange dort kein Feld tippt. Abgedockt zählt auch Esc im
 /// Hauptfenster ([`crate::dialog::escape_pressed`]), Enter des Hauptfensters nie.
-fn keys(ui: &egui::Ui, ready: bool) -> (bool, bool) {
+pub(crate) fn keys(ui: &egui::Ui, ready: bool) -> (bool, bool) {
     let ctx = ui.ctx();
     let enter =
         ready && !crate::viewport::typing(ctx) && ctx.input(|i| i.key_pressed(egui::Key::Enter));
