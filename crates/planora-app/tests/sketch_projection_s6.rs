@@ -222,8 +222,8 @@ fn deleting_projected_curve_prunes_copy() {
     let (mut s, id, c) = projected();
     select(&mut s, &[Item::Curve(c)]);
     {
-        let (se, sk) = s.session_sketch_mut().unwrap();
-        se.delete_selection(sk);
+        let (se, sf) = s.session_draft_mut().unwrap();
+        se.delete_selection_in(sf);
     }
     s.observe_sketch(false);
     assert!(draft(&s).sketch.curve(c).is_none());

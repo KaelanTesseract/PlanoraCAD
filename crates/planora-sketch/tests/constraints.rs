@@ -429,3 +429,45 @@ fn jacobians_match_finite_differences_for_end_tangent() {
         check_jacobian(&mut s.clone(), kind);
     }
 }
+
+/// M-9: Die Löschregel des Modells. Mit einer Kurve gehen ihre freien Enden samt Maßen und
+/// Abhängigkeiten; ein Ende, das noch eine Kurve benutzt, und ein geschützter Punkt bleiben
+/// mit allem, was an ihnen hängt.
+#[test]
+fn remove_curve_ends_follows_the_delete_rule() {
+    let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    let c = s.add_point(10.0, 8.0).unwrap();
+    let d = s.add_point(-5.0, 3.0).unwrap();
+    let l1 = s.add_line(a, b).unwrap();
+    let l2 = s.add_line(b, c).unwrap();
+    let l3 = s.add_line(a, d).unwrap();
+    let fix_a = s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    let dist_ab = s.add_constraint(K::Distance(a, b, 10.0)).unwrap();
+    let fix_b = s.add_constraint(K::Fixed(b, 10.0, 0.0)).unwrap();
+    let fix_d = s.add_constraint(K::Fixed(d, -5.0, 3.0)).unwrap();
+    // l1 löschen: a ist geschützt, b hängt noch an l2.
+    let ends = s.curve(l1).unwrap().kind.points();
+    s.remove_curve(l1).unwrap();
+    assert_eq!(s.remove_curve_ends(&ends, &[a]), 0);
+    assert!(s.point_xy(a).is_ok() && s.point_xy(b).is_ok());
+    assert!(
+        s.constraint(fix_a).is_some(),
+        "geschützter Punkt behält seine Fixierung"
+    );
+    assert!(
+        s.constraint(fix_b).is_some(),
+        "benutzter Punkt behält seine Fixierung"
+    );
+    assert!(s.constraint(dist_ab).is_some());
+    // l3 löschen ohne Schutz: d ist frei und geht samt Fixierung; a hängt an keiner Kurve mehr,
+    // geht also auch, mit Fixierung und Maß.
+    let ends = s.curve(l3).unwrap().kind.points();
+    s.remove_curve(l3).unwrap();
+    assert_eq!(s.remove_curve_ends(&ends, &[]), 2);
+    assert!(s.point_xy(a).is_err() && s.point_xy(d).is_err());
+    assert!(s.constraint(fix_d).is_none() && s.constraint(fix_a).is_none());
+    assert!(s.constraint(dist_ab).is_none());
+    assert!(s.point_xy(b).is_ok() && s.curve(l2).is_some());
+}

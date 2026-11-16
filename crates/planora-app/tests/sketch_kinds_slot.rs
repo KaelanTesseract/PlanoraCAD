@@ -24,6 +24,19 @@ use planora_sketch::shapes::{ArcPlan, ArcSlotIds, ArcSlotPlan, ShapePlan, SlotId
 use planora_sketch::solver::{SolveReport, SolveStatus};
 use std::f64::consts::{FRAC_PI_2, SQRT_2, TAU};
 
+/// Entf an einer Skizze ohne Entwurf: als Entwurf ohne Kopien (nichts ist geschützt), wie
+/// `delete_selection_in` am offenen Entwurf.
+fn delete_in_draft(se: &mut SketchSession, sk: &mut Sketch) {
+    let mut sf = planora_feature::SketchFeature {
+        sketch: sk.clone(),
+        plane: planora_feature::SketchPlane::Standard(planora_app::state::StandardPlane::XY),
+        copies: Vec::new(),
+        formulas: Default::default(),
+    };
+    se.delete_selection_in(&mut sf);
+    *sk = sf.sketch;
+}
+
 const R: f64 = 0.5;
 const SIZE: Vec2 = vec2(1920.0, 1080.0);
 const NONE: Modifiers = Modifiers::NONE;
@@ -1148,7 +1161,7 @@ fn trimming_a_side_and_deleting_an_arc_leave_no_dead_constraints() {
     let ids = slot_ids(&sk);
     se.set_tool(&mut sk, Tool::Select);
     se.selection = vec![Item::Curve(ids.caps[1])];
-    se.delete_selection(&mut sk);
+    delete_in_draft(&mut se, &mut sk);
     assert!(sk.curve(ids.caps[1]).is_none());
     assert_eq!(sk.clone().solve().status, SolveStatus::Solved);
 
@@ -1157,7 +1170,7 @@ fn trimming_a_side_and_deleting_an_arc_leave_no_dead_constraints() {
     let ids = arc_slot_ids(&sk);
     se.set_tool(&mut sk, Tool::Select);
     se.selection = vec![Item::Curve(ids.outer)];
-    se.delete_selection(&mut sk);
+    delete_in_draft(&mut se, &mut sk);
     assert!(sk.curve(ids.outer).is_none());
     assert_eq!(sk.clone().solve().status, SolveStatus::Solved);
 }

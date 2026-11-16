@@ -145,8 +145,9 @@ fn x_deletes_one_undo_step() {
     let mut w = ws();
     let (line, _) = open_line_and_point(&mut w);
     let n = undo_len(&w);
-    let (se, sk) = state(&mut w).session_sketch_mut().unwrap();
-    assert!(se.delete_under_item(sk, CheckItem::Curve(line)));
+    let (se, sf) = state(&mut w).session_draft_mut().unwrap();
+    assert!(se.delete_under_item_in(sf, CheckItem::Curve(line)));
+    let sk = &mut sf.sketch;
     assert!(sk.curve(line).is_none());
     w.observe_history(false);
     assert_eq!(undo_len(&w), n + 1);
@@ -156,8 +157,9 @@ fn x_deletes_one_undo_step() {
 fn x_is_refused_for_a_lone_point() {
     let mut w = ws();
     let (_, lone) = open_line_and_point(&mut w);
-    let (se, sk) = state(&mut w).session_sketch_mut().unwrap();
-    assert!(!se.delete_under_item(sk, CheckItem::Point(lone)));
+    let (se, sf) = state(&mut w).session_draft_mut().unwrap();
+    assert!(!se.delete_under_item_in(sf, CheckItem::Point(lone)));
+    let sk = &mut sf.sketch;
     assert!(sk.point_xy(lone).is_ok());
 }
 
@@ -167,8 +169,9 @@ fn under_list_follows_delete_and_undo() {
     let (line, _) = open_line_and_point(&mut w);
     assert_eq!(names(&mut w), ["Linie 1", "Punkt 1"]);
     {
-        let (se, sk) = state(&mut w).session_sketch_mut().unwrap();
-        assert!(se.delete_under_item(sk, CheckItem::Curve(line)));
+        let (se, sf) = state(&mut w).session_draft_mut().unwrap();
+        assert!(se.delete_under_item_in(sf, CheckItem::Curve(line)));
+        let sk = &mut sf.sketch;
         // Gleich nach dem Löschen steht der Bericht der Skizze noch im Bild; ein Zeilenklick darauf
         // ist harmlos.
         se.last_report = Some(sk.solve());
@@ -177,11 +180,12 @@ fn under_list_follows_delete_and_undo() {
     assert_eq!(names(&mut w), ["Punkt 1"], "X: Zeile weg");
     // Veraltetes Element: Klick und X tun nichts.
     {
-        let (se, sk) = state(&mut w).session_sketch_mut().unwrap();
+        let (se, sf) = state(&mut w).session_draft_mut().unwrap();
+        let sk = &mut sf.sketch;
         se.selection.clear();
         assert!(!se.focus_item(sk, CheckItem::Curve(line)));
         assert!(se.selection.is_empty());
-        assert!(!se.delete_under_item(sk, CheckItem::Curve(line)));
+        assert!(!se.delete_under_item_in(sf, CheckItem::Curve(line)));
     }
     // Rückgängig: Die Zeile ist wieder da.
     assert!(state(&mut w).undo_sketch());
@@ -476,8 +480,9 @@ fn x_on_a_line_removes_its_points_and_dimensions_like_delete() {
     }
     w.observe_history(false);
     let before = undo_len(&w);
-    let (se, sk) = state(&mut w).session_sketch_mut().unwrap();
-    assert!(se.delete_under_item(sk, CheckItem::Curve(line)));
+    let (se, sf) = state(&mut w).session_draft_mut().unwrap();
+    assert!(se.delete_under_item_in(sf, CheckItem::Curve(line)));
+    let sk = &mut sf.sketch;
     assert_eq!(sk.constraints().count(), 0, "Maß muss mit");
     let points: Vec<_> = sk.points().map(|p| p.0).collect();
     assert_eq!(points, vec![lone], "nur der freie Punkt bleibt");

@@ -1390,9 +1390,9 @@ fn a_deleted_curve_falls_out_of_the_chain() {
     let line = normal_lines(sketch(&s))[0];
     pick_with(&mut s, v(20.0, 0.0), true);
     {
-        let (se, sk) = s.session_sketch_mut().unwrap();
+        let (se, sf) = s.session_draft_mut().unwrap();
         se.selection = vec![planora_app::sketch_state::Item::Curve(line)];
-        se.delete_selection(sk);
+        se.delete_selection_in(sf);
     }
     s.observe_sketch(false);
     assert_eq!(picked(&s), 0, "wieder die Wahl");

@@ -618,3 +618,15 @@ fn checking_many_rollbacks_loads_and_restores_and_rejects_same_chain() {
     let e = Document::from_snapshot(s, 0.05).expect_err("abgelehnt");
     assert!(e.to_string().contains("desselben Körpers"), "{e}");
 }
+
+/// M-9: Eine Rechnung für Dokument und Verlaufsleiste. Mit allen Rückrollstellen gleich der Menge
+/// des Dokuments; eine einzelne Stelle erfasst sich selbst und alles, was von ihr abhängt.
+#[test]
+fn rolled_back_from_single_stelle_and_all() {
+    let (mut d, sketch, extrude) = sketch_model();
+    assert!(d.rolled_back_from(&[]).is_empty());
+    let one = d.rolled_back_from(&[sketch]);
+    assert!(one.contains(&sketch) && one.contains(&extrude), "{one:?}");
+    d.set_rollback(extrude, sketch).unwrap();
+    assert_eq!(d.rolled_back_from(d.rollbacks()), one);
+}

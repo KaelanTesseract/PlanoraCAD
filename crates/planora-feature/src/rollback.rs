@@ -153,7 +153,16 @@ impl Document {
     /// ihnen abhängt (Verweise zeigen nur nach vorn, ein Durchlauf reicht). Schwache Bezüge
     /// zählen mit, soweit die Quelle vor dem Feature steht.
     pub(crate) fn rolled_back(&self) -> HashSet<FeatureId> {
-        let mut found: HashSet<FeatureId> = self.rollbacks.iter().copied().collect();
+        self.rolled_back_from(&self.rollbacks)
+    }
+
+    /// Wie [`rolled_back`](Self::rolled_back) für beliebige Stellen `stellen` (etwa eine einzelne
+    /// Rückrollstelle in der Verlaufsleiste): die Stellen selbst und alles, was von ihnen abhängt,
+    /// harte Bezüge und schwache, soweit die Quelle vor dem Feature steht (Skizzen 11a Task 17);
+    /// eine vor ihre Quelle geschobene Skizze ist nicht erfasst. Eine gemeinsame Rechnung für
+    /// Dokument und Verlaufsleiste (Folgepunkt M-9).
+    pub fn rolled_back_from(&self, stellen: &[FeatureId]) -> HashSet<FeatureId> {
+        let mut found: HashSet<FeatureId> = stellen.iter().copied().collect();
         if found.is_empty() {
             return found;
         }

@@ -828,9 +828,10 @@ fn a_deleted_curve_falls_out_of_the_picks_and_of_the_run() {
     click(&mut s, v(25.0, 0.0)).unwrap();
     click(&mut s, v(50.0, 15.0)).unwrap();
     assert_eq!(stage(&s), 2);
-    let (se, sk) = s.session_sketch_mut().unwrap();
+    let (se, sf) = s.session_draft_mut().unwrap();
     se.selection = vec![Item::Curve(bottom)];
-    se.delete_selection(sk);
+    se.delete_selection_in(sf);
+    let sk = &mut sf.sketch;
     assert_eq!(se.pending_curves.len(), 1);
     assert_eq!(se.pick_points.len(), 1);
     assert!(close(se.pick_points[0], v(50.0, 15.0)));
@@ -844,10 +845,10 @@ fn a_deleted_curve_falls_out_of_the_picks_and_of_the_run() {
     type_in(&mut s, 0, "5");
     click(&mut s, v(40.0, 10.0)).unwrap();
     let arc = arcs(sketch(&s))[0];
-    let (se, sk) = s.session_sketch_mut().unwrap();
+    let (se, sf) = s.session_draft_mut().unwrap();
     assert!(se.fillet_run.is_some());
     se.selection = vec![Item::Curve(arc)];
-    se.delete_selection(sk);
+    se.delete_selection_in(sf);
     assert_eq!(
         se.fillet_run, None,
         "der Lauf vergisst die gelöschte Rundung"

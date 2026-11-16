@@ -1090,8 +1090,8 @@ fn delete_is_one_unit_when_a_suppression_is_refused() {
         let curves = sk(&mut app).curves().count();
         select(&mut app, vec![Item::Curve(free), Item::Curve(inst)]);
         {
-            let (se, s) = state(&mut app).session_sketch_mut().unwrap();
-            se.delete_selection(s);
+            let (se, sf) = state(&mut app).session_draft_mut().unwrap();
+            se.delete_selection_in(sf);
         }
         let text = message(&mut app).unwrap_or_default();
         assert!(text.contains(&tr!("sketch-pattern-cycle")), "{text}");
@@ -1101,8 +1101,9 @@ fn delete_is_one_unit_when_a_suppression_is_refused() {
         assert_eq!(sk(&mut app).pattern(p).unwrap().instances.len(), 2);
         // Ohne das Exemplar geht das Löschen der Linie.
         select(&mut app, vec![Item::Curve(free)]);
-        let (se, s) = state(&mut app).session_sketch_mut().unwrap();
-        se.delete_selection(s);
+        let (se, sf) = state(&mut app).session_draft_mut().unwrap();
+        se.delete_selection_in(sf);
+        let s = &mut sf.sketch;
         assert!(s.curve(free).is_none());
     });
 }

@@ -2974,6 +2974,41 @@ impl Sketch {
         self.prune_points(&all)
     }
 
+    /// Löschregel für Kurven (wie Fusion, Skizzen 11a H2 und Korrektur I-1): Mit einer Kurve gehen
+    /// ihre Endpunkte samt allen Maßen und Abhängigkeiten, die an ihnen hängen (sonst hielten diese
+    /// den Punkt am Leben). Aufzurufen nach dem Entfernen der Kurven mit deren Punkten `ends`.
+    /// Es bleiben, mit allem, was an ihnen hängt: Punkte, die noch eine lebende Kurve benutzt, die
+    /// Mitte eines Kreismusters und die geschützten Punkte `protected` (etwa eingezogene Punkte,
+    /// die Ziele in den Kopien des Entwurfs). Liefert die Zahl der entfernten Punkte.
+    pub fn remove_curve_ends(&mut self, ends: &[PointId], protected: &[PointId]) -> usize {
+        if ends.is_empty() {
+            return 0;
+        }
+        let mut still_used: std::collections::HashSet<PointId> =
+            self.curves().flat_map(|(_, c)| c.kind.points()).collect();
+        still_used.extend(self.pattern_centers());
+        still_used.extend(protected.iter().copied());
+        let gone: Vec<PointId> = ends
+            .iter()
+            .copied()
+            .filter(|p| !still_used.contains(p))
+            .collect();
+        let doomed: Vec<ConstraintId> = self
+            .constraints()
+            .filter(|(_, k)| k.kind.points().iter().any(|p| gone.contains(p)))
+            .map(|(id, _)| id)
+            .collect();
+        for id in doomed {
+            let _ = self.remove_constraint(id);
+        }
+        let candidates: Vec<PointId> = ends
+            .iter()
+            .copied()
+            .filter(|p| !protected.contains(p))
+            .collect();
+        self.prune_points(&candidates)
+    }
+
     /// Entfernt diejenigen der Punkte `candidates`, die (noch) leben und weder eine Kurve noch
     /// eine (nicht interne) Abhängigkeit benutzt; andere freie Punkte bleiben. Gibt die Zahl
     /// der entfernten Punkte zurück; unbekannte und doppelte Ids werden übergangen.

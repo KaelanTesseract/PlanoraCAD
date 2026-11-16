@@ -62,7 +62,7 @@ impl Activity {
                 .enumerate()
                 .map(|(i, f)| (f.id, i))
                 .collect(),
-            rolled: rolled_back(doc, doc.rollbacks()),
+            rolled: doc.rolled_back_from(doc.rollbacks()),
             marker: doc.marker(),
         }
     }
@@ -76,38 +76,6 @@ impl Activity {
     fn behind_global(&self, id: FeatureId) -> bool {
         self.index.get(&id).is_some_and(|&i| i >= self.marker)
     }
-}
-
-/// Die Stellen `stellen` und alles, was von ihnen abhängt (Verweise zeigen nur nach vorn, ein
-/// Durchlauf in Listenordnung reicht). Wie `Document::rolled_back`: harte Bezüge und schwache,
-/// soweit die Quelle vor dem Feature steht (Skizzen 11a Task 17); eine vor ihre Quelle
-/// geschobene Skizze ist nicht erfasst.
-fn rolled_back(doc: &Document, stellen: &[FeatureId]) -> HashSet<FeatureId> {
-    let mut found: HashSet<FeatureId> = stellen.iter().copied().collect();
-    if found.is_empty() {
-        return found;
-    }
-    let pos: HashMap<FeatureId, usize> = doc
-        .features()
-        .iter()
-        .enumerate()
-        .map(|(i, f)| (f.id, i))
-        .collect();
-    for (idx, f) in doc.features().iter().enumerate() {
-        if found.contains(&f.id) {
-            continue;
-        }
-        let weak_before = || {
-            f.kind
-                .weak_dependencies()
-                .into_iter()
-                .any(|d| pos.get(&d).is_some_and(|&i| i < idx) && found.contains(&d))
-        };
-        if f.kind.dependencies().iter().any(|d| found.contains(d)) || weak_before() {
-            found.insert(f.id);
-        }
-    }
-    found
 }
 
 /// Die Schritte der Kette von `tip` in Listenordnung, Skizzen eingeschlossen; für einen
@@ -240,7 +208,11 @@ fn dropped_rollbacks(
         .iter()
         .copied()
         .filter(|r| *r != step && !comparable.contains(r) && chain.contains(r))
-        .filter(|r| rolled_back(doc, &[*r]).iter().any(|id| before.contains(id)))
+        .filter(|r| {
+            doc.rolled_back_from(&[*r])
+                .iter()
+                .any(|id| before.contains(id))
+        })
         .collect()
 }
 

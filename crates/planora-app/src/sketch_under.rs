@@ -160,16 +160,9 @@ impl SketchSession {
         true
     }
 
-    /// X in der Zeile: löscht das Element (ein Rückgängig-Schritt). Bei einem veralteten Element
-    /// oder einem Skizzenpunkt geschieht nichts.
-    /// Ohne Kopien des Entwurfs; das Skizzenfeld nimmt
-    /// [`delete_under_item_in`](Self::delete_under_item_in).
-    pub fn delete_under_item(&mut self, sk: &mut Sketch, it: CheckItem) -> bool {
-        self.delete_under_item_keeping(sk, it, &[])
-    }
-
-    /// Wie [`delete_under_item`](Self::delete_under_item) am ganzen Entwurf `sf`: Eingezogene
-    /// Punkte bleiben wie bei Entf ([`SketchSession::delete_selection_in`]).
+    /// X in der Zeile: löscht das Element im Entwurf `sf` (ein Rückgängig-Schritt). Bei einem
+    /// veralteten Element oder einem Skizzenpunkt geschieht nichts. Eingezogene Punkte bleiben wie
+    /// bei Entf ([`SketchSession::delete_selection_in`]).
     pub fn delete_under_item_in(&mut self, sf: &mut SketchFeature, it: CheckItem) -> bool {
         let keep = crate::sketch_state::kept_points(sf);
         self.delete_under_item_keeping(&mut sf.sketch, it, &keep)
