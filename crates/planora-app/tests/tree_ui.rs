@@ -381,9 +381,10 @@ fn the_delete_note_mentions_face_sketches_of_a_union() {
 }
 
 #[test]
-fn an_edge_copy_reference_goes_away_with_its_source_feature() {
-    // Die Kopie steht nur im Entwurf; „Löschen“ beendet die Skizze vorher, sodass die Rückfrage
-    // die Skizze als Folge nennt und danach nichts mehr auf den Quader verweist.
+fn deleting_an_edge_copy_source_keeps_the_sketch_with_a_warning() {
+    // Skizzen 11a Task 17: Die Herkunft einer Kopie ist ein schwacher Bezug. „Löschen“ beendet
+    // die Skizze vorher (die Kopie stand nur im Entwurf); der Quader geht ohne Rückfrage, die
+    // Skizze bleibt, ihr Bezug ist verloren (Warnung, die Kurve bleibt stehen).
     let mut s = AppState::new();
     let a = s.create_box(DVec3::new(10.0, 20.0, 5.0)).unwrap();
     let sk = s
@@ -397,15 +398,22 @@ fn an_edge_copy_reference_goes_away_with_its_source_feature() {
             .iter()
             .any(|(e, _)| s.project_edge_into_sketch(0, e).is_ok())
     );
-    assert!(
-        s.document.dependents(a).is_empty(),
-        "nur im Entwurf: das Dokument kennt die Kopie noch nicht"
-    );
     browser::request_delete(&mut s, a);
     assert!(s.sketch_session.is_none(), "Skizze vorher beendet");
-    let plan = s.pending_delete.clone().expect("Rückfrage");
-    assert!(plan.text().contains("Skizze 1"), "{}", plan.text());
-    browser::apply_delete(&mut s, &plan).unwrap();
+    assert!(
+        s.pending_delete.is_none(),
+        "keine Rückfrage, nichts hängt hart am Quader"
+    );
+    assert!(s.document.feature(a).is_none(), "Quader gelöscht");
+    let f = s.document.feature(sk).expect("Skizze bleibt");
+    assert_eq!(
+        f.status,
+        planora_feature::FeatureStatus::Ok,
+        "{:?}",
+        f.status
+    );
+    assert!(f.warning().is_some());
+    assert_eq!(f.lost_projections().len(), 1);
     assert!(
         s.document
             .features()
@@ -427,23 +435,19 @@ fn a_stale_delete_confirmation_is_refreshed_instead_of_deleting() {
     browser::request_delete(&mut s, x);
     let shown = s.pending_delete.clone().expect("Rückfrage");
     assert!(!shown.text().contains("Skizze 1"));
-    // Während die Rückfrage offen ist: Skizze S anlegen und eine Kante von X hineinkopieren.
-    let sk = s
-        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
-        .unwrap();
-    s.open_sketch(sk).unwrap();
-    let solid = s.bodies[0].solid.clone();
-    let mut copied = false;
-    for (e, _) in solid.edges.iter() {
-        if s.project_edge_into_sketch(0, e).is_ok() {
-            let c = s.sketch_draft.as_ref().unwrap().copies.last().unwrap();
-            if c.source.origins().contains(&x) {
-                copied = true;
-                break;
-            }
-        }
-    }
-    assert!(copied, "eine Kante von X kopiert");
+    // Während die Rückfrage offen ist: Skizze S auf einer Fläche von X anlegen (harter Bezug;
+    // eine kopierte Kante wäre seit Skizzen 11a Task 17 nur ein schwacher Bezug).
+    let face = s.bodies[0]
+        .solid
+        .faces
+        .iter()
+        .find(|(id, f)| {
+            f.tag.as_ref().is_some_and(|t| t.origin == x.0)
+                && planora_sketch::plane_of_face(&s.bodies[0].solid, *id).is_some()
+        })
+        .map(|(id, _)| id)
+        .expect("ebene Fläche von X");
+    let sk = s.new_sketch_on_face(0, face).unwrap();
     // „Löschen“ im Rückfragefenster
     let c = ctx();
     frame(&c, &mut s, vec![], "");
