@@ -140,6 +140,9 @@ const LAMBDA_FACTOR: f64 = 10.0;
 /// eines Punktes um einen festen Punkt) „billig“ und erzeugt riesige Querschritte, mit denen
 /// der Solver schon bei einfachen Startlagen nicht konvergiert.
 const MIN_DIAG: f64 = 1e-9;
+/// Zug auf dem dünnen Weg: Senkt ein Schritt die Kosten um höchstens diesen Anteil und sind die
+/// harten Residuen erfüllt, endet die weiche Phase (Ruling T3-3).
+const SOFT_STALL_RATIO: f64 = 0.5;
 /// Relative Schrittweite bzw. Kostensenkung, unter der ein Schritt als Stillstand gilt.
 const STALL_REL: f64 = 1e-14;
 /// So viele Schritte für den ganzen Weg nimmt [`Sketch::solve_in_steps`] höchstens.
@@ -259,10 +262,16 @@ impl SolveCache {
         .then_some(hit)
     }
 
-    /// Analyse eines gelösten Eintrags mit den Abhängigkeiten `constraints`, ohne Blick auf die
-    /// Werte (Zug auf dem dünnen Weg: Rang und freie Teile gelten vom Zugbeginn an weiter).
-    fn analysis_for(&self, constraints: &[ConstraintId]) -> Option<Analysis> {
-        match &self.groups.get(constraints)?.outcome {
+    /// Analyse eines gelösten Eintrags mit den Abhängigkeiten `constraints` und denselben
+    /// Lesevariablen `reads`, ohne Blick auf die Werte (Zug auf dem dünnen Weg: Rang und freie
+    /// Teile gelten vom Zugbeginn an weiter). Andere Lesevariablen heißen andere Spalten; dann
+    /// passen die gemerkten freien Variablen nicht.
+    fn analysis_for(&self, constraints: &[ConstraintId], reads: &[usize]) -> Option<Analysis> {
+        let hit = self.groups.get(constraints)?;
+        if hit.reads != reads {
+            return None;
+        }
+        match &hit.outcome {
             Outcome::Solved {
                 dof,
                 redundant,
@@ -888,6 +897,17 @@ impl Sketch {
                         let step_len = step.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
                         stalled =
                             step_len <= STALL_REL * size || (cost - trial_cost) <= STALL_REL * cost;
+                        // Zug auf dem dünnen Weg (Ruling T3-3): Sind die harten Residuen schon
+                        // erfüllt und sinken die Kosten je Schritt nur noch langsam, ist das
+                        // Zugziel erreicht; weitere Schritte wandern nur entlang freier
+                        // Richtungen (unsichtbar, ~1e-6 mm). Der dichte Weg rechnet wie bisher.
+                        if !soft.is_empty()
+                            && g.order.is_some()
+                            && (cost - trial_cost) <= SOFT_STALL_RATIO * cost
+                            && t.hard_inf() <= tol_r
+                        {
+                            stalled = true;
+                        }
                         x.copy_from_slice(&trial);
                         a = t;
                         cost = trial_cost;
@@ -1612,7 +1632,7 @@ impl Sketch {
                     }
                     Some(Ready::Assembled(a)) => self.analyze_assembled(&g, a),
                     None if carried => old_cache
-                        .analysis_for(&g.constraints)
+                        .analysis_for(&g.constraints, &g.reads)
                         .unwrap_or_else(|| self.analyze(&g, x)),
                     None => self.analyze(&g, x),
                 };
@@ -1955,6 +1975,35 @@ mod tests {
     use super::*;
     use crate::constraint::ConstraintKind as K;
     use planora_math::{Frame, Tolerance};
+
+    #[test]
+    fn analysis_for_needs_the_same_reads() {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let a = s.add_point(0.0, 0.0).unwrap();
+        let b = s.add_point(3.0, 0.0).unwrap();
+        let id = s.add_constraint(K::Distance(a, b, 3.0)).unwrap();
+        let mut cache = SolveCache::default();
+        cache.groups.insert(
+            vec![id],
+            CachedGroup {
+                reads: vec![0, 1, 2, 3],
+                values: vec![0; 4],
+                outcome: Outcome::Solved {
+                    dof: 3,
+                    redundant: Vec::new(),
+                    free_vars: vec![0, 1, 2, 3],
+                    carried: false,
+                },
+            },
+        );
+        let hit = cache
+            .analysis_for(&[id], &[0, 1, 2, 3])
+            .map(|a| a.free_vars);
+        assert_eq!(hit, Some(vec![0, 1, 2, 3]));
+        // Dieselben Abhängigkeiten, andere Lesevariablen: nichts übernehmen.
+        assert!(cache.analysis_for(&[id], &[0, 1, 2, 4]).is_none());
+        assert!(cache.analysis_for(&[id], &[0, 1, 2]).is_none());
+    }
 
     #[test]
     fn soft_pull_moves_free_points_and_keeps_hard_constraints_exact() {

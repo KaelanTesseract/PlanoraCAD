@@ -87,33 +87,52 @@ fn sparse_drag_like_dense() {
     }];
     let (rd, rs) = (d.drag(&drag).unwrap(), s.drag(&drag).unwrap());
     assert_eq!(rd.status, SolveStatus::Solved, "{rd:?}");
+    assert_eq!(rs.status, SolveStatus::Solved, "{rs:?}");
     assert_eq!(rd.drag_failed, rs.drag_failed);
-    // Voraussetzung von Ruling T2-1: Beide Wege laufen bis an die Schrittgrenze (100 Schritte),
-    // gleich viele Schritte.
-    assert_eq!(rd.iterations, rs.iterations, "{rd:?} / {rs:?}");
-    assert!(rd.iterations >= 100, "{rd:?}");
-    // Bedenken (Task-2-Bericht): Der Zuglauf der unterbestimmten Kette endet auf beiden Wegen
-    // erst an `MAX_ITERATIONS` (100 Schritte, ohne Stillstand). Die Kette hat freie Richtungen,
-    // die nur die Dämpfung `λ · s` (λ bis 1e-12) hält; dort wird Rundung bis etwa 1e12-fach
-    // verstärkt, und eine andere Eliminationsfolge (RCM) landet an einer anderen, ebenso gültigen
-    // Lage. Gemessen: größte Abweichung 6,2e-9 mm. Darum hier 1e-8 statt 1e-9; alles andere
-    // (Status, dof, überzählig, Widerspruch) ist gleich.
-    // A10 (Task 3): Der dünne Weg übernimmt beim Ziehen die Analyse vom Zugbeginn, der dichte
-    // rechnet sie an der gezogenen Lage (Ruling F7). Darum hier nur die Lage; die Analyse
-    // vergleicht das Lösen beim Loslassen, das auf beiden Wegen neu rechnet.
-    assert_eq!(rd.status, rs.status);
     assert_eq!(rd.conflicting, rs.conflicting);
-    assert_eq!(rs.dof, start_dof, "{rs:?}");
+    // Ruling T3-3: Der dünne Weg beendet die weiche Phase, sobald die harten Residuen erfüllt
+    // sind und die Kosten je Schritt um weniger als die Hälfte sinken; der dichte Weg läuft wie
+    // bisher bis an die Schrittgrenze (100 Schritte). Danach wandert die unterbestimmte Kette nur
+    // noch entlang freier Richtungen, die allein die Dämpfung `λ · s` (λ bis 1e-12) hält
+    // (gemessen bis etwa 3e-6 mm). Beide Lagen sind gleich gültig; verlangt wird:
+    // - das Zugziel auf beiden Wegen bis 1e-9 erreicht,
+    assert!(rs.iterations < rd.iterations, "{rs:?} / {rd:?}");
+    let target = drag[0].target;
+    for sk in [&d, &s] {
+        let e = (sk.point_xyz(last).unwrap() - target).abs().max_element();
+        assert!(e <= 1e-9, "Zugziel um {e:e} verfehlt");
+    }
+    // - die harten Abhängigkeiten erfüllt (ein neues Lösen braucht keinen Schritt),
+    for sk in [&d, &s] {
+        let mut again = sk.clone();
+        again.set_solver_path(SolverPath::Dense);
+        let r = again.solve();
+        assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+        assert_eq!(r.iterations, 0, "{r:?}");
+    }
+    // - die Lage dünn gegen dicht bis 5e-6 mm,
     for (p, _) in d.points() {
         let e = (d.point_xyz(p).unwrap() - s.point_xyz(p).unwrap())
             .abs()
             .max_element();
-        assert!(e <= 1e-8, "Punkt {p:?} weicht um {e:e} ab");
+        assert!(e <= 5e-6, "Punkt {p:?} weicht um {e:e} ab");
     }
-    let (rd, rs) = (d.solve(), s.solve());
-    same_within(&rd, &rs, &d, &s, 1e-8);
-    assert_eq!(rd.free_points, rs.free_points);
-    assert_eq!(rd.free_curves, rs.free_curves);
+    // - und während des Zugs die Analyse vom Zugbeginn (A10, Ruling F7; dicht rechnet neu).
+    assert_eq!(rs.dof, start_dof, "{rs:?}");
+    // Nach dem Loslassen rechnet der dünne Weg die Analyse an seiner Lage neu. Sie wird gegen
+    // eine frische Analyse an derselben Lage geprüft, nicht gegen dicht: Die gezogene Kette
+    // liegt an einer fast abhängigen Stelle (dicht 4 überzählige Abhängigkeiten, dof 127 statt
+    // 123), und dort kippt der Rang schon bei Lageunterschieden um 1e-7.
+    let release = s.solve();
+    let mut fresh = s.clone();
+    fresh.set_solver_path(SolverPath::Sparse);
+    let r = fresh.solve();
+    assert_eq!(release.status, r.status);
+    assert_eq!(release.dof, r.dof);
+    assert_eq!(release.redundant, r.redundant);
+    assert_eq!(release.conflicting, r.conflicting);
+    assert_eq!(release.free_points, r.free_points);
+    assert_eq!(release.free_curves, r.free_curves);
 }
 
 #[test]

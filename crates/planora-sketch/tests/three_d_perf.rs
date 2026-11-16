@@ -178,3 +178,61 @@ fn sparse_threshold_crossover() {
         );
     }
 }
+
+/// Teurer Fall der dünnen Freiheitsprüfung (`column_free`): `chain_2d(100)`, danach erst ein
+/// `Fixed` am Anfang und 50 Längenmaße an den ersten Linien. Die bestimmenden Zeilen kommen also
+/// spät; jede bestimmte Spalte rechnet bis weit ans Ende der Hülle. Lösen dicht gegen dünn, je
+/// der Median aus 3 Läufen.
+#[test]
+#[ignore = "Messtest, nur im Release-Build sinnvoll"]
+fn sparse_free_check_with_late_dimensions() {
+    use planora_sketch::constraint::ConstraintKind as K;
+    use planora_sketch::model::CurveKind;
+    use planora_sketch::sparse::SolverPath;
+    let build = || {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        chain_2d(&mut s, 100);
+        let (first, _) = s.points().next().unwrap();
+        let at = s.point_xy(first).unwrap();
+        s.add_constraint(K::Fixed(first, at.x, at.y)).unwrap();
+        let lines: Vec<_> = s
+            .curves()
+            .filter_map(|(_, c)| match c.kind {
+                CurveKind::Line { a, b } => Some((a, b)),
+                _ => None,
+            })
+            .take(50)
+            .collect();
+        for (a, b) in lines {
+            s.add_constraint(K::Distance(a, b, 2.0)).unwrap();
+        }
+        s
+    };
+    let run = |path: SolverPath| {
+        let mut out: Vec<(f64, usize)> = (0..3)
+            .map(|_| {
+                let mut s = build();
+                s.set_solver_path(path);
+                let t = Instant::now();
+                let (r, _) = s.solve_timed();
+                assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+                (t.elapsed().as_secs_f64(), r.dof)
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out[1]
+    };
+    let mut s = build();
+    s.set_solver_path(SolverPath::Sparse);
+    let (_, t) = s.solve_timed();
+    let (dense, dd) = run(SolverPath::Dense);
+    let (sparse, sd) = run(SolverPath::Sparse);
+    assert_eq!(dd, sd);
+    println!(
+        "FREIPRUEFUNG chain_2d(100) + Fixed + 50 Maße: lösen dicht {:.3} s, dünn {:.3} s \
+         (dof {sd}; Rang dünn {:.0} ms)",
+        dense,
+        sparse,
+        t.rank.as_secs_f64() * 1e3
+    );
+}
