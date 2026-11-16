@@ -765,3 +765,35 @@ fn the_stage_of_a_chamfer_offers_its_fields() {
         assert_eq!(got, fields, "{kind:?}");
     }
 }
+
+/// Ruling H1-5 (b): In einer 3D-Skizze steht die Übergangskurve nicht im Untermenü „Ändern“ (wie
+/// Fusion), und die Aktion wählt dort kein Werkzeug. In 2D bleibt alles wie gehabt.
+#[test]
+fn blend_curve_only_in_2d_sketches() {
+    let mut w = workspace(true);
+    assert!(app::sketch_modify_tools(&w).contains(&Tool::BlendCurve));
+    {
+        let (se, sk) = w.active_tab_mut().state.session_sketch_mut().unwrap();
+        se.set_three_d(sk, true);
+        se.choose_tool(sk, Tool::Line);
+    }
+    let tools = app::sketch_modify_tools(&w);
+    assert!(!tools.contains(&Tool::BlendCurve), "{tools:?}");
+    assert_eq!(tools, vec![Tool::Offset, Tool::MoveCopy, Tool::Scale]);
+    planora_app::commands::run_action(&mut w, Action::SketchBlendCurve);
+    assert_eq!(
+        w.active_tab().state.sketch_session.as_ref().unwrap().tool,
+        Tool::Line,
+        "die Aktion wirkt in 3D nicht"
+    );
+    {
+        let (se, sk) = w.active_tab_mut().state.session_sketch_mut().unwrap();
+        se.set_three_d(sk, false);
+    }
+    assert!(app::sketch_modify_tools(&w).contains(&Tool::BlendCurve));
+    planora_app::commands::run_action(&mut w, Action::SketchBlendCurve);
+    assert_eq!(
+        w.active_tab().state.sketch_session.as_ref().unwrap().tool,
+        Tool::BlendCurve
+    );
+}

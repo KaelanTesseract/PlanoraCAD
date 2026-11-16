@@ -381,14 +381,14 @@ impl Rig {
         let surface = self.surface;
         self.ctx
             .run_ui(raw, |ui| {
+                // Die Fläche vor der App: Am Bildende gibt die App einen Fokus ab, dessen Widget im
+                // Bild nicht gezeichnet wurde (Ruling H1-5).
                 if let Some(id) = surface {
                     planora_app::viewport::focus_is_not_typing(ui.ctx(), id);
-                }
-                app.ui(ui, &mut f);
-                if let Some(id) = surface {
                     let spot = Rect::from_min_size(pos2(W - 4.0, H - 4.0), Vec2::splat(2.0));
                     ui.interact(spot, id, egui::Sense::click());
                 }
+                app.ui(ui, &mut f);
             })
             .drop_without_applying_deltas();
     }

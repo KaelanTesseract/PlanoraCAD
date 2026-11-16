@@ -310,6 +310,8 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchText => {
             if let Some(tool) = a.sketch_tool()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
+                // Die Übergangskurve gibt es nur in 2D-Skizzen (Ruling H1-5, wie Fusion).
+                && !(tool == crate::sketch_state::Tool::BlendCurve && sk.three_d)
             {
                 se.choose_tool(sk, tool);
             }

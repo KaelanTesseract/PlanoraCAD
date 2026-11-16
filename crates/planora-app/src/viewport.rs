@@ -574,6 +574,7 @@ fn other_field_has_keyboard(ctx: &egui::Context) -> bool {
 /// der App nach dem Aufbau aller Bereiche aufgerufen und von jedem abgedockten Fenster nach
 /// seinem Inhalt ([`crate::detach`]).
 pub fn remember_keyboard_focus(ctx: &egui::Context) {
+    guard_focus(ctx);
     let focused = keyboard_taken(ctx);
     let other = other_field_has_keyboard(ctx);
     let viewport = ctx.viewport_id();
@@ -595,6 +596,47 @@ pub fn remember_keyboard_focus(ctx: &egui::Context) {
             }
         }
     });
+}
+
+/// Wurde das Widget `id` in diesem Bild gezeichnet (im Fenster von `ctx`)?
+pub fn drawn_this_frame(ctx: &egui::Context, id: egui::Id) -> bool {
+    ctx.viewport(|v| v.this_pass.widgets.contains(id))
+}
+
+fn deferred_focus_id(viewport: egui::ViewportId) -> egui::Id {
+    egui::Id::new(("planora-deferred-focus", viewport))
+}
+
+/// Fokus-Schutz am Bildende (Ruling H1-5): egui 0.36 gibt den Fokus ungefiltert an den
+/// Barrierefreiheitsbaum (accesskit) weiter. Steht er auf einem Widget, das in diesem Bild nicht
+/// gezeichnet wurde (eine Anforderung für ein Feld, das erst noch erscheint oder eben verschwand),
+/// bricht accesskit im Fenster ab. Darum gibt die App ihn hier ab und merkt ihn sich für das
+/// nächste Bild: Wird das Widget dort gezeichnet und hat niemand sonst den Fokus, bekommt es ihn
+/// dann (ein Bild später als von egui gedacht). Läuft am Ende jedes Bilds, im Hauptfenster und in
+/// jedem abgedockten Fenster ([`remember_keyboard_focus`]).
+fn guard_focus(ctx: &egui::Context) {
+    let key = deferred_focus_id(ctx.viewport_id());
+    let deferred: Option<egui::Id> = ctx.data_mut(|d| {
+        let id = d.get_temp(key);
+        d.remove::<egui::Id>(key);
+        id
+    });
+    if let Some(id) = deferred
+        && ctx.memory(|m| m.focused()).is_none()
+        && drawn_this_frame(ctx, id)
+    {
+        ctx.memory_mut(|m| m.request_focus(id));
+    }
+    if let Some(id) = ctx.memory(|m| m.focused())
+        && !drawn_this_frame(ctx, id)
+    {
+        ctx.memory_mut(|m| m.surrender_focus(id));
+        // Nur eine verschobene Anforderung weitertragen, keine dauernde: Wer schon im Bild davor
+        // nicht gezeichnet war, bekommt den Fokus nicht wieder.
+        if deferred != Some(id) {
+            ctx.data_mut(|d| d.insert_temp(key, id));
+        }
+    }
 }
 
 fn child_typing_id() -> egui::Id {

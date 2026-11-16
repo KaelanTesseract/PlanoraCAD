@@ -2812,6 +2812,20 @@ fn sketch_create_entries(ui: &mut egui::Ui, ws: &mut Workspace) {
 pub const SKETCH_MODIFY_TOOLS: [Tool; 4] =
     [Tool::Offset, Tool::MoveCopy, Tool::Scale, Tool::BlendCurve];
 
+/// Die Werkzeuge, die das Untermenü „Ändern“ für die offene Skizze zeigt: [`SKETCH_MODIFY_TOOLS`],
+/// in einer 3D-Skizze ohne die Übergangskurve (Ruling H1-5, wie Fusion: nur in 2D-Skizzen).
+pub fn sketch_modify_tools(ws: &Workspace) -> Vec<Tool> {
+    let three_d = ws
+        .active_tab()
+        .state
+        .session_sketch()
+        .is_some_and(|sk| sk.three_d);
+    SKETCH_MODIFY_TOOLS
+        .into_iter()
+        .filter(|&t| !(three_d && t == Tool::BlendCurve))
+        .collect()
+}
+
 /// Bei offener Skizze das Untermenü „Ändern“ im Menü „Bearbeiten“: Skizzenrundung, die drei
 /// Fasen, Versatz, Verschieben/Kopieren und Skizzenmaßstab.
 fn sketch_modify_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
@@ -2823,7 +2837,7 @@ fn sketch_modify_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         let kinds = crate::sketch_kinds::ToolKind::of(Tool::Fillet)
             .iter()
             .map(|k| (k.action(), icons::sketch_kind_icon(*k), k.hint()));
-        let tools = SKETCH_MODIFY_TOOLS.map(|t| {
+        let tools = sketch_modify_tools(ws).into_iter().map(|t| {
             let action = Action::for_sketch_tool(t).unwrap_or(Action::SketchMoveCopy);
             (
                 action,

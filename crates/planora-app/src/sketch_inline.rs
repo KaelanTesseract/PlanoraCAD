@@ -240,7 +240,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
     };
     let first = draw_rows(&ctx, se, sf, &scope, place, &[]);
     let (enter, esc, typed) = (first.enter, first.esc, first.typed);
-    let mut drawn = first.drawn;
+    let drawn = first.drawn;
     // Offene Liste der Arten: Eingabe und Esc gehören ihr, nicht der Form.
     let flyout = crate::sketch_panel::flyout_open(&ctx);
     if enter && !flyout && se.runs_transform() {
@@ -267,7 +267,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
         .any(|f| !drawn.iter().any(|(k, _)| *k == f.kind))
     {
         let done: Vec<FieldKind> = drawn.iter().map(|(k, _)| *k).collect();
-        drawn.extend(draw_rows(&ctx, se, sf, &scope, place, &done).drawn);
+        draw_rows(&ctx, se, sf, &scope, place, &done);
     }
     // Nach dem Bearbeiten: Eingabe und ein Klick neben das Feld nehmen ihm den Fokus. Das nächste
     // Bild soll trotzdem wieder hier tippen; ein anderes Eingabefeld behält seinen. Nur wenn er
@@ -279,7 +279,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
     {
         ctx.memory_mut(|m| m.request_focus(id));
     }
-    keep_focus_on_drawn(&ctx, &drawn);
+    keep_focus_on_drawn(&ctx);
     typed || enter
 }
 
@@ -301,14 +301,15 @@ struct Rows {
     drawn: Vec<(FieldKind, egui::Id)>,
 }
 
-/// Grundregel für den Fokus (Handtest 11a, Fund 7a): Ein Feld am Zeiger, das in diesem Bild nicht
-/// gezeichnet wurde, darf ihn nicht halten. Sonst zeigte der Barrierefreiheitsbaum (accesskit) auf
-/// einen Knoten, den es im Bild nicht gibt, und bräche ab; egui selbst ließe eine eben gestellte
-/// Anforderung ein Bild lang stehen.
-fn keep_focus_on_drawn(ctx: &egui::Context, drawn: &[(FieldKind, egui::Id)]) {
+/// Grundregel für den Fokus (Handtest 11a, Fund 7a), sofort nach den Feldern: Ein Feld am Zeiger,
+/// das in diesem Bild nicht gezeichnet wurde, darf ihn nicht halten. Sonst zeigte der
+/// Barrierefreiheitsbaum (accesskit) auf einen Knoten, den es im Bild nicht gibt, und bräche ab.
+/// Für alle anderen Widgets gilt dieselbe Regel am Bildende ([`viewport::remember_keyboard_focus`]);
+/// hier greift sie schon, weil die Felder ihre Lage im selben Bild ändern.
+fn keep_focus_on_drawn(ctx: &egui::Context) {
     if let Some(id) = ctx.memory(|m| m.focused())
         && viewport::draw_field_has_keyboard(ctx)
-        && !drawn.iter().any(|(_, d)| *d == id)
+        && !viewport::drawn_this_frame(ctx, id)
     {
         ctx.memory_mut(|m| m.surrender_focus(id));
     }
