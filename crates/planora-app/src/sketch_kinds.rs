@@ -89,6 +89,12 @@ pub enum ToolKind {
     SplineControl,
     /// Fusion „Kegelschnitt“ (Skizzen 7): Start, Ende, Scheitel, dann das Rho-Feld am Zeiger.
     Conic,
+    /// Fusion „Linie“ als Art des Linienwerkzeugs (Skizzen 11a): der bisherige Linienzug über
+    /// `click_line`.
+    Line,
+    /// Fusion „Mittelpunktlinie“ (Skizzen 11a): erst die Mitte, dann ein Ende; die Linie liegt
+    /// symmetrisch zur Mitte. Eigener Klick `click_midpoint_line`, keine Kette.
+    MidpointLine,
 }
 
 impl ToolKind {
@@ -128,6 +134,8 @@ impl ToolKind {
         ToolKind::SplineFit,
         ToolKind::SplineControl,
         ToolKind::Conic,
+        ToolKind::Line,
+        ToolKind::MidpointLine,
     ];
 
     /// Das Werkzeug, zu dem die Art gehört.
@@ -146,6 +154,7 @@ impl ToolKind {
                 Tool::ProjectEdge
             }
             SplineFit | SplineControl | Conic => Tool::Spline,
+            Line | MidpointLine => Tool::Line,
         }
     }
 
@@ -162,6 +171,7 @@ impl ToolKind {
             Tool::Pattern => &all[23..25],
             Tool::ProjectEdge => &all[25..31],
             Tool::Spline => &all[31..34],
+            Tool::Line => &all[34..36],
             _ => &[],
         }
     }
@@ -175,6 +185,10 @@ impl ToolKind {
                 | ToolKind::ArcCenter
                 | ToolKind::SplineFit
                 | ToolKind::SplineControl
+                // Skizzen 11a: Linie und Mittelpunktlinie klicken über `click_line` und
+                // `click_midpoint_line` mit den echten Punkten des Linienzugs.
+                | ToolKind::Line
+                | ToolKind::MidpointLine
         )
     }
 
@@ -235,6 +249,10 @@ impl ToolKind {
             // Die Klicks sammelt `click_spline`, Eingabe oder Doppelklick schließt ab.
             SplineFit | SplineControl => &[&[]],
             Conic => &[&[], &[], &[], &[F::Rho]],
+            // Skizzen 11a: Beide Linienarten haben ihre Felder erst nach dem ersten Punkt
+            // (`stage_fields`); die Länge der Mittelpunktlinie ist die ganze Linie.
+            Line => &[&[], &[F::Length, F::Angle]],
+            MidpointLine => &[&[], &[F::Length, F::Angle]],
         }
     }
 
@@ -281,6 +299,8 @@ impl ToolKind {
             SplineFit => tr!("sketch-kind-spline-fit-hint"),
             SplineControl => tr!("sketch-kind-spline-control-hint"),
             Conic => tr!("sketch-kind-conic-hint"),
+            Line => tr!("sketch-tool-line-hint"),
+            MidpointLine => tr!("sketch-kind-midpoint-line-hint"),
         }
     }
 
@@ -322,6 +342,8 @@ impl ToolKind {
             SplineFit => Action::SketchSplineFit,
             SplineControl => Action::SketchSplineControl,
             Conic => Action::SketchConic,
+            Line => Action::SketchLine,
+            MidpointLine => Action::SketchMidpointLine,
         }
     }
 
@@ -343,7 +365,8 @@ impl ToolKind {
             }
             ArcTangent => crate::msg!("sketch-arc-tangent-start"),
             PolygonCircumscribed | PolygonInscribed => crate::msg!("sketch-radius-positive"),
-            PolygonEdge | SlotCenterToCenter | SlotOverall | SlotCenterPoint => {
+            Line | MidpointLine | PolygonEdge | SlotCenterToCenter | SlotOverall
+            | SlotCenterPoint => {
                 crate::msg!("sketch-err-line-zero")
             }
             Fillet => crate::msg!("sketch-fillet-too-big"),
@@ -399,6 +422,8 @@ pub struct ToolKinds {
     pub project: ToolKind,
     /// Art am Spline-Knopf: durch Stützpunkte, mit Kontrollpunkten oder Kegelschnitt (Skizzen 7).
     pub spline: ToolKind,
+    /// Linie oder Mittelpunktlinie am Linienknopf (Skizzen 11a).
+    pub line: ToolKind,
 }
 
 impl Default for ToolKinds {
@@ -414,6 +439,7 @@ impl Default for ToolKinds {
             pattern: ToolKind::PatternRect,
             project: ToolKind::Project,
             spline: ToolKind::SplineFit,
+            line: ToolKind::Line,
         }
     }
 }
@@ -430,6 +456,7 @@ impl ToolKinds {
             Tool::Pattern => self.pattern = kind,
             Tool::ProjectEdge => self.project = kind,
             Tool::Spline => self.spline = kind,
+            Tool::Line => self.line = kind,
             _ => {}
         }
     }
@@ -620,8 +647,20 @@ impl SketchSession {
             Tool::Pattern => Some(self.kinds.pattern),
             Tool::ProjectEdge => Some(self.kinds.project),
             Tool::Spline => Some(self.kinds.spline),
+            Tool::Line => Some(self.kinds.line),
             _ => None,
         }
+    }
+
+    /// Zeichnet das Linienwerkzeug gerade in der Art Mittelpunktlinie (Skizzen 11a)?
+    pub fn is_midpoint_line(&self) -> bool {
+        self.tool == Tool::Line && self.kinds.line == ToolKind::MidpointLine
+    }
+
+    /// Faktor von der Länge zwischen Mitte und Zeiger zur Länge im Feld: 2 bei der
+    /// Mittelpunktlinie (das Feld nennt die ganze Linie), sonst 1.
+    pub(crate) fn line_length_factor(&self) -> f64 {
+        if self.is_midpoint_line() { 2.0 } else { 1.0 }
     }
 
     /// Die aktive Art, wenn sie über die Stufenmaschine läuft (nicht klassisch).
@@ -1019,7 +1058,8 @@ impl SketchSession {
     /// Drücken auf dem letzten Punkt des Linienzugs wird beim Ziehen ein tangentialer Bogen: Greift
     /// nur im Linienwerkzeug, wenn `at` im Fangradius des Punkts liegt und dort eine Kurve endet.
     pub fn begin_line_arc(&mut self, sk: &Sketch, at: DVec2, radius: f64) -> bool {
-        if self.tool != Tool::Line || !at.is_finite() {
+        // Die Mittelpunktlinie hat keinen Linienzug, an dem ein Bogen anschließen könnte.
+        if self.tool != Tool::Line || self.is_midpoint_line() || !at.is_finite() {
             return false;
         }
         let Some(&start) = self.pending.first() else {

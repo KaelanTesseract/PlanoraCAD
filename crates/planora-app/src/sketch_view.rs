@@ -660,6 +660,8 @@ pub fn auto_marks(sk: &Sketch, se: &SketchSession) -> Vec<(DVec2, AutoConstraint
         return Vec::new();
     };
     let own = match (se.tool, se.pending.last().and_then(|&p| pos(sk, p))) {
+        // Mittelpunktlinie: Die Zeichen stehen in der Mitte der ganzen Linie, also an ihrer Mitte.
+        (Tool::Line, Some(start)) if se.is_midpoint_line() => start,
         (Tool::Line, Some(start)) => (start + cur.at) * 0.5,
         _ => cur.at,
     };
@@ -3399,6 +3401,7 @@ fn draw_preview3(
         }
     }
     let shape: Vec<DVec3> = match (se.tool, pending.as_slice()) {
+        (Tool::Line, [.., last]) if se.is_midpoint_line() => vec![*last * 2.0 - cur.at, cur.at],
         (Tool::Line, [.., last]) => vec![*last, cur.at],
         (Tool::Spline, [_, ..]) => pending.iter().copied().chain([cur.at]).collect(),
         _ => Vec::new(),
@@ -3529,6 +3532,7 @@ fn draw_preview(
             .collect()
     };
     let shape: Vec<DVec2> = match (se.tool, pending.as_slice(), se.pending_pos.as_slice()) {
+        (Tool::Line, [.., last], _) if se.is_midpoint_line() => vec![*last * 2.0 - cursor, cursor],
         (Tool::Line, [.., last], _) => vec![*last, cursor],
         (Tool::Rectangle, _, [a, ..]) => vec![
             *a,

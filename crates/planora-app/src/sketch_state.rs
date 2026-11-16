@@ -17,7 +17,7 @@ use planora_sketch::constraint::{Axis3, ConstraintId, ConstraintKind, FixToggle,
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
 use planora_sketch::offset::{OffsetPlan, OffsetProblem};
-use planora_sketch::shapes::{folded_over, sweep_crossed_half_turn};
+use planora_sketch::shapes::{self, folded_over, sweep_crossed_half_turn};
 use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
 use planora_sketch::text::TextRemoval;
@@ -1232,6 +1232,7 @@ impl SketchSession {
                     Ok(())
                 }
                 Tool::Point => se.click_point(sk, cur, prior),
+                Tool::Line if se.is_midpoint_line() => se.click_midpoint_line(sk, cur, prior),
                 Tool::Line => se.click_line(sk, cur, prior),
                 Tool::Rectangle => se.click_rectangle(sk, cur, prior),
                 Tool::Circle => se.click_circle(sk, cur, prior),
@@ -1654,6 +1655,42 @@ impl SketchSession {
         self.pending = vec![p];
         self.created = Some(Created::Line(line));
         self.follow_triad(sk, p);
+        Ok(())
+    }
+
+    /// Klick der Mittelpunktlinie (Skizzen 11a, Fusion „Midpoint Line“): Der erste setzt oder fängt
+    /// die Mitte, der zweite das Ende; der Anfang liegt gespiegelt, und die Mitte ist über
+    /// `Midpoint` an die Linie gebunden. Das Ende fängt und bekommt automatische Abhängigkeiten wie
+    /// bei der Linie, der gespiegelte Anfang nicht. Keine Kette: Danach beginnt die nächste Linie
+    /// neu.
+    fn click_midpoint_line(
+        &mut self,
+        sk: &mut Sketch,
+        cur: &DrawCursor,
+        prior: &Sketch,
+    ) -> Result<(), Msg> {
+        let Some(&mid) = self.pending.first() else {
+            let p = self.attach(sk, None, cur)?;
+            self.pending = vec![p];
+            self.solve_checked(sk, prior)?;
+            self.follow_triad(sk, p);
+            return Ok(());
+        };
+        let from = sk.point_xy(mid).map_err(err)?;
+        let (start, _) = shapes::midpoint_line_plan(from, cur.at, sk.tolerance().linear)
+            .ok_or_else(|| ToolKind::MidpointLine.refusal())?;
+        let end = self.attach(sk, None, cur)?;
+        let a = sk.add_point(start.x, start.y).map_err(err)?;
+        let line = sk.add_midpoint_line(mid, a, end).map_err(err)?;
+        self.solve_checked(sk, prior)?;
+        for auto in &cur.autos {
+            self.try_auto(sk, auto.kind(line));
+        }
+        self.pending.clear();
+        self.line_chain = None;
+        self.line_after_arc = None;
+        self.created = Some(Created::Line(line));
+        self.follow_triad(sk, end);
         Ok(())
     }
 

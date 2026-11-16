@@ -418,6 +418,9 @@ impl SketchSession {
                     self.follow_triad(sk, p);
                     return Ok(p);
                 };
+                if self.is_midpoint_line() {
+                    return self.finish_midpoint_line3(sk, prior, start, p, cur);
+                }
                 let line = sk.add_line(start, p).map_err(err)?;
                 self.solve_checked(sk, prior)?;
                 if let Some(kind) = self.axis_constraint(line, cur.axis) {
@@ -445,6 +448,39 @@ impl SketchSession {
             }
             _ => Err(crate::msg!("sketch-invalid-position")),
         }
+    }
+
+    /// Zweiter Klick der Mittelpunktlinie in 3D (Skizzen 11a): `end` ist das gesetzte oder
+    /// gefangene Ende, der Anfang liegt gespiegelt an der Mitte `mid` in derselben Ebene der
+    /// Triade und fängt nicht. Wie in 2D folgt keine Kette.
+    fn finish_midpoint_line3(
+        &mut self,
+        sk: &mut Sketch,
+        prior: &Sketch,
+        mid: PointId,
+        end: PointId,
+        cur: &Cursor3,
+    ) -> Result<PointId, Msg> {
+        let (m, e) = (
+            sk.point_xyz(mid).map_err(err)?,
+            sk.point_xyz(end).map_err(err)?,
+        );
+        let mirrored = m * 2.0 - e;
+        if mirrored.distance(e) <= sk.tolerance().linear {
+            return Err(ToolKind::MidpointLine.refusal());
+        }
+        let start = self.point3_at(sk, &Cursor3::free(mirrored, None))?;
+        let line = sk.add_midpoint_line(mid, start, end).map_err(err)?;
+        self.solve_checked(sk, prior)?;
+        if let Some(kind) = self.axis_constraint(line, cur.axis) {
+            self.try_auto(sk, kind);
+        }
+        self.pending.clear();
+        self.line_chain = None;
+        self.line_after_arc = None;
+        self.created = Some(Created::Line(line));
+        self.follow_triad(sk, end);
+        Ok(end)
     }
 
     /// Der Punkt für den Klick: der gefangene oder ein neuer (2D, wenn er in der Skizzenebene

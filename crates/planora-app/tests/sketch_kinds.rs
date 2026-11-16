@@ -209,8 +209,9 @@ fn kinds_cover_their_tools_without_gaps() {
     // Anordnungen (23 → 25). Skizzen 6: Projizieren (25 → 26); Task 10 bewusst angepasst:
     // Schneiden und Silhouette (26 → 28). Skizzen 7: die drei Arten am Spline-Knopf (28 → 31).
     // Skizzen 10, Task 16 bewusst angepasst: 3D-Geometrie einbeziehen (31 → 32). Task 19 bewusst
-    // angepasst: Auf Fläche projizieren und Schnittkurve (32 → 34).
-    assert_eq!(ToolKind::ALL.len(), 34);
+    // angepasst: Auf Fläche projizieren und Schnittkurve (32 → 34). Skizzen 11a, Task 8 bewusst
+    // angepasst: Linie und Mittelpunktlinie als Arten des Linienwerkzeugs (34 → 36).
+    assert_eq!(ToolKind::ALL.len(), 36);
     let mut seen = Vec::new();
     for tool in [
         Tool::Rectangle,
@@ -222,6 +223,7 @@ fn kinds_cover_their_tools_without_gaps() {
         Tool::Pattern,
         Tool::ProjectEdge,
         Tool::Spline,
+        Tool::Line,
     ] {
         assert!(!ToolKind::of(tool).is_empty(), "{tool:?}");
         for &k in ToolKind::of(tool) {
@@ -230,11 +232,10 @@ fn kinds_cover_their_tools_without_gaps() {
             seen.push(k);
         }
     }
-    assert_eq!(seen.len(), 34);
+    assert_eq!(seen.len(), 36);
     for tool in [
         Tool::Select,
         Tool::Point,
-        Tool::Line,
         Tool::Ellipse,
         Tool::Trim,
         Tool::Extend,
@@ -258,7 +259,10 @@ fn kinds_cover_their_tools_without_gaps() {
             ToolKind::ArcCenter,
             // Skizzen 7: Beide Splines sammeln ihre Punkte weiter in `click_spline`.
             ToolKind::SplineFit,
-            ToolKind::SplineControl
+            ToolKind::SplineControl,
+            // Skizzen 11a: Beide Linienarten klicken über `click_line` und `click_midpoint_line`.
+            ToolKind::Line,
+            ToolKind::MidpointLine
         ]
     );
     assert_eq!(
@@ -276,6 +280,8 @@ fn kinds_cover_their_tools_without_gaps() {
             project: ToolKind::Project,
             // Skizzen 7: das Klappmenü am Spline-Knopf.
             spline: ToolKind::SplineFit,
+            // Skizzen 11a: der Linienknopf merkt Linie oder Mittelpunktlinie.
+            line: ToolKind::Line,
         }
     );
     let lines_only: Vec<ToolKind> = ToolKind::ALL
@@ -434,8 +440,9 @@ fn default_keys_stay_and_twenty_actions_have_none() {
     // angepasst: Schneiden und Silhouette ebenso (22 → 24). Skizzen 7: die drei Arten am
     // Spline-Knopf ebenso (24 → 27). Skizzen 10, Task 16 bewusst angepasst: 3D-Geometrie
     // einbeziehen ebenso (27 → 28). Task 19 bewusst angepasst: Auf Fläche projizieren und
-    // Schnittkurve ebenso (28 → 30).
-    assert_eq!(free, 30);
+    // Schnittkurve ebenso (28 → 30). Skizzen 11a, Task 8 bewusst angepasst: die Mittelpunktlinie
+    // ebenso (30 → 31); die Linie hat L.
+    assert_eq!(free, 31);
     assert!(km.to_overrides().is_empty(), "Konfiguration bleibt leer");
 }
 

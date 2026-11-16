@@ -263,6 +263,8 @@ fn only_the_forms_with_kinds_and_the_fillet_have_a_triangle() {
     assert_eq!(
         with,
         [
+            // Skizzen 11a, Task 8 bewusst angepasst: Linie und Mittelpunktlinie am Linienknopf.
+            Tool::Line,
             Tool::Rectangle,
             Tool::Circle,
             Tool::Arc,

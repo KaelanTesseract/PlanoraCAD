@@ -485,6 +485,18 @@ pub fn degree_buttons(ctx: &egui::Context) -> Vec<(u8, egui::Rect)> {
         .unwrap_or_default()
 }
 
+fn line_kind_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("line-kind")
+}
+
+/// Art und Lage der Umschalter „Linie“ und „Mittelpunktlinie“ im letzten Bild, leer ohne das
+/// Linienwerkzeug (für Tests).
+#[doc(hidden)]
+pub fn line_kind_buttons(ctx: &egui::Context) -> Vec<(ToolKind, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<(ToolKind, egui::Rect)>>(line_kind_key()))
+        .unwrap_or_default()
+}
+
 fn rho_field_key() -> egui::Id {
     shell_panels::sketch_side_id().with("conic-rho")
 }
@@ -1027,6 +1039,11 @@ fn tool_options(
     } else {
         ui.data_mut(|d| d.remove_temp::<Vec<(u8, egui::Rect)>>(degree_buttons_key()));
     }
+    if se.tool == Tool::Line {
+        line_options(ui, se, &mut sf.sketch);
+    } else {
+        ui.data_mut(|d| d.remove_temp::<Vec<(ToolKind, egui::Rect)>>(line_kind_key()));
+    }
     if se.tool == Tool::Offset {
         ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
     }
@@ -1072,6 +1089,26 @@ fn tool_options(
             }
         });
     }
+}
+
+/// Umschalter des Linienwerkzeugs (Skizzen 11a, Fusion „Optionen des Features“): „Linie“ oder
+/// „Mittelpunktlinie“. Das Werkzeug bleibt, nur die Art wechselt (wie ein Eintrag der Liste am
+/// Leistenknopf).
+fn line_options(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch) {
+    let mut rects = Vec::new();
+    ui.horizontal_wrapped(|ui| {
+        for &kind in ToolKind::of(Tool::Line) {
+            let selected = se.kinds.line == kind;
+            let button = ui
+                .selectable_label(selected, kind.label())
+                .on_hover_text(kind.hint());
+            rects.push((kind, button.rect));
+            if button.clicked() && !selected {
+                se.choose_kind(sk, kind);
+            }
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(line_kind_key(), rects));
 }
 
 /// Einstellung des Splines mit Kontrollpunkten (Skizzen 7): der Grad neuer Kurven, 5 oder 3.

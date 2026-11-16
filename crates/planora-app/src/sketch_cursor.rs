@@ -526,7 +526,12 @@ impl SketchSession {
         {
             return Some((AutoConstraint::Tangent(arc), forward));
         }
-        plan_direction(sk, self.tool, start, self.line_chain, end, on_geometry)
+        let found = plan_direction(sk, self.tool, start, self.line_chain, end, on_geometry);
+        // Die Mitte liegt mitten in der Linie, nicht an ihrem Ende: Dort läuft nichts tangential
+        // weiter (Skizzen 11a).
+        found.filter(|(auto, _)| {
+            !(self.is_midpoint_line() && matches!(auto, AutoConstraint::Tangent(_)))
+        })
     }
 
     /// Tangente des Bogens: beim Setzen des Anfangs aus dem Punkt unter dem Zeiger, danach die

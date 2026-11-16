@@ -125,6 +125,9 @@ action_table! {
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Die
     // Esc, Enter und Entf der Skizze sind fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];
+    /// Fusion „Mittelpunktlinie“ (Skizzen 11a): zweite Art des Linienwerkzeugs, ohne Vorgabetaste
+    /// wie in Fusion, belegbar.
+    SketchMidpointLine, "skizze.mittelpunktlinie", "action-sketch-midpoint-line", Sketch, [];
     // Die Arten der Formen (`sketch_kinds::ToolKind`): Der Name ist der Name der Art, der Knopf
     // der Leiste heißt weiter nach der Form (`sketch_panel::tool_label`). Nur Rechteck und Kreis
     // haben eine Vorgabetaste.

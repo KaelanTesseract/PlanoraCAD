@@ -654,6 +654,8 @@ impl SketchSession {
         let from = sk.point_xy(first).ok()?;
         let along = at - from;
         Some(match kind {
+            // Mittelpunktlinie: Die Länge im Feld ist die ganze Linie (Skizzen 11a, A1).
+            F::Length if self.is_midpoint_line() => 2.0 * along.length(),
             F::Length | F::Radius | F::MajorAxis => along.length(),
             F::Diameter => 2.0 * along.length(),
             F::Angle => {
@@ -717,7 +719,7 @@ impl SketchSession {
                 let from = sk.point_xyz(*self.pending.first()?).ok()?;
                 let d = cur.at - from;
                 if kind == FieldKind::Length {
-                    return Some(d.length());
+                    return Some(d.length() * self.line_length_factor());
                 }
                 let (u, v) = self.plane_axes3();
                 Some(d.dot(v).abs().atan2(d.dot(u)))
@@ -751,7 +753,13 @@ impl SketchSession {
             return None;
         }
         let from = sk.point_xyz(*self.pending.first()?).ok()?;
-        let (len, angle) = (self.input.locked(F::Length), self.input.locked(F::Angle));
+        // Mittelpunktlinie: Das Feld nennt die ganze Linie, der Zeiger liegt eine halbe entfernt.
+        let (len, angle) = (
+            self.input
+                .locked(F::Length)
+                .map(|l| l / self.line_length_factor()),
+            self.input.locked(F::Angle),
+        );
         if len.is_none() && angle.is_none() {
             return None;
         }
@@ -815,7 +823,12 @@ impl SketchSession {
         match self.tool {
             Tool::Line => {
                 let (start, from) = first?;
-                let (len, angle) = (input.locked(F::Length), input.locked(F::Angle));
+                // Mittelpunktlinie: Das Feld nennt die ganze Linie, der Zeiger liegt eine halbe
+                // entfernt.
+                let len = input
+                    .locked(F::Length)
+                    .map(|l| l / self.line_length_factor());
+                let angle = input.locked(F::Angle);
                 let Some(angle) = angle else {
                     return Some(from + toward(from) * len?);
                 };

@@ -276,6 +276,9 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchIntersectionCurve
         | Action::SketchSplineFit
         | Action::SketchSplineControl
+        // Skizzen 11a: Linie und Mittelpunktlinie sind die beiden Arten des Linienwerkzeugs.
+        | Action::SketchLine
+        | Action::SketchMidpointLine
         | Action::SketchConic => {
             if let Some(kind) = a.sketch_kind()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
@@ -296,7 +299,6 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             }
         }
         Action::SketchInsertControlPoint
-        | Action::SketchLine
         | Action::SketchTrim
         | Action::SketchExtend
         | Action::SketchBreak

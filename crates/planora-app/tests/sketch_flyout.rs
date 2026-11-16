@@ -284,6 +284,8 @@ fn only_shapes_with_kinds_have_a_triangle() {
                 | Tool::ProjectEdge
                 // Skizzen 7: Klappmenü am Spline-Knopf.
                 | Tool::Spline
+                // Skizzen 11a, Task 8 bewusst angepasst: Linie und Mittelpunktlinie am Linienknopf.
+                | Tool::Line
         );
         assert_eq!(sketch_panel::has_flyout(tool), expected, "{tool:?}");
     }
@@ -704,6 +706,14 @@ fn the_create_menu_lists_all_kinds_while_a_sketch_is_open() {
                 1,
                 "Menü zu"
             );
+        } else if tool == Tool::Line {
+            // Skizzen 11a, Task 8 bewusst angepasst: Der Umschalter im Skizzenfeld trägt den
+            // Namen der Art noch einmal; das Menü ist trotzdem zu.
+            assert_eq!(
+                shot.texts.iter().filter(|t| t.text == last.label()).count(),
+                1,
+                "Menü zu"
+            );
         } else {
             assert!(!shot.has(&last.label()), "Menü zu");
         }
@@ -712,7 +722,8 @@ fn the_create_menu_lists_all_kinds_while_a_sketch_is_open() {
     // angepasst: dazu „Schneiden“ und „Silhouette“ (→ 22). Skizzen 7: die beiden Splines (→ 24).
     // Skizzen 10, Task 16 bewusst angepasst: „3D-Geometrie einbeziehen“ (→ 25). Task 19 bewusst
     // angepasst: „Auf Fläche projizieren“ und „Schnittkurve“ (→ 27).
-    assert_eq!(count, 27);
+    // Skizzen 11a, Task 8 bewusst angepasst: „Linie“ mit Linie und Mittelpunktlinie (→ 29).
+    assert_eq!(count, 29);
 }
 
 /// Hat die Schrift in ihrer Zeichentabelle einen Eintrag für `c`? (Wie in tests/icons.rs.)
@@ -751,11 +762,11 @@ fn the_submenu_arrows_of_the_create_menu_use_a_glyph_the_fonts_have() {
     let menu = shot.find("Erzeugen").rect.center();
     let shot = rig.click(menu);
     assert_no_missing_glyphs(&shot, "Menü Erzeugen");
-    // Alle sieben Untermenüs mit Pfeil stehen im offenen Menü (Skizzen 6: „Projizieren/Einschließen“,
-    // Skizzen 7: „Spline“).
+    // Alle acht Untermenüs mit Pfeil stehen im offenen Menü (Skizzen 6: „Projizieren/Einschließen“,
+    // Skizzen 7: „Spline“, Skizzen 11a: „Linie“).
     let arrow = planora_app::icons::glyph(planora_app::icons::Icon::PathSeparator).to_string();
     let arrows = shot.texts.iter().filter(|t| t.text == arrow).count();
-    assert_eq!(arrows, 7, "ein Pfeil je Untermenü");
+    assert_eq!(arrows, 8, "ein Pfeil je Untermenü");
     // Auch mit offenem Untermenü.
     let sub = shot
         .texts
