@@ -3578,11 +3578,13 @@ fn draw_preview(
             let a0 = (*s - *m).y.atan2((*s - *m).x);
             let d = cursor - *m;
             let a1 = d.y.atan2(d.x);
-            let sweep = (a1 - a0).rem_euclid(TAU);
+            // Im Uhrzeigersinn gezogen läuft die Vorschau andersherum (wie der Bogen).
+            let sign = if se.arc_cw() { -1.0 } else { 1.0 };
+            let sweep = (sign * (a1 - a0)).rem_euclid(TAU);
             let steps = ((sweep / TAU * STEPS_PER_TURN as f64).ceil() as usize).max(1);
             (0..=steps)
                 .map(|k| {
-                    let t = a0 + sweep * k as f64 / steps as f64;
+                    let t = a0 + sign * sweep * k as f64 / steps as f64;
                     *m + DVec2::new(t.cos(), t.sin()) * r
                 })
                 .collect()

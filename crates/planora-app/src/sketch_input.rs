@@ -857,7 +857,9 @@ impl SketchSession {
                     None => Some(m + toward(m) * input.locked(F::Radius)?),
                     Some(&start) => {
                         let s = sk.point_xy(start).ok()?;
-                        Some(m + rotated(s - m, input.locked(F::Sweep)?))
+                        let sweep = input.locked(F::Sweep)?;
+                        // Der Zug bestimmt den Sinn, das Feld nur die Öffnung.
+                        Some(m + rotated(s - m, if self.arc_cw() { -sweep } else { sweep }))
                     }
                 }
             }

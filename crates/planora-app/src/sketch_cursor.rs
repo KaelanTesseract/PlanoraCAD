@@ -3,6 +3,7 @@
 //! ohne Oberfläche; der Fang-Index wird nur neu gebaut, wenn sich die Skizze geändert hat.
 
 use crate::msg::Msg;
+use crate::sketch_input::FieldKind;
 use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::{Item, SketchSession, Tool, TransformStage, err};
 use planora_math::DVec2;
@@ -591,6 +592,12 @@ impl SketchSession {
         self.draw_cursor = raw
             .filter(|r| r.is_finite() && self.is_drawing_tool())
             .map(|r| self.resolve_cursor(sk, r, radius));
+        // Der Bogen „Mittelpunkt“ folgt dem Zug; ein getipptes Winkelfeld setzt die Lage selbst.
+        if let Some(at) = self.draw_cursor.as_ref().map(|c| c.at)
+            && self.input.locked(FieldKind::Sweep).is_none()
+        {
+            self.track_arc_sweep(at);
+        }
     }
 
     /// Fang-Index zum Stand von `sk`, wenn nötig neu gebaut.

@@ -600,6 +600,11 @@ pub struct SketchSession {
     /// zum Start und der seitdem gezogene Winkel (mit Vorzeichen, gegen den Uhrzeigersinn um die
     /// Normale der Ebene positiv). Das Vorzeichen gibt die Richtung des Bogens wie der Zug.
     pub arc_sweep3: Option<(f64, f64)>,
+    /// Dasselbe für den Bogen „Mittelpunkt“ in 2D (Skizzen 11a, A6): letzter Winkel des Zeigers
+    /// zum Start und der seitdem gezogene Winkel mit Vorzeichen (gegen den Uhrzeigersinn positiv).
+    pub arc_sweep: Option<(f64, f64)>,
+    /// Mitte und Start des laufenden 2D-Bogens „Mittelpunkt“, Bezug für [`arc_sweep`](Self::arc_sweep).
+    pub arc_base: Option<(DVec2, DVec2)>,
     /// Letzte Stelle beim Stutzen durch Ziehen (`None`: kein Zug läuft).
     pub trim_drag: Option<DVec2>,
     /// Zählt die gelungenen Änderungen durch Stutzen, Dehnen und Brechen, mit dem Werkzeug der
@@ -781,6 +786,8 @@ impl SketchSession {
             pending3: Vec::new(),
             plane3: None,
             arc_sweep3: None,
+            arc_sweep: None,
+            arc_base: None,
             trim_drag: None,
             modify_edits: (0, None),
             fillet_run: None,
@@ -879,6 +886,8 @@ impl SketchSession {
         self.pending3.clear();
         self.plane3 = None;
         self.arc_sweep3 = None;
+        self.arc_sweep = None;
+        self.arc_base = None;
         self.input = DrawInput::default();
         // Bemaßen: Wahl und gesetztes Maß (sein Feld schließt) entfallen, nichts bleibt.
         self.dim = DimToolState::default();
@@ -1463,6 +1472,8 @@ impl SketchSession {
     /// nur bei Stutzen, Dehnen und Brechen.
     pub fn update_hover(&mut self, sk: &Sketch, at: Option<DVec2>, radius: f64) {
         if self.tool == Tool::BlendCurve {
+            // Verlässt der Zeiger die Fläche, bleibt kein Ring am letzten Ziel stehen.
+            self.blend.hover = None;
             self.hover_preview = at
                 .filter(|a| a.is_finite())
                 .and_then(|at| self.blend_hover_with(sk, at, radius));
@@ -1807,6 +1818,32 @@ impl SketchSession {
         Ok(())
     }
 
+    /// Läuft der Bogen „Mittelpunkt“ in 2D im Uhrzeigersinn (so gezogen)?
+    pub fn arc_cw(&self) -> bool {
+        self.arc_sweep.is_some_and(|(_, total)| total < 0.0)
+    }
+
+    /// Führt beim Bogen „Mittelpunkt“ in 2D nach dem Start den gezogenen Winkel des Zeigers `at`
+    /// mit (Fusion: Der Bogen folgt dem Zug; gleiche Regel wie in 3D). Sonst vergessen.
+    pub fn track_arc_sweep(&mut self, at: DVec2) {
+        let (true, Some((m, s))) = (
+            self.tool == Tool::Arc && self.kind_of(Tool::Arc) == Some(ToolKind::ArcCenter),
+            self.arc_base,
+        ) else {
+            self.arc_sweep = None;
+            return;
+        };
+        let p = at - m;
+        if p.length() <= 0.0 || !p.is_finite() {
+            return;
+        }
+        let angle = (s - m).angle_to(p);
+        let (last, total) = self.arc_sweep.unwrap_or((0.0, 0.0));
+        let step = (angle - last + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+            - std::f64::consts::PI;
+        self.arc_sweep = Some((angle, total + step));
+    }
+
     fn click_arc(&mut self, sk: &mut Sketch, cur: &DrawCursor, prior: &Sketch) -> Result<(), Msg> {
         let tol = sk.tolerance().linear;
         match *self.pending.as_slice() {
@@ -1827,6 +1864,11 @@ impl SketchSession {
                     return Err(crate::msg!("sketch-arc-start-center"));
                 }
                 self.pending.push(s);
+                self.arc_sweep = None;
+                self.arc_base = Some((
+                    sk.point_xy(center).map_err(err)?,
+                    sk.point_xy(s).map_err(err)?,
+                ));
                 self.plan_arc_tangent(sk, center, s, cur)?;
             }
             [center, start, ..] => {
@@ -1838,6 +1880,11 @@ impl SketchSession {
                     return Err(crate::msg!("sketch-arc-end-center"));
                 }
                 let on_start = || crate::msg!("sketch-arc-end-on-start");
+                // Auch ein Klick ohne Zeigerbilder davor zählt als Zug (Fusion: der Bogen folgt ihm).
+                if self.input.locked(FieldKind::Sweep).is_none() {
+                    self.track_arc_sweep(cur.at);
+                }
+                let cw = self.arc_cw();
                 let end = match cur.point(tol) {
                     Some(p) if p == start => return Err(on_start()),
                     Some(p) if p != center => p,
@@ -1858,7 +1905,13 @@ impl SketchSession {
                 if sk.point_xy(end).map_err(err)?.distance(s) <= tol {
                     return Err(on_start());
                 }
-                let arc = sk.add_arc(center, start, end).map_err(err)?;
+                // Im Uhrzeigersinn gezogen läuft der Bogen vom Ende zum Start.
+                let arc = if cw {
+                    sk.add_arc(center, end, start)
+                } else {
+                    sk.add_arc(center, start, end)
+                }
+                .map_err(err)?;
                 self.clear_pending();
                 self.solve_checked(sk, prior)?;
                 for auto in &cur.autos {

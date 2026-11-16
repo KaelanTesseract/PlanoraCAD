@@ -196,6 +196,22 @@ fn hover_shows_preview_after_first() {
 }
 
 #[test]
+fn leaving_the_canvas_clears_the_hover_ring_and_preview() {
+    let mut w = rig(true);
+    click(&mut w, v(9.5, 0.0)).unwrap();
+    {
+        let (se, sf, _) = parts(&mut w);
+        se.update_hover(&sf.sketch, Some(v(20.5, 5.0)), R);
+        assert!(se.blend.hover.is_some(), "Ring am Ziel");
+        assert!(se.hover_preview.is_some(), "Vorschau da");
+        // Der Zeiger verlässt die Zeichenfläche.
+        se.update_hover(&sf.sketch, None, R);
+        assert!(se.blend.hover.is_none(), "Ring klebt nicht");
+        assert!(se.hover_preview.is_none(), "Vorschau weg");
+    }
+}
+
+#[test]
 fn hover_over_circle_gives_no_target() {
     let mut w = rig(true);
     {
