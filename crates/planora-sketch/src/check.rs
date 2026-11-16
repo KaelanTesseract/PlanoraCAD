@@ -55,16 +55,7 @@ impl Sketch {
         curves.sort();
         curves.dedup();
 
-        let mut owned: HashSet<PointId> = HashSet::new();
-        for (_, c) in self.curves() {
-            owned.extend(c.kind.points());
-        }
-        for (_, t) in self.texts() {
-            owned.extend(t.points.iter().copied());
-            if let TextPlacement::Box { corners, .. } = t.placement {
-                owned.extend(corners);
-            }
-        }
+        let owned = self.owned_points();
         let mut points: Vec<PointId> = r
             .free_points
             .iter()
@@ -93,6 +84,21 @@ impl Sketch {
             .collect()
     }
 
+    /// Punkte, die zu einer lebenden Kurve oder einem Text gehören.
+    fn owned_points(&self) -> HashSet<PointId> {
+        let mut owned: HashSet<PointId> = HashSet::new();
+        for (_, c) in self.curves() {
+            owned.extend(c.kind.points());
+        }
+        for (_, t) in self.texts() {
+            owned.extend(t.points.iter().copied());
+            if let TextPlacement::Box { corners, .. } = t.placement {
+                owned.extend(corners);
+            }
+        }
+        owned
+    }
+
     /// Rotes Schloss (A4): Die Skizze ist bestimmt und hat mindestens ein lebendes Element.
     pub fn is_locked(&self, r: &SolveReport) -> bool {
         self.status(r) == SketchStatus::Determined
@@ -102,7 +108,7 @@ impl Sketch {
     }
 
     /// Laufende Nummer ab 1 des Elements unter den lebenden Elementen derselben Art (Kurven:
-    /// derselben Kurvenart, also „Linie 3“; Punkte; Texte), in Id-Reihenfolge. Ein gelöschtes
+    /// derselben Kurvenart, also „Linie 3“; Punkte: nur alleinstehende; Texte), in Id-Reihenfolge. Ein gelöschtes
     /// Element vor ihm verschiebt die Nummer. Ein totes Element zählt als nächste freie Nummer.
     pub fn item_ordinal(&self, it: CheckItem) -> usize {
         match it {
@@ -113,7 +119,14 @@ impl Sketch {
                     .filter(|(i, d)| *i < c && Some(discriminant(&d.kind)) == kind)
                     .count()
             }
-            CheckItem::Point(p) => 1 + self.points().filter(|(i, _)| *i < p).count(),
+            CheckItem::Point(p) => {
+                // Nur alleinstehende Punkte zählen (Ruling T16-1), keine Kurven- oder Textpunkte.
+                let owned = self.owned_points();
+                1 + self
+                    .points()
+                    .filter(|(i, _)| *i < p && !owned.contains(i))
+                    .count()
+            }
             CheckItem::Text(t) => 1 + self.texts().filter(|(i, _)| *i < t).count(),
         }
     }

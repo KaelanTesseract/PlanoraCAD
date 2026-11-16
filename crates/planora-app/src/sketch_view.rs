@@ -2691,6 +2691,13 @@ impl Projected {
     }
 }
 
+/// Anteil der Deckkraft, mit dem „Bestimmte ausblenden“ voll bestimmte Geometrie zeichnet.
+const DIMMED_ALPHA: f32 = 0.2;
+
+fn dimmed(c: Color32) -> Color32 {
+    c.gamma_multiply(DIMMED_ALPHA)
+}
+
 /// Farbe einer Kurve der offenen Skizze (ohne Aufhellung unter dem Zeiger): gewählt (auch die
 /// schon gewählten Kurven einer laufenden Art) > projiziert (lila wie Fusion, auch als
 /// Konstruktion; gestrichelt macht der Linienstil) > Konstruktion > bestimmt > frei.
@@ -2707,6 +2714,9 @@ fn curve_ink(
         || dim_picked(se, Item::Curve(c));
     if selected {
         col.selected
+    } else if se.hides_determined() && curve_determined(se.last_report.as_ref(), c) {
+        // Haken „Bestimmte ausblenden“ (Skizzen 11a): voll bestimmte Geometrie gedämpft.
+        dimmed(col.determined)
     } else if projected.curves.contains(&c) {
         col.projected
     } else if sk.curve(c).is_some_and(|d| d.construction) {
@@ -2743,6 +2753,8 @@ fn point_ink(
         || dim_picked(se, Item::Point(p));
     if selected {
         col.selected
+    } else if se.hides_determined() && point_determined(se.last_report.as_ref(), p) {
+        dimmed(col.determined)
     } else if projected.points.contains(&p) {
         col.projected
     } else if point_determined(se.last_report.as_ref(), p) {

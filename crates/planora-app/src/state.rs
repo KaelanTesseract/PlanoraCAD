@@ -3169,6 +3169,11 @@ impl AppState {
         fit.stable = 0;
     }
 
+    /// Beendet das Nachpassen der Ansicht beim Öffnen einer Skizze (die Ansicht wurde bewegt).
+    pub(crate) fn cancel_sketch_fit(&mut self) {
+        self.sketch_fit = None;
+    }
+
     /// Skizze der offenen Sitzung (der Entwurf).
     pub fn session_sketch(&self) -> Option<&Sketch> {
         self.sketch_session.as_ref()?;

@@ -367,6 +367,16 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         Action::SketchToggleCurvature => {
             crate::curvature_dialog::toggle(&mut ws.active_tab_mut().state);
         }
+        Action::SketchFindUnderConstrained => {
+            if let Some((se, _)) = ws.active_tab_mut().state.session_sketch_mut() {
+                se.open_under_list();
+            }
+        }
+        Action::SketchCompute => {
+            if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
+                se.compute_sketch(sk);
+            }
+        }
         Action::SketchBreakLink => {
             // Wie der Knopf: alle gewählten Projektionen in einem Schritt; ohne passende
             // Auswahl nichts (wie „Konstruktion umschalten“).

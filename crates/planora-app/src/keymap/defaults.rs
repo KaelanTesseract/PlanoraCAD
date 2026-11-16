@@ -245,6 +245,12 @@ action_table! {
     /// Fusion „Krümmungsanzeige ein/aus“ (Toggle Curvature Display, Skizzen 11a): wie der Menüpunkt
     /// im Rechtsklickmenü der gewählten Kurve; ohne Vorgabetaste wie in Fusion.
     SketchToggleCurvature, "skizze.kruemmungsanzeige", "action-sketch-toggle-curvature", Sketch, [];
+    /// Fusion „Unterbestimmte finden“ (Find Under-Constrained, Skizzen 11a): öffnet die Liste im
+    /// Skizzenfeld; ohne Vorgabetaste wie in Fusion.
+    SketchFindUnderConstrained, "skizze.unterbestimmte_finden", "action-sketch-find-under", Sketch, [];
+    /// Fusion „Skizze berechnen“ (Compute Sketch, Skizzen 11a): wie der Knopf im Skizzenfeld;
+    /// ohne Vorgabetaste wie in Fusion.
+    SketchCompute, "skizze.berechnen", "action-sketch-compute", Sketch, [];
     /// Fusion „Verknüpfung aufheben“ (Skizzen 6): wie der Knopf im Skizzenfeld, nur mit
     /// ausgewählten projizierten Kurven; ohne Vorgabetaste wie in Fusion.
     SketchBreakLink, "skizze.verknuepfung_aufheben", "action-sketch-break-link", Sketch, [];

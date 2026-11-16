@@ -648,6 +648,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         changed: false,
         look_at: false,
         break_link: false,
+        focus: None,
     };
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
@@ -694,6 +695,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     state.sketch_grid_changed |= palette.changed;
     if palette.look_at {
         state.look_at_sketch();
+    }
+    if let Some(it) = palette.focus {
+        state.focus_under_item(it);
     }
     if palette.break_link {
         // Derselbe Weg wie die Aktion: alle gewählten Projektionen in einem Schritt.
@@ -955,6 +959,8 @@ struct SketchPalette {
     look_at: bool,
     /// Der Knopf „Verknüpfung aufheben“ wurde gedrückt (Skizzen 6).
     break_link: bool,
+    /// Zeile der Liste „Unterbestimmte finden“, auf die geklickt wurde: Die Ansicht folgt.
+    focus: Option<planora_sketch::check::CheckItem>,
 }
 
 /// Was das Skizzenfeld außer Sitzung und Entwurf braucht.
@@ -1550,6 +1556,7 @@ fn side_contents(
     });
     // Skizzenstatus oben im Feld (Skizzen 11a, A4); die Freiheitsgrade stehen weiter im Fußfeld.
     status_row(ui, se, &sf.sketch);
+    under_section(ui, se, &mut sf.sketch, palette);
     tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);
 
@@ -1800,6 +1807,99 @@ pub fn status_line(sk: &Sketch, r: &planora_sketch::solver::SolveReport) -> (Str
         SketchStatus::Determined => (tr!("sketch-check-determined"), StatusTone::Normal),
         SketchStatus::Conflict => (tr!("sketch-check-conflict"), StatusTone::Error),
         SketchStatus::NotSolved => (tr!("sketch-check-not-solved"), StatusTone::Warning),
+    }
+}
+
+/// Höchste Höhe der Liste „Unterbestimmte finden“, bevor sie scrollt.
+const UNDER_LIST_MAX_H: f32 = 160.0;
+
+/// Knöpfe „Unterbestimmte finden“ und „Skizze berechnen“ und, solange sie offen ist, die Liste der
+/// unterbestimmten Elemente (Skizzen 11a): Haken „Bestimmte ausblenden“, je Element eine Zeile
+/// (Klick wählt es und holt es ins Bild), ein X löscht es (außer Skizzenpunkte), „Schließen“.
+fn under_section(
+    ui: &mut egui::Ui,
+    se: &mut SketchSession,
+    sk: &mut Sketch,
+    palette: &mut SketchPalette,
+) {
+    let mouse = crate::keymap::mouse::current(ui.ctx());
+    ui.horizontal_wrapped(|ui| {
+        let find = ui
+            .add(egui::Button::selectable(
+                se.under_list.is_some(),
+                tr!("sketch-check-find"),
+            ))
+            .on_hover_text(with_hint(
+                &mouse,
+                Action::SketchFindUnderConstrained,
+                &tr!("sketch-check-find"),
+            ));
+        if find.clicked() {
+            se.open_under_list();
+        }
+        let compute = ui
+            .button(tr!("sketch-check-compute"))
+            .on_hover_text(with_hint(
+                &mouse,
+                Action::SketchCompute,
+                &tr!("sketch-check-compute"),
+            ));
+        if compute.clicked() {
+            se.compute_sketch(sk);
+        }
+    });
+    let Some(mut list) = se.under_list else {
+        return;
+    };
+    let rows = se.under_rows(sk);
+    let mut close = false;
+    let mut delete = None;
+    ui.horizontal(|ui| {
+        ui.checkbox(
+            &mut list.hide_determined,
+            egui::RichText::new(tr!("sketch-check-hide-determined")).size(SWITCH_TEXT_PX),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            close = ui.button(tr!("sketch-check-close")).clicked();
+        });
+    });
+    if rows.is_empty() {
+        ui.label(
+            egui::RichText::new(tr!("sketch-check-none"))
+                .size(SWITCH_TEXT_PX)
+                .color(ui.visuals().weak_text_color()),
+        );
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("planora-sketch-under-list")
+        .max_height(UNDER_LIST_MAX_H)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for (it, text, deletable) in &rows {
+                ui.horizontal(|ui| {
+                    if *deletable {
+                        let x = ui
+                            .small_button("×")
+                            .on_hover_text(tr!("sketch-check-delete-hint"));
+                        if x.clicked() {
+                            delete = Some(*it);
+                        }
+                    }
+                    use planora_sketch::check::CheckItem;
+                    let picked = match (se.selection.as_slice(), it) {
+                        ([Item::Curve(a)], CheckItem::Curve(b)) => a == b,
+                        ([Item::Point(a)], CheckItem::Point(b)) => a == b,
+                        _ => false,
+                    };
+                    if ui.selectable_label(picked, text).clicked() {
+                        palette.focus = Some(*it);
+                    }
+                });
+            }
+        });
+    se.under_list = if close { None } else { Some(list) };
+    if let Some(it) = delete {
+        se.delete_under_item(sk, it);
     }
 }
 

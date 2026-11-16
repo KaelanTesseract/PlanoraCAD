@@ -291,3 +291,68 @@ fn second_solve_comes_from_the_cache() {
     assert_eq!(second.group_solves, 0, "{second:?}");
     assert_eq!(s.status(&first), s.status(&second));
 }
+
+#[test]
+fn ordinal_counts_only_lone_points() {
+    // Ruling T16-1: Kurvenenden zählen bei den Punkten nicht mit.
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(5.0, 0.0).unwrap();
+    s.add_line(a, b).unwrap();
+    let c = s.add_point(0.0, 3.0).unwrap();
+    let d = s.add_point(5.0, 3.0).unwrap();
+    s.add_line(c, d).unwrap();
+    let lone = s.add_point(9.0, 9.0).unwrap();
+    let lone2 = s.add_point(8.0, 9.0).unwrap();
+    assert_eq!(s.item_ordinal(CheckItem::Point(lone)), 1);
+    assert_eq!(s.item_ordinal(CheckItem::Point(lone2)), 2);
+}
+
+fn two_lines() -> Sketch {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 1.0).unwrap();
+    let c = s.add_point(0.0, 5.0).unwrap();
+    s.add_line(a, b).unwrap();
+    s.add_line(b, c).unwrap();
+    s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::Distance(a, b, 10.0)).unwrap();
+    s
+}
+
+#[test]
+fn recompute_all_equals_fresh_solve() {
+    let mut s = two_lines();
+    let _ = s.solve();
+    let mut fresh = two_lines();
+    let want = fresh.solve();
+    let got = s.recompute_all();
+    assert_eq!(got.status, want.status);
+    assert_eq!(got.dof, want.dof);
+    assert_eq!(got.free_points, want.free_points);
+    assert_eq!(got.free_curves, want.free_curves);
+    assert_eq!(got.redundant, want.redundant);
+    assert_eq!(got.conflicting, want.conflicting);
+    // Der Cache war leer: es wurde wirklich gerechnet.
+    assert!(got.group_solves > 0, "{got:?}");
+}
+
+#[test]
+fn recompute_all_unchanged_values_bitwise() {
+    let mut s = two_lines();
+    let _ = s.solve();
+    let before: Vec<(f64, f64)> = s
+        .points()
+        .map(|(p, _)| s.point_xy(p).map(|q| (q.x, q.y)).unwrap())
+        .collect();
+    let _ = s.recompute_all();
+    let after: Vec<(f64, f64)> = s
+        .points()
+        .map(|(p, _)| s.point_xy(p).map(|q| (q.x, q.y)).unwrap())
+        .collect();
+    assert_eq!(before.len(), after.len());
+    for (b, a) in before.iter().zip(&after) {
+        assert_eq!(b.0.to_bits(), a.0.to_bits());
+        assert_eq!(b.1.to_bits(), a.1.to_bits());
+    }
+}

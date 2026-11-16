@@ -558,6 +558,9 @@ pub struct SketchSession {
     /// Was der letzte Klick fertig angelegt hat.
     pub created: Option<Created>,
     pub last_report: Option<SolveReport>,
+    /// Die offene Liste „Unterbestimmte finden“ (bleibt, bis man sie schließt oder die Skizze
+    /// verlässt; die Zeilen kommen je Bild aus `last_report`).
+    pub under_list: Option<crate::sketch_under::UnderList>,
     /// Meldung zum letzten Schritt; gespeichert als Grund und erst beim Zeichnen übersetzt
     /// ([`message_text`](Self::message_text)).
     pub message: Option<Msg>,
@@ -792,6 +795,7 @@ impl SketchSession {
             input: DrawInput::default(),
             created: None,
             last_report: None,
+            under_list: None,
             message: None,
             dragging: None,
             curve_drag: None,

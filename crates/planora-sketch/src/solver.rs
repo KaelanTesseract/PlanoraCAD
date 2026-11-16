@@ -565,6 +565,13 @@ impl Sketch {
         self.solve_with_soft(&[])
     }
 
+    /// „Skizze berechnen“: leert den Zwischenspeicher und löst alles neu. Werte ändern sich nur,
+    /// soweit das Lösen sie ändert; eine schon gelöste Skizze bleibt bitgleich.
+    pub fn recompute_all(&mut self) -> SolveReport {
+        self.solve_cache = SolveCache::default();
+        self.solve()
+    }
+
     /// Wie [`solve`](Self::solve), mit der Aufteilung der Zeit (nur zum Messen). Das Ergebnis ist
     /// bitgleich zu dem von `solve`.
     #[doc(hidden)]
