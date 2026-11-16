@@ -688,10 +688,11 @@ impl SketchSession {
             }
             F::Sweep => {
                 let start = sk.point_xy(*self.pending.get(1)?).ok()? - from;
-                start
-                    .perp_dot(along)
-                    .atan2(start.dot(along))
-                    .rem_euclid(std::f64::consts::TAU)
+                let ccw = start.perp_dot(along).atan2(start.dot(along));
+                // Im Uhrzeigersinn gezogen zeigt das Feld die Öffnung in diesem Sinn, wie Fusion
+                // (Handtest 11a, Fund 5a), nicht 360° − Öffnung.
+                let signed = if self.arc_cw() { -ccw } else { ccw };
+                signed.rem_euclid(std::f64::consts::TAU)
             }
             F::MinorAxis => {
                 let major = (*self.pending_pos.first()? - from).try_normalize()?;

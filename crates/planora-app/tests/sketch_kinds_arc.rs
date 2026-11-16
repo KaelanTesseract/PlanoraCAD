@@ -1224,3 +1224,29 @@ fn messages_exist_in_both_languages() {
         });
     }
 }
+
+/// Handtest 11a, Fund 5a: Das Feld „Öffnungswinkel“ schlägt die tatsächliche Öffnung des Bogens
+/// vor, auch im Uhrzeigersinn (wie Fusion), nicht 360° − Öffnung.
+#[test]
+fn arc_center_sweep_field_shows_the_real_opening_both_ways() {
+    for (path, want) in [
+        (vec![on_circle(-20.0), on_circle(-60.0)], 60.0),
+        (
+            vec![on_circle(-90.0), on_circle(-180.0), on_circle(-250.0)],
+            250.0,
+        ),
+        (vec![on_circle(20.0), on_circle(60.0)], 60.0),
+        (
+            vec![on_circle(90.0), on_circle(180.0), on_circle(250.0)],
+            250.0,
+        ),
+    ] {
+        let (mut se, sk) = center_arc_started();
+        for &p in &path {
+            se.update_cursor(&sk, Some(p), R);
+        }
+        se.sync_input(&sk);
+        let sweep = se.field_value(&sk, F::Sweep).unwrap().to_degrees();
+        assert!((sweep - want).abs() < 1e-6, "{path:?}: {sweep}");
+    }
+}
