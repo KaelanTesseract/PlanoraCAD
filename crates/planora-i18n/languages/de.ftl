@@ -1979,6 +1979,7 @@ sketch-err-kernel = Der Kernel hat das Profil abgelehnt: { $detail }
 sketch-err-tangent-kinds = Tangential geht nur zwischen Linie und Kreis/Bogen/Ellipse/Spline oder zwei Kreisen/Bögen
 sketch-smooth-kinds = Glatt geht nur zwischen einem Spline und einer Linie, einem Bogen, einem Ellipsenbogen, einem Kegelschnitt oder einem zweiten Spline
 sketch-end-tangent-ends = Tangential am Ende geht nur an den offenen Enden zweier Kurven, die an diesem Punkt zusammentreffen
+sketch-supplement-angle-only = Den Gegenwinkel gibt es nur beim Winkelmaß
 sketch-smooth-fixed-line = Eine Linie kann an einem festen Spline nur tangential anschließen
 sketch-err-smooth-end = Glatt braucht ein Ende jeder Kurve
 sketch-err-handle-smooth-flat = Krümmungsgriff geht hier nicht: Die Kurve, an die dieses Ende glatt anschließt, hat dort keine Krümmung

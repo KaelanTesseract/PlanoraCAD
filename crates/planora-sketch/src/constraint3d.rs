@@ -551,7 +551,12 @@ pub(crate) fn eval(ctx: &Ctx, data: &ConstraintData) -> Option<Vec<Dual>> {
             let den = norm_len3(&d1) * norm_len3(&d2);
             let sin = length3(&cross3(&d1, &d2));
             let w = v.abs();
-            vec![(sin * w.cos() - dot3(&d1, &d2) * w.sin()) / den]
+            if data.supplement {
+                // Gegenwinkel: zwischen `d1` und `−d2`, `dot` wechselt das Vorzeichen.
+                vec![(sin * w.cos() + dot3(&d1, &d2) * w.sin()) / den]
+            } else {
+                vec![(sin * w.cos() - dot3(&d1, &d2) * w.sin()) / den]
+            }
         }
         Tangent(c1, c2) if line_and_param(sk, *c1, *c2).is_some() => {
             let Some((line, curve)) = line_and_param(sk, *c1, *c2) else {
@@ -714,7 +719,7 @@ impl Sketch {
     }
 
     /// Aktueller Wert eines Maßes an 3D-Geometrie; `None`, wenn die Art wie in 2D misst.
-    pub(crate) fn measure3(&self, kind: &ConstraintKind) -> Option<f64> {
+    pub(crate) fn measure3(&self, kind: &ConstraintKind, supplement: bool) -> Option<f64> {
         use ConstraintKind::*;
         let ctx = Ctx::collecting(self, &self.vars);
         Some(match kind {
@@ -723,7 +728,8 @@ impl Sketch {
             Diameter(c, _) => 2.0 * circle_of3(&ctx, *c).1.v,
             Angle(c1, c2, _) => {
                 let ((_, d1), (_, d2)) = (line_dir3(&ctx, *c1), line_dir3(&ctx, *c2));
-                length3(&cross3(&d1, &d2)).v.atan2(dot3(&d1, &d2).v)
+                let (sin, dot) = (length3(&cross3(&d1, &d2)).v, dot3(&d1, &d2).v);
+                sin.atan2(if supplement { -dot } else { dot })
             }
             EllipseMajor(c, _) => length3(&ellipse_of3(&ctx, *c).1).v,
             _ => return None,

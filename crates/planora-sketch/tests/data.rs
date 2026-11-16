@@ -115,6 +115,7 @@ fn push_constraint(d: &mut SketchData, kind: ConstraintKind, alive: bool) {
     d.constraints.push(ConstraintRecord {
         kind,
         branch: 0,
+        supplement: false,
         driven: false,
         enabled: true,
         internal: false,

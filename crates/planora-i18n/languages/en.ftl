@@ -1996,6 +1996,7 @@ sketch-err-kernel = The kernel rejected the profile: { $detail }
 sketch-err-tangent-kinds = Tangent only works between a line and a circle/arc/ellipse/spline, or between two circles/arcs
 sketch-smooth-kinds = Curvature only works between a spline and a line, an arc, an elliptical arc, a conic curve or a second spline
 sketch-end-tangent-ends = Tangent at the end only works at the open ends of two curves that meet at this point
+sketch-supplement-angle-only = The supplementary angle exists only for an angle dimension
 sketch-smooth-fixed-line = A line can only join a fixed spline with a tangent
 sketch-err-smooth-end = Curvature needs an end of each curve
 sketch-err-handle-smooth-flat = No curvature handle here: the curve joined to this end has no curvature there

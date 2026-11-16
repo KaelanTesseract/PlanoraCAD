@@ -1246,6 +1246,8 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
             .map(|c| ConstraintRecord {
                 kind: constraint_from(&c.art),
                 branch: c.zweig,
+                // Das Feld kommt mit Format 21 in die Datei (Skizzen 11a, Task 7).
+                supplement: false,
                 driven: c.gesteuert,
                 enabled: c.aktiv,
                 internal: c.intern,

@@ -50,6 +50,8 @@ pub struct CurveRecord {
 pub struct ConstraintRecord {
     pub kind: ConstraintKind,
     pub branch: i8,
+    /// Gegenwinkel am Winkelmaß (Skizzen 11a); die Datei schreibt ihn ab Format 21 (Task 7).
+    pub supplement: bool,
     pub driven: bool,
     pub enabled: bool,
     pub internal: bool,
@@ -197,6 +199,7 @@ impl Sketch {
                 .map(|(_, c)| ConstraintRecord {
                     kind: c.kind.clone(),
                     branch: c.branch,
+                    supplement: c.supplement,
                     driven: c.driven,
                     enabled: c.enabled,
                     internal: c.internal,
@@ -451,6 +454,7 @@ impl Sketch {
                 kind: c.kind,
                 branch: c.branch,
                 shared_sign: 0,
+                supplement: c.supplement,
                 driven: c.driven,
                 enabled: c.enabled,
                 internal: c.internal,

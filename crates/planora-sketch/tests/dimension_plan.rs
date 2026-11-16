@@ -53,7 +53,13 @@ fn plan(s: &Sketch, picks: &[DimPick], pointer: DVec2) -> DimPlan {
     assert_eq!(p.anchor, pointer);
     let x = value(&p.kind);
     assert!(x.is_finite() && x > 0.0, "{p:?}");
-    let m = s.measure(&p.kind).unwrap();
+    let m = match p.kind {
+        K::Angle(a, b, _) => s.measure_angle(a, b, p.supplement).unwrap(),
+        _ => {
+            assert!(!p.supplement, "{p:?}");
+            s.measure(&p.kind).unwrap()
+        }
+    };
     assert!((m - x).abs() < 1e-12, "{p:?}: gemessen {m}");
     p
 }
@@ -62,7 +68,8 @@ fn plan(s: &Sketch, picks: &[DimPick], pointer: DVec2) -> DimPlan {
 fn commits_still(s: &Sketch, p: &DimPlan) {
     let mut c = s.clone();
     let before = c.variables().to_vec();
-    c.add_constraint(p.kind.clone()).unwrap();
+    c.add_constraint_supplement(p.kind.clone(), p.supplement)
+        .unwrap();
     let r = c.solve();
     assert_eq!(r.iterations, 0, "{p:?}: {r:?}");
     assert!(r.conflicting.is_empty(), "{p:?}: {r:?}");
@@ -390,22 +397,34 @@ fn two_lines() {
 
     // Nicht parallel: Winkel, positiv, in beiden Reihenfolgen.
     let (l3, _, _) = line(&mut s, v(0.0, 0.0), v(-30.0, 30.0));
-    for picks in [
-        [
-            DimPick::Curve(l1, v(5.0, 0.0)),
-            DimPick::Curve(l3, v(-5.0, 5.0)),
-        ],
-        [
-            DimPick::Curve(l3, v(-5.0, 5.0)),
-            DimPick::Curve(l1, v(5.0, 0.0)),
-        ],
-        [
-            DimPick::Curve(l2, v(30.0, 20.0)),
-            DimPick::Curve(l3, v(-5.0, 5.0)),
-        ],
+    // Der Zeiger liegt im Feld zwischen +d1 und +d2 (bei l2/l3 liegt der Schnittpunkt bei
+    // (−20, 20)): Winkel, kein Gegenwinkel.
+    for (picks, pointer) in [
+        (
+            [
+                DimPick::Curve(l1, v(5.0, 0.0)),
+                DimPick::Curve(l3, v(-5.0, 5.0)),
+            ],
+            v(10.0, 10.0),
+        ),
+        (
+            [
+                DimPick::Curve(l3, v(-5.0, 5.0)),
+                DimPick::Curve(l1, v(5.0, 0.0)),
+            ],
+            v(10.0, 10.0),
+        ),
+        (
+            [
+                DimPick::Curve(l2, v(30.0, 20.0)),
+                DimPick::Curve(l3, v(-5.0, 5.0)),
+            ],
+            v(-15.0, 25.0),
+        ),
     ] {
-        let d = plan(&s, &picks, v(10.0, 10.0));
+        let d = plan(&s, &picks, pointer);
         assert_eq!(d.mode, DimMode::Angle);
+        assert!(!d.supplement, "{d:?}");
         assert!(
             (value(&d.kind) - 0.75 * std::f64::consts::PI).abs() < 1e-12,
             "{d:?}"
@@ -480,9 +499,9 @@ fn plan_does_not_touch_the_sketch() {
     assert_eq!(s.points().count(), n);
 }
 
-/// Winkel zweier Linien bei Zeigerlagen rundum: immer derselbe positive Wert in (0, π), und das
-/// Anlegen bewegt nichts. Den Ergänzungswinkel wählt der Zeiger nicht (Korrektur 1, B:
-/// `Angle` kann `π − θ` nicht mit passendem Messwert ausdrücken).
+/// Winkel zweier Linien bei Zeigerlagen rundum (Skizzen 11a, A7): Der Zeiger wählt den Winkel
+/// `θ` oder den Gegenwinkel `π − θ`, beide in (0, π), und das Anlegen bewegt nichts. Der Winkel
+/// gilt in den Feldern zwischen `+d1`/`+d2` und `−d1`/`−d2`.
 #[test]
 fn angle_quadrant_sweep_commits_still() {
     let mut s = sketch();
@@ -505,7 +524,20 @@ fn angle_quadrant_sweep_commits_still() {
             assert_eq!(p.mode, DimMode::Angle);
             let x = value(&p.kind);
             assert!(x > 0.0 && x < std::f64::consts::PI, "{p:?}");
-            assert!((x - theta).abs() < 1e-12, "{p:?}");
+            // Der Keil zwischen +d1 (0°) und +d2 (≈56,3°) und sein Gegenkeil: Winkel.
+            let deg = k as f64;
+            let t = theta.to_degrees();
+            let angle_field =
+                (deg > 0.5 && deg < t - 0.5) || (deg > 180.5 && deg < 180.0 + t - 0.5);
+            let supplement_field =
+                (deg > t + 0.5 && deg < 179.5) || (deg > 180.0 + t + 0.5 && deg < 359.5);
+            if angle_field {
+                assert!(!p.supplement, "{k}: {p:?}");
+                assert!((x - theta).abs() < 1e-12, "{p:?}");
+            } else if supplement_field {
+                assert!(p.supplement, "{k}: {p:?}");
+                assert!((x - (std::f64::consts::PI - theta)).abs() < 1e-12, "{p:?}");
+            }
             if k % 10 == 0 {
                 commits_still(&s, &p);
             }

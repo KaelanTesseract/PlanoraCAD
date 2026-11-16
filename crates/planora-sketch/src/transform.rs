@@ -1575,7 +1575,7 @@ impl Sketch {
         for (id, d, held_before) in inner {
             let (value, _) = transformed_value(&d.kind, s);
             let kind = map_ids(&value, |p| points[&p], |c| curves[&c]);
-            let new = self.add_constraint(kind)?;
+            let new = self.add_constraint_supplement(kind, d.supplement)?;
             if let (Some(from), Some(to)) = (d.extra, self.constraints[new].extra) {
                 self.vars[to] = self.vars[from];
             }

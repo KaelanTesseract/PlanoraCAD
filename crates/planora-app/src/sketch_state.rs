@@ -2835,7 +2835,7 @@ impl SketchSession {
     /// Macht das überzählige Maß `id` anzeigend (es zeigt den aktuellen Wert) und sagt es.
     pub(crate) fn make_driven(&mut self, sk: &mut Sketch, id: ConstraintId) -> Result<(), Msg> {
         sk.set_driven(id, true).map_err(err)?;
-        if let Some(v) = sk.constraint(id).and_then(|c| sk.measure(&c.kind)) {
+        if let Some(v) = sk.measure_constraint(id) {
             sk.set_constraint_value(id, v).map_err(err)?;
         }
         self.last_report = Some(sk.solve());

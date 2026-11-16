@@ -45,6 +45,8 @@ pub struct DimPlan {
     pub mode: DimMode,
     pub anchor: DVec2,
     pub driven: bool,
+    /// Nur an `Angle`: Der Zeiger liegt im Gegenfeld, das Maß misst `π − θ` (Skizzen 11a, A7).
+    pub supplement: bool,
 }
 
 impl DimPlan {
@@ -66,6 +68,7 @@ impl DimPlan {
             kind,
             mode,
             anchor: self.anchor,
+            supplement: false,
         })
     }
 }
@@ -97,9 +100,12 @@ impl Sketch {
     ///   `CenterlineDiameter`.
     /// - Zwei Linien: parallel (innerhalb `10 · tol.angular`) ⇒ `DistancePointLine(L2.a, L1)`,
     ///   mit einer Mittellinie `CenterlineDiameter` vom ersten Punkt der anderen; sonst `Angle`,
-    ///   so geordnet, dass der Wert positiv ist. Den Ergänzungswinkel kann der Zeiger nicht
-    ///   wählen: `Angle` misst zwischen den gerichteten Linien, `π − θ` wäre nur als
-    ///   `Angle(L2, L1, π − θ)` mit dem Messwert `−θ` zu haben (Zeile erfüllt, Anzeige falsch).
+    ///   so geordnet, dass der Wert positiv ist. Den Gegenwinkel wählt der Zeiger (Skizzen 11a,
+    ///   A7; die Entscheidung „Winkel immer in (0, π) ohne Gegenwinkel“ aus Skizzen 5 gilt nicht
+    ///   mehr): Mit dem Schnittpunkt `X` der Geraden und `u = Zeiger − X` liegt `u` im Feld
+    ///   zwischen `+d1` und `+d2` oder zwischen `−d1` und `−d2` ⇒ Winkel `θ`, sonst Gegenwinkel
+    ///   `π − θ` (`DimPlan::supplement`); genau auf einer Geraden gilt der Winkel. Im Raum zählt
+    ///   die Lage des Zeigers in der Skizzenebene (Projektion der Linien auf x und y).
     ///
     /// An 3D-Geometrie (Skizzen 10, Annahme A2) gibt es nur die Arten mit 3D-Fassung: Wo die
     /// Zeigerregel waagerecht oder senkrecht wählte, bleibt es der ausgerichtete Abstand im Raum
@@ -118,6 +124,7 @@ impl Sketch {
             return None;
         }
         let (kind, mode) = self.raw_plan(picks, pointer)?;
+        let supplement = self.pointer_supplement(&kind, pointer);
         // An 3D-Geometrie (Skizzen 10, Annahme A2): waagerecht und senkrecht bemaßen ist gesperrt,
         // es bleibt der ausgerichtete Abstand im Raum; Arten ohne 3D-Fassung gibt es nicht.
         let (kind, mode) = if self.constraint_is_3d(&kind) {
@@ -135,7 +142,7 @@ impl Sketch {
         if self.refuse_text_glyphs(&kind).is_err() {
             return None;
         }
-        let measured = self.measure(&kind)?;
+        let measured = self.measure_with(&kind, supplement)?;
         let small = if matches!(kind, ConstraintKind::Angle(..)) {
             self.tol.angular
         } else {
@@ -153,7 +160,45 @@ impl Sketch {
             kind,
             mode,
             anchor: pointer,
+            supplement,
         })
+    }
+
+    /// Wählt der Zeiger bei einem Winkelmaß `kind` den Gegenwinkel? Schnittpunkt `X` der Geraden
+    /// (im Raum ihrer Projektion auf die Skizzenebene), `u = Zeiger − X`: `u` im Feld zwischen
+    /// `+d1` und `+d2` oder `−d1` und `−d2` ⇒ `false`, sonst `true`. Auf einer Geraden
+    /// (`|cross| ≤ tol.angular · |u|`) oder bei fast parallelen Geraden `false`.
+    fn pointer_supplement(&self, kind: &ConstraintKind, pointer: DVec2) -> bool {
+        let ConstraintKind::Angle(l1, l2, _) = *kind else {
+            return false;
+        };
+        let line = |c: CurveId| -> Option<(DVec2, DVec2)> {
+            let CurveKind::Line { a, b } = self.curve(c)?.kind else {
+                return None;
+            };
+            let (pa, pb) = if self.is_3d_curve(c) {
+                let (a3, b3) = (self.pos3(a), self.pos3(b));
+                (DVec2::new(a3.x, a3.y), DVec2::new(b3.x, b3.y))
+            } else {
+                (self.pos(a), self.pos(b))
+            };
+            Some((pa, (pb - pa).try_normalize()?))
+        };
+        let (Some((a1, d1)), Some((a2, d2))) = (line(l1), line(l2)) else {
+            return false;
+        };
+        let den = d1.perp_dot(d2);
+        if den.abs() <= self.tol.angular {
+            return false;
+        }
+        let x = a1 + d1 * ((a2 - a1).perp_dot(d2) / den);
+        let u = pointer - x;
+        let (p, q) = (d1.perp_dot(u), u.perp_dot(d2));
+        let tol = self.tol.angular * u.length();
+        if p.abs() <= tol || q.abs() <= tol {
+            return false;
+        }
+        p * q < 0.0
     }
 
     /// Wählte die Zeigerregel bei `picks` und `pointer` waagerecht oder senkrecht, obwohl

@@ -382,6 +382,9 @@ pub struct ConstraintData {
     /// Tangente an einem gemeinsamen Endpunkt: Vorzeichen, unter dem die Richtung gilt, aus der
     /// Geometrie beim Anlegen, Laden oder Ändern der Kurve (`0` sonst). Steht nicht in der Datei.
     pub(crate) shared_sign: i8,
+    /// Nur an `Angle`: Das Maß misst den Gegenwinkel `π − θ` (Richtungen `(−d2, d1)`, im Raum
+    /// `d1` gegen `−d2`), Skizzen 11a (A7). Sonst `false`.
+    pub(crate) supplement: bool,
     /// Nur anzeigen, nicht erzwingen.
     pub driven: bool,
     pub enabled: bool,
@@ -395,6 +398,11 @@ pub struct ConstraintData {
 pub type ConstraintId = Id<ConstraintData>;
 
 impl ConstraintData {
+    /// Misst das Winkelmaß den Gegenwinkel `π − θ`? Nur an `Angle` wahr.
+    pub fn supplement(&self) -> bool {
+        self.supplement
+    }
+
     /// Gewählte Lage bei mehrdeutigen Abhängigkeiten: `1`/`-1` je Seite, `0` ohne Wahl.
     pub fn branch(&self) -> i8 {
         self.branch
@@ -1013,7 +1021,12 @@ fn eval_kind_2d(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         Angle(c1, c2, v) => {
             let ((_, d1), (_, d2)) = (line_dir(ctx, *c1), line_dir(ctx, *c2));
             let den = norm_len(&d1) * norm_len(&d2);
-            vec![(cross(&d1, &d2) * v.cos() - dot(&d1, &d2) * v.sin()) / den]
+            if data.supplement {
+                // Gegenwinkel: Richtungen `(−d2, d1)`; `cross` bleibt, `dot` wechselt das Vorzeichen.
+                vec![(cross(&d1, &d2) * v.cos() + dot(&d1, &d2) * v.sin()) / den]
+            } else {
+                vec![(cross(&d1, &d2) * v.cos() - dot(&d1, &d2) * v.sin()) / den]
+            }
         }
         ArcRadius(c) => {
             let CurveKind::Arc { center, start, end } = sk.curves[*c].kind else {
@@ -1581,6 +1594,7 @@ impl Sketch {
             kind,
             branch: 0,
             shared_sign: 0,
+            supplement: false,
             driven: false,
             enabled: true,
             internal: true,
@@ -1676,13 +1690,29 @@ impl Sketch {
     /// Aktueller Wert eines Maßes (der gespeicherte Wert in `kind` wird ignoriert).
     /// `None` für Abhängigkeiten ohne Zahlenwert oder ungültige Objekte.
     pub fn measure(&self, kind: &ConstraintKind) -> Option<f64> {
+        self.measure_with(kind, false)
+    }
+
+    /// Der Winkel zwischen den Linien `c1` und `c2`: mit `supplement` der Gegenwinkel `π − θ`
+    /// (Skizzen 11a, A7). `None`, wenn `c1` oder `c2` keine passende Linie ist.
+    pub fn measure_angle(&self, c1: CurveId, c2: CurveId, supplement: bool) -> Option<f64> {
+        self.measure_with(&ConstraintKind::Angle(c1, c2, 0.0), supplement)
+    }
+
+    /// Der Messwert der lebenden Abhängigkeit `id`; ein Winkelmaß beachtet seinen Gegenwinkel.
+    pub fn measure_constraint(&self, id: ConstraintId) -> Option<f64> {
+        let c = self.constraint(id)?;
+        self.measure_with(&c.kind, c.supplement)
+    }
+
+    pub(crate) fn measure_with(&self, kind: &ConstraintKind, supplement: bool) -> Option<f64> {
         use ConstraintKind::*;
         if !kind.is_dimension() {
             return None;
         }
         self.check_structure(kind).ok()?;
         if self.constraint_is_3d(kind)
-            && let Some(v) = self.measure3(kind)
+            && let Some(v) = self.measure3(kind, supplement)
         {
             return v.is_finite().then_some(v);
         }
@@ -1694,7 +1724,12 @@ impl Sketch {
             Diameter(c, _) => 2.0 * circle_of(&ctx, *c).1.v,
             Angle(c1, c2, _) => {
                 let ((_, d1), (_, d2)) = (line_dir(&ctx, *c1), line_dir(&ctx, *c2));
-                cross(&d1, &d2).v.atan2(dot(&d1, &d2).v)
+                let (cr, dt) = (cross(&d1, &d2).v, dot(&d1, &d2).v);
+                if supplement {
+                    cr.atan2(-dt)
+                } else {
+                    cr.atan2(dt)
+                }
             }
             EllipseMajor(c, _) => length(&ellipse_of(&ctx, *c).1).v,
             EllipseMinor(c, _) => ellipse_of(&ctx, *c).3.v,
@@ -2360,6 +2395,21 @@ impl Sketch {
 
     /// Legt eine Abhängigkeit an. Bei einem Fehler bleibt die Skizze unverändert.
     pub fn add_constraint(&mut self, kind: ConstraintKind) -> Result<ConstraintId, SketchError> {
+        self.add_constraint_supplement(kind, false)
+    }
+
+    /// Wie [`Sketch::add_constraint`]; `supplement` (Gegenwinkel `π − θ`, Skizzen 11a, A7) gibt
+    /// es nur an `Angle`, sonst `InvalidInput`.
+    pub fn add_constraint_supplement(
+        &mut self,
+        kind: ConstraintKind,
+        supplement: bool,
+    ) -> Result<ConstraintId, SketchError> {
+        if supplement && !matches!(kind, ConstraintKind::Angle(..)) {
+            return Err(SketchError::InvalidInput(tr!(
+                "sketch-supplement-angle-only"
+            )));
+        }
         if matches!(
             kind,
             ConstraintKind::ArcRadius(_)
@@ -2389,6 +2439,7 @@ impl Sketch {
         let lift = self.check_3d(&kind)?;
         // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
         let (mut data, start) = self.new_constraint_data(kind);
+        data.supplement = supplement;
         // Mit Mustern: Schlösse die Abhängigkeit eine Schleife zwischen Vorlage und eigenem
         // Exemplar, wird sie abgelehnt (Entscheidung 6).
         if self.data_closes_pattern_cycle(&data, start) {
@@ -2403,7 +2454,7 @@ impl Sketch {
             }
             data.driven = true;
             if let Some(kind) = self
-                .measure(&data.kind)
+                .measure_with(&data.kind, data.supplement)
                 .and_then(|v| data.kind.with_value(v))
                 .filter(|k| self.check_constraint_value(k).is_ok())
             {
@@ -2429,6 +2480,7 @@ impl Sketch {
             kind,
             branch,
             shared_sign,
+            supplement: false,
             driven: false,
             enabled: true,
             internal: false,
@@ -2524,6 +2576,7 @@ impl Sketch {
             kind,
             branch: 0,
             shared_sign: 0,
+            supplement: false,
             driven: false,
             enabled: true,
             internal: false,
