@@ -86,7 +86,6 @@ pub fn comb_teeth(
         .collect()
 }
 
-/// Ableitungen einer Kurve an einer Stelle: Ort, erste und zweite Ableitung nach dem Parameter.
 impl Sketch {
     /// Kann die Kurve `c` einen Krümmungskamm tragen? Bogen, Kreis, Ellipse, Ellipsenbogen, Spline,
     /// Spline mit Kontrollpunkten, Kegelschnitt und feste (projizierte) Splines; Linien nicht.

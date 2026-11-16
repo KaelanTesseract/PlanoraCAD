@@ -131,7 +131,8 @@ fn old_file_bytes_unchanged() {
         "fixtures",
         "fixtures_format18",
         "fixtures_old_smooth",
-        "fixtures_format21",
+        // `fixtures_format21/missing_source.json` ist seit der Schlussprüfung I-2 eine Datei im
+        // Format 21 (fehlende Quelle), keine alte Datei; sie prüft `load_file_with_missing_weak_source`.
         "step_fixtures",
     ] {
         let mut entries: Vec<_> = std::fs::read_dir(root.join(dir))
@@ -389,20 +390,29 @@ fn supplement_on_other_kind_rejected_on_load() {
     assert!(e.contains(&tr!("sketch-supplement-angle-only")), "{e}");
 }
 
-/// Skizzen 11a, Task 17 (Spec „Verlorene Projektionen“): Eine Datei, in der die Quelle einer
-/// Kantenprojektion fehlt (etwa nach dem Löschen des Quaders gespeichert), lädt ohne Fehler. Nach
-/// der Neuberechnung warnt die Skizze, die Kurve bleibt, und das Speichern ist bytegleich. Die
-/// Datei ist Format 1: Kantenprojektionen gibt es seit dem ersten Format.
-#[test]
-fn load_file_with_missing_weak_source() {
+/// Die Datei `missing_source.json`: eine Skizze mit einer Kantenprojektion, deren Quelle
+/// (Feature 1) fehlt; als Text ohne Zeilenende.
+fn missing_source_text() -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures_format21/missing_source.json");
     let raw = std::fs::read_to_string(&path)
         .unwrap()
         .replace("\r\n", "\n");
-    let text = raw.trim_end_matches('\n');
-    assert_eq!(format_of(text), 1);
+    raw.trim_end_matches('\n').to_string()
+}
+
+/// Skizzen 11a, Task 17 (Spec „Verlorene Projektionen“): Eine Datei, in der die Quelle einer
+/// Kantenprojektion fehlt (etwa nach dem Löschen des Quaders gespeichert), lädt ohne Fehler. Nach
+/// der Neuberechnung warnt die Skizze, die Kurve bleibt, und das Speichern ist bytegleich. Die
+/// Datei ist Format 21 (Schlussprüfung I-2): Ältere Programme prüfen die Herkunft einer Kopie
+/// beim Laden hart und könnten sie nicht öffnen.
+#[test]
+fn load_file_with_missing_weak_source() {
+    let text = missing_source_text();
+    let text = text.as_str();
+    assert_eq!(format_of(text), 21);
     let snap = decode_version(text, "missing_source.json").unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(required_format(&snap), 21);
     assert_eq!(encode_version(&snap).unwrap(), text, "bytegleich");
     let doc = Document::from_snapshot(snap, 0.05).unwrap_or_else(|e| panic!("{e}"));
     let s = doc.features()[0].id;
@@ -421,4 +431,48 @@ fn load_file_with_missing_weak_source() {
     doc.check_invariants().unwrap();
     // Gespeichert nach der Neuberechnung: dieselben Bytes.
     assert_eq!(encode_version(&doc.snapshot()).unwrap(), text, "bytegleich");
+}
+
+/// Schlussprüfung I-2: Dieselbe Datei mit einer Formatnummer unter 21 wird mit „ab Format 21“
+/// abgelehnt: Eine Kopie mit fehlender Quelle gibt es erst seit Format 21.
+#[test]
+fn missing_weak_source_below_format_21_rejected() {
+    let mut v: serde_json::Value = serde_json::from_str(&missing_source_text()).unwrap();
+    let want = tr!(
+        "proj-since-format",
+        what = tr!("proj-feat-lost-source"),
+        format = "21"
+    );
+    for format in [1, 20] {
+        v["format"] = serde_json::json!(format);
+        let e = err_text(&serde_json::to_string_pretty(&v).unwrap());
+        assert!(e.contains(&want), "Format {format}: {e}");
+    }
+}
+
+/// Schlussprüfung I-2: Steht die Quelle einer Kopie hinter der Skizze, braucht das Dokument
+/// Format 21; steht sie davor, bleibt es beim alten Format (hier 1, bytegleich).
+#[test]
+fn weak_source_behind_the_sketch_needs_format_21() {
+    let snap = decode_version(&missing_source_text(), "missing_source.json").unwrap();
+    let source = SnapshotFeature {
+        id: FeatureId(1),
+        name: "Quader1".into(),
+        suppressed: false,
+        kind: FeatureKind::Box {
+            size: planora_math::DVec3::new(10.0, 10.0, 5.0),
+            origin: planora_math::DVec3::ZERO,
+        },
+        formulas: Default::default(),
+    };
+    let mut behind = snap.clone();
+    behind.features.push(source.clone());
+    assert_eq!(required_format(&behind), 21, "Quelle hinter der Skizze");
+    let mut before = snap;
+    before.features.insert(0, source);
+    assert_eq!(required_format(&before), 1, "Quelle vor der Skizze");
+    let text = encode_version(&before).unwrap();
+    assert_eq!(format_of(&text), 1);
+    let back = decode_version(&text, "x.json").unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(encode_version(&back).unwrap(), text, "bytegleich");
 }

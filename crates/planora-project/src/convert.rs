@@ -63,7 +63,8 @@ const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 
 /// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 21
 /// mit Krümmungskamm, Gegenwinkel, Tangente am Ende oder Glatt am Ellipsenbogen in einer Skizze
-/// ([`needs_format_21`], auch in gelöschten Einträgen), 20
+/// ([`needs_format_21`], auch in gelöschten Einträgen) oder einer Kopie mit fehlender oder
+/// dahinterstehender Quelle ([`has_lost_source`]), 20
 /// mit 3D-Geometrie oder dem Haken „3D-Skizze“ in einer Skizze ([`needs_format_20`]), 19
 /// mit einer Leinwand (auch unterdrückt: ihr Bild muss in der Datei stehen) oder einem
 /// Kontrollpunktrahmen an einer Skizzenkurve ([`needs_format_19`], auch an einem gelöschten
@@ -94,7 +95,7 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
     // Der Ordner „Leinwände“ kann nur mit einer Leinwand ausgeblendet sein (das Dokument räumt
     // ihn mit der letzten Leinwand weg); er braucht darum keine eigene Regel.
-    if has(needs_format_21) {
+    if has(needs_format_21) || has_lost_source(&s.features) {
         21
     } else if has(needs_format_20) {
         20
@@ -152,6 +153,21 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
 /// der Datei ([`Sketch::needs_format_21`]).
 fn needs_format_21(k: &FeatureKind) -> bool {
     matches!(k, FeatureKind::Sketch(sf) if sf.sketch.needs_format_21())
+}
+/// Hat eine Skizze eine Kopie, deren Herkunft (die Features aus [`CopySource::origins`], ohne
+/// die losen Quellskizzen) im Verlauf fehlt oder nicht vor der Skizze steht (Skizzen 11a,
+/// verlorene Projektion; Schlussprüfung I-2)? Ältere Programme prüfen diese Bezüge beim Laden
+/// hart und brächen ab; die Datei braucht darum Format 21.
+fn has_lost_source(features: &[SnapshotFeature]) -> bool {
+    features.iter().enumerate().any(|(i, f)| {
+        let FeatureKind::Sketch(sf) = &f.kind else {
+            return false;
+        };
+        sf.copies
+            .iter()
+            .flat_map(|c| c.source.origins())
+            .any(|o| !features[..i].iter().any(|g| g.id == o))
+    })
 }
 /// Braucht die Art Format 20 (Skizzen 10)? Eine Skizze mit 3D-Geometrie (3D-Punkt, Kurve mit
 /// Normale, Freiformkurve im Raum, `AlongZ`, `Fixed3`, die internen `InPlane`/`EllipseAxes3`)
@@ -4168,6 +4184,17 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         });
     }
     migrate_profiles(origin, &mut features)?;
+    // Eine Kopie mit fehlender oder dahinterstehender Quelle gibt es erst ab Format 21 (I-2).
+    if file.format < 21 && has_lost_source(&features) {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-lost-source"),
+                format = "21"
+            ),
+        ));
+    }
     Ok(Snapshot {
         features,
         marker: file.marker,

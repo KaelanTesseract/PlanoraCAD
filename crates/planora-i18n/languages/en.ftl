@@ -3280,6 +3280,7 @@ proj-feat-canvas = Canvases
 proj-feat-control-frame = Control point frames on sketch curves
 proj-feat-3d-sketch = 3D geometry in sketches
 proj-feat-sketch-check = Curvature comb, end tangent, supplementary angle and smooth on an elliptic arc in sketches
+proj-feat-lost-source = Projected curves with a missing source
 proj-write-failed = The document cannot be written: { $msg }
 proj-invalid-values = The document contains invalid values and is not saved: { $msg }
 proj-expect-formula-map = a table of field → formula
