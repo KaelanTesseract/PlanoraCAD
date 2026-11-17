@@ -184,7 +184,7 @@ fn rotate_grip_turns_about_corner0() {
     assert!((angle - FRAC_PI_2).abs() < 1e-9, "{angle}");
     let after = corners(&s, t);
     assert!(after[0].distance(before[0]) < 1e-9, "Ecke 0 bleibt");
-    assert!((after[1] - after[0]).length() - (before[1] - before[0]).length() < 1e-9);
+    assert!(((after[1] - after[0]).length() - (before[1] - before[0]).length()).abs() < 1e-9);
 }
 
 #[test]
@@ -342,5 +342,56 @@ fn held_angle_refused_with_message() {
     );
     end(&mut s);
     assert_eq!(undo_len(&s), steps, "kein Schritt");
+    assert!(sk(&s).text_angle(t).unwrap().abs() < 1e-12);
+}
+
+#[test]
+fn rotate_tool_switch_restores() {
+    let (mut s, t) = rig();
+    select_text(&mut s, t);
+    let steps = undo_len(&s);
+    let before = sk(&s).clone();
+    let at = grips(&s)[0].1;
+    assert!(begin(&mut s, at));
+    drag(&mut s, at + v(-15.0, 6.0));
+    assert!(sk(&s).text_angle(t).unwrap().abs() > 0.1);
+    {
+        let (se_, sk_) = s.session_sketch_mut().unwrap();
+        se_.set_tool(sk_, planora_app::sketch_state::Tool::Line);
+    }
+    s.observe_sketch(false);
+    assert_eq!(sk(&s).to_data(), before.to_data());
+    assert!(sk(&s).text_angle(t).unwrap().abs() < 1e-12);
+    assert_eq!(undo_len(&s), steps, "kein Schritt");
+}
+
+#[test]
+fn pointer_on_corner0_changes_nothing() {
+    let (mut s, t) = rig();
+    select_text(&mut s, t);
+    let at = grips(&s)[0].1;
+    assert!(begin(&mut s, at));
+    drag(&mut s, at + v(-15.0, 6.0));
+    let turned = sk(&s).text_angle(t).unwrap();
+    let c0 = corners(&s, t)[0];
+    drag(&mut s, c0);
+    assert!(
+        (sk(&s).text_angle(t).unwrap() - turned).abs() < 1e-12,
+        "hält"
+    );
+    end(&mut s);
+}
+
+#[test]
+fn changing_the_selection_mid_drag_does_not_matter() {
+    let (mut s, t) = rig();
+    select_text(&mut s, t);
+    let at = grips(&s)[0].1;
+    assert!(begin(&mut s, at));
+    se(&mut s).selection.clear();
+    drag(&mut s, at + v(-15.0, 6.0));
+    end(&mut s);
+    assert!(sk(&s).text_angle(t).unwrap().abs() > 0.1);
+    assert!(s.undo_sketch());
     assert!(sk(&s).text_angle(t).unwrap().abs() < 1e-12);
 }

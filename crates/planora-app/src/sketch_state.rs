@@ -888,7 +888,13 @@ impl SketchSession {
     /// wie mit [`end_drag`](Self::end_drag) beendet, auch ein Griffzug. Nur der erste Zug, der einen
     /// Griff erst einschaltet, geht ganz zurück: Er bleibt nie halb stehen.
     pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
-        if self.curve_drag.as_ref().is_some_and(|d| d.activates) {
+        // Auch der Zug am Drehgriff eines Textes geht ganz zurück: Ein Werkzeugwechsel hinterlässt
+        // nichts. (Der Rho-Griff bleibt ein gewöhnlicher Zug, siehe `a_tool_change_takes_over_the_rho_drag`.)
+        if self
+            .curve_drag
+            .as_ref()
+            .is_some_and(|d| d.activates || d.text_rot.is_some())
+        {
             self.abort_handle_drag(sk);
         }
         self.end_drag(sk);
