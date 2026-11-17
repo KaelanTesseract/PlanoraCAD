@@ -127,12 +127,6 @@ impl Sketch {
         !self.texts.is_empty()
     }
 
-    /// Inhalte aller Texteinträge in Arena-Reihenfolge, auch gelöschter (wie in
-    /// [`Sketch::to_data`]); für die Formatwahl (Skizzen 11b: `{Name}` braucht Format 22).
-    pub fn text_entry_contents(&self) -> impl Iterator<Item = &str> {
-        self.texts.iter().map(|(_, t)| t.content.as_str())
-    }
-
     /// Arten aller Abhängigkeitseinträge in Arena-Reihenfolge, auch gelöschter und interner.
     pub fn constraint_entries(&self) -> impl Iterator<Item = &ConstraintKind> {
         self.constraints.iter().map(|(_, c)| &c.kind)

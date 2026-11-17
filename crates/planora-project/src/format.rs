@@ -70,6 +70,11 @@ pub struct VersionFile {
         deserialize_with = "de_sketch_groups"
     )]
     pub skizzengruppen: Vec<SkizzengruppeDto>,
+    /// Nächste Kennung einer Skizzengruppe (ab Format 22); 0 oder fehlend heißt „aus den
+    /// Kennungen ableiten“ (größte + 1). Fehlt ohne Gruppen, damit alte Dateien Byte für Byte
+    /// bleiben.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub naechste_gruppe: u64,
     /// Bilder der Leinwände (ab Format 19, Skizzen 9): Kennung, Format und Base64 der Datei-Bytes,
     /// in jeder Version erneut (wie `netze`). Leer heißt: fehlt, damit alte Dateien Byte für Byte
     /// bleiben. Steht hinten, weil die Daten lang sind.

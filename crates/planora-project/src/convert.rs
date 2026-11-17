@@ -35,7 +35,7 @@ use planora_feature::{
 };
 use planora_feature::{
     IsoDirection, SketchGroup, SketchGroupId, SketchGroups, SpunAxis, SpunSelection, SpunSpec,
-    TextFormulas, has_param_ref,
+    TextFormulas,
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
@@ -66,8 +66,9 @@ const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 
 /// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 22
-/// mit einer Skizzengruppe, einer Höhenformel an einem Text, einem `{Name}`-Verweis in einem Text
-/// (auch einem gelöschten), einem Drehprofil oder einer Isokurve ([`needs_format_22`]), 21
+/// mit einer Skizzengruppe (oder einer vergebenen Gruppenkennung), einer Höhenformel an einem
+/// Text, einem Drehprofil oder einer Isokurve ([`needs_format_22`]; ein `{Name}`-Verweis im Text
+/// zählt nicht, Korrekturrunde 1), 21
 /// mit Krümmungskamm, Gegenwinkel, Tangente am Ende oder Glatt am Ellipsenbogen in einer Skizze
 /// ([`needs_format_21`], auch in gelöschten Einträgen) oder einer Kopie mit fehlender oder
 /// dahinterstehender Quelle ([`has_lost_source`]), 20
@@ -101,7 +102,7 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
     // Der Ordner „Leinwände“ kann nur mit einer Leinwand ausgeblendet sein (das Dokument räumt
     // ihn mit der letzten Leinwand weg); er braucht darum keine eigene Regel.
-    if has(needs_format_22) || !s.sketch_groups.is_empty() {
+    if has(needs_format_22) || !s.sketch_groups.is_empty() || s.sketch_groups.next != 0 {
         22
     } else if has(needs_format_21) || has_lost_source(&s.features) {
         21
@@ -156,12 +157,12 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
         1
     }
 }
-/// Braucht die Art Format 22 (Skizzen 11b)? Eine Skizze mit Höhenformel an einem Text, einem
-/// `{Name}`-Verweis in einem Text (auch einem gelöschten: Er steht in der Datei) oder einer Kopie
-/// mit Drehprofil oder Isokurve. Die Skizzengruppen prüft [`format_with`] am Snapshot.
+/// Braucht die Art Format 22 (Skizzen 11b)? Eine Skizze mit Höhenformel an einem Text oder einer
+/// Kopie mit Drehprofil oder Isokurve. Die Skizzengruppen prüft [`format_with`] am Snapshot.
+/// `{Name}` im Text braucht kein neues Format: Die Datenform des Textes bleibt, ältere Programme
+/// zeigen die Klammern wörtlich (Korrekturrunde 1).
 fn needs_format_22(k: &FeatureKind) -> bool {
     matches!(k, FeatureKind::Sketch(sf) if !sf.text_formulas.is_empty()
-    || sf.sketch.text_entry_contents().any(has_param_ref)
     || sf.copies.iter().any(|c| matches!(
         c.source,
         CopySource::SpunProfile(_) | CopySource::Isoparametric { .. }
@@ -2749,8 +2750,8 @@ fn text_formulas_from(
 
 /// Liest die Skizzengruppen (ab Format 22): Kennungen eindeutig, die übergeordnete Gruppe steht
 /// in der Datei (ohne Kreis), jede genannte Skizze ist ein Skizzen-Feature der Datei und steht
-/// in höchstens einer Gruppe. Die nächste Kennung folgt auf die größte (sie steht nicht in der
-/// Datei).
+/// in höchstens einer Gruppe. Die nächste Kennung (`naechste_gruppe`) ist mindestens größte + 1;
+/// fehlt sie, ist sie größte + 1 (ohne Gruppen 0).
 fn sketch_groups_from(origin: &str, file: &VersionFile) -> Result<SketchGroups> {
     let bad = |m: String| ProjectError::corrupt(origin, m);
     let sketches: HashSet<u64> = file
@@ -2815,11 +2816,22 @@ fn sketch_groups_from(origin: &str, file: &VersionFile) -> Result<SketchGroups> 
             hidden: g.aus,
         });
     }
-    out.next = match out.groups.iter().map(|g| g.id.0).max() {
+    let min = match out.groups.iter().map(|g| g.id.0).max() {
         Some(m) => m
             .checked_add(1)
-            .ok_or_else(|| bad(tr!("proj-sketch-group-twice", id = m.to_string())))?,
+            .ok_or_else(|| bad(tr!("proj-sketch-group-id-max")))?,
         None => 0,
+    };
+    out.next = match file.naechste_gruppe {
+        0 => min,
+        n if n < min => {
+            return Err(bad(tr!(
+                "proj-sketch-group-next-small",
+                next = n.to_string(),
+                min = min.to_string()
+            )));
+        }
+        n => n,
     };
     Ok(out)
 }
@@ -4065,6 +4077,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         },
         projektangaben: s.project_info.as_ref().map(project_to),
         skizzengruppen: sketch_groups_to(&s.sketch_groups),
+        naechste_gruppe: s.sketch_groups.next,
         stueckliste: overrides_to(&s.parts_overrides),
         parameter: s.parameters.iter().map(parameter_to).collect(),
         // Der Zähler steht nur mit Parametern in der Datei (ohne fehlt er, alte Dateien bleiben
@@ -4155,14 +4168,13 @@ fn has_format_21_data(k: &KindDto) -> bool {
 }
 
 /// Inhalt aus Format 22 in einer Feature-Art der Datei (Gegenstück zu [`needs_format_22`]):
-/// Höhenformel, `{Name}` in einem Text (auch gelöscht), Drehprofil oder Isokurve. Die
-/// Skizzengruppen prüft [`decode_version`] an der Datei.
+/// Höhenformel, Drehprofil oder Isokurve. Die Skizzengruppen prüft [`decode_version`] an der
+/// Datei.
 fn has_format_22_data(k: &KindDto) -> bool {
     let KindDto::Skizze(s) = k else {
         return false;
     };
     !s.hoehenformeln.is_empty()
-        || s.skizze.texte.iter().any(|t| has_param_ref(&t.inhalt))
         || s.kopien
             .iter()
             .any(|c| c.drehprofil.is_some() || c.isokurve.is_some())
@@ -4422,6 +4434,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     }
     if file.format < 22
         && (!file.skizzengruppen.is_empty()
+            || file.naechste_gruppe != 0
             || file.features.iter().any(|f| has_format_22_data(&f.art)))
     {
         return Err(ProjectError::corrupt(

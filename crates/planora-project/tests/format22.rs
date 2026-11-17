@@ -1,7 +1,7 @@
 //! Dateiformat 22 (Teilprojekt Skizzen 11b, Task 7): Nur ein Dokument mit Skizzengruppe,
-//! Höhenformel an einem Text, `{Name}` in einem Text (auch einem gelöschten), Drehprofil oder
-//! Isokurve wird mit Format 22 geschrieben; alle anderen bleiben bytegleich. Der Rundlauf ist
-//! verlustfrei.
+//! Höhenformel an einem Text, Drehprofil oder Isokurve wird mit Format 22 geschrieben; alle
+//! anderen bleiben bytegleich. `{Name}` in einem Text ändert das Format nicht (Korrekturrunde 1:
+//! die Datenform des Textes bleibt, nur seine Deutung ist neu). Der Rundlauf ist verlustfrei.
 
 use planora_feature::planes::{AxisRef, StdAxis};
 use planora_feature::*;
@@ -17,8 +17,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Felder, die es erst ab Format 22 gibt.
-const NEW_FIELDS: [&str; 4] = [
+const NEW_FIELDS: [&str; 5] = [
     "\"skizzengruppen\"",
+    "\"naechste_gruppe\"",
     "\"hoehenformeln\"",
     "\"drehprofil\"",
     "\"isokurve\"",
@@ -370,21 +371,258 @@ fn text_formula_writes_22() {
     );
 }
 
+/// Ein Dokument, in dem nur `{…}` im Text neu ist, schreibt kein Format 22 (auch nicht mit
+/// gelöschtem Text), sondern das Format des Textes (18).
 #[test]
-fn param_ref_in_text_writes_22() {
-    let (sk, _) = text_sketch("{Breite} mm");
+fn param_ref_in_text_keeps_format() {
+    for delete in [false, true] {
+        let (mut sk, t) = text_sketch("{Breite} mm");
+        if delete {
+            sk.remove_text(t).unwrap();
+        }
+        let d = document_with(vec![("Skizze1", FeatureKind::Sketch(sketch_feature(sk)))]);
+        let snap = d.snapshot();
+        assert_eq!(required_format(&snap), 18, "{delete}");
+        let text = encode_version(&snap).unwrap();
+        assert_eq!(format_of(&text), 18);
+        assert!(text.contains("{Breite} mm"));
+        let back = decode_version(&text, "x.json").unwrap();
+        assert_eq!(encode_version(&back).unwrap(), text);
+    }
+}
+
+/// Eine Datei im Format 21 mit `{Breite}` im Text (hier eine geschriebene Datei mit
+/// nachträglich getipptem Verweis) lädt; neu geschrieben ergibt sie dieselben Bytes.
+#[test]
+fn format_21_file_with_param_ref_loads_unchanged() {
+    // Ein Kamm hält die Datei bei Format 21 (sonst schriebe sie sich als 18).
+    let (mut sk, _) = text_sketch("Breite mm");
+    let m = sk.add_point(0.0, 60.0).unwrap();
+    let st = sk.add_point(5.0, 60.0).unwrap();
+    let en = sk.add_point(0.0, 65.0).unwrap();
+    let arc = sk.add_arc(m, st, en).unwrap();
+    sk.set_comb(arc, Some(planora_sketch::comb::CombSettings::default()))
+        .unwrap();
     let d = document_with(vec![("Skizze1", FeatureKind::Sketch(sketch_feature(sk)))]);
-    let (back, text) = roundtrip(&d.snapshot());
+    let written = encode_version(&d.snapshot()).unwrap();
+    assert_eq!(format_of(&written), 21);
+    let text = written.replacen("\"Breite mm\"", "\"{Breite} mm\"", 1);
     assert!(text.contains("{Breite} mm"));
-    assert!(sketch_of(&back, 0).text_formulas.is_empty());
+    let snap = decode_version(&text, "x.json").unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(encode_version(&snap).unwrap(), text);
+}
+
+/// Die nächste Gruppenkennung steht in der Datei (`naechste_gruppe`) und kommt gleich zurück,
+/// auch wenn sie größer ist als größte + 1.
+#[test]
+fn group_next_roundtrips() {
+    let d = three_sketches();
+    let mut snap = d.snapshot();
+    let mut g = nested_groups(&d);
+    g.next = 9;
+    snap.sketch_groups = g.clone();
+    let (back, text) = roundtrip(&snap);
+    assert_eq!(back.sketch_groups, g);
+    // Skizzen gelten nach dem Laden nach ihrem Stand als neu (`same_content`); gleich ist der
+    // Snapshot darum über seine Datei.
+    assert_eq!(
+        encode_version(&back).unwrap(),
+        encode_version(&snap).unwrap()
+    );
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["naechste_gruppe"], 9, "{text}");
+    // Fehlt das Feld, gilt größte + 1.
+    let mut v2 = v.clone();
+    v2.as_object_mut().unwrap().remove("naechste_gruppe");
+    let back = decode_version(&serde_json::to_string_pretty(&v2).unwrap(), "x.json").unwrap();
+    assert_eq!(back.sketch_groups.next, 3);
+}
+
+/// Die Datei als JSON-Wert, mit Gruppen und Format 22.
+fn grouped_value() -> serde_json::Value {
+    let d = three_sketches();
+    let mut snap = d.snapshot();
+    snap.sketch_groups = nested_groups(&d);
+    serde_json::from_str(&encode_version(&snap).unwrap()).unwrap()
+}
+
+/// Fehlertext beim Laden des geänderten Werts.
+fn load_err(v: &serde_json::Value) -> String {
+    decode_version(&serde_json::to_string_pretty(v).unwrap(), "x.json")
+        .unwrap_err()
+        .to_string()
 }
 
 #[test]
-fn deleted_text_with_param_ref_needs_22() {
-    let (mut sk, t) = text_sketch("{Breite} mm");
-    sk.remove_text(t).unwrap();
-    let d = document_with(vec![("Skizze1", FeatureKind::Sketch(sketch_feature(sk)))]);
-    roundtrip(&d.snapshot());
+fn bad_sketch_groups_refused() {
+    // Doppelte Kennung
+    let mut v = grouped_value();
+    v["skizzengruppen"][1]["kennung"] = 1.into();
+    v["skizzengruppen"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("eltern");
+    let e = load_err(&v);
+    assert!(e.contains(&tr!("proj-sketch-group-twice", id = "1")), "{e}");
+    // Elternkreis A → B → A
+    let mut v = grouped_value();
+    v["skizzengruppen"][0]["eltern"] = 2.into();
+    let e = load_err(&v);
+    assert!(
+        e.contains(&tr!("proj-sketch-group-parent", id = "1")),
+        "{e}"
+    );
+    // Fehlende Eltern
+    let mut v = grouped_value();
+    v["skizzengruppen"][1]["eltern"] = 77.into();
+    let e = load_err(&v);
+    assert!(
+        e.contains(&tr!("proj-sketch-group-parent", id = "2")),
+        "{e}"
+    );
+    // Ein Mitglied, das keine Skizze ist
+    let mut v = grouped_value();
+    v["skizzengruppen"][0]["skizzen"] = serde_json::json!([999]);
+    let e = load_err(&v);
+    assert!(
+        e.contains(&tr!(
+            "proj-sketch-group-not-sketch",
+            id = "1",
+            feature = "999"
+        )),
+        "{e}"
+    );
+    // Eine Skizze in zwei Gruppen
+    let mut v = grouped_value();
+    let first = v["skizzengruppen"][1]["skizzen"][0].clone();
+    v["skizzengruppen"][0]["skizzen"] = serde_json::json!([first]);
+    let e = load_err(&v);
+    assert!(
+        e.contains(&tr!(
+            "proj-sketch-group-member-twice",
+            feature = first.to_string()
+        )),
+        "{e}"
+    );
+    // Nächste Kennung zu klein
+    let mut v = grouped_value();
+    v["naechste_gruppe"] = 2.into();
+    let e = load_err(&v);
+    assert!(
+        e.contains(&tr!("proj-sketch-group-next-small", next = "2", min = "3")),
+        "{e}"
+    );
+    // Größte mögliche Kennung: keine nächste Kennung möglich
+    let mut v = grouped_value();
+    v["skizzengruppen"][1]["kennung"] = u64::MAX.into();
+    v["skizzengruppen"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("eltern");
+    v.as_object_mut().unwrap().remove("naechste_gruppe");
+    let e = load_err(&v);
+    assert!(e.contains(&tr!("proj-sketch-group-id-max")), "{e}");
+}
+
+#[test]
+fn bad_text_formulas_refused() {
+    let (mut sk, a) = text_sketch("Abc");
+    let b = sk
+        .add_text_box(
+            v(1.0, 30.0),
+            v(41.0, 40.0),
+            TextParams {
+                content: "De".into(),
+                style: TextStyle {
+                    font: "Gibt Es Nicht Sans".into(),
+                    bold: false,
+                    italic: false,
+                    spacing: 0.0,
+                },
+                height: 5.0,
+                flip_h: false,
+                flip_v: false,
+            },
+            HAlign::Left,
+            VAlign::Bottom,
+            shape("De"),
+        )
+        .unwrap();
+    sk.remove_text(b).unwrap();
+    let mut sf = sketch_feature(sk);
+    sf.text_formulas.insert(a, "Breite".into());
+    let snap = document_with(vec![("Skizze1", FeatureKind::Sketch(sf))]).snapshot();
+    let base: serde_json::Value = serde_json::from_str(&encode_version(&snap).unwrap()).unwrap();
+    // Formel am gelöschten Text
+    let mut v = base.clone();
+    v["features"][0]["art"]["hoehenformeln"][0]["text"] = b.index().into();
+    assert!(load_err(&v).contains(&tr!("proj-text-formula-missing-text")));
+    // Text außerhalb der Liste
+    let mut v = base.clone();
+    v["features"][0]["art"]["hoehenformeln"][0]["text"] = 5.into();
+    assert!(load_err(&v).contains(&tr!("proj-text-formula-missing-text")));
+    // Doppelte Formel
+    let mut v = base.clone();
+    let f = v["features"][0]["art"]["hoehenformeln"][0].clone();
+    v["features"][0]["art"]["hoehenformeln"] = serde_json::json!([f.clone(), f]);
+    assert!(load_err(&v).contains(&tr!("proj-text-formula-twice")));
+}
+
+#[test]
+fn bad_spun_and_iso_refused() {
+    let id = box_id(&copy_document(CopySource::Edge(edge(1))));
+    let spun = copy_document(CopySource::SpunProfile(SpunSpec {
+        selection: SpunSelection::Bodies(vec![]),
+        axis: SpunAxis::Own(CurveId::from_index(0)),
+        tolerance: 0.1,
+        flip: false,
+    }));
+    let spun: serde_json::Value = serde_json::from_str(&encode_version(&spun).unwrap()).unwrap();
+    let tolerance = tr!(
+        "proj-number-invalid",
+        what = tr!(
+            "proj-field",
+            name = "Skizze1",
+            label = tr!("proj-l-tolerance")
+        )
+    );
+    for bad in [0.0, -1.0, 1e300] {
+        let mut v = spun.clone();
+        v["features"][1]["art"]["kopien"][0]["drehprofil"]["toleranz"] = bad.into();
+        let e = load_err(&v);
+        assert!(e.contains(&tolerance), "{bad}: {e}");
+    }
+    // NaN lässt sich in JSON nicht schreiben; `null` an seiner Stelle ist beschädigt.
+    let mut v = spun.clone();
+    v["features"][1]["art"]["kopien"][0]["drehprofil"]["toleranz"] = serde_json::Value::Null;
+    load_err(&v);
+    let iso = copy_document(CopySource::Isoparametric {
+        face: face(id, "Wand 2"),
+        direction: IsoDirection::U,
+        value: 0.5,
+    });
+    let iso: serde_json::Value = serde_json::from_str(&encode_version(&iso).unwrap()).unwrap();
+    let share = tr!(
+        "proj-number-invalid",
+        what = tr!(
+            "proj-field",
+            name = "Skizze1",
+            label = tr!("proj-l-iso-share")
+        )
+    );
+    for bad in [-0.01, 1.01, 1e300] {
+        let mut v = iso.clone();
+        v["features"][1]["art"]["kopien"][0]["isokurve"]["anteil"] = bad.into();
+        let e = load_err(&v);
+        assert!(e.contains(&share), "{bad}: {e}");
+    }
+    let mut v = iso.clone();
+    v["features"][1]["art"]["kopien"][0]["isokurve"]["richtung"] = "w".into();
+    let e = load_err(&v);
+    assert!(
+        e.contains(&tr!("proj-unknown-iso-direction", value = "w")),
+        "{e}"
+    );
 }
 
 #[test]
@@ -491,10 +729,12 @@ fn format_21_file_with_22_data_refused() {
     sf.text_formulas.insert(t, "3 mm".into());
     let snap = document_with(vec![("Skizze1", FeatureKind::Sketch(sf))]).snapshot();
     assert!(err(&as_21(&snap)).to_string().contains(&expected));
-    // `{Name}` im Text
-    let (sk, _) = text_sketch("{Breite}");
-    let snap = document_with(vec![("Skizze1", FeatureKind::Sketch(sketch_feature(sk)))]).snapshot();
-    assert!(err(&as_21(&snap)).to_string().contains(&expected));
+    // Nur die nächste Gruppenkennung (ohne Gruppen)
+    let mut v = grouped_value();
+    v["skizzengruppen"] = serde_json::json!([]);
+    v["format"] = 21.into();
+    let e = load_err(&v);
+    assert!(e.contains(&expected), "{e}");
     // Isokurve
     let id = box_id(&copy_document(CopySource::Edge(edge(1))));
     let snap = copy_document(CopySource::Isoparametric {
