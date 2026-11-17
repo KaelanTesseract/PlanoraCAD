@@ -80,7 +80,7 @@ pub use refs::{
     resolve_edge, resolve_face,
 };
 pub use sketch_dxf::{SketchDxfError, SketchDxfOptions, sketch_dxf};
-pub use sketch_groups::{SketchGroup, SketchGroupId, SketchGroups};
+pub use sketch_groups::{GroupItem, SketchGroup, SketchGroupId, SketchGroups};
 pub use snapshot::{RestoreKind, Snapshot, SnapshotFeature, mesh_validations};
 pub use step_bodies::{
     MAX_STEP_TEXT_SUM_BYTES, NewStepBody, StepShape, StepShapeId, StepTextSumLimitGuard,

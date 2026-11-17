@@ -4017,6 +4017,15 @@ fn mb_text(bytes: usize) -> String {
 /// JSON-Text einer Versionsdatei. Enthält der Snapshot eine nicht endliche Zahl, ist das ein
 /// Fehler (das Dokument wird dann nicht geschrieben).
 pub fn encode_version(s: &Snapshot) -> Result<String> {
+    // Skizzengruppen müssen stimmig sein: Eine Zuordnung zu einer unbekannten Gruppe fiele beim
+    // Schreiben still weg, eine zu einer fehlenden Skizze ließe sich nicht mehr laden.
+    s.sketch_groups
+        .check(&|f| {
+            s.features
+                .iter()
+                .any(|x| x.id == f && matches!(x.kind, FeatureKind::Sketch(_)))
+        })
+        .map_err(|e| ProjectError::Invalid(tr!("proj-invalid-values", msg = e.to_string())))?;
     let profiles = profile_fields(s);
     let format = format_with(s, &profiles);
     let (step_formen, forms) = step_forms_to(s);

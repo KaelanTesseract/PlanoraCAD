@@ -368,6 +368,7 @@ impl Document {
         self.marker -= before_marker;
         // Doppelt abgesichert: `prune_rollbacks` in der Neuberechnung entfernt sie ebenfalls.
         self.rollbacks.retain(|r| !removed.contains(r));
+        self.sketch_groups.forget_sketches(&removed);
         self.prune_meshes();
         self.prune_step_shapes();
         self.prune_images();

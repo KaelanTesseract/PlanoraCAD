@@ -744,3 +744,52 @@ fn format_21_file_with_22_data_refused() {
     });
     assert!(err(&as_21(&snap)).to_string().contains(&expected));
 }
+
+/// Task 8: Was das Programm selbst nicht mehr lädt oder still verlöre, wird nie geschrieben:
+/// Mitglied mit unbekannter Gruppe, Mitglied einer fehlenden Skizze, Mitglied ohne Gruppen.
+#[test]
+fn broken_groups_are_never_written() {
+    let d = three_sketches();
+    let ids: Vec<FeatureId> = d.snapshot().features.iter().map(|f| f.id).collect();
+    let group = |id: u64| SketchGroup {
+        id: SketchGroupId(id),
+        name: "G".into(),
+        parent: None,
+        hidden: false,
+    };
+    type Break<'a> = Box<dyn Fn(&mut Snapshot) + 'a>;
+    let broken: Vec<Break> = vec![
+        // Unbekannte Gruppenkennung (fiele beim Schreiben still weg).
+        Box::new(|s| {
+            s.sketch_groups.groups.push(group(0));
+            s.sketch_groups.next = 1;
+            s.sketch_groups.member.insert(ids[0], SketchGroupId(5));
+        }),
+        // Mitglied ohne jede Gruppe.
+        Box::new(|s| {
+            s.sketch_groups.member.insert(ids[0], SketchGroupId(0));
+        }),
+        // Skizze gibt es nicht.
+        Box::new(|s| {
+            s.sketch_groups.groups.push(group(0));
+            s.sketch_groups.next = 1;
+            s.sketch_groups
+                .member
+                .insert(FeatureId(999), SketchGroupId(0));
+        }),
+    ];
+    for (k, f) in broken.iter().enumerate() {
+        let mut s = d.snapshot();
+        f(&mut s);
+        match encode_version(&s) {
+            Err(ProjectError::Invalid(_)) => {}
+            other => panic!("Fall {k}: {other:?}"),
+        }
+    }
+    // Ein gültiger Stand geht durch.
+    let mut s = d.snapshot();
+    s.sketch_groups.groups.push(group(0));
+    s.sketch_groups.next = 1;
+    s.sketch_groups.member.insert(ids[0], SketchGroupId(0));
+    assert_eq!(format_of(&encode_version(&s).unwrap()), 22);
+}

@@ -241,6 +241,7 @@ impl Document {
                 })?;
             }
             crate::parts::check_overrides(&s.parts_overrides)?;
+            Document::check_snapshot_groups(&s)?;
             // Als letzte Prüfung: `set_drawings` ändert das Dokument erst, wenn alles stimmt.
             self.set_drawings(s.drawings, s.next_drawing)?;
             self.project_info = s.project_info;
@@ -290,6 +291,7 @@ impl Document {
         if s.next_id == u64::MAX {
             return Err(bad(tr!("feature-snap-id-counter")));
         }
+        Document::check_snapshot_groups(&s)?;
         if s.marker > s.features.len() {
             return Err(bad(tr!("feature-snap-marker")));
         }
