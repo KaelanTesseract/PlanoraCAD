@@ -979,6 +979,10 @@ impl AppState {
     /// von `selected_body` (Index in der Körperliste für die Eigenschaften).
     pub fn select_body(&mut self, tip: Option<FeatureId>) {
         self.history_choice = tip;
+        // Eine andere Wahl verdrängt die Skizzengruppe (Skizzen 11b).
+        if tip.is_some() {
+            self.browser_group = None;
+        }
     }
 
     /// Körper der Verlaufsleiste als Spitze ([`Document::body_tips`]): der gewählte, solange er
@@ -1069,6 +1073,37 @@ impl AppState {
                 .collect()
         } else {
             vec![sel]
+        }
+    }
+
+    /// Die im Ordner „Skizzen“ gewählte Gruppe (Skizzen 11b): nur, solange nichts anderes gewählt
+    /// ist (Feature, Körper, Auswahl in der Ansicht, Zeichnung, Grundebene) und es sie gibt.
+    pub fn selected_sketch_group(&self) -> Option<planora_feature::SketchGroupId> {
+        self.browser_group.filter(|g| {
+            self.selected_feature.is_none()
+                && self.selected_body.is_none()
+                && self.selection.is_none()
+                && self.drawing_ui.selected_drawing.is_none()
+                && self.selected_origin.is_none()
+                && self.document.sketch_groups().group(*g).is_some()
+        })
+    }
+
+    /// Fenster und Wahl einer Skizzengruppe, die es nicht mehr gibt, entfallen (Skizzen 11b).
+    fn forget_gone_groups(&mut self) {
+        let groups = self.document.sketch_groups();
+        if self
+            .group_rename_draft
+            .as_ref()
+            .is_some_and(|(g, _)| groups.group(*g).is_none())
+        {
+            self.group_rename_draft = None;
+        }
+        if self
+            .browser_group
+            .is_some_and(|g| groups.group(g).is_none())
+        {
+            self.browser_group = None;
         }
     }
 
@@ -1409,6 +1444,7 @@ impl AppState {
         let visibility_before = self.document.visibility().clone();
         let groups_before = self.document.sketch_groups().clone();
         let kind = self.document.restore(s).map_err(|e| e.to_string())?;
+        self.forget_gone_groups();
         self.rebuild_name_counters();
         // Eine offene Skizze verwerfen: Ihr Entwurf (samt Verlauf) gehört zum alten Dokument.
         self.sketch_draft = None;
@@ -2266,6 +2302,9 @@ impl AppState {
 
     pub fn set_selection(&mut self, selection: Option<Pick>) {
         self.selected_origin = None;
+        // Jede Wahl in der Ansicht (auch ihr Aufheben) verdrängt die Skizzengruppe (Skizzen 11b);
+        // die Gruppenzeile setzt ihre Wahl erst danach.
+        self.browser_group = None;
         if self.selection != selection {
             self.selection = selection;
             // Eine Ebene wählt ihr Feature (wie ein Klick im Browser), alles andere den Körper.
@@ -4246,21 +4285,7 @@ impl AppState {
         {
             self.rename_draft = None;
         }
-        // Skizzen 11b: Fenster und Wahl einer Gruppe, die es nicht mehr gibt.
-        let groups = self.document.sketch_groups();
-        if self
-            .group_rename_draft
-            .as_ref()
-            .is_some_and(|(g, _)| groups.group(*g).is_none())
-        {
-            self.group_rename_draft = None;
-        }
-        if self
-            .browser_group
-            .is_some_and(|g| groups.group(g).is_none())
-        {
-            self.browser_group = None;
-        }
+        self.forget_gone_groups();
         if self
             .open_sketch_id()
             .is_some_and(|id| gone(&self.document, &id))

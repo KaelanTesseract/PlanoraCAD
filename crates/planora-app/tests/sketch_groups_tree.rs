@@ -456,3 +456,124 @@ fn undo_ungroup_restores_group() {
         assert!(r.s().document.feature(id).is_some());
     }
 }
+
+// ---- Korrekturrunde 1 ----------------------------------------------------------------------
+
+#[test]
+fn a_3d_pick_after_a_group_leaves_the_group_alone_on_delete() {
+    use planora_app::commands::run_action;
+    use planora_app::keymap::Action;
+    use planora_math::DVec3;
+    use planora_render::{FaceRef, Pick};
+    let mut r = rig(2);
+    let a = r.sketches[0];
+    let quader = r.s().create_box(DVec3::splat(4.0)).unwrap();
+    r.w.observe_history(false);
+    let g = r.group(&[GroupItem::Sketch(a)]);
+    let p = r.row("Gruppe1").center();
+    r.click(p);
+    assert_eq!(r.s().selected_sketch_group(), Some(g), "Gruppe gewählt");
+    // Klick in 3D auf eine Fläche: die Gruppe ist nicht mehr gewählt.
+    let face = r.s().bodies[0].mesh.face_ranges[0].face;
+    r.s()
+        .set_selection(Some(Pick::Face(FaceRef { body: 0, face })));
+    assert_eq!(r.s().browser_group, None);
+    assert_eq!(r.s().selected_sketch_group(), None);
+    run_action(&mut r.w, Action::DeleteSelection);
+    r.w.observe_history(false);
+    assert!(
+        r.s().document.sketch_groups().group(g).is_some(),
+        "Entf löst die alte Gruppe nicht auf"
+    );
+    // Auch ein über die Verlaufsleiste gewählter Körper verdrängt die Gruppe.
+    r.click(p);
+    assert_eq!(r.s().selected_sketch_group(), Some(g));
+    r.s().select_body(Some(quader));
+    assert_eq!(r.s().selected_sketch_group(), None);
+}
+
+#[test]
+fn group_commands_are_one_step_each() {
+    use planora_app::commands::run_action;
+    use planora_app::keymap::Action;
+    let mut r = rig(3);
+    let [a, b] = [r.sketches[0], r.sketches[1]];
+    let p1 = r.row("Skizze 1").center();
+    let p2 = r.row("Skizze 2").center();
+    r.click_with(p1, PointerButton::Primary, CTRL);
+    r.click_with(p2, PointerButton::Primary, CTRL);
+    let before = r.undo_len();
+    run_action(&mut r.w, Action::SketchGroupCreate);
+    r.settle();
+    assert_eq!(r.undo_len(), before + 1, "genau ein Schritt");
+    assert_eq!(r.label().as_deref(), Some("Gruppe erstellen"));
+    let g = r.group_of(a).expect("in der Gruppe");
+    assert_eq!(r.group_of(b), Some(g));
+    let p = r.row("Gruppe1").center();
+    r.click(p);
+    run_action(&mut r.w, Action::SketchGroupUngroup);
+    r.settle();
+    assert_eq!(r.undo_len(), before + 2, "genau ein weiterer Schritt");
+    assert_eq!(r.label().as_deref(), Some("Gruppe auflösen"));
+    assert!(r.s().document.sketch_groups().group(g).is_none());
+    assert_eq!(r.s().browser_group, None);
+}
+
+#[test]
+fn undo_that_removes_the_chosen_group_clears_the_choice() {
+    let mut r = rig(2);
+    let a = r.sketches[0];
+    let p = r.row("Skizze 1").center();
+    r.click(p);
+    r.menu("Skizze 1", "Gruppe erstellen");
+    r.settle();
+    let g = r.group_of(a).unwrap();
+    let row = r.row("Gruppe1").center();
+    r.click(row);
+    assert_eq!(r.s().browser_group, Some(g));
+    r.w.active_tab_mut().undo().unwrap();
+    r.settle();
+    assert!(r.s().document.sketch_groups().group(g).is_none());
+    assert_eq!(r.s().browser_group, None);
+}
+
+#[test]
+fn a_long_group_name_is_shortened_with_an_ellipsis() {
+    let mut r = rig(1);
+    let a = r.sketches[0];
+    let g = r.group(&[GroupItem::Sketch(a)]);
+    let long = "Sehr langer Gruppenname ".repeat(30).trim().to_string();
+    r.s().document.rename_sketch_group(g, &long).unwrap();
+    r.settle();
+    // Gezeichnet werden nur die Zeichen bis „…“ (der Text des Auftrags bleibt der volle Name).
+    fn shown(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::epaint::Shape::Text(t) => out.push(
+                t.galley
+                    .rows
+                    .iter()
+                    .flat_map(|r| r.row.glyphs.iter().map(|g| g.chr))
+                    .collect(),
+            ),
+            egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| shown(s, out)),
+            _ => {}
+        }
+    }
+    let raw = egui::RawInput {
+        screen_rect: Some(SCREEN),
+        time: Some(r.time + 1.0),
+        ..Default::default()
+    };
+    let c = r.c.clone();
+    let out = c.run_ui(raw, |ui| browser::show(ui, r.s()));
+    let mut drawn = Vec::new();
+    out.shapes.iter().for_each(|c| shown(&c.shape, &mut drawn));
+    out.drop_without_applying_deltas();
+    assert!(
+        drawn
+            .iter()
+            .any(|x| x.ends_with('…') && long.starts_with(x.trim_end_matches('…'))),
+        "gekürzt mit …: {drawn:?}"
+    );
+    assert!(!drawn.contains(&long), "nicht in voller Länge");
+}

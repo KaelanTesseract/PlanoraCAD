@@ -388,7 +388,7 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         }
         Action::SketchGroupUngroup => {
             let state = &mut ws.active_tab_mut().state;
-            match state.browser_group.filter(|_| state.selected_feature.is_none()) {
+            match state.selected_sketch_group() {
                 Some(g) => {
                     let _ = state.ungroup_sketch_group(g);
                 }
@@ -518,9 +518,7 @@ fn toggle_visibility(state: &mut AppState) {
 /// Baum). Zurückgesetzte Körper sind nicht gesperrt.
 fn delete_selection(state: &mut AppState) {
     // Skizzen 11b: Eine gewählte Skizzengruppe wird aufgelöst (keine Skizze gelöscht).
-    if state.selected_feature.is_none()
-        && let Some(g) = state.browser_group
-    {
+    if let Some(g) = state.selected_sketch_group() {
         let _ = state.ungroup_sketch_group(g);
         return;
     }

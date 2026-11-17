@@ -1488,7 +1488,7 @@ fn group_row(
     let own_hidden = grp.hidden;
     let hidden = folder_hidden || crate::sketch_tree::group_hidden(&state.document, g);
     let open = state.tree_groups_open.contains(&g);
-    let selected = state.browser_group == Some(g) && state.selected_feature.is_none();
+    let selected = state.selected_sketch_group() == Some(g);
     let (full, resp) = ui.allocate_exact_size(
         vec2(ui.available_width(), ROW_HEIGHT),
         Sense::click_and_drag(),
@@ -1542,13 +1542,24 @@ fn group_row(
         vec2(ICON_SIZE, ICON_SIZE),
     );
     paint_source(ui.painter(), icon_rect, IconSource::Font(Icon::Folder), ink);
-    ui.painter_at(rect).text(
-        egui::pos2(icon_rect.right() + theme::SPACE_2, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        &name,
-        theme::label_font(),
-        ink,
-    );
+    // Ein zu langer Name wird mit „…“ gekürzt (wie bei den Skizzenzeilen), ganz im Hinweis.
+    let name_x = icon_rect.right() + theme::SPACE_2;
+    let mut job = egui::text::LayoutJob::simple_singleline(name.clone(), theme::label_font(), ink);
+    job.wrap = egui::text::TextWrapping {
+        max_width: (rect.max.x - theme::SPACE_2 - name_x).max(0.0),
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    let galley = ui.painter().layout_job(job);
+    let shortened = galley.elided;
+    let pos = egui::pos2(name_x, rect.center().y - galley.size().y / 2.0);
+    ui.painter_at(rect).galley(pos, galley, ink);
+    let resp = if shortened {
+        resp.on_hover_text(&name)
+    } else {
+        resp
+    };
     // Pfeil und Auge liegen über der Zeile (ohne eigenen Layout-Bereich).
     let caret_rect = egui::Rect::from_min_max(rect.min, egui::pos2(eye_x, rect.max.y));
     let caret = ui.interact(
