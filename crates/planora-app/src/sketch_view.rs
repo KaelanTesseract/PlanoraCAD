@@ -2557,9 +2557,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             // Skizze (Skizzen 11b).
             if crate::spun_profile_dialog::wants_own_axis(state)
                 && let (Some(at), Some(id)) = (map.to_sketch(p), state.open_sketch_id())
-                && let Some(curve) = state
-                    .session_sketch()
-                    .and_then(|sk| sk.pick_curve(at, map.radius_at(p).unwrap_or(0.0)))
+                && let Some(curve) = state.session_sketch().and_then(|sk| {
+                    sk.pick_curve(at, map.radius_at(p).unwrap_or(0.0))
+                        .filter(|c| crate::spun_profile_dialog::own_axis_of(sk, *c).is_some())
+                })
             {
                 crate::surface_project_dialog::deliver(
                     state,
@@ -2567,7 +2568,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 );
                 return;
             }
-            match include_pick(state, &map, p, picked) {
+            // „Drehprofil“ mit Filter „Körper“: nur Körper zählen, auch nahe der Mittellinie.
+            let found = if crate::spun_profile_dialog::wants_body_only(state) {
+                crate::spun_profile_dialog::body_pick(picked)
+            } else {
+                include_pick(state, &map, p, picked)
+            };
+            match found {
                 Some(pick) => {
                     // Passt der Klick nicht, steht der Grund im Dialog.
                     crate::surface_project_dialog::deliver(state, pick);

@@ -516,3 +516,191 @@ fn dialog_has_dock_key() {
     let en = planora_i18n::with_lang(&planora_i18n::english(), || ToolKind::SpunProfile.label());
     assert_eq!(en, "Spun Profile");
 }
+
+#[test]
+fn unlinked_outline_stays_joined_when_a_corner_is_dragged() {
+    let (mut s, bi) = shaft_rig();
+    fill_shaft(&mut s, bi);
+    dialog(&mut s).linked = false;
+    let mut screen = Screen::new(W, H);
+    assert_eq!(
+        frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]),
+        Some(DialogOutcome::Applied)
+    );
+    s.observe_sketch(false);
+    // Weder Fixed noch Fixed3, dafür sind die Ecken des Umrisses verbunden.
+    let sk0 = sk(&s);
+    assert!(
+        !sk0.constraints()
+            .any(|(_, c)| c.kind.fixed_point().is_some()),
+        "keine Fixierung"
+    );
+    let joints: Vec<_> = sk0
+        .constraints()
+        .filter_map(|(_, c)| match c.kind {
+            ConstraintKind::Coincident(p, q) => Some((p, q)),
+            _ => None,
+        })
+        .collect();
+    assert!(joints.len() >= 3, "Ecken verbunden: {}", joints.len());
+    // Eine Ecke ziehen (auf eine neue Lage festhalten): beide Enden folgen, nichts reißt auf.
+    let (p, q) = joints[0];
+    let target = (-7.0, 3.5);
+    {
+        let (_, sk) = s.session_sketch_mut().unwrap();
+        sk.add_constraint(ConstraintKind::Fixed(p, target.0, target.1))
+            .unwrap();
+        sk.solve();
+    }
+    let sk1 = sk(&s);
+    for e in [p, q] {
+        let at = sk1.point_xy(e).unwrap();
+        assert!(
+            (at.x - target.0).abs() < 1e-6 && (at.y - target.1).abs() < 1e-6,
+            "{at:?}"
+        );
+    }
+}
+
+#[test]
+fn unlinked_offset_axis_edge_leaves_no_fixed3() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::new(10.0, 20.0, 5.0)).unwrap();
+    open_new(&mut s, StandardPlane::XZ);
+    choose(&mut s);
+    // Gerade Kante parallel zu Z bei x = 0, y = 20: parallel zur Ebene XZ, aber nicht in ihr.
+    let edge = {
+        let solid = &s.bodies[0].solid;
+        solid
+            .edges
+            .iter()
+            .find(|(_, e)| {
+                let on = |p: DVec3| p.x.abs() < 1e-9 && (p.y - 20.0).abs() < 1e-9;
+                on(solid.vertices[e.start].point) && on(solid.vertices[e.end].point)
+            })
+            .map(|(id, _)| id)
+            .expect("Kante")
+    };
+    let vertex = {
+        let solid = &s.bodies[0].solid;
+        solid
+            .edges
+            .iter()
+            .find(|(_, e)| {
+                solid.vertices[e.start]
+                    .point
+                    .distance(DVec3::new(10.0, 0.0, 0.0))
+                    < 1e-9
+            })
+            .map(|(id, _)| id)
+            .expect("Ecke")
+    };
+    dialog(&mut s).set_filter(SpunFilter::Elements);
+    assert!(spd::deliver(
+        &mut s,
+        IncludePick::Vertex {
+            body: 0,
+            edge: vertex,
+            end: false
+        }
+    ));
+    dialog(&mut s).focus = SpunField::Axis;
+    assert!(spd::deliver(&mut s, IncludePick::Edge(0, edge)));
+    {
+        let d = dialog(&mut s);
+        assert!(d.ok_enabled(), "{:?}", d.error());
+        d.project_axis = true;
+        d.linked = false;
+    }
+    let mut screen = Screen::new(W, H);
+    assert_eq!(
+        frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]),
+        Some(DialogOutcome::Applied)
+    );
+    s.observe_sketch(false);
+    assert!(curve_count(&s) >= 1, "die Achse ist da");
+    assert!(
+        !sk(&s)
+            .constraints()
+            .any(|(_, c)| c.kind.fixed_point().is_some()),
+        "weder Fixed noch Fixed3"
+    );
+    assert!(draft(&s).copies.is_empty());
+}
+
+#[test]
+fn body_filter_skips_axes_planes_and_origin() {
+    use planora_render::{FaceRef, Pick};
+    let (mut s, bi) = shaft_rig();
+    assert!(planora_app::spun_profile_dialog::wants_body_only(&s));
+    // Nur Körper zählen: Ebene und alles andere fallen weg, die Fläche bleibt.
+    assert_eq!(
+        planora_app::spun_profile_dialog::body_pick(Some(Pick::Plane(FeatureId(1)))),
+        None
+    );
+    assert_eq!(planora_app::spun_profile_dialog::body_pick(None), None);
+    let IncludePick::Face(b, f) = some_face(&s, bi) else {
+        panic!("Fläche");
+    };
+    assert_eq!(
+        planora_app::spun_profile_dialog::body_pick(Some(Pick::Face(FaceRef { body: b, face: f }))),
+        Some(IncludePick::Face(b, f))
+    );
+    // Im Feld „Achse“ oder mit dem Filter „Elemente“ gilt das nicht.
+    dialog(&mut s).focus = SpunField::Axis;
+    assert!(!planora_app::spun_profile_dialog::wants_body_only(&s));
+    dialog(&mut s).focus = SpunField::Selection;
+    dialog(&mut s).set_filter(SpunFilter::Elements);
+    assert!(!planora_app::spun_profile_dialog::wants_body_only(&s));
+}
+
+#[test]
+fn rejected_click_does_not_block_ok_and_message_goes_with_next_good_click() {
+    let (mut s, bi) = shaft_rig();
+    fill_shaft(&mut s, bi);
+    // Ein abgelehnter Klick (Fläche als Achse) lässt gültige Felder gelten: OK bleibt frei.
+    dialog(&mut s).focus = SpunField::Axis;
+    let f = some_face(&s, bi);
+    assert!(!spd::deliver(&mut s, f));
+    {
+        let d = dialog(&mut s);
+        assert!(d.error().is_some());
+        assert!(d.ok_enabled());
+    }
+    // Der nächste passende Klick nimmt die Meldung weg.
+    assert!(spd::deliver(&mut s, IncludePick::Axis(AxisId::Z)));
+    assert!(dialog(&mut s).error().is_none());
+}
+
+#[test]
+fn elements_pick_names_the_exact_reason() {
+    let (mut s, _) = shaft_rig();
+    let own = {
+        let (_, sk) = s.session_sketch_mut().unwrap();
+        let a = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(0.0, 10.0).unwrap();
+        sk.add_line(a, b).unwrap()
+    };
+    s.observe_sketch(false);
+    let id = s.open_sketch_id().unwrap();
+    dialog(&mut s).set_filter(SpunFilter::Elements);
+    assert!(!spd::deliver(
+        &mut s,
+        IncludePick::SketchCurve {
+            sketch: id,
+            curve: own
+        }
+    ));
+    assert_eq!(
+        dialog(&mut s).error().as_deref(),
+        Some("Kurven der aktiven Skizze sind nicht wählbar; bitte eine neue Skizze beginnen.")
+    );
+}
+
+#[test]
+fn hint_does_not_promise_a_link() {
+    let de = ToolKind::SpunProfile.hint();
+    assert!(!de.contains("verknüpft"), "{de}");
+    let en = planora_i18n::with_lang(&planora_i18n::english(), || ToolKind::SpunProfile.hint());
+    assert!(!en.contains("linked"), "{en}");
+}

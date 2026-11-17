@@ -119,6 +119,29 @@ pub fn wants_own_axis(state: &AppState) -> bool {
     )
 }
 
+/// Wählt ein Klick in der Ansicht gerade nur Körper (Feld „Auswahl“ mit Filter „Körper“)? Dann
+/// zählen Ursprungsachsen, Ebenen und der Ursprung nicht, und ein Klick nahe der Mittellinie einer
+/// Welle trifft den Körper (wie Fusions Auswahlfilter „Körper“).
+pub fn wants_body_only(state: &AppState) -> bool {
+    matches!(
+        state.surface_dialog.as_ref(),
+        Some(crate::surface_project_dialog::SurfaceDialog::Spun(d))
+            if d.focus == SpunField::Selection && d.filter == SpunFilter::Bodies
+    )
+}
+
+/// Der Klick der Auswahl „Körper“ aus dem Treffer der Ansicht: nur Fläche, Kante oder Ecke eines
+/// Körpers, sonst `None`.
+pub fn body_pick(picked: Option<planora_render::Pick>) -> Option<IncludePick> {
+    use planora_render::{EdgeRef, FaceRef, Pick};
+    match picked? {
+        Pick::Face(FaceRef { body, face }) => Some(IncludePick::Face(body, face)),
+        Pick::Edge(EdgeRef { body, edge }) => Some(IncludePick::Edge(body, edge)),
+        Pick::Vertex { body, edge, end } => Some(IncludePick::Vertex { body, edge, end }),
+        Pick::Plane(_) => None,
+    }
+}
+
 impl SpunProfileDialog {
     /// Meldung des Dialogs in der aktuellen Sprache: ein abgelehnter Klick oder, sonst, der
     /// Fehler der Vorschau.
@@ -135,7 +158,9 @@ impl SpunProfileDialog {
         self.preview.as_ref().and_then(|p| p.as_ref().ok()).copied()
     }
 
-    /// Ist die Vorschau fehlerfrei? Nur dann ist OK frei.
+    /// Ist die Vorschau fehlerfrei? Nur dann ist OK frei. Eine Meldung eines abgelehnten Klicks
+    /// sperrt OK nicht: Die Felder sind gültig, die Meldung ist ein Hinweis und verschwindet mit
+    /// dem nächsten passenden Klick oder jeder Änderung.
     pub fn ok_enabled(&self) -> bool {
         self.preview_count().is_some()
     }
@@ -174,6 +199,7 @@ impl SpunProfileDialog {
         if filter != self.filter {
             self.filter = filter;
             self.clear_selection();
+            self.error = None;
             self.dirty = true;
         }
     }
@@ -229,8 +255,20 @@ impl SpunProfileDialog {
                 }
             }
             SpunFilter::Elements => {
-                let source = curve_source(state, pick.clone())
-                    .map_err(|_| crate::msg!("spun-pick-elements"))?;
+                // Der genaue Grund des Ablehnens (aktive Skizze, Körper nach der Skizze, ...)
+                // geht durch; nur ein Klick auf etwas ganz anderes bekommt den allgemeinen Hinweis.
+                let source = curve_source(state, pick.clone()).map_err(|e| {
+                    if matches!(
+                        pick,
+                        IncludePick::Edge(..)
+                            | IncludePick::Vertex { .. }
+                            | IncludePick::SketchCurve { .. }
+                    ) {
+                        e
+                    } else {
+                        crate::msg!("spun-pick-elements")
+                    }
+                })?;
                 match self.elements.iter().position(|e| *e == source) {
                     Some(i) => {
                         self.elements.remove(i);
@@ -430,11 +468,13 @@ impl SpunProfileDialog {
             });
         if clear_selection {
             self.clear_selection();
+            self.error = None;
             self.dirty = true;
         }
         if clear_axis {
             self.axis = None;
             self.axis_pick = None;
+            self.error = None;
             self.dirty = true;
         }
         self.set_filter(filter);

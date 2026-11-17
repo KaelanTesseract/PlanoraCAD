@@ -10,7 +10,7 @@ use planora_kernel::Curve;
 use planora_math::DVec2;
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::helpers::{Included, ProjectStyle};
-use planora_sketch::model::{CurveId, CurveKind, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 /// Auswahlfilter des Projizierens (Fusion „Auswahlfilter“).
@@ -147,20 +147,62 @@ impl SketchSession {
                 }
             }
             if !fixed {
+                // Frei: weder `Fixed` noch `Fixed3` (3D-Punkte, etwa eine versetzte Achse) ...
                 let pins: Vec<_> = sk
                     .constraints()
-                    .filter(|(id, d)| {
-                        !known.contains(id) && matches!(d.kind, ConstraintKind::Fixed(..))
-                    })
+                    .filter(|(id, d)| !known.contains(id) && d.kind.fixed_point().is_some())
                     .map(|(id, _)| id)
                     .collect();
                 for id in pins {
                     sk.remove_constraint(id).map_err(err)?;
                 }
+                // ... und zusammenfallende Enden hängen zusammen, damit der Umriss beim Ziehen
+                // einer Ecke nicht aufreißt (je Ecke ein `Coincident` zum ersten Punkt dort).
+                let (linear, mut reps): (f64, Vec<PointId>) = (sk.tolerance().linear, Vec::new());
+                let mut ends = Vec::new();
+                for target in &out {
+                    match *target {
+                        CopyTarget::Point(p) => ends.push(p),
+                        CopyTarget::Curve(c) => ends.extend(curve_ends(sk, c)),
+                    }
+                }
+                for p in ends {
+                    let at = sk.point_xyz(p).map_err(err)?;
+                    let mut joined = false;
+                    for &q in &reps {
+                        if q == p {
+                            joined = true;
+                            break;
+                        }
+                        if sk.point_xyz(q).map_err(err)?.distance(at) <= linear {
+                            sk.add_constraint(ConstraintKind::Coincident(q, p))
+                                .map_err(err)?;
+                            joined = true;
+                            break;
+                        }
+                    }
+                    if !joined {
+                        reps.push(p);
+                    }
+                }
             }
             se.solve_checked(sk, prior)?;
             Ok(out)
         })
+    }
+}
+
+/// Die Endpunkte einer Kurve (Linie, Bogen, Ellipsenbogen, fester Spline); Kreise und Ellipsen
+/// haben keine.
+fn curve_ends(sk: &Sketch, c: CurveId) -> Vec<PointId> {
+    match sk.curve(c).map(|d| &d.kind) {
+        Some(CurveKind::Line { a, b }) => vec![*a, *b],
+        Some(
+            CurveKind::Arc { start, end, .. }
+            | CurveKind::EllipticArc { start, end, .. }
+            | CurveKind::FixedSpline { start, end, .. },
+        ) => vec![*start, *end],
+        _ => Vec::new(),
     }
 }
 
