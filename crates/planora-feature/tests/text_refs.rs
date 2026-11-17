@@ -349,3 +349,214 @@ fn parameter_change_with_height_formula() {
         assert_eq!(d.feature(s).unwrap().status, FeatureStatus::Ok);
     });
 }
+
+// ---- Profile, die dem Text folgen (Korrekturrunde 1, I1) ------------------------------------
+
+fn edit_value(d: &mut Document, p: ParamId, name: &str, formula: &str) {
+    d.set_parameter(
+        p,
+        ParamEdit {
+            name: name.into(),
+            formula: formula.into(),
+            unit: ParamUnit::Length,
+            comment: String::new(),
+        },
+    )
+    .unwrap();
+}
+
+/// Die Verweise der Extrusion `e`.
+fn extrude_refs(d: &Document, e: FeatureId) -> Vec<planora_sketch::ProfileRef> {
+    match &d.feature(e).unwrap().kind {
+        FeatureKind::Extrude {
+            profiles: ProfileSel::Refs(r),
+            ..
+        } => r.clone(),
+        k => panic!("keine Extrusion mit Verweisen: {k:?}"),
+    }
+}
+
+/// Die Flächen der Skizze `s`: die des Textes `t` und die übrigen.
+fn faces(
+    d: &Document,
+    s: FeatureId,
+    t: TextId,
+) -> (
+    Vec<planora_sketch::ProfileRef>,
+    Vec<planora_sketch::ProfileRef>,
+) {
+    let sk = &sketch_def(d, s).sketch;
+    sk.profiles()
+        .refs
+        .into_iter()
+        .partition(|r| sk.text_of_profile(r) == Some(t))
+}
+
+/// Dokument mit `Breite` = `breite`, Text „{Breite}“ und einem Rechteck (100, 0)–(110, 10);
+/// eine Extrusion über die gewählten Flächen (`with_rect`: dazu das Rechteck; `letters`: nur so
+/// viele Flächen des Textes, sonst alle).
+fn extrude_doc(
+    breite: &str,
+    with_rect: bool,
+    letters: Option<usize>,
+    lib: &FontLibrary,
+) -> (
+    Document,
+    ParamId,
+    FeatureId,
+    TextId,
+    FeatureId,
+    planora_sketch::helpers::RectIds,
+) {
+    let mut d = Document::new();
+    let p = length(&mut d, "Breite", breite);
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let t = add_text(&mut sk, "{Breite}", lib);
+    let rect = sk
+        .add_rectangle(DVec2::new(100.0, 0.0), DVec2::new(110.0, 10.0))
+        .unwrap();
+    let s = d.add_feature("Skizze 1", sketch_kind(sk)).unwrap();
+    d.reshape_texts(lib);
+    let (text, other) = faces(&d, s, t);
+    let mut refs: Vec<_> = match letters {
+        Some(n) => text.into_iter().take(n).collect(),
+        None => text,
+    };
+    if with_rect {
+        refs.extend(other);
+    }
+    let e = d
+        .add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: s,
+                profiles: ProfileSel::Refs(refs),
+                height: 2.0,
+            },
+        )
+        .unwrap();
+    assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+    (d, p, s, t, e, rect)
+}
+
+fn assert_follows(d: &Document, s: FeatureId, t: TextId, e: FeatureId, with_rect: bool) {
+    let f = d.feature(e).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    let (text, other) = faces(d, s, t);
+    let mut want = text;
+    if with_rect {
+        want.extend(other);
+    }
+    let mut got = extrude_refs(d, e);
+    let key = |r: &planora_sketch::ProfileRef| format!("{r:?}");
+    got.sort_by_key(key);
+    want.sort_by_key(key);
+    assert_eq!(got, want, "die Auswahl ist der ganze Text von heute");
+}
+
+#[test]
+fn shorter_value_keeps_extrusion() {
+    // 100 → 5: Die hinteren Buchstaben verschwinden, ihre Kurven sind tot.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t, e, _) = extrude_doc("100", false, None, &lib);
+        edit_value(&mut d, p, "Breite", "5");
+        assert!(d.reshape_texts(&lib));
+        assert_eq!(shown(&d, s, t).as_deref(), Some("5,00"));
+        assert_follows(&d, s, t, e, false);
+    });
+}
+
+#[test]
+fn longer_value_keeps_extrusion() {
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t, e, _) = extrude_doc("5", false, None, &lib);
+        edit_value(&mut d, p, "Breite", "1000");
+        assert!(d.reshape_texts(&lib));
+        assert_eq!(shown(&d, s, t).as_deref(), Some("1000,00"));
+        assert_follows(&d, s, t, e, false);
+    });
+}
+
+#[test]
+fn mixed_selection_keeps_the_other_faces() {
+    // Text und Rechteck: Der Text folgt, das Rechteck bleibt gewählt.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t, e, _) = extrude_doc("100", true, None, &lib);
+        edit_value(&mut d, p, "Breite", "5");
+        d.reshape_texts(&lib);
+        assert_follows(&d, s, t, e, true);
+    });
+}
+
+#[test]
+fn some_letters_follow_the_whole_text() {
+    // Fusion: Ein Text ist als Ganzes ein Profil; nach einer Änderung gilt der ganze Text.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t, e, _) = extrude_doc("100", false, Some(1), &lib);
+        edit_value(&mut d, p, "Breite", "5");
+        d.reshape_texts(&lib);
+        assert_follows(&d, s, t, e, false);
+    });
+}
+
+#[test]
+fn unchanged_text_keeps_the_selection() {
+    // Gleicher Wert, gleiche Kurven: Die Auswahl (nur ein Buchstabe) bleibt, wie sie ist.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, _, _, e, _) = extrude_doc("100", false, Some(1), &lib);
+        let before = extrude_refs(&d, e);
+        let version = d.feature(e).unwrap().version();
+        edit_value(&mut d, p, "Breite", "100");
+        d.reshape_texts(&lib);
+        assert_eq!(extrude_refs(&d, e), before);
+        assert_eq!(d.feature(e).unwrap().version(), version);
+    });
+}
+
+#[test]
+fn lost_face_outside_text_stays_an_error() {
+    // Das Rechteck verschwindet: Das bleibt ein verlorenes Profil, auch wenn der Text folgt.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, _, e, rect) = extrude_doc("100", true, None, &lib);
+        d.update(s, |k| {
+            let FeatureKind::Sketch(sf) = k else {
+                unreachable!()
+            };
+            sf.sketch.remove_curve(rect.lines[0]).unwrap();
+        })
+        .unwrap();
+        edit_value(&mut d, p, "Breite", "5");
+        d.reshape_texts(&lib);
+        let f = d.feature(e).unwrap();
+        assert!(
+            matches!(&f.status, FeatureStatus::Error(m) if m.contains(&tr!("feature-profile-lost"))),
+            "{:?}",
+            f.status
+        );
+    });
+}
+
+#[test]
+fn followed_selection_survives_save_and_undo() {
+    // Die neue Auswahl steht in der Definition: Snapshot und Wiederherstellen tragen sie.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t, e, _) = extrude_doc("100", false, None, &lib);
+        let old = d.snapshot();
+        edit_value(&mut d, p, "Breite", "5");
+        d.reshape_texts(&lib);
+        let new = d.snapshot();
+        d.restore(old).unwrap();
+        d.reshape_texts(&lib);
+        assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+        d.restore(new).unwrap();
+        d.reshape_texts(&lib);
+        assert_follows(&d, s, t, e, false);
+    });
+}

@@ -326,3 +326,211 @@ fn unit_change_reshapes_text() {
     assert_ne!(moved, before);
     assert_eq!(points(def(rig.ws())), before);
 }
+
+// ---- Korrekturrunde 1: Einfügen (I2) und Schließen der Skizze ---------------------------------
+
+/// Kopiert den Text des Tabs von `rig` (Skizze kurz offen, ganzer Text gewählt) in die Ablage.
+fn copy_text(rig: &mut Rig) -> planora_feature::FeatureClip {
+    {
+        let s = &mut rig.ws().active_tab_mut().state;
+        let id = s.document.features()[0].id;
+        s.open_sketch(id).unwrap();
+        let (se, sf) = s.session_draft_mut().unwrap();
+        let t = text_id(&sf.sketch);
+        se.selection = sf
+            .sketch
+            .text(t)
+            .unwrap()
+            .curves
+            .iter()
+            .map(|&c| planora_app::sketch_state::Item::Curve(c))
+            .collect();
+    }
+    commands::run_action(rig.ws(), Action::SketchCopy);
+    let clip = rig.ws().sketch_clipboard.clone().unwrap();
+    rig.ws().active_tab_mut().state.close_sketch();
+    rig.settle();
+    clip
+}
+
+/// Ein zweites Dokument (optional mit `Breite` = `breite`) mit offener Skizze, in die `clip`
+/// eingefügt wird (an der Quelllage, das Verschieben bleibt unbestätigt).
+fn paste_into(name: &str, breite: Option<&str>, clip: planora_feature::FeatureClip) -> Rig {
+    let mut w = ws(name);
+    if let Some(b) = breite {
+        length(&mut w, "Breite", b);
+    }
+    {
+        let s = &mut w.active_tab_mut().state;
+        let id = s
+            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
+        s.open_sketch(id).unwrap();
+    }
+    w.observe_history(false);
+    w.sketch_clipboard = Some(clip);
+    let mut rig = Rig::new(w);
+    let steps = rig
+        .ws()
+        .active_tab()
+        .state
+        .sketch_history()
+        .unwrap()
+        .undo_len();
+    commands::run_action(rig.ws(), Action::SketchPaste);
+    rig.settle();
+    let st = &rig.ws().active_tab().state;
+    assert_eq!(
+        st.sketch_history().unwrap().undo_len(),
+        steps + 1,
+        "ein Schritt „Einfügen“"
+    );
+    // Die Auswahl nennt nur lebende Kurven, und zwar alle des Textes.
+    let sk = st.session_sketch().unwrap();
+    let se = st.sketch_session.as_ref().unwrap();
+    let own = &sk.text(text_id(sk)).unwrap().curves;
+    for c in own {
+        assert!(
+            se.selection
+                .contains(&planora_app::sketch_state::Item::Curve(*c)),
+            "Kurve {c:?} gewählt"
+        );
+    }
+    for it in &se.selection {
+        if let planora_app::sketch_state::Item::Curve(c) = it {
+            assert!(sk.curve(*c).is_some(), "lebende Kurve");
+        }
+    }
+    rig
+}
+
+/// Ein erneutes Setzen der Skizze mit den mitgelieferten Schriften ändert nichts: Die Kurven
+/// sind die des gezeigten Inhalts.
+fn curves_match_shown(sk: &Sketch) {
+    let lib = planora_text::FontLibrary::bundled_only();
+    let mut again = sk.clone();
+    assert!(
+        !again.reshape_texts(&lib).changed,
+        "Kurven passen zum Gezeigten"
+    );
+}
+
+#[test]
+fn paste_shows_target_value() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut source, _) = text_rig("planora-text-params-paste-src");
+    let clip = copy_text(&mut source);
+    let mut rig = paste_into("planora-text-params-paste-dst", Some("7"), clip);
+    {
+        let sk = rig.ws().active_tab().state.session_sketch().unwrap();
+        assert_eq!(content(sk), "{Breite} mm");
+        assert_eq!(shown(sk), Some(format!("{} mm", fmt_len_num(7.0))));
+        curves_match_shown(sk);
+    }
+    rig.ws().active_tab_mut().state.close_sketch();
+    rig.settle();
+    let w = rig.ws();
+    assert_eq!(shown(def(w)), Some(format!("{} mm", fmt_len_num(7.0))));
+    curves_match_shown(def(w));
+    assert!(
+        w.active_tab().state.document.features()[0]
+            .warning()
+            .is_none()
+    );
+}
+
+#[test]
+fn paste_without_parameter_shows_literal_and_warns() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut source, _) = text_rig("planora-text-params-paste-src2");
+    let clip = copy_text(&mut source);
+    let mut rig = paste_into("planora-text-params-paste-none", None, clip);
+    {
+        let sk = rig.ws().active_tab().state.session_sketch().unwrap();
+        assert_eq!(shown(sk).as_deref(), Some("{Breite} mm"));
+        curves_match_shown(sk);
+    }
+    rig.ws().active_tab_mut().state.close_sketch();
+    rig.settle();
+    let w = rig.ws();
+    assert_eq!(shown(def(w)).as_deref(), Some("{Breite} mm"));
+    let f = &w.active_tab().state.document.features()[0];
+    assert_eq!(f.status, FeatureStatus::Ok);
+    let want = tr!("feature-sketch-text-param-unknown", names = "Breite");
+    assert_eq!(f.warning(), Some(want.as_str()));
+}
+
+#[test]
+fn closing_sketch_sets_stale_text() {
+    // Ein Text, dessen Kurven nicht zum Wert passen (hier über die Modell-API ohne Ersetzen
+    // angelegt), wird beim Schließen der Skizze im nächsten Bild neu gesetzt.
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut w = ws("planora-text-params-close");
+    length(&mut w, "Breite", "20");
+    let id = w
+        .active_tab_mut()
+        .state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    w.observe_history(false);
+    // Erst ruhige Bilder bei geschlossener Skizze: Das Neusetzen nach dem Laden ist erledigt.
+    let mut rig = Rig::new(w);
+    rig.ws().active_tab_mut().state.open_sketch(id).unwrap();
+    rig.ws().observe_history(false);
+    rig.settle();
+    {
+        let lib = planora_text::FontLibrary::bundled_only();
+        let style = planora_sketch::text_shape::TextStyle {
+            font: "Montserrat".into(),
+            bold: false,
+            italic: false,
+            spacing: 0.0,
+        };
+        use planora_sketch::text_shape::TextShaper as _;
+        let shape = lib.shape("{Breite} mm", &style).unwrap();
+        let sk = rig
+            .ws()
+            .active_tab_mut()
+            .state
+            .session_sketch_mut()
+            .unwrap()
+            .1;
+        sk.add_text_box(
+            DVec2::new(0.0, 0.0),
+            DVec2::new(80.0, 10.0),
+            planora_sketch::text::TextParams {
+                content: "{Breite} mm".into(),
+                style,
+                height: 5.0,
+                flip_h: false,
+                flip_v: false,
+            },
+            planora_sketch::text::HAlign::Left,
+            planora_sketch::text::VAlign::Bottom,
+            std::sync::Arc::new(shape),
+        )
+        .unwrap();
+    }
+    rig.ws().active_tab_mut().state.observe_sketch(false);
+    rig.ws().active_tab_mut().state.close_sketch();
+    rig.settle();
+    let w = rig.ws();
+    assert_eq!(shown(def(w)), Some(format!("{} mm", fmt_len_num(20.0))));
+    curves_match_shown(def(w));
+}
+
+#[test]
+fn language_change_reshapes_text() {
+    // Das Dezimalzeichen im Text folgt der Sprache (Korrekturrunde 1, M1).
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut rig, _) = text_rig("planora-text-params-lang");
+    let before = shown(def(rig.ws()));
+    rig.ws().set_language(&planora_i18n::english());
+    rig.settle();
+    let en = shown(def(rig.ws()));
+    rig.ws().set_language(&planora_i18n::german());
+    rig.settle();
+    assert_eq!(en.as_deref(), Some("20.00 mm"));
+    assert_eq!(shown(def(rig.ws())), before);
+    assert_eq!(before.as_deref(), Some("20,00 mm"));
+}

@@ -3498,7 +3498,18 @@ impl AppState {
             self.sketch_history = None;
             return Ok(());
         }
+        // Parameter im Text (Skizzen 11b): Ein Text mit `{…}` aus der Sitzung (etwa ohne
+        // Schriftliste eingefügt) wird nach dem Schließen mit den Werten des Dokuments neu
+        // gesetzt; bei unveränderter Form ändert das nichts.
+        let param_texts = self.sketch_draft.as_ref().is_some_and(|d| {
+            d.sketch
+                .texts()
+                .any(|(_, t)| planora_feature::text_refs::has_param_ref(&t.content))
+        });
         self.commit_draft()?;
+        if param_texts {
+            self.texts_due = true;
+        }
         self.restore_camera();
         Ok(())
     }
@@ -4063,6 +4074,7 @@ impl AppState {
         // Was davor offen war, ist ein eigener Schritt; ein laufendes Werkzeug endet.
         self.observe_sketch(false);
         let scope = self.document.param_scope();
+        let fonts = self.fonts.clone();
         let Some((se, sf)) = self.session_draft_mut() else {
             return Err(crate::msg!("state-no-open-sketch"));
         };
@@ -4077,13 +4089,37 @@ impl AppState {
                 return Err(m);
             }
         };
+        // Parameter im Text (Skizzen 11b): Ein eingefügter Text zeigt den Wert dieses Dokuments
+        // (ein fehlender Parameter steht wörtlich da und warnt), im selben Schritt neu gesetzt.
+        // Ohne Schriftliste setzt das Schließen der Skizze neu (`try_close_sketch`).
+        planora_feature::text_refs::apply_shown(&mut sf.sketch, &scope);
+        if let Some(lib) = &fonts {
+            sf.sketch.reshape_texts(lib.as_ref());
+        }
         if let Err(m) = se.solve_checked(&mut sf.sketch, &before.sketch) {
             *sf = before;
             se.message = Some(m.clone());
             return Err(m);
         }
-        // Alle eingefügten Elemente sind gewählt: die Kurven und die freien Punkte.
-        let curves: Vec<CurveId> = report.map.curves.values().copied().collect();
+        // Alle eingefügten Elemente sind gewählt: die Kurven und die freien Punkte. Ein neu
+        // gesetzter Text kann andere Kurven haben als die Quelle: nur lebende, dazu alle
+        // heutigen Kurven der eingefügten Texte.
+        let mut curves: Vec<CurveId> = report
+            .map
+            .curves
+            .values()
+            .copied()
+            .filter(|&c| sf.sketch.curve(c).is_some())
+            .collect();
+        for t in report.map.texts.values() {
+            if let Some(d) = sf.sketch.text(*t) {
+                for &c in &d.curves {
+                    if !curves.contains(&c) {
+                        curves.push(c);
+                    }
+                }
+            }
+        }
         let grown = sf.sketch.transform_set(&curves, &[]);
         let mut selection: Vec<Item> = curves.iter().map(|&c| Item::Curve(c)).collect();
         selection.extend(
@@ -4091,10 +4127,16 @@ impl AppState {
                 .map
                 .points
                 .values()
-                .filter(|p| !grown.points.contains(p))
+                .filter(|p| !grown.points.contains(p) && sf.sketch.point_xy(**p).is_ok())
                 .map(|&p| Item::Point(p)),
         );
-        let points: Vec<PointId> = report.map.points.values().copied().collect();
+        let points: Vec<PointId> = report
+            .map
+            .points
+            .values()
+            .copied()
+            .filter(|&p| sf.sketch.point_xy(p).is_ok())
+            .collect();
         se.selection = selection.clone();
         se.drop_curve_picks();
         se.edit_label = Some(crate::msg!("undo-sketch-paste"));

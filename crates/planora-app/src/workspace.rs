@@ -2016,6 +2016,10 @@ impl Workspace {
     /// dann unangetastet. Wie [`Workspace::set_theme`].
     pub fn set_language(&mut self, lang: &planora_i18n::Lang) -> bool {
         planora_i18n::set_global(lang.clone());
+        // Parameter im Text (Skizzen 11b): Das Dezimalzeichen im Text folgt der Sprache.
+        for t in &mut self.tabs {
+            t.reshape_due = true;
+        }
         let id = lang.id().to_string();
         self.config.language = Some(id.clone());
         let transparency = self
