@@ -249,6 +249,7 @@ fn paste_and_move_is_one_undo_step() {
         at_source,
         "die Kopie ist verschoben"
     );
+    let moved = point_bits(sk(&mut w));
     assert_eq!(
         state(&mut w).sketch_undo_label().as_deref(),
         Some(t("undo-sketch-paste").as_str()),
@@ -261,6 +262,11 @@ fn paste_and_move_is_one_undo_step() {
     // Wiederholen bringt die verschobene Kopie zurück.
     assert!(state(&mut w).redo_sketch());
     assert_eq!(sk(&mut w).curves().count(), 4);
+    assert_eq!(
+        point_bits(sk(&mut w)),
+        moved,
+        "Wiederholen bringt die verschobene Lage zurück"
+    );
 }
 
 #[test]
@@ -452,7 +458,10 @@ fn keys_copy_and_paste_through_the_app() {
     open_sketch(&mut w, StandardPlane::XY);
     rectangle_with_dims(&mut w);
     let mut rig = Rig::new(w);
-    rig.frame(vec![Event::Copy]);
+    rig.frame(vec![
+        Event::ModifiersChanged(Modifiers::COMMAND),
+        Event::Copy,
+    ]);
     assert!(rig.ws().sketch_clipboard.is_some(), "Strg+C kopiert");
     // Strg+V mit leerer Systemzwischenablage: nur das Loslassen von V kommt.
     rig.frame(vec![Event::Key {
@@ -498,7 +507,10 @@ fn formula_field_keeps_ctrl_c() {
     );
     rig.settle();
     assert!(viewport::typing(&rig.ctx), "das Maßfeld hat die Tastatur");
-    rig.frame(vec![Event::Copy]);
+    rig.frame(vec![
+        Event::ModifiersChanged(Modifiers::COMMAND),
+        Event::Copy,
+    ]);
     rig.frame(vec![Event::Cut]);
     assert!(rig.ws().sketch_clipboard.is_none(), "nichts kopiert");
     assert_eq!(
@@ -692,4 +704,73 @@ fn paste_error_from_fixed_spline_between_planes_changes_nothing() {
     assert_eq!(undo_len(&mut w), before, "kein Schritt");
     let text = session(&mut w).message_text().unwrap();
     assert!(text.contains(&t("sketch-move-fixed")), "{text}");
+}
+
+// ---- Korrekturrunde 1 ------------------------------------------------------------------------
+
+fn with_tool(w: &mut Workspace, tool: Tool) {
+    let (se, sk) = state(w).session_sketch_mut().unwrap();
+    se.set_tool(sk, tool);
+}
+
+#[test]
+fn cut_does_nothing_where_delete_does_nothing() {
+    // Offene Anordnung (Muster): Entf löscht dort nichts, Ausschneiden auch nicht.
+    let mut w = ws();
+    open_sketch(&mut w, StandardPlane::XY);
+    rectangle_with_dims(&mut w);
+    with_tool(&mut w, Tool::Pattern);
+    assert!(session(&mut w).runs_pattern());
+    let before = sk(&mut w).curves().count();
+    commands::run_action(&mut w, Action::SketchCut);
+    assert_eq!(sk(&mut w).curves().count(), before, "nichts ausgeschnitten");
+    assert!(w.sketch_clipboard.is_none(), "auch nichts in der Ablage");
+
+    // Offener Abschnitt „Text“.
+    let mut w = ws();
+    open_sketch(&mut w, StandardPlane::XY);
+    rectangle_with_dims(&mut w);
+    with_tool(&mut w, Tool::Text);
+    assert!(session(&mut w).runs_text());
+    let all: Vec<Item> = sk(&mut w).curves().map(|(c, _)| Item::Curve(c)).collect();
+    session(&mut w).selection = all;
+    commands::run_action(&mut w, Action::SketchCut);
+    assert_eq!(sk(&mut w).curves().count(), 4);
+    assert!(w.sketch_clipboard.is_none());
+}
+
+#[test]
+fn paste_and_move_in_3d_is_one_undo_step_too() {
+    let mut w = ws();
+    open_sketch(&mut w, StandardPlane::XY);
+    {
+        let (se, sk) = state(&mut w).session_sketch_mut().unwrap();
+        sk.set_three_d(true);
+        let a = sk
+            .add_point3(planora_math::DVec3::new(0.0, 0.0, 1.0))
+            .unwrap();
+        let b = sk
+            .add_point3(planora_math::DVec3::new(10.0, 0.0, 1.0))
+            .unwrap();
+        let line = sk.add_line(a, b).unwrap();
+        se.selection = vec![Item::Curve(line)];
+    }
+    state(&mut w).observe_sketch(false);
+    commands::run_action(&mut w, Action::SketchCopy);
+    assert!(w.sketch_clipboard.is_some());
+    let before = undo_len(&mut w);
+    commands::run_action(&mut w, Action::SketchPaste);
+    assert_eq!(undo_len(&mut w), before + 1);
+    assert_eq!(session(&mut w).tool, Tool::MoveCopy);
+    {
+        let (se, sf) = state(&mut w).session_draft_mut().unwrap();
+        se.transform.shift_z = 3.0;
+        se.confirm_transform(sf).unwrap();
+    }
+    state(&mut w).observe_sketch(false);
+    assert_eq!(undo_len(&mut w), before + 1, "kein zweiter Schritt in 3D");
+    assert_eq!(
+        state(&mut w).sketch_undo_label().as_deref(),
+        Some(t("undo-sketch-paste").as_str())
+    );
 }

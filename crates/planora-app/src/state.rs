@@ -3818,6 +3818,16 @@ impl AppState {
     /// Ausschneiden: kopieren und die Auswahl wie mit Entf löschen (Löschregel der Skizze), ein
     /// Schritt „Ausschneiden“. Scheitert das Kopieren, bleibt die Skizze, wie sie war.
     pub fn cut_sketch_selection(&mut self) -> Result<planora_feature::FeatureClip, Msg> {
+        // Dieselben Sperren wie Entf (`sketch_view`): mitten in einem Zug, in der offenen Anordnung
+        // und im offenen Abschnitt „Text“ gehört die Auswahl dem Werkzeug; dann geschieht nichts
+        // (auch keine Zwischenablage, keine Meldung).
+        if self
+            .sketch_session
+            .as_ref()
+            .is_some_and(|se| se.in_gesture() || se.runs_pattern() || se.runs_text())
+        {
+            return Err(Msg::Join(Vec::new()));
+        }
         // Was davor offen war, ist ein eigener Schritt.
         self.observe_sketch(false);
         let clip = self.copy_sketch_selection()?;

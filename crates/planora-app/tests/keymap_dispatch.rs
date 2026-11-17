@@ -866,3 +866,100 @@ fn rebound_copy_works_with_plain_key() {
     let mut events = vec![Event::Copy];
     assert!(sketch_frame(&km, &mut events, false, &mut PasteLatch::default()).is_empty());
 }
+
+// ---- Korrekturrunde 1 ------------------------------------------------------------------------
+
+/// Ein Bild des Hauptfensters über den Kontext (mit den gehaltenen Umschalttasten `held`).
+fn ctx_frame(area: Area, events: Vec<Event>, held: Modifiers) -> (Vec<Action>, Vec<Event>) {
+    let ctx = egui::Context::default();
+    let mut all = vec![Event::ModifiersChanged(held)];
+    all.extend(events);
+    let raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+        events: all,
+        ..Default::default()
+    };
+    let km = Keymap::defaults();
+    let mut got = Vec::new();
+    let mut left = Vec::new();
+    let out = ctx.run_ui(raw, |ui| {
+        got = dispatch::pressed(ui.ctx(), &km, area);
+        left = ui.input(|i| {
+            i.events
+                .iter()
+                .filter(|e| !matches!(e, Event::ModifiersChanged(_)))
+                .cloned()
+                .collect()
+        });
+    });
+    out.drop_without_applying_deltas();
+    (got, left)
+}
+
+#[test]
+fn without_an_open_sketch_copy_and_cut_events_stay_untouched() {
+    // Strg+C aus markiertem Label-Text (egui) darf nicht verschluckt werden.
+    for area in [Area::Model, Area::Drawing] {
+        let (got, left) = ctx_frame(
+            area,
+            vec![Event::Copy, Event::Cut, Event::Paste("x".into())],
+            Modifiers::COMMAND,
+        );
+        assert!(got.is_empty());
+        assert_eq!(
+            left,
+            vec![Event::Copy, Event::Cut, Event::Paste("x".into())],
+            "{area:?}"
+        );
+    }
+    // Mit offener Skizze werden sie zu Tasten.
+    let (got, _) = ctx_frame(Area::Sketch, vec![Event::Copy], Modifiers::COMMAND);
+    assert_eq!(got, vec![Action::SketchCopy]);
+}
+
+#[test]
+fn paste_in_a_text_field_does_not_paste_into_the_sketch_after_focus_loss() {
+    let km = Keymap::defaults();
+    let mut latch = PasteLatch::default();
+    // Strg+V im Textfeld: das Feld liest `Paste`.
+    let mut in_field = vec![Event::Paste("x".into())];
+    assert!(sketch_frame(&km, &mut in_field, true, &mut latch).is_empty());
+    // Das Feld verliert den Fokus, dann kommt das Loslassen.
+    let mut later = vec![release(Key::V, Modifiers::COMMAND)];
+    assert!(
+        sketch_frame(&km, &mut later, false, &mut latch).is_empty(),
+        "das Loslassen gehört zum Einfügen im Feld"
+    );
+    // Das nächste Strg+V (leere Systemzwischenablage) fügt wieder ein.
+    let mut next = vec![release(Key::V, Modifiers::COMMAND)];
+    assert_eq!(
+        sketch_frame(&km, &mut next, false, &mut latch),
+        vec![Action::SketchPaste]
+    );
+}
+
+#[test]
+fn only_exactly_ctrl_c_x_v_become_the_sketch_keys() {
+    let ctrl_shift = Modifiers {
+        shift: true,
+        ..Modifiers::COMMAND
+    };
+    // Strg+Umschalt+C: kopiert nicht, ist aber die Taste Strg+Umschalt+C (zum Belegen).
+    let (got, left) = ctx_frame(Area::Sketch, vec![Event::Copy], ctrl_shift);
+    assert!(got.is_empty(), "{got:?}");
+    assert!(left.iter().any(|e| matches!(
+        e,
+        Event::Key { key: Key::C, pressed: true, modifiers, .. } if modifiers.shift && modifiers.command
+    )));
+    // Umschalt+Entf (Ausschneiden) und Umschalt+Einfg (Einfügen): ohne Strg bleibt alles.
+    let (got, left) = ctx_frame(
+        Area::Sketch,
+        vec![Event::Cut, Event::Paste("x".into())],
+        Modifiers::SHIFT,
+    );
+    assert!(got.is_empty());
+    assert_eq!(left, vec![Event::Cut, Event::Paste("x".into())]);
+    // Strg+Umschalt+V mit leerer Zwischenablage (nur das Loslassen) fügt nichts ein.
+    let (got, _) = ctx_frame(Area::Sketch, vec![release(Key::V, ctrl_shift)], ctrl_shift);
+    assert!(got.is_empty(), "{got:?}");
+}

@@ -1126,3 +1126,22 @@ fn capturing_counts_the_clipboard_events_as_ctrl_c_x_v() {
         );
     }
 }
+
+#[test]
+fn capturing_ctrl_shift_c_is_not_plain_ctrl_c() {
+    let mut r = rig();
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
+    let ctrl_shift = Modifiers {
+        shift: true,
+        ..CTRL
+    };
+    r.frame_with(vec![Event::Copy], ctrl_shift);
+    r.settle();
+    assert_eq!(r.state().capturing, None);
+    // Keine Doppelbelegung mit Strg+C: die Belegung ist Strg+Umschalt+C.
+    assert_eq!(
+        r.km().bindings(Action::Save),
+        &[chord(Key::C, true, true, false)]
+    );
+}

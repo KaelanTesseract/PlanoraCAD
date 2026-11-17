@@ -1555,8 +1555,10 @@ fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
                         (Action::SketchCut, tr!("action-sketch-cut"), has_selection),
                         (Action::SketchPaste, tr!("action-sketch-paste"), has_clip),
                     ] {
-                        let button = egui::Button::new(label)
-                            .shortcut_text(crate::keymap::shortcut_hint(&km, action));
+                        let button = egui::Button::new(label).shortcut_text(
+                            egui::RichText::new(crate::keymap::shortcut_hint(&km, action))
+                                .font(theme::kbd_font()),
+                        );
                         if ui.add_enabled(enabled, button).clicked() {
                             clip = Some(action);
                         }

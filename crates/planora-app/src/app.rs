@@ -1228,6 +1228,12 @@ impl PlanoraApp {
         // Skizzen 10: Alt allein und Pfeil hoch gehalten (die Triade der 3D-Skizze); der Verfolger
         // muss jedes Bild sehen, auch wenn sonst gesperrt ist.
         self.triad_keys(ctx);
+        // Strg+C/X/V gehören der Skizze nur, solange im aktiven Tab eine Skizze offen ist (auch
+        // für die abgedockten Fenster).
+        keymap::clipboard_keys::set_sketch_open(
+            ctx,
+            self.ws.active_tab().state.sketch_session.is_some(),
+        );
         if self.ws.prompt.is_some() {
             return;
         }

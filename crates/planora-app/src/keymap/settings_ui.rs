@@ -329,10 +329,11 @@ fn catch(
     let held = i.modifiers;
     let mut caught = None;
     // Strg+C/X/V sind für egui `Copy`/`Cut`/`Paste`; hier zählen sie als die Tasten (Skizzen 11b).
-    super::clipboard_keys::clipboard_events_as_keys(
+    super::clipboard_keys::clipboard_events_as_keys_with(
         &mut i.events,
         false,
         &mut super::clipboard_keys::PasteLatch::default(),
+        held,
     );
     for e in &i.events {
         if caught.is_some() {
