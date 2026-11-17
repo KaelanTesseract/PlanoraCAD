@@ -212,6 +212,239 @@ fn sphere_gives_half_circle_arc() {
     // Halbkreis von Pol zu Pol.
     assert!(s.x.abs() < EPS && e.x.abs() < EPS, "{s} {e}");
     assert!((s.y + e.y).abs() < EPS && (s.y.abs() - 10.0).abs() < EPS);
+    // Seite der Halbebene: n = z x d = (-Y) x Z = -X, also Skizzen-x < 0 (XZ: x = Welt-X).
+    let m = arc_mid(&g[0]);
+    assert!((m.x + 10.0).abs() < EPS && m.y.abs() < EPS, "{m}");
+}
+
+/// Mittelpunkt eines Bogens (gegen den Uhrzeigersinn um +z von `start` nach `end`).
+fn arc_mid(g: &Included) -> DVec3 {
+    let Included::Arc { c, start, end, n } = g else {
+        panic!("{g:?}")
+    };
+    assert!((n.z - 1.0).abs() < EPS);
+    let (u, v) = (*start - *c, *end - *c);
+    let h = u.y.atan2(u.x) + sweep(u, v) / 2.0;
+    *c + DVec3::new(h.cos(), h.sin(), 0.0) * u.length()
+}
+
+/// Winkel gegen den Uhrzeigersinn von `u` nach `v` in (0, 2π].
+fn sweep(u: DVec3, v: DVec3) -> f64 {
+    let a = v.y.atan2(v.x) - u.y.atan2(u.x);
+    if a <= 0.0 {
+        a + std::f64::consts::TAU
+    } else {
+        a
+    }
+}
+
+#[test]
+fn flip_moves_arc_to_other_side() {
+    let mut d = Document::new();
+    let k = sphere(&mut d, 10.0);
+    let spec = SpunSpec {
+        flip: true,
+        ..body_spec(k, z_axis())
+    };
+    let g = run(&d, &spec).unwrap();
+    assert_eq!(arcs(&g).len(), 1, "{g:?}");
+    let m = arc_mid(&g[0]);
+    assert!((m.x - 10.0).abs() < EPS && m.y.abs() < EPS, "{m}");
+}
+
+/// Achse der ersten Fläche der Art `kind` (Ursprung, z) des Körpers.
+fn face_axis(s: &Solid, kind: planora_kernel::SurfaceKind) -> (DVec3, DVec3) {
+    let f = s
+        .faces
+        .iter()
+        .find(|(_, f)| f.surface.kind() == kind)
+        .expect("Fläche")
+        .1;
+    let fr = f.surface.frame();
+    (fr.origin, fr.z)
+}
+
+/// Eine Skizzenebene, die die Achsrichtung `d` enthält.
+fn frame_for(d: DVec3) -> Frame {
+    if d.cross(DVec3::Z).length() < 1e-9 {
+        xz()
+    } else {
+        Frame::WORLD
+    }
+}
+
+#[test]
+fn cone_gives_slanted_line() {
+    let mut d = Document::new();
+    let c = d
+        .add_feature(
+            "Kegel",
+            FeatureKind::Cone {
+                radius: 6.0,
+                height: 8.0,
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    let (o, z) = face_axis(&solid(&d, c), planora_kernel::SurfaceKind::Cone);
+    let spec = body_spec(c, SpunAxis::Own(CurveId::from_index(0)));
+    let g = run_on(&d, frame_for(z), &spec, Some((o, z))).unwrap();
+    all_flat(&g);
+    let ls = lines(&g);
+    // Grundlinie (r 0 bis 6) und Mantellinie (Länge 10), nichts auf der Achse.
+    assert_eq!(ls.len(), 2, "{ls:?}");
+    let mut len: Vec<f64> = ls.iter().map(|(a, b)| a.distance(*b)).collect();
+    len.sort_by(f64::total_cmp);
+    assert!(
+        (len[0] - 6.0).abs() < EPS && (len[1] - 10.0).abs() < EPS,
+        "{len:?}"
+    );
+}
+
+#[test]
+fn torus_fillet_gives_quarter_arc() {
+    // Zylinder R 10 H 30, obere Kreiskante mit R 2 verrundet: Torusfläche koaxial zu Z.
+    let mut d = Document::new();
+    let c = cyl(&mut d, 10.0, 30.0, 0.0);
+    let s = solid(&d, c);
+    let (id, _) = s
+        .edges
+        .iter()
+        .find(|(_, e)| {
+            matches!(e.curve, Curve::Circle { .. }) && s.vertices[e.start].point.z > 15.0
+        })
+        .expect("obere Kreiskante");
+    let edge = EdgeRef::from_edge(&s, id, &tol()).unwrap();
+    let f = d
+        .add_feature(
+            "Rundung",
+            FeatureKind::Verrunden {
+                body: BodyRef {
+                    feature: c,
+                    index: 0,
+                },
+                edges: vec![edge],
+                art: BlendArt::Rundung { radius: 2.0 },
+                tangentenkette: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(d.feature(f).unwrap().status, FeatureStatus::Ok);
+    assert!(
+        solid(&d, f)
+            .faces
+            .iter()
+            .any(|(_, f)| f.surface.kind() == planora_kernel::SurfaceKind::Torus)
+    );
+    let g = run(&d, &body_spec(f, z_axis())).unwrap();
+    all_flat(&g);
+    // Drei Linien (Grund, Mantel bis z 28, Deckel bis r 8) und ein Viertelbogen um (8, 28).
+    let (mut ls, mut arcs_) = (Vec::new(), Vec::new());
+    for g in &g {
+        match g {
+            Included::Line(a, b) => ls.push((*a, *b)),
+            Included::Arc { c, start, end, .. } => arcs_.push((*c, *start, *end)),
+            g => panic!("{g:?}"),
+        }
+    }
+    assert_eq!((ls.len(), arcs_.len()), (3, 1), "{g:?}");
+    assert!(has_axial(&ls, 10.0, 0.0, 28.0), "{ls:?}");
+    assert!(has_radial(&ls, 0.0, 0.0, 10.0), "{ls:?}");
+    assert!(has_radial(&ls, 30.0, 0.0, 8.0), "{ls:?}");
+    let (m, a, b) = arcs_[0];
+    assert!(
+        (m.x.abs() - 8.0).abs() < EPS && (m.y - 28.0).abs() < EPS,
+        "{m}"
+    );
+    assert!((m.distance(a) - 2.0).abs() < EPS);
+    assert!((sweep(a - m, b - m) - std::f64::consts::FRAC_PI_2).abs() < 1e-6);
+}
+
+#[test]
+fn empty_selection_is_nothing() {
+    let mut d = Document::new();
+    let _ = shaft(&mut d, 10.0);
+    for sel in [
+        SpunSelection::Bodies(vec![]),
+        SpunSelection::Elements(vec![]),
+    ] {
+        let spec = SpunSpec {
+            selection: sel,
+            axis: z_axis(),
+            tolerance: 0.01,
+            flip: false,
+        };
+        assert_eq!(run(&d, &spec), Err(SpunError::Nothing));
+    }
+}
+
+/// Achse um 5e-9 gestört (Rest des Skizzenlösers, wie bei einer Achse aus einer Skizzenlinie):
+/// Die Welle geht trotzdem durch; um 1e-3 schief bleibt `NotRevolved` (Korrektur I1).
+#[test]
+fn slightly_perturbed_axis_still_revolved() {
+    let mut d = Document::new();
+    let (_, s) = shaft(&mut d, 10.0);
+    let spec = body_spec(s, SpunAxis::Own(CurveId::from_index(0)));
+    let dir = DVec3::new(5e-9, 0.0, 1.0).normalize();
+    let g = run_on(&d, xz(), &spec, Some((DVec3::ZERO, dir))).unwrap();
+    let ls = lines(&g);
+    assert_eq!(ls.len(), 5, "{ls:?}");
+    let at_r = |r: f64| {
+        ls.iter()
+            .any(|(a, b)| (a.x.abs() - r).abs() < 1e-5 && (b.x.abs() - r).abs() < 1e-5)
+    };
+    assert!(at_r(10.0) && at_r(5.0), "{ls:?}");
+    let tilted = DVec3::new(1e-3, 0.0, 1.0).normalize();
+    assert_eq!(
+        run_on(&d, xz(), &spec, Some((DVec3::ZERO, tilted))),
+        Err(SpunError::NotRevolved)
+    );
+}
+
+/// Eine gekrümmte Kante, die die Achse kreuzt (Knick in r), fällt nicht weg (Korrektur M1).
+#[test]
+fn curve_crossing_axis_is_kept() {
+    let mut d = Document::new();
+    let mut sk = Sketch::new(xz(), "Quelle", Tolerance::default());
+    let m = sk.add_point(2.0, 10.0).unwrap();
+    let circle = sk.add_circle(m, 5.0).unwrap();
+    let src = d
+        .add_feature(
+            "Quelle",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk,
+                plane: SketchPlane::Standard(StandardPlane::XZ),
+                copies: vec![],
+                formulas: Default::default(),
+                text_formulas: Default::default(),
+            }),
+        )
+        .unwrap();
+    let (c, t0, t1) = d.sketch_of(src).unwrap().curve_world(circle).unwrap();
+    let spec = elements_spec(vec![CurveSource::SketchCurve {
+        sketch: src,
+        curve: circle,
+    }]);
+    let g = run(&d, &spec).unwrap();
+    assert!(g.len() >= 2, "an der Achse geteilt: {g:?}");
+    let curves: Vec<_> = g
+        .iter()
+        .map(|g| match g {
+            Included::Spline { curve } => curve.clone(),
+            g => panic!("{g:?}"),
+        })
+        .collect();
+    let (u0, u1) = curves[0].domain();
+    let side = curves[0].point(0.5 * (u0 + u1)).x.signum();
+    for i in 0..50 {
+        let (r, s) = image_xz(c.point(t0 + (t1 - t0) * i as f64 / 50.0));
+        let at = DVec3::new(side * r, s, 0.0);
+        let dist = curves
+            .iter()
+            .map(|k| k.distance_to(at))
+            .fold(f64::INFINITY, f64::min);
+        assert!(dist <= spec.tolerance, "Punkt {i}: {dist}");
+    }
 }
 
 #[test]
@@ -496,6 +729,7 @@ fn deleted_body_is_warning() {
     let (t, curves) = follow_doc(&mut d, &body_spec(s, z_axis()));
     let before = sketch_lines(&d, t, &curves);
     d.delete(s).unwrap();
+    assert_eq!(d.feature(t).unwrap().status, FeatureStatus::Ok);
     assert!(!warning_of(&d, t).is_empty());
     assert_eq!(d.feature(t).unwrap().lost_projections().len(), curves.len());
     let after = sketch_lines(&d, t, &curves);

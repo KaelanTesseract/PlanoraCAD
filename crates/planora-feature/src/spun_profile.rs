@@ -13,6 +13,7 @@ use crate::surface_project::{CurveSource, DocView, Source, fit, resolve_source};
 use crate::{EdgeRef, VertexRef};
 use planora_i18n::tr;
 use planora_kernel::{Curve, Solid, Surface, section_by_plane};
+use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::CurveId;
 use planora_sketch::helpers::{Included, include_curve};
@@ -122,9 +123,11 @@ impl std::fmt::Display for SpunError {
 
 impl std::error::Error for SpunError {}
 
-/// Grenze für „parallel“ und „senkrecht“ zwischen Einheitsvektoren und, mit der Körpergröße
-/// malgenommen, für „auf der Achse“ (Spec-Entscheidung 6).
+/// Grenze für „Achse in der Skizzenebene oder parallel“ zwischen Einheitsvektoren.
 const REL: f64 = 1e-9;
+/// Kleinste Winkelgrenze für „koaxial“, wie `COAXIAL_ANGLE` in `planora-kernel/src/blend/
+/// analytic.rs` (dort nicht öffentlich).
+const COAXIAL_ANGLE: f64 = 1e-9;
 /// Abtastpunkte je Kurvenstück für die Nullstellen beim Beschneiden auf die Halbebene.
 const CLIP_SAMPLES: usize = 64;
 /// Anfangs- und Höchstzahl Abtastpunkte für eine angenäherte Bildkurve.
@@ -198,7 +201,7 @@ pub fn spun_profile(
                 }
                 chosen.push(doc.body(*b).ok_or(SpunError::Lost)?);
             }
-            if !chosen.iter().all(|s| revolved(s, a, d)) {
+            if !chosen.iter().all(|s| revolved(s, a, d, tol)) {
                 return Err(SpunError::NotRevolved);
             }
             body_outline(&spin, &chosen, tol)?
@@ -266,8 +269,11 @@ fn resolve_spin_axis(
 }
 
 /// Ist jede Fläche eine Ebene senkrecht zur Achse oder eine zur Achse koaxiale Zylinder-, Kegel-,
-/// Kugel- oder Torusfläche (Rahmen-z parallel zur Achse, Ursprung auf der Achse)?
-fn revolved(solid: &Solid, a: DVec3, d: DVec3) -> bool {
+/// Kugel- oder Torusfläche (Rahmen-z parallel zur Achse, Ursprung auf der Achse)? Grenzen wie
+/// `revolves_about` im Kernel: Abstand von der Achse höchstens `tol.linear`, Richtungsabweichung
+/// über die Körpergröße höchstens `tol.linear` (mindestens [`COAXIAL_ANGLE`]). So geht auch eine
+/// Achse aus einer Skizzenlinie mit dem Rest des Lösers (Korrektur I1).
+fn revolved(solid: &Solid, a: DVec3, d: DVec3, tol: &Tolerance) -> bool {
     let size = crate::plane_rect::solid_bounds(solid)
         .map(|(lo, hi)| lo.distance(hi))
         .unwrap_or(0.0)
@@ -279,8 +285,9 @@ fn revolved(solid: &Solid, a: DVec3, d: DVec3) -> bool {
                 .fold(0.0, f64::max),
         )
         .max(1.0);
-    let lin = REL * size;
-    let parallel = |z: DVec3| z.cross(d).length() <= REL;
+    let lin = tol.linear;
+    let angle = (lin / size).max(COAXIAL_ANGLE);
+    let parallel = |z: DVec3| z.cross(d).length() <= angle;
     let on_axis = |p: DVec3| {
         let v = p - a;
         (v - d * v.dot(d)).length() <= lin
@@ -637,28 +644,53 @@ fn element_curve(
         Curve::Circle { frame, .. } => {
             let v = frame.origin - spin.a;
             let off = (v - spin.d * v.dot(spin.d)).length();
-            if frame.z.cross(spin.d).length() <= REL && off <= lin {
+            let angle = (lin / frame.origin.distance(spin.a).max(1.0)).max(COAXIAL_ANGLE);
+            if frame.z.cross(spin.d).length() <= angle && off <= lin {
                 out.push(Included::Point(spin.image(c.point(t0))));
                 return;
             }
         }
         _ => {}
     }
-    if let Some(g) = spline_image(spin, c, t0, t1, limit, lin) {
-        out.push(g);
+    // Wo die Kurve die Achse berührt oder kreuzt, hat das Bild einen Knick (r = 0): dort teilen,
+    // jedes Teil für sich annähern (Korrektur M1).
+    let r = |t: f64| spin.sr(c.point(t)).1;
+    let ts: Vec<f64> = (0..=CLIP_SAMPLES)
+        .map(|k| t0 + (t1 - t0) * k as f64 / CLIP_SAMPLES as f64)
+        .collect();
+    let mut cuts = vec![t0];
+    for k in 1..CLIP_SAMPLES {
+        let (r0, r1, r2) = (r(ts[k - 1]), r(ts[k]), r(ts[k + 1]));
+        if r1 > r0 || r1 > r2 {
+            continue;
+        }
+        // Minimum per Goldenem Schnitt eingrenzen.
+        let (mut lo, mut hi) = (ts[k - 1], ts[k + 1]);
+        let g = 0.5 * (5f64.sqrt() - 1.0);
+        for _ in 0..80 {
+            let (x1, x2) = (hi - g * (hi - lo), lo + g * (hi - lo));
+            if r(x1) < r(x2) {
+                hi = x2;
+            } else {
+                lo = x1;
+            }
+        }
+        let t = 0.5 * (lo + hi);
+        if r(t) <= 10.0 * lin && (t - t0).abs() > 1e-9 && (t1 - t).abs() > 1e-9 {
+            cuts.push(t);
+        }
+    }
+    cuts.push(t1);
+    cuts.dedup_by(|b, a| (*b - *a).abs() <= 1e-9);
+    for w in cuts.windows(2) {
+        out.push(spline_image(spin, c, w[0], w[1], limit, lin));
     }
 }
 
 /// Abgetastet, abgebildet und mit der Schranke `limit` angenähert (fester Spline). Prüft die
-/// Mitten zwischen den Abtastpunkten und verdichtet, bis die Schranke auch dort gilt.
-fn spline_image(
-    spin: &Spin,
-    c: &Curve,
-    t0: f64,
-    t1: f64,
-    limit: f64,
-    lin: f64,
-) -> Option<Included> {
+/// Mitten zwischen den Abtastpunkten und verdichtet, bis die Schranke auch dort gilt. Gelingt
+/// das nicht, ist der Streckenzug durch die dichtesten Abtastpunkte der Spline (nie weglassen).
+fn spline_image(spin: &Spin, c: &Curve, t0: f64, t1: f64, limit: f64, lin: f64) -> Included {
     let limit = if limit.is_finite() && limit > 0.0 {
         limit
     } else {
@@ -671,13 +703,33 @@ fn spline_image(
         let first = pts[0];
         if pts.iter().all(|p| p.distance(first) <= lin) {
             // Bild fällt auf einen Punkt zusammen.
-            return Some(Included::Point(first));
+            return Included::Point(first);
         }
-        let curve = fit(&pts, limit * 0.5)?;
-        let ok = (0..n - 1).all(|k| curve.distance_to(at(k as f64 + 0.5)) <= limit);
-        if ok || n >= SPLINE_SAMPLES.1 {
-            return ok.then_some(Included::Spline { curve });
+        if let Some(curve) = fit(&pts, limit * 0.5)
+            && (0..n - 1).all(|k| curve.distance_to(at(k as f64 + 0.5)) <= limit)
+        {
+            return Included::Spline { curve };
+        }
+        if n >= SPLINE_SAMPLES.1 {
+            return polyline(pts);
         }
         n = 2 * n - 1;
+    }
+}
+
+/// Streckenzug (Grad 1) durch die Punkte als Spline; zusammenfallende Nachbarn fallen weg.
+fn polyline(mut pts: Vec<DVec3>) -> Included {
+    pts.dedup_by(|b, a| a.distance(*b) <= 1e-12);
+    let first = pts[0];
+    if pts.len() < 2 {
+        return Included::Point(first);
+    }
+    let n = pts.len();
+    let mut knots = vec![0.0];
+    knots.extend((0..n).map(|i| i as f64 / (n - 1) as f64));
+    knots.push(1.0);
+    match NurbsCurve::new(1, knots, pts, vec![1.0; n]) {
+        Ok(curve) => Included::Spline { curve },
+        Err(_) => Included::Point(first),
     }
 }
