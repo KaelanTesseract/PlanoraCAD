@@ -336,6 +336,7 @@ fn include_kind_in_flyout_without_key() {
             ToolKind::Include3d,
             ToolKind::ProjectToSurface,
             ToolKind::IntersectionCurve,
+            ToolKind::SpunProfile,
         ]
     );
     assert_eq!(ToolKind::Include3d.tool(), Tool::ProjectEdge);

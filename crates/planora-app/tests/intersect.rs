@@ -352,6 +352,7 @@ fn flyout_has_intersect_and_silhouette_without_keys() {
             ToolKind::Include3d,
             ToolKind::ProjectToSurface,
             ToolKind::IntersectionCurve,
+            ToolKind::SpunProfile,
         ]
     );
     assert_eq!(STRIP_TOOLS, 20);

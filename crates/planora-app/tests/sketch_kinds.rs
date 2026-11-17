@@ -225,7 +225,8 @@ fn kinds_cover_their_tools_without_gaps() {
     // Skizzen 10, Task 16 bewusst angepasst: 3D-Geometrie einbeziehen (31 → 32). Task 19 bewusst
     // angepasst: Auf Fläche projizieren und Schnittkurve (32 → 34). Skizzen 11a, Task 8 bewusst
     // angepasst: Linie und Mittelpunktlinie als Arten des Linienwerkzeugs (34 → 36).
-    assert_eq!(ToolKind::ALL.len(), 36);
+    // Skizzen 11b, Task 14 bewusst angepasst: Drehprofil (36 → 37).
+    assert_eq!(ToolKind::ALL.len(), 37);
     let mut seen = Vec::new();
     for tool in [
         Tool::Rectangle,
@@ -246,7 +247,7 @@ fn kinds_cover_their_tools_without_gaps() {
             seen.push(k);
         }
     }
-    assert_eq!(seen.len(), 36);
+    assert_eq!(seen.len(), 37);
     for tool in [
         Tool::Select,
         Tool::Point,
@@ -456,7 +457,8 @@ fn default_keys_stay_and_twenty_actions_have_none() {
     // einbeziehen ebenso (27 → 28). Task 19 bewusst angepasst: Auf Fläche projizieren und
     // Schnittkurve ebenso (28 → 30). Skizzen 11a, Task 8 bewusst angepasst: die Mittelpunktlinie
     // ebenso (30 → 31); die Linie hat L.
-    assert_eq!(free, 31);
+    // Skizzen 11b, Task 14 bewusst angepasst: Drehprofil ebenso (31 → 32).
+    assert_eq!(free, 32);
     assert!(km.to_overrides().is_empty(), "Konfiguration bleibt leer");
 }
 

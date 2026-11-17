@@ -4402,7 +4402,7 @@ impl AppState {
 
     /// Der Körper `body` (Index in [`AppState::bodies`]), wie er vor der geöffneten Skizze
     /// sichtbar ist; nur diese Körper lassen sich in die Skizze bringen.
-    fn solid_before_sketch(&self, body: usize) -> Result<Solid, Msg> {
+    pub(crate) fn solid_before_sketch(&self, body: usize) -> Result<Solid, Msg> {
         let id = self
             .open_sketch_id()
             .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
@@ -4791,25 +4791,110 @@ impl AppState {
         source: CopySource,
         label: Msg,
     ) -> Result<usize, Msg> {
+        self.place_groups(vec![(pieces.to_vec(), source)], true, label)
+    }
+
+    /// Wie [`AppState::place_included`] für mehrere Gruppen auf einmal (je Gruppe Stücke und
+    /// Herkunft), alles in einem Schritt: Schlägt eine Gruppe fehl, bleibt die Skizze unverändert.
+    /// Mit `linked == false` entstehen freie Kurven ohne Fixierung und ohne Eintrag in `copies`.
+    fn place_groups(
+        &mut self,
+        groups: Vec<(Vec<Included>, CopySource)>,
+        linked: bool,
+        label: Msg,
+    ) -> Result<usize, Msg> {
         let (Some(se), Some(draft)) = (self.sketch_session.as_mut(), self.sketch_draft.as_mut())
         else {
             return Err(crate::msg!("state-no-open-sketch"));
         };
-        let targets = match se.include_pieces(&mut draft.sketch, pieces) {
+        let all: Vec<Included> = groups.iter().flat_map(|(p, _)| p.iter().cloned()).collect();
+        let targets = match se.include_pieces_as(&mut draft.sketch, &all, linked) {
             Ok(t) => t,
             Err(e) => return Err(se.message.clone().unwrap_or(Msg::Raw(e))),
         };
-        let of = u32::try_from(targets.len()).unwrap_or(u32::MAX);
-        for (k, target) in targets.iter().enumerate() {
-            draft.copies.push(EdgeCopy {
-                target: *target,
-                source: source.clone(),
-                piece: u32::try_from(k).unwrap_or(u32::MAX),
-                of,
-            });
+        if linked {
+            let mut from = 0;
+            for (pieces, source) in &groups {
+                let part = &targets[from..from + pieces.len()];
+                from += pieces.len();
+                let of = u32::try_from(part.len()).unwrap_or(u32::MAX);
+                for (k, target) in part.iter().enumerate() {
+                    draft.copies.push(EdgeCopy {
+                        target: *target,
+                        source: source.clone(),
+                        piece: u32::try_from(k).unwrap_or(u32::MAX),
+                        of,
+                    });
+                }
+            }
         }
         se.edit_label = Some(label);
         Ok(targets.len())
+    }
+
+    /// Fusion „Drehprofil“ (Skizzen 11b, Spec 5): rechnet mit
+    /// [`planora_feature::spun_profile`] (wie die Neuberechnung) und legt die Kurven in die
+    /// offene Skizze. Mit `linked` sind sie violett verknüpft (`CopySource::SpunProfile`, eine
+    /// Gruppe), sonst freie Kurven ohne Fixierung und ohne Eintrag in `copies`. Mit
+    /// `project_axis` kommt die Achse dazu: eine Kante als `Include(Edge)`, eine Ursprungsachse
+    /// als `Include(Axis)`, eine Linie einer früheren Skizze als `Include(SketchCurve)`; eine
+    /// Linie der eigenen Skizze liegt schon da. Ein Rückgängig-Schritt („Drehprofil“); bei einem
+    /// Fehler bleibt die Skizze unverändert, die Meldung steht auch in der Sitzung.
+    pub fn add_spun_profile(
+        &mut self,
+        spec: planora_feature::SpunSpec,
+        project_axis: bool,
+        linked: bool,
+    ) -> Result<usize, Msg> {
+        let r = self.try_spun_profile(spec, project_axis, linked);
+        if let Err(m) = &r
+            && let Some(se) = self.sketch_session.as_mut()
+        {
+            se.message = Some(m.clone());
+        }
+        r
+    }
+
+    fn try_spun_profile(
+        &mut self,
+        spec: planora_feature::SpunSpec,
+        project_axis: bool,
+        linked: bool,
+    ) -> Result<usize, Msg> {
+        let (idx, frame) = self.open_sketch_place()?;
+        let pieces = self.spun_pieces(&spec)?;
+        let mut groups = vec![(pieces, CopySource::SpunProfile(spec.clone()))];
+        if project_axis && let Some(r) = spun_axis_include(&spec.axis) {
+            let axis = planora_feature::included_pieces(&self.document, idx, &frame, &r)
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| crate::msg!("sketch-include-failed"))?;
+            groups.push((axis, CopySource::Include(r)));
+        }
+        self.place_groups(groups, linked, crate::msg!("undo-spun-profile"))
+    }
+
+    /// Die Kurvenstücke des Drehprofils `spec` in der offenen Skizze, gerechnet wie die
+    /// Neuberechnung; die Vorschau des Dialogs nutzt dieselbe Rechnung. Ein Fehler der Rechnung
+    /// ist die Meldung in der aktuellen Sprache.
+    pub fn spun_pieces(&self, spec: &planora_feature::SpunSpec) -> Result<Vec<Included>, Msg> {
+        use planora_feature::{DocView, SpunAxis, SpunError, spun_profile};
+        let (idx, frame) = self.open_sketch_place()?;
+        let own = match &spec.axis {
+            SpunAxis::Own(c) => Some(
+                self.session_sketch()
+                    .and_then(|sk| crate::spun_profile_dialog::own_axis_of(sk, *c))
+                    .ok_or_else(|| crate::msg!("sketch-spun-lost"))?,
+            ),
+            SpunAxis::Ref(_) => None,
+        };
+        let view = DocView::new(&self.document, idx, frame);
+        let tol = self.document.kernel().tolerance;
+        spun_profile(&view, spec, own, &tol).map_err(|e| match e {
+            SpunError::AxisNotInPlane => crate::msg!("sketch-spun-axis-off-plane"),
+            SpunError::NotRevolved => crate::msg!("sketch-spun-not-revolved"),
+            SpunError::Lost => crate::msg!("sketch-spun-lost"),
+            SpunError::Nothing => crate::msg!("sketch-spun-nothing"),
+        })
     }
 
     /// Gemeinsamer Abschluss von Projizieren, Schneiden und Silhouette: legt die Kurvenstücke
@@ -5118,6 +5203,22 @@ fn mesh_label() -> String {
 /// Hinweis an ausgegrauten Menüpunkten bei gewähltem Netz-Körper (Spec §6).
 pub fn mesh_locked_hint() -> String {
     tr!("state-mesh-locked")
+}
+
+/// Der Verweis, mit dem „Achse projizieren“ (Drehprofil) die Achse in die Skizze einzieht; `None`
+/// bei einer Linie der eigenen Skizze (sie liegt schon da).
+fn spun_axis_include(axis: &planora_feature::SpunAxis) -> Option<planora_feature::IncludeRef> {
+    use planora_feature::planes::AxisRef;
+    use planora_feature::{IncludeRef, SpunAxis};
+    match axis {
+        SpunAxis::Own(_) => None,
+        SpunAxis::Ref(AxisRef::Standard(a)) => Some(IncludeRef::Axis(*a)),
+        SpunAxis::Ref(AxisRef::Edge(e)) => Some(IncludeRef::Edge(e.clone())),
+        SpunAxis::Ref(AxisRef::SketchLine { sketch, curve }) => Some(IncludeRef::SketchCurve {
+            sketch: *sketch,
+            curve: *curve,
+        }),
+    }
 }
 
 /// Lässt sich die Herkunft `source` mit „Neu verknüpfen“ in der Ansicht neu wählen? Kante,

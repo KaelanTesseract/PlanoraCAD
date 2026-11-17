@@ -723,7 +723,8 @@ fn the_create_menu_lists_all_kinds_while_a_sketch_is_open() {
     // Skizzen 10, Task 16 bewusst angepasst: „3D-Geometrie einbeziehen“ (→ 25). Task 19 bewusst
     // angepasst: „Auf Fläche projizieren“ und „Schnittkurve“ (→ 27).
     // Skizzen 11a, Task 8 bewusst angepasst: „Linie“ mit Linie und Mittelpunktlinie (→ 29).
-    assert_eq!(count, 29);
+    // Skizzen 11b, Task 14 bewusst angepasst: „Drehprofil" (→ 30).
+    assert_eq!(count, 30);
 }
 
 /// Hat die Schrift in ihrer Zeichentabelle einen Eintrag für `c`? (Wie in tests/icons.rs.)

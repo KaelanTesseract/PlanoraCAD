@@ -2553,6 +2553,20 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         // „Auf Fläche projizieren“ und „Schnittkurve“ (Skizzen 10): Der Klick füllt das aktive
         // Feld des Dialogs; erst dessen OK legt an.
         if kind.has_dialog() {
+            // „Drehprofil“: Wartet der Dialog auf die Achse, gilt zuerst eine Linie der offenen
+            // Skizze (Skizzen 11b).
+            if crate::spun_profile_dialog::wants_own_axis(state)
+                && let (Some(at), Some(id)) = (map.to_sketch(p), state.open_sketch_id())
+                && let Some(curve) = state
+                    .session_sketch()
+                    .and_then(|sk| sk.pick_curve(at, map.radius_at(p).unwrap_or(0.0)))
+            {
+                crate::surface_project_dialog::deliver(
+                    state,
+                    crate::state::IncludePick::SketchCurve { sketch: id, curve },
+                );
+                return;
+            }
             match include_pick(state, &map, p, picked) {
                 Some(pick) => {
                     // Passt der Klick nicht, steht der Grund im Dialog.

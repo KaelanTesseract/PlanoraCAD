@@ -8,6 +8,7 @@ use crate::sketch_state::{SketchSession, err};
 use planora_feature::CopyTarget;
 use planora_kernel::Curve;
 use planora_math::DVec2;
+use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::helpers::{Included, ProjectStyle};
 use planora_sketch::model::{CurveId, CurveKind, Sketch};
 use std::f64::consts::{FRAC_PI_2, TAU};
@@ -121,7 +122,21 @@ impl SketchSession {
         sk: &mut Sketch,
         pieces: &[Included],
     ) -> Result<Vec<CopyTarget>, String> {
+        self.include_pieces_as(sk, pieces, true)
+    }
+
+    /// Wie [`SketchSession::include_pieces`]; mit `fixed == false` (ohne Projektionsverknüpfung,
+    /// Skizzen 11b „Drehprofil“) bleiben die Stücke freie Kurven: Die Fixierungen (`Fixed`), die
+    /// das Einziehen anlegt, werden wieder genommen. Beides ist ein Schritt, ein Fehler stellt
+    /// die Skizze wieder her.
+    pub fn include_pieces_as(
+        &mut self,
+        sk: &mut Sketch,
+        pieces: &[Included],
+        fixed: bool,
+    ) -> Result<Vec<CopyTarget>, String> {
         self.atomic(sk, |se, sk, prior| {
+            let known: Vec<_> = sk.constraints().map(|(id, _)| id).collect();
             let mut out = Vec::with_capacity(pieces.len());
             for g in pieces {
                 let ids = sk.add_included(g).map_err(err)?;
@@ -129,6 +144,18 @@ impl SketchSession {
                     ([c], []) => out.push(CopyTarget::Curve(*c)),
                     ([], [p]) => out.push(CopyTarget::Point(*p)),
                     _ => return Err(crate::msg!("sketch-include-failed")),
+                }
+            }
+            if !fixed {
+                let pins: Vec<_> = sk
+                    .constraints()
+                    .filter(|(id, d)| {
+                        !known.contains(id) && matches!(d.kind, ConstraintKind::Fixed(..))
+                    })
+                    .map(|(id, _)| id)
+                    .collect();
+                for id in pins {
+                    sk.remove_constraint(id).map_err(err)?;
                 }
             }
             se.solve_checked(sk, prior)?;

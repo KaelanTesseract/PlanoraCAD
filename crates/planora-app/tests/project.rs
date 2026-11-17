@@ -661,6 +661,7 @@ fn esc_ends_project_intersect_and_silhouette() {
         ToolKind::Include3d,
         ToolKind::ProjectToSurface,
         ToolKind::IntersectionCurve,
+        ToolKind::SpunProfile,
     ] {
         let steps = undo_len(&s);
         {
@@ -799,6 +800,7 @@ fn strip_still_fits_1080() {
             ToolKind::Include3d,
             ToolKind::ProjectToSurface,
             ToolKind::IntersectionCurve,
+            ToolKind::SpunProfile,
         ]
     );
     assert_eq!(

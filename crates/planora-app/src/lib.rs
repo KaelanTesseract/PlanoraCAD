@@ -84,6 +84,7 @@ pub mod sketch_tree;
 pub mod sketch_triad;
 pub mod sketch_under;
 pub mod sketch_view;
+pub mod spun_profile_dialog;
 pub mod state;
 pub mod step_import_dialog;
 pub mod surface_project_dialog;
