@@ -4094,7 +4094,8 @@ impl AppState {
         // Ohne Schriftliste setzt das Schließen der Skizze neu (`try_close_sketch`).
         planora_feature::text_refs::apply_shown(&mut sf.sketch, &scope);
         if let Some(lib) = &fonts {
-            sf.sketch.reshape_texts(lib.as_ref());
+            sf.sketch
+                .reshape_texts(&crate::fonts_library::Guarded(lib.as_ref()));
         }
         if let Err(m) = se.solve_checked(&mut sf.sketch, &before.sketch) {
             *sf = before;
