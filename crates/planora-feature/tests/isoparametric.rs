@@ -567,3 +567,345 @@ fn lost_face_is_warning() {
     assert!(before.0.distance(after.0) < EPS && before.1.distance(after.1) < EPS);
     d.check_invariants().unwrap();
 }
+
+// ---- Korrekturrunde 1 ----
+
+/// Quader 20 × 20 × 5 mit Loch R 3 um (10, 10) und seine Deckfläche.
+fn plate_with_hole(d: &mut Document) -> FaceRef {
+    let bx = d
+        .add_feature(
+            "Quader",
+            FeatureKind::Box {
+                size: DVec3::new(20.0, 20.0, 5.0),
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    let hole = cyl_at(d, 3.0, 9.0, DVec3::new(10.0, 10.0, -2.0));
+    let cut = boolean(d, bx, hole, BoolOp::Difference);
+    let s = body(d, cut);
+    let (top, _) = s
+        .faces
+        .iter()
+        .find(|(f, _)| {
+            planora_sketch::plane_of_face(&s, *f)
+                .is_some_and(|fr| fr.z.z > 0.5 && (fr.origin.z - 5.0).abs() < 1e-9)
+        })
+        .unwrap();
+    FaceRef::from_face(&s, top, &tol()).unwrap()
+}
+
+/// I2: Nachschärfen auf der echten Lochkante. Die Linie beim Anteil 0,4 liegt 2 neben der Mitte
+/// und schneidet den Kreis schräg (nicht in einem Polygoneckpunkt). Die Enden liegen auf dem
+/// Kreis (1e-9), die Längen sind 10 − √5. (Beim Anteil 0,3 läge die Linie 4 neben der Mitte und
+/// verfehlte das Loch R 3.)
+#[test]
+fn plane_hole_ends_on_circle() {
+    let mut d = Document::new();
+    let top = plate_with_hole(&mut d);
+    let want = 10.0 - 5.0f64.sqrt();
+    for dir in [IsoDirection::U, IsoDirection::V] {
+        let g = run(&d, &top, dir, 0.4).unwrap();
+        assert_eq!(g.len(), 2, "{g:?}");
+        let mut on_circle = 0;
+        for piece in &g {
+            let (a, b) = line(piece);
+            assert!((a.distance(b) - want).abs() < 1e-9, "{dir:?}: {a:?} {b:?}");
+            for p in [a, b] {
+                let r = DVec3::new(p.x - 10.0, p.y - 10.0, 0.0).length();
+                if (r - 3.0).abs() < 0.5 {
+                    assert!((r - 3.0).abs() <= 1e-9, "{dir:?}: zum Kreis {}", r - 3.0);
+                    on_circle += 1;
+                }
+            }
+        }
+        assert_eq!(on_circle, 2);
+    }
+}
+
+/// I2: Zylinder R 10 H 30 mit einem Querloch, dessen Querschnitt ein auf die Spitze gestelltes
+/// Quadrat ist (|x| + |z − 15| ≤ 4, entlang Y durch): Die Lochkanten sind Ellipsenstücke, in
+/// (u, v) schräg. Der v-Kreis bei z = 13,5 ergibt zwei Bögen mit Enden genau auf der Lochkante
+/// (|x| = 2,5) und den Winkeln π − 2 · asin 0,25.
+#[test]
+fn cylinder_slanted_hole_ends_on_edge() {
+    let mut d = Document::new();
+    let main = cyl_at(&mut d, 10.0, 30.0, DVec3::ZERO);
+    let frame = StandardPlane::XZ.frame();
+    let mut sk = Sketch::new(frame, "Raute", Tolerance::default());
+    let p: Vec<_> = [(4.0, 15.0), (0.0, 19.0), (-4.0, 15.0), (0.0, 11.0)]
+        .iter()
+        .map(|&(x, y)| sk.add_point(x, y).unwrap())
+        .collect();
+    for k in 0..4 {
+        sk.add_line(p[k], p[(k + 1) % 4]).unwrap();
+    }
+    let s = d
+        .add_feature(
+            "Raute",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk,
+                plane: SketchPlane::Standard(StandardPlane::XZ),
+                copies: vec![],
+                formulas: Default::default(),
+                text_formulas: Default::default(),
+            }),
+        )
+        .unwrap();
+    let e = d
+        .add_feature(
+            "Stab",
+            FeatureKind::Extrude {
+                sketch: s,
+                profiles: ProfileSel::Index(0),
+                height: 30.0,
+            },
+        )
+        .unwrap();
+    let mv = d
+        .add_feature(
+            "Verschieben",
+            FeatureKind::Move {
+                body: BodyRef {
+                    feature: e,
+                    index: 0,
+                },
+                delta: -frame.z * 15.0,
+            },
+        )
+        .unwrap();
+    let b = boolean(&mut d, main, mv, BoolOp::Difference);
+    let face = face_of(&d, b, SurfaceKind::Cylinder, Some(10.0));
+    let g = run(&d, &face, IsoDirection::V, 0.45).unwrap();
+    assert_eq!(g.len(), 2, "{g:?}");
+    let hole = 2.0 * (0.25f64).asin();
+    for piece in &g {
+        let (c, r, ang) = arc_angle(piece);
+        assert!(c.distance(DVec3::new(0.0, 0.0, 13.5)) < 1e-9 && (r - 10.0).abs() < 1e-9);
+        assert!((ang - (PI - hole)).abs() < 1e-9, "{ang}");
+        let Included::Arc { start, end, .. } = piece else {
+            unreachable!()
+        };
+        for q in [start, end] {
+            let edge = q.x.abs() + (q.z - 15.0).abs();
+            assert!((edge - 4.0).abs() <= 1e-9, "zur Lochkante {}", edge - 4.0);
+        }
+    }
+}
+
+/// I1: Halbschale 90° … 270° (Zylinder ∩ Quader x < 0) mit einem Loch bei 200° (jenseits von
+/// ±180°, also für sich entfaltet eine Periode neben der äußeren Schleife). Der Bereich bleibt
+/// π breit; der Anteil 0,5 trifft 180°.
+#[test]
+fn half_shell_hole_keeps_range() {
+    let mut d = Document::new();
+    let c = cyl_at(&mut d, 10.0, 30.0, DVec3::ZERO);
+    let bx = d
+        .add_feature(
+            "Hälfte",
+            FeatureKind::Box {
+                size: DVec3::new(20.0, 40.0, 40.0),
+                origin: DVec3::new(-20.0, -20.0, -5.0),
+            },
+        )
+        .unwrap();
+    let half = boolean(&mut d, c, bx, BoolOp::Intersection);
+    let at = 200f64.to_radians();
+    let m = DVec3::new(10.0 * at.cos(), 10.0 * at.sin(), 15.0);
+    let pocket = d
+        .add_feature(
+            "Tasche",
+            FeatureKind::Box {
+                size: DVec3::new(4.0, 2.0, 4.0),
+                origin: m - DVec3::new(2.0, 1.0, 2.0),
+            },
+        )
+        .unwrap();
+    let b = boolean(&mut d, half, pocket, BoolOp::Difference);
+    let face = face_of(&d, b, SurfaceKind::Cylinder, None);
+    let s = body(&d, b);
+    let found = planora_feature::refs::resolve_face(&[&s], &face, &tol()).unwrap();
+    let geom = face_geom(&s, found.face);
+    assert_eq!(geom.loops.len(), 2, "Fläche mit Loch");
+    let r = iso_range(&geom);
+    assert!((r.u.1 - r.u.0 - PI).abs() < 1e-9, "{r:?}");
+    let g = run(&d, &face, IsoDirection::U, 0.5).unwrap();
+    assert_eq!(g.len(), 1, "{g:?}");
+    let (a, b) = line(&g[0]);
+    for p in [a, b] {
+        assert!(p.distance(DVec3::new(-10.0, 0.0, p.z)) < 1e-9, "{p:?}");
+    }
+    assert!((a.distance(b) - 30.0).abs() < EPS);
+    // Der Punkt mitten im Loch liegt beim Anteil (200 − 90) / 180.
+    let v = iso_value_at(&geom, m, IsoDirection::U);
+    assert!((v - 110.0 / 180.0).abs() < 1e-9, "{v}");
+}
+
+/// ⚠️ (a): Freiformfläche, geschlossen um die Drehachse, mit einem Loch auf der Seite gegenüber
+/// der Naht: Der Umlauf ergibt genau ein Stück, das über die Naht läuft (der Laufbereich geht
+/// über das Ende des NURBS-Bereichs hinaus und wird beim Beschneiden gefaltet). Alle Punkte
+/// liegen auf der Fläche, und das Stück geht durch den Punkt gegenüber dem Loch.
+#[test]
+fn nurbs_piece_over_seam() {
+    let mut d = Document::new();
+    let rev = spline_revolve(&mut d);
+    let pocket = d
+        .add_feature(
+            "Tasche",
+            FeatureKind::Box {
+                size: DVec3::new(2.5, 1.0, 1.0),
+                origin: DVec3::new(-4.0, 2.25, -0.5),
+            },
+        )
+        .unwrap();
+    let b = boolean(&mut d, rev, pocket, BoolOp::Difference);
+    let s = body(&d, b);
+    let (fid, f) = s
+        .faces
+        .iter()
+        .find(|(_, f)| f.surface.kind() == SurfaceKind::Nurbs && !f.inner.is_empty())
+        .expect("Freiformfläche mit Loch");
+    let face = FaceRef::from_face(&s, fid, &tol()).unwrap();
+    let geom = face_geom(&s, fid);
+    let surface = &f.surface;
+    // Die Laufrichtung ist die geschlossene; die feste die andere.
+    let (dir, period) = match (surface.u_period(), surface.v_period()) {
+        (Some(t), _) => (IsoDirection::V, t),
+        (None, Some(t)) => (IsoDirection::U, t),
+        _ => panic!("Fläche nicht geschlossen"),
+    };
+    let r = iso_range(&geom);
+    let run_range = if dir == IsoDirection::V { r.u } else { r.v };
+    assert!((run_range.1 - run_range.0 - period).abs() < 1e-9, "{r:?}");
+    let (pu, pv) = surface.project(DVec3::new(2.8, 2.75, 0.0));
+    let across = surface.point(pu, pv);
+    let value = iso_value_at(&geom, across, dir);
+    let g = run(&d, &face, dir, value).unwrap();
+    assert_eq!(g.len(), 1, "{g:?}");
+    let Included::Spline { curve } = &g[0] else {
+        panic!("kein Spline: {:?}", g[0]);
+    };
+    let (t0, t1) = curve.domain();
+    // Das Stück läuft wirklich über das Ende des NURBS-Bereichs (Faltung beim Beschneiden).
+    let Surface::Nurbs(data) = surface else {
+        unreachable!()
+    };
+    let (du, dv) = data.surface().domain();
+    let (lo, hi) = if dir == IsoDirection::V { du } else { dv };
+    assert!(
+        t0 < lo - 1e-6 || t1 > hi + 1e-6,
+        "{t0} … {t1} in {lo} … {hi}"
+    );
+    let mut closest = f64::INFINITY;
+    for k in 0..=400 {
+        let p = curve.point(t0 + (t1 - t0) * k as f64 / 400.0);
+        assert!(surface.implicit(p).abs() <= 1e-6, "{p:?}");
+        closest = closest.min(p.distance(across));
+    }
+    assert!(closest < 1e-2, "{closest}");
+    // Beide Enden am Loch (x < 0).
+    for p in [curve.point(t0), curve.point(t1)] {
+        assert!(p.x < -1.0, "{p:?}");
+    }
+}
+
+/// ⚠️ (b) und M3: Teilkegel 90° … 180° mit Spitze. Die Spitze ist ein Pol: Die u-Hülle bleibt
+/// 90° breit, und die u-Linie bei 135° läuft vom Grundkreis bis zur Spitze.
+#[test]
+fn cone_apex_is_pole() {
+    let mut d = Document::new();
+    let c = d
+        .add_feature(
+            "Kegel",
+            FeatureKind::Cone {
+                radius: 6.0,
+                height: 8.0,
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    let bx = d
+        .add_feature(
+            "Viertel",
+            FeatureKind::Box {
+                size: DVec3::new(10.0, 10.0, 12.0),
+                origin: DVec3::new(-10.0, 0.0, -2.0),
+            },
+        )
+        .unwrap();
+    let q = boolean(&mut d, c, bx, BoolOp::Intersection);
+    let face = face_of(&d, q, SurfaceKind::Cone, None);
+    let s = body(&d, q);
+    let found = planora_feature::refs::resolve_face(&[&s], &face, &tol()).unwrap();
+    let r = iso_range(&face_geom(&s, found.face));
+    assert!((r.u.1 - r.u.0 - PI / 2.0).abs() < 1e-9, "{r:?}");
+    let g = run(&d, &face, IsoDirection::U, 0.5).unwrap();
+    assert_eq!(g.len(), 1, "{g:?}");
+    let (a, b) = line(&g[0]);
+    let at = 135f64.to_radians();
+    let base = DVec3::new(6.0 * at.cos(), 6.0 * at.sin(), 0.0);
+    let apex = DVec3::new(0.0, 0.0, 8.0);
+    assert!(
+        (a.distance(base) < 1e-9 && b.distance(apex) < 1e-9)
+            || (a.distance(apex) < 1e-9 && b.distance(base) < 1e-9),
+        "{a:?} {b:?}"
+    );
+}
+
+/// M2: Am Kugelpol ist der v-Kreis ein Punkt (kein Stück); der Meridian beim Anteil 0 (auf der
+/// Naht) ist ein voller Halbkreis.
+#[test]
+fn sphere_pole_and_seam_meridian() {
+    let mut d = Document::new();
+    let s = d
+        .add_feature(
+            "Kugel",
+            FeatureKind::Sphere {
+                radius: 8.0,
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    let face = face_of(&d, s, SurfaceKind::Sphere, None);
+    for value in [0.0, 1.0] {
+        assert_eq!(
+            run(&d, &face, IsoDirection::V, value),
+            Err(ProjectError::NoHit)
+        );
+    }
+    let g = run(&d, &face, IsoDirection::U, 0.0).unwrap();
+    assert_eq!(g.len(), 1, "{g:?}");
+    let (c, r, ang) = arc_angle(&g[0]);
+    assert!(c.length() < EPS && (r - 8.0).abs() < EPS && (ang - PI).abs() < 1e-9);
+}
+
+/// M2: Anteil genau 0 und 1 auf dem Rand eines Viertelzylinders (0° … 90°): die Linien auf den
+/// Randkanten bei 0° und 90°.
+#[test]
+fn value_zero_on_boundary() {
+    let mut d = Document::new();
+    let c = cyl_at(&mut d, 10.0, 30.0, DVec3::ZERO);
+    let bx = d
+        .add_feature(
+            "Quader",
+            FeatureKind::Box {
+                size: DVec3::new(20.0, 20.0, 40.0),
+                origin: DVec3::new(0.0, 0.0, -5.0),
+            },
+        )
+        .unwrap();
+    let q = boolean(&mut d, c, bx, BoolOp::Intersection);
+    let face = face_of(&d, q, SurfaceKind::Cylinder, None);
+    for (value, at) in [(0.0, 0.0), (1.0, 90f64.to_radians())] {
+        let g = run(&d, &face, IsoDirection::U, value).unwrap();
+        assert_eq!(g.len(), 1, "{g:?}");
+        let (a, b) = line(&g[0]);
+        for p in [a, b] {
+            assert!(
+                p.distance(DVec3::new(10.0 * at.cos(), 10.0 * at.sin(), p.z)) < 1e-9,
+                "{p:?}"
+            );
+        }
+        assert!((a.distance(b) - 30.0).abs() < EPS);
+    }
+}

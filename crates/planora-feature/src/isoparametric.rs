@@ -10,9 +10,10 @@
 //! 2. Die Linie beim Wert `lo + value · (hi − lo)` läuft über den ganzen Bereich der anderen
 //!    Richtung und wird mit den Randpolygonen geschnitten (auch um eine Periode verschoben).
 //!    Jeder Schnitt wird auf der echten Randkante nachgeschärft (Halbieren).
-//! 3. Abschnitte, deren Mitte in der Fläche liegt, werden Stücke; aneinanderstoßende Abschnitte
-//!    bleiben ein Stück. Über die Naht einer geschlossenen Richtung läuft ein Stück durch: Es
-//!    wird nur an echten Randschnitten geteilt, nie an der Naht (Prüf-Schwerpunkt 5).
+//! 3. Abschnitte, deren Mitte in der Fläche oder auf dem Rand liegt, werden Stücke;
+//!    aneinanderstoßende Abschnitte bleiben ein Stück. Über die Naht einer geschlossenen Richtung
+//!    läuft ein Stück durch: Es wird nur an echten Randschnitten geteilt, nie an der Naht
+//!    (Prüf-Schwerpunkt 5).
 //! 4. Ausgabe exakt: Ebene → Linie; Zylinder/Kegel `u = const` → Linie, `v = const` →
 //!    Bogen/Kreis; Kugel und Torus → Bogen/Kreis; Freiformfläche → fester Spline aus
 //!    [`NurbsSurface::iso_curve_u`](planora_math::nurbs::NurbsSurface::iso_curve_u) bzw. `_v`,
@@ -50,6 +51,11 @@ const REFINE_REACH: f64 = 0.05;
 const REFINE_STEPS: usize = 8;
 /// Halbierungen beim Nachschärfen.
 const REFINE_BISECTIONS: usize = 60;
+/// Größte Abweichung eines nachgeschärften Schnitts vom Polygonpunkt, bezogen auf die 3D-Länge
+/// der geschnittenen Polygonkante. Die Randpolygone tasten Bögen alle 5° ab; die Sehnenhöhe ist
+/// dann `tan(5°/4) ≈ 0,022` der Sehne. Das Doppelte lässt auch schräge Schnitte (Weg entlang der
+/// Linie = Sehnenhöhe / sin Schnittwinkel, bis etwa 25°) zu.
+const CHORD_DEVIATION: f64 = 0.05;
 /// Abtastpunkte für die Länge eines Stücks.
 const LENGTH_SAMPLES: usize = 16;
 
@@ -57,7 +63,7 @@ const LENGTH_SAMPLES: usize = 16;
 /// Fläche in einer Richtung geschlossen und deckt sie den ganzen Umlauf, gilt der volle Umlauf
 /// ab der Naht (Anfang der äußeren Schleife).
 pub fn iso_range(face: &FaceGeom) -> IsoRange {
-    range_of(face, &face_polys(face))
+    range_of(face, &aligned_polys(face, face_polys(face)))
 }
 
 /// Anteil 0–1 des Punkts `p` (auf der Fläche) am Bereich [`iso_range`] in der Richtung `dir`
@@ -102,7 +108,7 @@ pub fn iso_curves(
         return Err(ProjectError::NoHit);
     }
     let geom = face_geom(solid, found.face);
-    let polys = face_polys(&geom);
+    let polys = aligned_polys(&geom, face_polys(&geom));
     let range = range_of(&geom, &polys);
     let line = IsoLine::new(&geom, dir, range, value.clamp(0.0, 1.0));
     let over_time = || start.elapsed() > budget;
@@ -139,13 +145,50 @@ fn wrap(x: f64, period: Option<f64>) -> f64 {
     }
 }
 
-fn range_of(face: &FaceGeom, polys: &[Vec<DVec2>]) -> IsoRange {
-    let bounds = |pts: &mut dyn Iterator<Item = DVec2>| {
-        pts.fold(
-            (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
-            |(lo, hi), p| (lo.min(p), hi.max(p)),
-        )
+/// Hüllrechteck `(lo, hi)` von Punkten (leer: unendlich).
+fn bounds(pts: &mut dyn Iterator<Item = DVec2>) -> (DVec2, DVec2) {
+    pts.fold(
+        (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(p), hi.max(p)),
+    )
+}
+
+/// Legt die inneren Schleifen (Löcher) in die Periode der äußeren: Jede Schleife wird in den
+/// geschlossenen Richtungen um ganze Perioden so verschoben, dass die Mitte ihres Hüllrechtecks
+/// der Mitte der äußeren Hülle am nächsten liegt. Jede Schleife ist für sich ab `project`
+/// entfaltet (Winkel in (−π, π]); ohne das Verschieben kann ein Loch eine Periode neben der
+/// äußeren Schleife liegen und das Hüllrechteck aufblähen (Korrekturrunde 1, I1).
+fn aligned_polys(face: &FaceGeom, mut polys: Vec<Vec<DVec2>>) -> Vec<Vec<DVec2>> {
+    let Some(outer) = polys.first() else {
+        return polys;
     };
+    let (olo, ohi) = bounds(&mut outer.iter().copied());
+    if !(olo.is_finite() && ohi.is_finite()) {
+        return polys;
+    }
+    let mid = 0.5 * (olo + ohi);
+    let (pu, pv) = (face.surface.u_period(), face.surface.v_period());
+    for poly in polys.iter_mut().skip(1) {
+        let (lo, hi) = bounds(&mut poly.iter().copied());
+        if !(lo.is_finite() && hi.is_finite()) {
+            continue;
+        }
+        let c = 0.5 * (lo + hi);
+        let shift = |x: f64, to: f64, period: Option<f64>| {
+            period.map_or(0.0, |t| unwrap_near(x, to, t) - x)
+        };
+        let d = DVec2::new(shift(c.x, mid.x, pu), shift(c.y, mid.y, pv));
+        if d != DVec2::ZERO {
+            for p in poly.iter_mut() {
+                *p += d;
+            }
+        }
+    }
+    polys
+}
+
+/// Bereich aus den (mit [`aligned_polys`] ausgerichteten) Randpolygonen.
+fn range_of(face: &FaceGeom, polys: &[Vec<DVec2>]) -> IsoRange {
     let (mut lo, mut hi) = bounds(&mut polys.iter().flatten().copied());
     if !(lo.is_finite() && hi.is_finite()) {
         let r = face.domain;
@@ -154,8 +197,8 @@ fn range_of(face: &FaceGeom, polys: &[Vec<DVec2>]) -> IsoRange {
             v: r.map_or((0.0, 0.0), |r| (r.v0, r.v1)),
         };
     }
-    // Voller Umlauf ab der Naht: Anfang der äußeren Schleife (Löcher können über die Naht
-    // hinaus entfaltet sein).
+    // Voller Umlauf ab der Naht: Anfang der äußeren Schleife (ein Loch über der Naht kann
+    // auch nach dem Ausrichten etwas über sie hinausragen).
     let (outer_lo, _) = bounds(&mut polys[0].iter().copied());
     let full = |period: Option<f64>, lo: &mut f64, hi: &mut f64, start: f64| {
         if let Some(t) = period
@@ -229,18 +272,35 @@ impl<'a> IsoLine<'a> {
         over_time: &dyn Fn() -> bool,
     ) -> Result<Vec<(f64, f64)>, ProjectError> {
         let (a, b) = (self.a, self.b);
-        let mut cuts = vec![a, b];
-        for t in self.crossings(polys) {
+        let eps = 1e-12 * (b - a).abs().max(1.0);
+        // (Polygonwert, nachgeschärfter Wert) je Schnitt, nach dem Polygonwert geordnet;
+        // gleiche Polygonwerte (gemeinsame Ecken zweier Kanten) zählen einmal.
+        let mut found: Vec<(f64, f64)> = Vec::new();
+        for (t, chord) in self.crossings(polys) {
             if over_time() {
                 return Err(ProjectError::TooSlow);
             }
-            let t = self.refine(t);
+            found.push((t, self.refine(t, chord, tol)));
+        }
+        found.sort_by(|x, y| x.0.total_cmp(&y.0));
+        found.dedup_by(|x, y| (x.0 - y.0).abs() <= eps);
+        // Das Nachschärfen darf getrennte Schnitte nicht zusammenlegen oder vertauschen (sonst
+        // verschmölzen Stücke über ein Loch): Dann gelten für beide die Polygonwerte.
+        let mut refined: Vec<bool> = vec![true; found.len()];
+        for i in 1..found.len() {
+            if found[i].1 - found[i - 1].1 <= eps {
+                refined[i] = false;
+                refined[i - 1] = false;
+            }
+        }
+        let mut cuts = vec![a, b];
+        for (&(raw, sharp), ok) in found.iter().zip(&refined) {
+            let t = if *ok { sharp } else { raw };
             if t > a && t < b {
                 cuts.push(t);
             }
         }
         cuts.sort_by(f64::total_cmp);
-        let eps = 1e-12 * (b - a).abs().max(1.0);
         cuts.dedup_by(|x, y| (*x - *y).abs() <= eps);
         let mut spans: Vec<(f64, f64)> = Vec::new();
         for w in cuts.windows(2) {
@@ -275,8 +335,8 @@ impl<'a> IsoLine<'a> {
     }
 
     /// Schnitte der Linie mit den Randpolygonen (auch um eine Periode verschoben) als
-    /// Laufparameter, ungeordnet.
-    fn crossings(&self, polys: &[Vec<DVec2>]) -> Vec<f64> {
+    /// Laufparameter, ungeordnet, je mit der 3D-Länge der geschnittenen Polygonkante.
+    fn crossings(&self, polys: &[Vec<DVec2>]) -> Vec<(f64, f64)> {
         let s = &self.geom.surface;
         let shifts = |period: Option<f64>| match period {
             Some(t) => vec![-t, 0.0, t],
@@ -293,25 +353,30 @@ impl<'a> IsoLine<'a> {
                         let d = DVec2::new(*du, *dv);
                         let ((pf, pr), (qf, qr)) = (self.split(p + d), self.split(q + d));
                         let (sp, sq) = (pf - self.c, qf - self.c);
+                        let chord = || {
+                            let (a, b) = (p + d, q + d);
+                            s.point(a.x, a.y).distance(s.point(b.x, b.y))
+                        };
                         if sp == 0.0 && sq == 0.0 {
                             // Randstück entlang der Linie: beide Enden.
-                            out.push(pr);
-                            out.push(qr);
+                            out.push((pr, chord()));
+                            out.push((qr, chord()));
                         } else if (sp <= 0.0 && sq >= 0.0) || (sp >= 0.0 && sq <= 0.0) {
-                            out.push(pr + (qr - pr) * sp / (sp - sq));
+                            out.push((pr + (qr - pr) * sp / (sp - sq), chord()));
                         }
                     }
                 }
             }
         }
-        out.retain(|t| t.is_finite() && *t >= self.a && *t <= self.b);
+        out.retain(|(t, _)| t.is_finite() && *t >= self.a && *t <= self.b);
         out
     }
 
     /// Schärft den Schnitt beim Laufparameter `t` (aus dem Randpolygon) auf der nächsten echten
     /// Randkante nach: Halbieren über die feste Koordinate des Fußpunkts. Findet sich in der Nähe
-    /// kein Vorzeichenwechsel, bleibt `t`.
-    fn refine(&self, t: f64) -> f64 {
+    /// kein Vorzeichenwechsel oder liegt der neue Punkt weiter vom Polygonpunkt ab, als die
+    /// Abtastung der geschnittenen Polygonkante (3D-Länge `chord`) abweichen kann, bleibt `t`.
+    fn refine(&self, t: f64, chord: f64, tol: &Tolerance) -> f64 {
         let s = &self.geom.surface;
         let (u, v) = self.uv(t);
         let x = s.point(u, v);
@@ -371,8 +436,14 @@ impl<'a> IsoLine<'a> {
             IsoDirection::V => s.u_period(),
         };
         let run = period.map_or(run, |p| unwrap_near(run, t, p));
-        // Nur ein naher Treffer zählt (sonst war es eine andere Kante).
-        if run.is_finite() && (run - t).abs() <= REFINE_REACH * (self.b - self.a).abs() {
+        // Nur ein naher Treffer zählt (sonst war es eine andere Kante): höchstens die
+        // Sehnenabweichung der Abtastung (Korrekturrunde 1, M1).
+        if !run.is_finite() {
+            return t;
+        }
+        let (ru, rv) = self.uv(run);
+        let gap = s.point(ru, rv).distance(x);
+        if gap <= (chord * CHORD_DEVIATION).max(tol.linear) {
             run
         } else {
             t
