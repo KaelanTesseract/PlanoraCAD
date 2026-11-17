@@ -22,6 +22,7 @@ pub mod planes;
 pub mod recompute;
 pub mod refs;
 mod rollback;
+pub mod sketch_dxf;
 mod snapshot;
 mod step_bodies;
 pub mod surface_project;
@@ -73,6 +74,7 @@ pub use refs::{
     EdgeRef, FaceRef, RefCache, ResolvedEdge, ResolvedFace, face_probe_calls, first_face,
     resolve_edge, resolve_face,
 };
+pub use sketch_dxf::{SketchDxfError, SketchDxfOptions, sketch_dxf};
 pub use snapshot::{RestoreKind, Snapshot, SnapshotFeature, mesh_validations};
 pub use step_bodies::{
     MAX_STEP_TEXT_SUM_BYTES, NewStepBody, StepShape, StepShapeId, StepTextSumLimitGuard,

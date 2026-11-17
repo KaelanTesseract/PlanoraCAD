@@ -366,3 +366,77 @@ fn bad_input_is_refused() {
     );
     assert!(plain_dxf_string(&m).is_err());
 }
+
+/// Die Namen der LAYER-Tabelle in der Reihenfolge der Datei.
+fn layer_table_names(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.split("\r\n").collect();
+    let start = lines
+        .windows(2)
+        .position(|w| w[0].trim() == "2" && w[1] == "LAYER")
+        .expect("LAYER-Tabelle");
+    let mut names = Vec::new();
+    // Gruppencode und Wert wechseln sich ab.
+    let mut i = start + 2;
+    while i + 1 < lines.len() && lines[i + 1] != "ENDTAB" {
+        if lines[i].trim() == "2" {
+            names.push(lines[i + 1].to_string());
+        }
+        i += 2;
+    }
+    names
+}
+
+fn one_point(layers: Vec<PlainLayer>, layer: usize) -> PlainDxf {
+    PlainDxf {
+        unit: DxfUnit::Millimeter,
+        layers,
+        entities: vec![(layer, PlainEntity::Point(p(1.0, 2.0)))],
+    }
+}
+
+#[test]
+fn layer_color_outside_1_to_255_is_refused() {
+    for color in [-7, 0, 256, i16::MAX, i16::MIN] {
+        let m = one_point(
+            vec![PlainLayer {
+                name: "A".into(),
+                color,
+            }],
+            0,
+        );
+        match plain_dxf_string(&m) {
+            Err(DrawError::Unsupported(msg)) => {
+                assert_eq!(msg, planora_i18n::tr!("drawing-err-plain-color"), "{color}")
+            }
+            other => panic!("Farbe {color} sollte abgelehnt werden: {other:?}"),
+        }
+    }
+    // Die Grenzen selbst sind gültig.
+    for color in [1, 7, 255] {
+        let m = one_point(
+            vec![PlainLayer {
+                name: "A".into(),
+                color,
+            }],
+            0,
+        );
+        plain_dxf_string(&m).unwrap_or_else(|e| panic!("Farbe {color}: {e:?}"));
+    }
+}
+
+#[test]
+fn layer_zero_is_always_first_in_the_layer_table() {
+    // Der Aufrufer nennt „0“ erst an dritter Stelle.
+    let m = one_point(vec![layer("A"), layer("B"), layer("0")], 2);
+    let text = plain_dxf_string(&m).unwrap();
+    assert_eq!(layer_table_names(&text), ["0", "A", "B"]);
+    // Auch bei Groß-/Kleinschreibung eindeutig und ohne „0“ vorn ergänzt.
+    let m = one_point(vec![layer("A")], 0);
+    let text = plain_dxf_string(&m).unwrap();
+    assert_eq!(layer_table_names(&text), ["0", "A"]);
+    // Das Objekt auf der späten Ebene „0“ landet auch auf „0“.
+    let m = one_point(vec![layer("A"), layer("0")], 1);
+    let (_, imp) = read(&m);
+    let zero = imp.layers.iter().find(|l| l.name == "0").unwrap();
+    assert!(matches!(zero.elements[..], [Element2d::Point(_)]));
+}

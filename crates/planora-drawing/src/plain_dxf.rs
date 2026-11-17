@@ -93,6 +93,10 @@ pub fn plain_dxf_string(m: &PlainDxf) -> Result<String, DrawError> {
     if m.entities.iter().any(|(i, _)| *i >= m.layers.len()) {
         return Err(DrawError::Unsupported(tr!("drawing-err-plain-layer")));
     }
+    // Farbe 0 hieße BYBLOCK, eine negative „Ebene aus“: beides ist hier kein Wert.
+    if m.layers.iter().any(|l| !(1..=255).contains(&l.color)) {
+        return Err(DrawError::Unsupported(tr!("drawing-err-plain-color")));
+    }
     let (min, max) = extent(m)?;
 
     // Ebenen: „0“ gibt es immer (Block- und Rahmenebene); Namen eindeutig ohne Rücksicht auf
@@ -114,12 +118,17 @@ pub fn plain_dxf_string(m: &PlainDxf) -> Result<String, DrawError> {
         });
         unique
     };
+    // „0“ steht immer vorn in der Tabelle (wie beim Blatt): die erste Ebene des Aufrufers mit
+    // diesem Namen, sonst eine ergänzte; alle anderen folgen in ihrer Reihenfolge.
+    let zero = m.layers.iter().position(|l| layer_name(&l.name) == "0");
+    let zero_color = zero.map_or(7, |i| i64::from(m.layers[i].color));
+    spec("0".to_string(), zero_color, &mut seen);
     let mut names: Vec<String> = Vec::with_capacity(m.layers.len());
-    let has_zero = m.layers.iter().any(|l| layer_name(&l.name) == "0");
-    if !has_zero {
-        spec("0".to_string(), 7, &mut seen);
-    }
-    for l in &m.layers {
+    for (i, l) in m.layers.iter().enumerate() {
+        if Some(i) == zero {
+            names.push("0".to_string());
+            continue;
+        }
         let base = layer_name(&l.name);
         let base = if base.is_empty() {
             "_".to_string()
