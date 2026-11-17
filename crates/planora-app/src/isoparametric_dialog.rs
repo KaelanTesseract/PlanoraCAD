@@ -27,6 +27,9 @@ use planora_kernel::{Face, Id};
 use planora_math::{DVec3, Frame, TAU};
 use planora_sketch::helpers::Included;
 
+/// Ein Paar (Richtung, Anteil 0–1) einer Isokurve.
+pub type IsoPair = (IsoDirection, f64);
+
 /// Größte Anzahl bei „Verteilt“ (**Annahme**, in `offene-punkte.md`).
 pub const MAX_COUNT: u32 = 50;
 /// Abtastpunkte je Vorschaukurve.
@@ -53,14 +56,6 @@ impl IsoDirections {
             IsoDirections::Both => &[IsoDirection::U, IsoDirection::V],
         }
     }
-
-    /// Die Richtung, deren Anteil ein Punkt setzt (bei beiden U, **Annahme**).
-    fn of_point(self) -> IsoDirection {
-        match self {
-            IsoDirections::V => IsoDirection::V,
-            IsoDirections::U | IsoDirections::Both => IsoDirection::U,
-        }
-    }
 }
 
 /// Art der Lage.
@@ -69,7 +64,8 @@ pub enum IsoMode {
     /// „Einzeln“: eine Kurve bei der Entfernung.
     #[default]
     Single,
-    /// „Verteilt“: `count` Kurven gleichmäßig über den Bereich, ohne die Ränder.
+    /// „Verteilt“: `count` Kurven gleichmäßig über den Bereich, ohne die Ränder (in einer
+    /// geschlossenen Richtung mit gleichen Abständen rundum, keine auf der Naht).
     Distributed,
 }
 
@@ -81,9 +77,12 @@ pub enum IsoField {
     Point,
 }
 
-/// Die Anteile 0–1 der Kurven: bei „Einzeln“ `[distance]` (auf 0–1 begrenzt), bei „Verteilt“
-/// `k / (count + 1)` für `k = 1..=count` (`count` auf 1–[`MAX_COUNT`] begrenzt).
-pub fn iso_values(mode: IsoMode, distance: f64, count: u32) -> Vec<f64> {
+/// Die Anteile 0–1 der Kurven einer Richtung: bei „Einzeln“ `[distance]` (auf 0–1 begrenzt), bei
+/// „Verteilt“ in einer offenen Richtung `k / (count + 1)` für `k = 1..=count` (ohne die Ränder),
+/// in einer geschlossenen (`closed`: voller Umlauf mit Naht) `(k + 0,5) / count` für
+/// `k = 0..count` (gleiche Abstände rundum, keine Kurve auf der Naht; Entscheidung M4, **Annahme**
+/// zu Fusion). `count` wird auf 1–[`MAX_COUNT`] begrenzt.
+pub fn iso_values(mode: IsoMode, distance: f64, count: u32, closed: bool) -> Vec<f64> {
     match mode {
         IsoMode::Single => {
             let d = if distance.is_finite() { distance } else { 0.5 };
@@ -91,9 +90,30 @@ pub fn iso_values(mode: IsoMode, distance: f64, count: u32) -> Vec<f64> {
         }
         IsoMode::Distributed => {
             let n = count.clamp(1, MAX_COUNT);
-            (1..=n).map(|k| f64::from(k) / f64::from(n + 1)).collect()
+            if closed {
+                (0..n)
+                    .map(|k| (f64::from(k) + 0.5) / f64::from(n))
+                    .collect()
+            } else {
+                (1..=n).map(|k| f64::from(k) / f64::from(n + 1)).collect()
+            }
         }
     }
+}
+
+/// Ausdehnung ab diesem Bruchteil der Periode gilt als voller Umlauf (wie in
+/// `planora_feature::isoparametric`).
+const FULL_TURN: f64 = 1.0 - 1e-6;
+
+/// Ist die Richtung `dir` der Fläche `geom` geschlossen: Läuft ihr Anteil (bei `U` der u-Bereich)
+/// über den vollen Umlauf einer periodischen Richtung?
+fn closed(geom: &planora_kernel::boolean::FaceGeom, dir: IsoDirection) -> bool {
+    let range = planora_feature::isoparametric::iso_range(geom);
+    let ((lo, hi), period) = match dir {
+        IsoDirection::U => (range.u, geom.surface.u_period()),
+        IsoDirection::V => (range.v, geom.surface.v_period()),
+    };
+    period.is_some_and(|t| hi - lo >= t * FULL_TURN)
 }
 
 /// Der offene Dialog „Isoparametrische Kurve“ ([`SurfaceDialog::Iso`]).
@@ -113,8 +133,14 @@ pub struct IsoDialog {
     pub focus: IsoField,
     /// Der Klick der Fläche (Körper, Fläche), für die Hervorhebung und den Punkt.
     face_pick: Option<(usize, Id<Face>)>,
-    /// Der zuletzt gewählte Punkt (Welt).
-    point: Option<DVec3>,
+    /// Der zuletzt gewählte Punkt als Anteile `[u, v]` (beim Wählen mit
+    /// [`planora_feature::isoparametric::iso_value_at`] gerechnet). Bei „Einzeln“ bekommt jede
+    /// Richtung ihren Anteil daraus (die Kurven laufen durch den Punkt); ein getippter Wert in
+    /// „Entfernung“ nimmt ihn weg.
+    point: Option<[f64; 2]>,
+    /// Ist die Richtung `[U, V]` der gewählten Fläche geschlossen (voller Umlauf)? Beim Wählen
+    /// der Fläche gerechnet.
+    closed: [bool; 2],
     /// Meldung eines abgelehnten Klicks oder OKs.
     pub(crate) error: Option<Msg>,
     /// Ergebnis der Vorschau: Zahl der Stücke oder die Meldung; `None` ohne Fläche.
@@ -122,7 +148,7 @@ pub struct IsoDialog {
     /// Die Kurven der Vorschau als Linienzüge in Weltkoordinaten.
     lines: Vec<Vec<DVec3>>,
     /// Die zuletzt gerechneten Eingaben; die Vorschau rechnet nur neu, wenn sie sich ändern.
-    seen: Option<(Option<FaceRef>, IsoDirections, Vec<f64>)>,
+    seen: Option<(Option<FaceRef>, Vec<IsoPair>)>,
 }
 
 impl Default for IsoDialog {
@@ -137,6 +163,7 @@ impl Default for IsoDialog {
             focus: IsoField::Face,
             face_pick: None,
             point: None,
+            closed: [false; 2],
             error: None,
             preview: None,
             lines: Vec::new(),
@@ -204,15 +231,36 @@ impl IsoDialog {
         self.preview_count().is_some_and(|n| n > 0)
     }
 
-    /// Die Anteile der Kurven aus den Feldern.
-    pub fn values(&self) -> Vec<f64> {
-        iso_values(self.mode, self.distance, self.count)
+    /// Die Paare (Richtung, Anteil) der Kurven aus den Feldern. Bei „Einzeln“ mit Punkt hat jede
+    /// Richtung ihren Anteil aus dem Punkt, ohne Punkt gilt „Entfernung“ für alle Richtungen. Bei
+    /// „Verteilt“ zählt, ob die Richtung geschlossen ist ([`iso_values`]).
+    pub fn pairs(&self) -> Vec<IsoPair> {
+        let mut out = Vec::new();
+        for &dir in self.directions.list() {
+            let k = usize::from(dir == IsoDirection::V);
+            match (self.mode, self.point) {
+                (IsoMode::Single, Some(shares)) => out.push((dir, shares[k])),
+                _ => out.extend(
+                    iso_values(self.mode, self.distance, self.count, self.closed[k])
+                        .into_iter()
+                        .map(|v| (dir, v)),
+                ),
+            }
+        }
+        out
     }
 
-    /// Rechnet die Vorschau neu (mit der Rechnung des Anlegens).
+    /// Rechnet die Vorschau neu (mit der Rechnung des Anlegens). Mit Punkt zeigt „Entfernung“
+    /// danach den Anteil der ersten Richtung (bei einem Richtungswechsel neu gerechnet).
     pub fn refresh(&mut self, state: &AppState) {
-        let values = self.values();
-        self.seen = Some((self.face.clone(), self.directions, values.clone()));
+        let pairs = self.pairs();
+        if self.mode == IsoMode::Single
+            && self.point.is_some()
+            && let Some(&(_, v)) = pairs.first()
+        {
+            self.distance = v;
+        }
+        self.seen = Some((self.face.clone(), pairs.clone()));
         self.lines.clear();
         let Some(face) = self.face.clone() else {
             self.preview = None;
@@ -220,20 +268,18 @@ impl IsoDialog {
         };
         let frame = state.session_sketch().map(|sk| *sk.frame());
         let mut count = 0;
-        for &dir in self.directions.list() {
-            for &value in &values {
-                match state.iso_pieces(&face, dir, value) {
-                    Ok(pieces) => {
-                        count += pieces.len();
-                        if let Some(f) = frame {
-                            self.lines.extend(pieces.iter().map(|g| polyline(g, &f)));
-                        }
+        for &(dir, value) in &pairs {
+            match state.iso_pieces(&face, dir, value) {
+                Ok(pieces) => {
+                    count += pieces.len();
+                    if let Some(f) = frame {
+                        self.lines.extend(pieces.iter().map(|g| polyline(g, &f)));
                     }
-                    Err(m) => {
-                        self.lines.clear();
-                        self.preview = Some(Err(m));
-                        return;
-                    }
+                }
+                Err(m) => {
+                    self.lines.clear();
+                    self.preview = Some(Err(m));
+                    return;
                 }
             }
         }
@@ -248,13 +294,24 @@ impl IsoDialog {
     fn stale(&self) -> bool {
         self.seen
             .as_ref()
-            .is_none_or(|(f, d, v)| *f != self.face || *d != self.directions || *v != self.values())
+            .is_none_or(|(f, p)| *f != self.face || *p != self.pairs())
     }
 
-    /// Nimmt einen Klick für das Feld „Fläche“ (bei aktivem Feld „Punkt“ ebenso, ohne Punkt): nur
-    /// eine Körperfläche vor der offenen Skizze. Ein unpassender lässt die Felder, wie sie sind,
-    /// und hinterlässt einen Hinweis. `true`, wenn er passte.
+    /// Nimmt einen Klick ohne Punkt (aus [`crate::surface_project_dialog::deliver`]) in einem der
+    /// beiden Felder: Er wählt die Fläche (nur eine Körperfläche vor der offenen Skizze), nimmt
+    /// einen gesetzten Punkt weg und macht „Punkt“ zum aktiven Feld. Ein unpassender Klick lässt
+    /// die Felder, wie sie sind, und hinterlässt einen Hinweis. `true`, wenn er passte.
     pub fn take_pick(&mut self, state: &AppState, pick: IncludePick) -> bool {
+        if !self.set_face(state, pick) {
+            return false;
+        }
+        self.point = None;
+        self.refresh(state);
+        true
+    }
+
+    /// Setzt die Fläche aus dem Klick `pick`; `false` mit Hinweis, wenn er nicht passt.
+    fn set_face(&mut self, state: &AppState, pick: IncludePick) -> bool {
         let IncludePick::Face(body, face) = pick else {
             self.error = Some(crate::msg!("iso-pick-face"));
             return false;
@@ -270,35 +327,43 @@ impl IsoDialog {
                 return false;
             }
         };
+        let geom = state
+            .solid_before_sketch(body)
+            .ok()
+            .filter(|s| s.faces.get(face).is_some());
+        self.closed = geom.map_or([false; 2], |s| {
+            let g = planora_kernel::boolean::face_geom(&s, face);
+            [closed(&g, IsoDirection::U), closed(&g, IsoDirection::V)]
+        });
         self.face = Some(r);
         self.face_pick = Some((body, face));
-        self.point = None;
         self.focus = IsoField::Point;
         self.error = None;
-        self.refresh(state);
         true
     }
 
-    /// Nimmt einen Punkt `at` (Welt) auf der Fläche `face` des Körpers `body`: Er muss auf der
-    /// gewählten Fläche liegen und setzt die Entfernung in der Richtung des Punkts.
+    /// Nimmt einen Punkt `at` (Welt) auf der Fläche `face` des Körpers `body` (Feld „Punkt“):
+    /// Liegt er auf einer anderen Fläche, wird diese die Fläche (wie Fusion). Bei „Einzeln“
+    /// laufen die Kurven danach durch den Punkt. Ein Klick auf etwas, das keine Körperfläche vor
+    /// der Skizze ist, lässt die Felder, wie sie sind, und hinterlässt einen Hinweis.
     fn take_point(&mut self, state: &AppState, body: usize, face: Id<Face>, at: DVec3) -> bool {
-        if self.face_pick != Some((body, face)) {
-            self.error = Some(crate::msg!("iso-pick-point"));
+        if self.face_pick != Some((body, face))
+            && !self.set_face(state, IncludePick::Face(body, face))
+        {
             return false;
         }
-        let Ok(solid) = state.solid_before_sketch(body) else {
+        let Some(solid) = state
+            .solid_before_sketch(body)
+            .ok()
+            .filter(|s| s.faces.get(face).is_some())
+        else {
             self.error = Some(crate::msg!("iso-pick-point"));
             return false;
         };
-        if solid.faces.get(face).is_none() {
-            self.error = Some(crate::msg!("iso-pick-point"));
-            return false;
-        }
-        let geom = planora_kernel::boolean::face_geom(&solid, face);
-        let share =
-            planora_feature::isoparametric::iso_value_at(&geom, at, self.directions.of_point());
-        self.distance = share;
-        self.point = Some(at);
+        let g = planora_kernel::boolean::face_geom(&solid, face);
+        let share = |d| planora_feature::isoparametric::iso_value_at(&g, at, d);
+        self.point = Some([share(IsoDirection::U), share(IsoDirection::V)]);
+        self.focus = IsoField::Point;
         self.error = None;
         self.refresh(state);
         true
@@ -321,7 +386,8 @@ impl IsoDialog {
             self.error = Some(m);
             return Err(text);
         };
-        match state.add_isoparametric(face, self.directions.list(), &self.values(), self.linked) {
+        let pairs = self.pairs();
+        match state.add_isoparametric(face, &pairs, self.linked) {
             Ok(n) => {
                 self.error = None;
                 Ok(n)
@@ -417,6 +483,9 @@ impl IsoDialog {
                                 )
                                 .changed()
                                 {
+                                    // Ein getippter Wert gilt für alle Richtungen; der Punkt
+                                    // ist dann nicht mehr die Lage.
+                                    self.point = None;
                                     self.error = None;
                                 }
                             }

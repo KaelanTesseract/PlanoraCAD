@@ -4928,8 +4928,8 @@ impl AppState {
         })
     }
 
-    /// Fusion „Isoparametrische Kurve“ (Skizzen 11b, Spec 6): je Richtung aus `dirs` und Anteil
-    /// aus `values` die Kurven `u = const` bzw. `v = const` der Fläche `face`, gerechnet mit
+    /// Fusion „Isoparametrische Kurve“ (Skizzen 11b, Spec 6): je Paar (Richtung, Anteil) aus
+    /// `pairs` die Kurven `u = const` bzw. `v = const` der Fläche `face`, gerechnet mit
     /// [`planora_feature::isoparametric::iso_curves`] (wie die Neuberechnung). Mit `linked` ist
     /// jedes Paar eine violette Gruppe (`CopySource::Isoparametric`), sonst freie Kurven (ohne
     /// Fixierung, nur feste Splines behalten ihre Enden, ohne Eintrag in `copies`). Die Skizze
@@ -4939,11 +4939,10 @@ impl AppState {
     pub fn add_isoparametric(
         &mut self,
         face: planora_feature::FaceRef,
-        dirs: &[planora_feature::IsoDirection],
-        values: &[f64],
+        pairs: &[(planora_feature::IsoDirection, f64)],
         linked: bool,
     ) -> Result<usize, Msg> {
-        let r = self.try_isoparametric(face, dirs, values, linked);
+        let r = self.try_isoparametric(face, pairs, linked);
         if let Err(m) = &r
             && let Some(se) = self.sketch_session.as_mut()
         {
@@ -4955,22 +4954,19 @@ impl AppState {
     fn try_isoparametric(
         &mut self,
         face: planora_feature::FaceRef,
-        dirs: &[planora_feature::IsoDirection],
-        values: &[f64],
+        pairs: &[(planora_feature::IsoDirection, f64)],
         linked: bool,
     ) -> Result<usize, Msg> {
         let mut groups = Vec::new();
-        for &direction in dirs {
-            for &value in values {
-                let pieces = self.iso_pieces(&face, direction, value)?;
-                if !pieces.is_empty() {
-                    let source = CopySource::Isoparametric {
-                        face: face.clone(),
-                        direction,
-                        value,
-                    };
-                    groups.push((pieces, source));
-                }
+        for &(direction, value) in pairs {
+            let pieces = self.iso_pieces(&face, direction, value)?;
+            if !pieces.is_empty() {
+                let source = CopySource::Isoparametric {
+                    face: face.clone(),
+                    direction,
+                    value,
+                };
+                groups.push((pieces, source));
             }
         }
         if groups.is_empty() {

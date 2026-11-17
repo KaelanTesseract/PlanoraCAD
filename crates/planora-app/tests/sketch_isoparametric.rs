@@ -268,17 +268,26 @@ fn assert_free(sk: &Sketch) {
 
 #[test]
 fn iso_values_distributed_without_edges() {
-    let v = iso_values(IsoMode::Distributed, 0.9, 3);
+    // Offene Richtung: k / (count + 1), ohne die Ränder.
+    let v = iso_values(IsoMode::Distributed, 0.9, 3, false);
     assert_eq!(v.len(), 3);
     for (got, want) in v.iter().zip([0.25, 0.5, 0.75]) {
         assert!((got - want).abs() < 1e-12, "{v:?}");
     }
-    assert_eq!(iso_values(IsoMode::Single, 0.3, 7), vec![0.3]);
+    // Geschlossene Richtung (M4): (k + 0,5) / count, gleiche Abstände, keine auf der Naht.
+    let v = iso_values(IsoMode::Distributed, 0.9, 4, true);
+    assert_eq!(v.len(), 4);
+    for (got, want) in v.iter().zip([0.125, 0.375, 0.625, 0.875]) {
+        assert!((got - want).abs() < 1e-12, "{v:?}");
+    }
+    assert_eq!(iso_values(IsoMode::Single, 0.3, 7, false), vec![0.3]);
+    assert_eq!(iso_values(IsoMode::Single, 0.3, 7, true), vec![0.3]);
     // Grenzen: Entfernung 0–1, Anzahl 1–50.
-    assert_eq!(iso_values(IsoMode::Single, 1.7, 1), vec![1.0]);
-    assert_eq!(iso_values(IsoMode::Single, -0.2, 1), vec![0.0]);
-    assert_eq!(iso_values(IsoMode::Distributed, 0.5, 0), vec![0.5]);
-    assert_eq!(iso_values(IsoMode::Distributed, 0.5, 80).len(), 50);
+    assert_eq!(iso_values(IsoMode::Single, 1.7, 1, false), vec![1.0]);
+    assert_eq!(iso_values(IsoMode::Single, -0.2, 1, false), vec![0.0]);
+    assert_eq!(iso_values(IsoMode::Distributed, 0.5, 0, false), vec![0.5]);
+    assert_eq!(iso_values(IsoMode::Distributed, 0.5, 0, true), vec![0.5]);
+    assert_eq!(iso_values(IsoMode::Distributed, 0.5, 80, false).len(), 50);
 }
 
 #[test]
@@ -349,8 +358,13 @@ fn u_and_v_on_dome_one_step() {
             .collect();
         values.sort_by(f64::total_cmp);
         assert_eq!(values.len(), 3, "{dir:?}: {values:?}");
-        for (got, want) in values.iter().zip([0.25, 0.5, 0.75]) {
-            assert!((got - want).abs() < 1e-12);
+        // U läuft auf der Kappe ganz herum (geschlossen, M4), V vom Äquator zum Pol (offen).
+        let want = match dir {
+            IsoDirection::U => [1.0 / 6.0, 0.5, 5.0 / 6.0],
+            IsoDirection::V => [0.25, 0.5, 0.75],
+        };
+        for (got, want) in values.iter().zip(want) {
+            assert!((got - want).abs() < 1e-12, "{dir:?}: {values:?}");
         }
     }
     assert_eq!(draft(&s).copies.len(), curve_count(&s), "alles verknüpft");
@@ -394,14 +408,37 @@ fn point_sets_distance() {
         assert_eq!(d.mode, IsoMode::Single);
         assert!(d.ok_enabled(), "{:?}", d.error());
     }
-    // Ein Punkt auf einer anderen Fläche wird abgelehnt; die Lage bleibt, OK bleibt frei.
+    // Ein Punkt auf einer anderen Fläche wechselt die Fläche und setzt den Punkt (M5, wie
+    // Fusion); zurück auf den Mantel ebenso.
+    let mantle = dialog(&mut s).face.clone();
     let other = face(&s, bi, SurfaceKind::Plane);
     let IncludePick::Face(_, top) = other else {
         unreachable!()
     };
-    assert!(!planora_app::isoparametric_dialog::deliver_point(
+    assert!(planora_app::isoparametric_dialog::deliver_point(
         &mut s,
         body,
+        top,
+        DVec3::new(0.0, 0.0, 30.0)
+    ));
+    {
+        let d = dialog(&mut s);
+        assert_ne!(d.face, mantle, "Fläche gewechselt");
+        assert!(d.error().is_none());
+    }
+    assert!(planora_app::isoparametric_dialog::deliver_point(
+        &mut s, body, id, at
+    ));
+    {
+        let d = dialog(&mut s);
+        assert_eq!(d.face, mantle);
+        assert!((d.distance - 0.3).abs() < 1e-6);
+    }
+    // Ein Klick auf etwas, das keine Fläche vor der Skizze ist, wird abgelehnt: Die Lage bleibt,
+    // OK bleibt frei.
+    assert!(!planora_app::isoparametric_dialog::deliver_point(
+        &mut s,
+        99,
         top,
         DVec3::new(0.0, 0.0, 30.0)
     ));
@@ -649,4 +686,313 @@ fn dialog_has_dock_key() {
             "Count".to_string()
         )
     );
+}
+
+/// Abstand des Weltpunkts `p` von der Kurve `c` der Skizze (dichte Abtastung; reicht für Linie
+/// und Kreis).
+fn distance_to_curve(sk: &Sketch, c: planora_sketch::model::CurveId, p: DVec3) -> f64 {
+    let (k, t0, t1) = sk.curve_world(c).unwrap();
+    let n = 20_000;
+    (0..=n)
+        .map(|i| {
+            k.point(t0 + (t1 - t0) * f64::from(i) / f64::from(n))
+                .distance(p)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+#[test]
+fn both_directions_pass_through_the_point() {
+    let (mut s, bi) = cylinder_rig();
+    let f = face(&s, bi, SurfaceKind::Cylinder);
+    assert!(spd::deliver(&mut s, f.clone()));
+    let IncludePick::Face(body, id) = f else {
+        unreachable!()
+    };
+    dialog(&mut s).directions = IsoDirections::Both;
+    let a = 0.9_f64;
+    let at = DVec3::new(10.0 * a.cos(), 10.0 * a.sin(), 9.0);
+    assert!(planora_app::isoparametric_dialog::deliver_point(
+        &mut s, body, id, at
+    ));
+    assert!(dialog(&mut s).ok_enabled());
+    let mut screen = Screen::new(W, H);
+    assert_eq!(
+        frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]),
+        Some(DialogOutcome::Applied)
+    );
+    let curves: Vec<_> = sk(&s).curves().map(|(c, _)| c).collect();
+    assert_eq!(curves.len(), 2, "eine U-Linie und ein V-Kreis");
+    assert!(
+        sk(&s)
+            .curves()
+            .any(|(_, c)| matches!(c.kind, CurveKind::Line { .. }))
+    );
+    for c in curves {
+        let d = distance_to_curve(sk(&s), c, at);
+        assert!(d < 1e-3, "die Kurve geht durch den Punkt: Abstand {d}");
+    }
+    // Der v-Anteil kommt aus der Höhe des Punkts (9 von 30).
+    let v_share = draft(&s).copies.iter().find_map(|c| match c.source {
+        CopySource::Isoparametric {
+            direction: IsoDirection::V,
+            value,
+            ..
+        } => Some(value),
+        _ => None,
+    });
+    assert!((v_share.unwrap() - 0.3).abs() < 1e-6);
+}
+
+#[test]
+fn direction_change_recomputes_share() {
+    let (mut s, bi) = cylinder_rig();
+    let f = face(&s, bi, SurfaceKind::Cylinder);
+    assert!(spd::deliver(&mut s, f.clone()));
+    let IncludePick::Face(body, id) = f else {
+        unreachable!()
+    };
+    let at = DVec3::new(10.0 * 0.6, 10.0 * 0.8, 9.0);
+    assert!(planora_app::isoparametric_dialog::deliver_point(
+        &mut s, body, id, at
+    ));
+    let u_share = dialog(&mut s).distance;
+    assert!(
+        (u_share - 0.3).abs() > 1e-3,
+        "u-Anteil ist nicht der v-Anteil: {u_share}"
+    );
+    dialog(&mut s).directions = IsoDirections::V;
+    refresh(&mut s);
+    let v = dialog(&mut s).distance;
+    assert!((v - 0.3).abs() < 1e-6, "{v}");
+    dialog(&mut s).directions = IsoDirections::U;
+    refresh(&mut s);
+    assert!((dialog(&mut s).distance - u_share).abs() < 1e-9);
+}
+
+#[test]
+fn distributed_closed_and_open_directions() {
+    // Zylinder: U (um den Umfang, geschlossen) mit 4 gleichen Abständen, keine auf der Naht;
+    // V (über die Höhe, offen) ohne die Ränder.
+    let (mut s, bi) = cylinder_rig();
+    let f = face(&s, bi, SurfaceKind::Cylinder);
+    assert!(spd::deliver(&mut s, f));
+    {
+        let d = dialog(&mut s);
+        d.directions = IsoDirections::Both;
+        d.mode = IsoMode::Distributed;
+        d.count = 4;
+    }
+    refresh(&mut s);
+    let mut screen = Screen::new(W, H);
+    assert_eq!(
+        frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]),
+        Some(DialogOutcome::Applied)
+    );
+    let mut u = Vec::new();
+    let mut v = Vec::new();
+    for g in groups(&s) {
+        if let CopySource::Isoparametric {
+            direction, value, ..
+        } = g
+        {
+            match direction {
+                IsoDirection::U => u.push(value),
+                IsoDirection::V => v.push(value),
+            }
+        }
+    }
+    u.sort_by(f64::total_cmp);
+    v.sort_by(f64::total_cmp);
+    assert_eq!(u, vec![0.125, 0.375, 0.625, 0.875]);
+    assert_eq!(v, vec![0.2, 0.4, 0.6, 0.8]);
+    // Die U-Linien stehen im Abstand 90°.
+    let mut angles: Vec<f64> = sk(&s)
+        .curves()
+        .filter(|(_, c)| matches!(c.kind, CurveKind::Line { .. }))
+        .map(|(c, _)| {
+            let (k, t0, _) = sk(&s).curve_world(c).unwrap();
+            let p = k.point(t0);
+            p.y.atan2(p.x).rem_euclid(std::f64::consts::TAU)
+        })
+        .collect();
+    angles.sort_by(f64::total_cmp);
+    assert_eq!(angles.len(), 4);
+    for w in angles.windows(2) {
+        assert!(
+            (w[1] - w[0] - std::f64::consts::FRAC_PI_2).abs() < 1e-6,
+            "{angles:?}"
+        );
+    }
+}
+
+#[test]
+fn dome_u_distributed_unlinked_meets_at_the_pole() {
+    use planora_sketch::constraint::ConstraintKind;
+    let mut s = AppState::new();
+    let d = dome(&mut s);
+    open_new(&mut s, StandardPlane::XY);
+    let bi = body_index(&s, d);
+    choose(&mut s);
+    let f = face(&s, bi, SurfaceKind::Sphere);
+    assert!(spd::deliver(&mut s, f));
+    {
+        let d = dialog(&mut s);
+        d.directions = IsoDirections::U;
+        d.mode = IsoMode::Distributed;
+        d.count = 4;
+        d.linked = false;
+    }
+    refresh(&mut s);
+    let mut screen = Screen::new(W, H);
+    assert_eq!(
+        frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]),
+        Some(DialogOutcome::Applied)
+    );
+    s.observe_sketch(false);
+    assert_eq!(curve_count(&s), 4, "vier Meridiane");
+    assert!(draft(&s).copies.is_empty());
+    assert!(
+        !sk(&s)
+            .constraints()
+            .any(|(_, c)| c.kind.fixed_point().is_some()),
+        "keine Fixierung"
+    );
+    // Am Pol hängen die vier Enden zusammen.
+    let pole = DVec3::new(0.0, 0.0, 10.0);
+    let near = |p| sk(&s).point_xyz(p).is_ok_and(|q| q.distance(pole) < 1e-6);
+    let joins = sk(&s)
+        .constraints()
+        .filter(|(_, c)| matches!(c.kind, ConstraintKind::Coincident(a, b) if near(a) && near(b)))
+        .count();
+    assert_eq!(joins, 3, "drei Coincident binden die vier Pol-Enden");
+}
+
+#[test]
+fn relink_to_face_without_hit_keeps_source() {
+    // Isokurve V beim Anteil 1 (oberer Rand des Zylinders); als neue Fläche eine Kugel: dort ist
+    // v = 1 der Pol, kein Stück.
+    let mut s = AppState::new();
+    let a = cylinder(&mut s, 10.0, 30.0, DVec3::ZERO);
+    let k = s
+        .document
+        .add_feature(
+            "Kugel",
+            FeatureKind::Sphere {
+                radius: 5.0,
+                origin: DVec3::new(40.0, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    s.refresh();
+    let sketch = open_new(&mut s, StandardPlane::XY);
+    choose(&mut s);
+    let ai = body_index(&s, a);
+    let f = face(&s, ai, SurfaceKind::Cylinder);
+    assert!(spd::deliver(&mut s, f));
+    {
+        let d = dialog(&mut s);
+        d.directions = IsoDirections::V;
+        d.distance = 1.0;
+    }
+    refresh(&mut s);
+    assert!(dialog(&mut s).ok_enabled(), "{:?}", dialog(&mut s).error());
+    let mut screen = Screen::new(W, H);
+    assert_eq!(
+        frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]),
+        Some(DialogOutcome::Applied)
+    );
+    s.observe_sketch(false);
+    let target = draft(&s).copies[0].target;
+    let before = draft(&s).copies[0].source.clone();
+    s.start_relink(sketch, target).unwrap();
+    let ki = body_index(&s, k);
+    let IncludePick::Face(_, fk) = face(&s, ki, SurfaceKind::Sphere) else {
+        unreachable!()
+    };
+    let steps = undo_len(&s);
+    assert!(s.relink_pick(ProjectTarget::Face(ki, fk)).is_err());
+    let message = s
+        .sketch_session
+        .as_ref()
+        .unwrap()
+        .message
+        .as_ref()
+        .map(|m| m.text());
+    assert_eq!(message, Some(planora_i18n::tr!("lost-relink-failed")));
+    assert_eq!(draft(&s).copies[0].source, before, "die Herkunft bleibt");
+    assert_eq!(undo_len(&s), steps, "kein Schritt");
+    assert!(
+        s.sketch_session.as_ref().unwrap().relink.is_some(),
+        "die Wahl bleibt"
+    );
+}
+
+#[test]
+fn single_at_zero_and_one() {
+    // Offene Richtung (V am Zylinder): 0 und 1 sind die Randkreise unten und oben.
+    for (share, z) in [(0.0, 0.0), (1.0, 30.0)] {
+        let (mut s, bi) = cylinder_rig();
+        let f = face(&s, bi, SurfaceKind::Cylinder);
+        assert!(spd::deliver(&mut s, f));
+        {
+            let d = dialog(&mut s);
+            d.directions = IsoDirections::V;
+            d.distance = share;
+        }
+        refresh(&mut s);
+        assert!(dialog(&mut s).ok_enabled(), "{:?}", dialog(&mut s).error());
+        let mut screen = Screen::new(W, H);
+        frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]);
+        let (c, _) = sk(&s).curves().next().expect("Kurve");
+        let (k, t0, _) = sk(&s).curve_world(c).unwrap();
+        assert!((k.point(t0).z - z).abs() < 1e-6);
+    }
+    // Offene Richtung ohne Stück (V an der Kugel: 0 und 1 sind die Pole): OK gesperrt.
+    for share in [0.0, 1.0] {
+        let mut s = AppState::new();
+        let k = s
+            .document
+            .add_feature(
+                "Kugel",
+                FeatureKind::Sphere {
+                    radius: 5.0,
+                    origin: DVec3::ZERO,
+                },
+            )
+            .unwrap();
+        s.refresh();
+        open_new(&mut s, StandardPlane::XY);
+        let ki = body_index(&s, k);
+        choose(&mut s);
+        let f = face(&s, ki, SurfaceKind::Sphere);
+        assert!(spd::deliver(&mut s, f));
+        {
+            let d = dialog(&mut s);
+            d.directions = IsoDirections::V;
+            d.distance = share;
+        }
+        refresh(&mut s);
+        let d = dialog(&mut s);
+        assert!(!d.ok_enabled(), "Pol: kein Stück");
+        assert_eq!(d.error(), Some(planora_i18n::tr!("iso-no-hit")));
+    }
+    // Geschlossene Richtung (U am Zylinder): 0 und 1 sind beide die Linie auf der Naht.
+    let mut at = Vec::new();
+    for share in [0.0, 1.0] {
+        let (mut s, bi) = cylinder_rig();
+        let f = face(&s, bi, SurfaceKind::Cylinder);
+        assert!(spd::deliver(&mut s, f));
+        dialog(&mut s).distance = share;
+        refresh(&mut s);
+        assert!(dialog(&mut s).ok_enabled(), "{:?}", dialog(&mut s).error());
+        let mut screen = Screen::new(W, H);
+        frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]);
+        assert_eq!(curve_count(&s), 1);
+        let (c, _) = sk(&s).curves().next().unwrap();
+        let (k, t0, _) = sk(&s).curve_world(c).unwrap();
+        let p = k.point(t0);
+        at.push(DVec3::new(p.x, p.y, 0.0));
+    }
+    assert!(at[0].distance(at[1]) < 1e-6, "beide auf der Naht: {at:?}");
 }

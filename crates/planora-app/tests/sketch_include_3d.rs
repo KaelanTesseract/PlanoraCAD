@@ -337,6 +337,8 @@ fn include_kind_in_flyout_without_key() {
             ToolKind::ProjectToSurface,
             ToolKind::IntersectionCurve,
             ToolKind::SpunProfile,
+            // Skizzen 11b, Task 16: bewusst angepasst, „Isoparametrische Kurve“ steht dahinter.
+            ToolKind::Isoparametric,
         ]
     );
     assert_eq!(ToolKind::Include3d.tool(), Tool::ProjectEdge);
