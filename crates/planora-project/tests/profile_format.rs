@@ -56,6 +56,7 @@ fn add_sketch(d: &mut Document, name: &str, sketch: Sketch, plane: StandardPlane
             plane: SketchPlane::Standard(plane),
             copies: vec![],
             formulas: Default::default(),
+            text_formulas: Default::default(),
         }),
     )
     .unwrap()

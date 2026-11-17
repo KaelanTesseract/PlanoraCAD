@@ -152,6 +152,9 @@ pub(crate) fn source_pieces(
             intersection_curve(&view, p, ctx.tol, recompute_budget()),
             || CopySource::Intersection(p.with_hints(ctx.solids, ctx.tol)),
         ),
+        // Drehprofil und Isokurve rechnen erst ab Task 13 bzw. 15; bis dahin bleibt die Lage
+        // (Warnung wie bei einem verlorenen Bezug).
+        CopySource::SpunProfile(_) | CopySource::Isoparametric { .. } => Err(lost),
         CopySource::Edge(_) | CopySource::Section { .. } | CopySource::Silhouette { .. } => {
             Err(lost)
         }

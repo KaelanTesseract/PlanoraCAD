@@ -2721,6 +2721,7 @@ impl AppState {
             plane,
             copies: Vec::new(),
             formulas: Default::default(),
+            text_formulas: Default::default(),
         });
         self.add_checked(&label, kind)
     }
@@ -2745,6 +2746,7 @@ impl AppState {
             plane,
             copies: Vec::new(),
             formulas: Default::default(),
+            text_formulas: Default::default(),
         });
         let id = self.add_checked_named(name, kind, Formulas::new())?;
         // Nur ein Name aus dem Zähler zählt ihn weiter (ein Layername nicht).
@@ -4889,7 +4891,10 @@ pub fn relink_pickable(source: &CopySource) -> bool {
         | CopySource::Silhouette { .. }
         | CopySource::SketchCurve { .. } => true,
         CopySource::Include(r) => !matches!(r, IncludeRef::ConstructionPoint(_)),
-        CopySource::OnSurface(_) | CopySource::Intersection(_) => false,
+        CopySource::OnSurface(_)
+        | CopySource::Intersection(_)
+        | CopySource::SpunProfile(_)
+        | CopySource::Isoparametric { .. } => false,
     }
 }
 

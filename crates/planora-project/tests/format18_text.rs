@@ -103,6 +103,7 @@ fn document(sketch: Sketch) -> Document {
             plane: SketchPlane::Standard(StandardPlane::XY),
             copies: vec![],
             formulas: Default::default(),
+            text_formulas: Default::default(),
         }),
     )
     .unwrap();
@@ -130,7 +131,7 @@ fn edited(f: impl FnOnce(&mut serde_json::Value)) -> String {
 
 #[test]
 fn format_version_is_18() {
-    assert_eq!(FORMAT_VERSION, 21);
+    assert_eq!(FORMAT_VERSION, 22);
 }
 
 #[test]
@@ -328,10 +329,10 @@ fn format_17_file_with_text_rejected() {
 }
 
 #[test]
-fn format_21_is_too_new() {
-    let text = encoded().replacen("\"format\": 18", "\"format\": 22", 1);
+fn format_23_is_too_new() {
+    let text = encoded().replacen("\"format\": 18", "\"format\": 23", 1);
     let e = decode_version(&text, "x.json").unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 22, .. }), "{e:?}");
+    assert!(matches!(e, ProjectError::TooNew { found: 23, .. }), "{e:?}");
 }
 
 /// Verdirbt den ersten Texteintrag einer Datei.

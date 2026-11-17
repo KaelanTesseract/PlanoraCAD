@@ -29,6 +29,7 @@ fn sketch_feature(sk: Sketch) -> FeatureKind {
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
         formulas: Default::default(),
+        text_formulas: Default::default(),
     })
 }
 
@@ -120,6 +121,7 @@ fn a_sketch_on_a_face_follows_the_body() {
                 plane: SketchPlane::OnFace(face),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -221,6 +223,7 @@ fn a_lost_face_is_reported_at_its_feature_and_dependents_are_skipped() {
                 plane: SketchPlane::OnFace(face),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -296,6 +299,7 @@ fn copied_body_edges_follow_a_resized_body() {
                     source: planora_feature::CopySource::Edge(edge),
                 }],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -343,6 +347,7 @@ fn deleting_an_extrusion_removes_the_sketch_on_its_face_and_the_extrusion_on_it(
                 plane: SketchPlane::OnFace(face),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

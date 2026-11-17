@@ -58,6 +58,7 @@ fn rect_sketch(w: f64, h: f64) -> SketchFeature {
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
         formulas: Default::default(),
+        text_formulas: Default::default(),
     }
 }
 

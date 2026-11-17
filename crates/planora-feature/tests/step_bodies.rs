@@ -401,6 +401,7 @@ fn works_like_any_exact_body() {
                 plane: SketchPlane::OnFace(face_ref(&rounded, "STEP-Fläche 2")),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

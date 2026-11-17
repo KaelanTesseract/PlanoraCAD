@@ -124,6 +124,7 @@ fn rig(n: usize) -> Rig {
                 plane: XY,
                 copies,
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -394,6 +395,7 @@ fn lost_vertices() -> (
                 plane: XY,
                 copies,
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

@@ -35,6 +35,7 @@ fn sketch_on(plane: SketchPlane, sketch: Sketch, copies: Vec<EdgeCopy>) -> Featu
         plane,
         copies,
         formulas: Default::default(),
+        text_formulas: Default::default(),
     })
 }
 

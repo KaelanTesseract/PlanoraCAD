@@ -87,6 +87,7 @@ fn on_xy(sketch: Sketch, formulas: SketchFormulas) -> SketchFeature {
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
         formulas,
+        text_formulas: Default::default(),
     }
 }
 

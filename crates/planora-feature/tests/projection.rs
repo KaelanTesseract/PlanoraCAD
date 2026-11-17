@@ -33,6 +33,7 @@ fn sketch_kind(sketch: Sketch, plane: StandardPlane, copies: Vec<EdgeCopy>) -> F
         plane: SketchPlane::Standard(plane),
         copies,
         formulas: Default::default(),
+        text_formulas: Default::default(),
     })
 }
 
@@ -666,6 +667,7 @@ fn oblique_arc_projection_follows_without_warning() {
                 plane: SketchPlane::OnPlane(p),
                 copies: vec![edge_copy(curve, edge)],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -994,6 +996,7 @@ fn cone_section_sketch(
                     source: CopySource::Section { face, index: 0 },
                 }],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

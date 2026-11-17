@@ -35,6 +35,7 @@ fn delete_in_draft(se: &mut SketchSession, sk: &mut Sketch) {
         plane: planora_feature::SketchPlane::Standard(planora_app::state::StandardPlane::XY),
         copies: Vec::new(),
         formulas: Default::default(),
+        text_formulas: Default::default(),
     };
     se.delete_selection_in(&mut sf);
     *sk = sf.sketch;
@@ -902,6 +903,7 @@ fn sides_field_is_a_whole_number_from_three_to_sixty_four() {
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: Vec::new(),
         formulas: Default::default(),
+        text_formulas: Default::default(),
     };
     assert_eq!(se.kind_stage(), 2);
     assert_eq!(se.input.sides, Some(8));

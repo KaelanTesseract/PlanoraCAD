@@ -102,6 +102,7 @@ fn snapshot_with(drawings: Vec<Drawing>, next_drawing: u64) -> Snapshot {
         next_param: 1,
         rollbacks: Vec::new(),
         dissolved_patterns: 0,
+        sketch_groups: Default::default(),
     }
 }
 

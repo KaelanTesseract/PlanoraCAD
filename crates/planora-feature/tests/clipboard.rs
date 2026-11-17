@@ -22,6 +22,7 @@ fn empty_on(plane: StandardPlane) -> SketchFeature {
         plane: SketchPlane::Standard(plane),
         copies: Vec::new(),
         formulas: Default::default(),
+        text_formulas: Default::default(),
     }
 }
 
@@ -431,6 +432,7 @@ fn fixed_spline_3d() -> SketchFeature {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: Vec::new(),
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

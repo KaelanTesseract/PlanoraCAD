@@ -11,6 +11,7 @@ pub mod expr;
 pub mod formulas;
 pub mod georef;
 mod include;
+pub mod isoparametric;
 mod meshes;
 pub mod model;
 mod ops;
@@ -23,9 +24,12 @@ pub mod recompute;
 pub mod refs;
 mod rollback;
 pub mod sketch_dxf;
+pub mod sketch_groups;
 mod snapshot;
+pub mod spun_profile;
 mod step_bodies;
 pub mod surface_project;
+pub mod text_refs;
 mod visibility;
 
 pub use canvas::{
@@ -55,13 +59,14 @@ pub use georef::{
     geo_ref_for_face_cached, resolve_geo, resolve_geo_cached, to_edge_ref, to_face_ref,
 };
 pub use include::{included_pieces, sketch_curve_points};
+pub use isoparametric::IsoDirection;
 pub use meshes::VisibleMesh;
 pub use model::{
     AxisId, BlendArt, BodyRef, CopySource, CopyTarget, Document, EdgeCopy, Feature, FeatureId,
     FeatureKind, FeatureStatus, IncludeRef, MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE,
     MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, MeshId, PlaneId, PointRefId, ProfileSel,
-    ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane, VertexRef,
-    include_plane_half, mesh_locked, sketch_source_allowed,
+    ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane, TextFormulas,
+    VertexRef, include_plane_half, mesh_locked, sketch_source_allowed,
 };
 pub use ops::{delete_lost_targets, relink_copies};
 pub use params::{ParamEdit, ParamId, ParamScope, Parameter};
@@ -75,6 +80,7 @@ pub use refs::{
     resolve_edge, resolve_face,
 };
 pub use sketch_dxf::{SketchDxfError, SketchDxfOptions, sketch_dxf};
+pub use sketch_groups::{SketchGroup, SketchGroupId, SketchGroups};
 pub use snapshot::{RestoreKind, Snapshot, SnapshotFeature, mesh_validations};
 pub use step_bodies::{
     MAX_STEP_TEXT_SUM_BYTES, NewStepBody, StepShape, StepShapeId, StepTextSumLimitGuard,
@@ -83,8 +89,10 @@ pub use step_bodies::{
 };
 // `ProjectError` bleibt im Modul (`surface_project::ProjectError`), damit es nicht mit
 // `planora_project::ProjectError` in Glob-Imports zusammenstößt.
+pub use spun_profile::{SpunAxis, SpunSelection, SpunSpec};
 pub use surface_project::{
     CurveSource, DocView, FaceTarget, IntersectTarget, IntersectionSpec, MAX_SURFACE_SAMPLES,
     ProjectType, SURFACE_PROJECT_BUDGET, SurfaceProjection, intersection_curve, project_to_surface,
 };
+pub use text_refs::has_param_ref;
 pub use visibility::{HiddenFolders, Visibility};

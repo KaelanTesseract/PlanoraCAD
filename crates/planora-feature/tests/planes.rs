@@ -185,6 +185,7 @@ fn angle_about_sketch_line_uses_sketch_plane() {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -323,6 +324,7 @@ fn collinear_points_error() {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -498,6 +500,7 @@ fn deleting_plane_lists_dependents() {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

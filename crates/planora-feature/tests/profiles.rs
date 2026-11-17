@@ -25,6 +25,7 @@ fn sketch_feature(sk: Sketch) -> FeatureKind {
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
         formulas: Default::default(),
+        text_formulas: Default::default(),
     })
 }
 

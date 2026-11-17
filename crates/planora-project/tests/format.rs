@@ -83,6 +83,7 @@ fn full_document() -> Document {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -228,6 +229,7 @@ fn profile_refs_are_written_as_the_old_number_or_as_references() {
                     plane: SketchPlane::Standard(StandardPlane::XY),
                     copies: vec![],
                     formulas: Default::default(),
+                    text_formulas: Default::default(),
                 }),
             )
             .unwrap();

@@ -195,6 +195,7 @@ fn intersect_freeform_reports_and_creates_nothing() {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

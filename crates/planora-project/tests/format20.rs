@@ -27,6 +27,7 @@ fn document(sketch: Sketch) -> Document {
             plane: SketchPlane::Standard(StandardPlane::XY),
             copies: vec![],
             formulas: Default::default(),
+            text_formulas: Default::default(),
         }),
     )
     .unwrap();
@@ -680,6 +681,7 @@ fn format20_piece_and_new_sources_roundtrip() {
                 plane: SketchPlane::Standard(StandardPlane::XZ),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -786,6 +788,7 @@ fn format20_piece_and_new_sources_roundtrip() {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies,
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -851,6 +854,7 @@ fn old_copy_sources_bytes_unchanged() {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: copies[..n].to_vec(),
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -890,6 +894,7 @@ fn new_copy_fields_need_format_20_and_one_target() {
                 of: 1,
             }],
             formulas: Default::default(),
+            text_formulas: Default::default(),
         }),
     )
     .unwrap();

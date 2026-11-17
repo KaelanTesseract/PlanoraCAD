@@ -25,6 +25,7 @@ pub fn rect_sketch(w: f64, h: f64) -> SketchFeature {
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
         formulas: Default::default(),
+        text_formulas: Default::default(),
     }
 }
 
@@ -201,6 +202,7 @@ fn revolve_from_a_sketch_axis() {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -415,6 +417,7 @@ fn determined_rect() -> SketchFeature {
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
         formulas: Default::default(),
+        text_formulas: Default::default(),
     }
 }
 

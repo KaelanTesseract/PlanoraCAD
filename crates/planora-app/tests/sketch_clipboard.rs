@@ -618,6 +618,7 @@ fn clip_with_fixed_spline() -> planora_feature::FeatureClip {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: Vec::new(),
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -641,6 +642,7 @@ fn clip_with_fixed_spline() -> planora_feature::FeatureClip {
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: Vec::new(),
         formulas: Default::default(),
+        text_formulas: Default::default(),
     };
     sf.sketch
         .add_projected_curve(

@@ -38,6 +38,7 @@ fn add_sketch(d: &mut Document, sk: Sketch) -> FeatureId {
             plane: SketchPlane::Standard(StandardPlane::XY),
             copies: vec![],
             formulas: Default::default(),
+            text_formulas: Default::default(),
         }),
     )
     .unwrap()
@@ -521,6 +522,7 @@ fn add_sketch_on(d: &mut Document, sk: Sketch, plane: StandardPlane) -> FeatureI
             plane: SketchPlane::Standard(plane),
             copies: vec![],
             formulas: Default::default(),
+            text_formulas: Default::default(),
         }),
     )
     .unwrap()
@@ -755,6 +757,7 @@ fn recompute_doc(
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies,
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -1055,6 +1058,7 @@ fn recompute_curve_and_vertex_projection_follows_as_one_group() {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies,
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
