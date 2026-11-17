@@ -372,6 +372,13 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 state.open_lost_projections(id);
             }
         }
+        Action::SketchSaveAsDxf => {
+            // Für die gewählte Skizze (Baum, Verlaufsleiste oder offene Skizze); ändert nichts.
+            let state = &mut ws.active_tab_mut().state;
+            if let Some(id) = state.open_sketch_id().or(state.selected_feature) {
+                state.open_sketch_dxf(id);
+            }
+        }
         Action::SketchToggleCurvature => {
             crate::curvature_dialog::toggle(&mut ws.active_tab_mut().state);
         }

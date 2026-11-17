@@ -352,6 +352,8 @@ pub struct AppState {
     /// Offener Dialog „Verlorene Projektionen verwalten“ (Skizzen 11a); bleibt über das Öffnen
     /// der Skizze für „Neu verknüpfen“ offen.
     pub lost_dialog: Option<crate::lost_projections_dialog::LostProjectionsDialog>,
+    /// Offener Dialog „Als DXF speichern“ einer Skizze (Skizzen 11b); ändert das Dokument nie.
+    pub sketch_dxf_dialog: Option<crate::sketch_dxf_dialog::SketchDxfDialog>,
     /// Hervorhebungsliste der Ansicht (Task H3): was die Felder des offenen Dialogs
     /// [`AppState::surface_dialog`] gewählt haben. Flächen sind getönt, Kanten, Ecken, Achsen,
     /// Ebenen und Kurven fertiger Skizzen stehen in der Auswahlfarbe. Setzen nur über
@@ -767,6 +769,7 @@ impl AppState {
             surface_dialog: None,
             curvature_dialog: None,
             lost_dialog: None,
+            sketch_dxf_dialog: None,
             dialog_marks: Vec::new(),
             pending_delete_dimension: None,
             document_name: tr!("state-unnamed"),
@@ -1280,6 +1283,7 @@ impl AppState {
         self.surface_dialog = None;
         self.curvature_dialog = None;
         self.lost_dialog = None;
+        self.sketch_dxf_dialog = None;
         self.dialog_marks.clear();
         self.dimension_tool = crate::dimension_tool::DimensionTool::default();
         self.balloon_tool = crate::balloon_tool::BalloonTool::default();

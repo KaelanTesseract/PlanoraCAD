@@ -1656,6 +1656,7 @@ pub fn show_file_dialogs(ctx: &egui::Context, ws: &mut Workspace) {
     {
         tab.canvas_dialog = Some(dialog);
     }
+    crate::sketch_dxf_dialog::show_open(ctx, &mut tab.state, &mut exchange_dir, &mut places);
     tab.state.insert_dialog_open = tab.dxf_dialog.is_some() || tab.svg_dialog.is_some();
     ws.exchange_dir = exchange_dir;
     ws.save_places(places);
@@ -1670,6 +1671,7 @@ fn file_window_open(ws: &Workspace) -> bool {
         || tab.dxf_dialog.is_some()
         || tab.svg_dialog.is_some()
         || tab.canvas_dialog.is_some()
+        || tab.state.sketch_dxf_dialog.is_some()
 }
 
 /// P10: schließt die Dateifenster des aktiven Tabs für Projekte oder Einstellungen. Ein
@@ -1687,6 +1689,7 @@ fn close_file_windows(ws: &mut Workspace) -> bool {
         return false;
     }
     tab.export_dialog = None;
+    tab.state.sketch_dxf_dialog = None;
     tab.import_dialog = None;
     tab.step_import_dialog = None;
     if tab.dxf_dialog.take().is_some() {

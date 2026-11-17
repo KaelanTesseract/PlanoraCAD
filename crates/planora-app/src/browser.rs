@@ -509,6 +509,8 @@ enum Action {
     RedefinePlane(FeatureId),
     /// „Verlorene Projektionen verwalten“ dieser Skizze (Skizzen 11a).
     ManageLostProjections(FeatureId),
+    /// „Als DXF speichern“ dieser Skizze (Skizzen 11b); ändert das Dokument nicht.
+    SaveAsDxf(FeatureId),
     /// „Kalibrieren“ dieser Leinwand (Klickmodus in der Ansicht).
     Calibrate(FeatureId),
 }
@@ -1466,6 +1468,14 @@ fn feature_menu(
         if ui.add(redefine).clicked() {
             pick(action, Action::RedefinePlane(id), ui);
         }
+        // Schreibt nur eine Datei, ändert nichts (Skizzen 11b); nicht gesperrt.
+        let save_dxf = key_button(
+            &tr!("tree-save-as-dxf"),
+            crate::keymap::Action::SketchSaveAsDxf,
+        );
+        if ui.add(save_dxf).clicked() {
+            pick(action, Action::SaveAsDxf(id), ui);
+        }
         // Nur an Skizzen mit verlorenen Projektionen (Skizzen 11a).
         if lost {
             let manage = key_button(
@@ -1785,6 +1795,9 @@ fn run(state: &mut AppState, action: Action) {
         }
         Action::ManageLostProjections(id) => {
             state.open_lost_projections(id);
+        }
+        Action::SaveAsDxf(id) => {
+            state.open_sketch_dxf(id);
         }
         // Fehler (offene Skizze, ausgeblendet) stehen in der Meldung.
         Action::Calibrate(id) => {

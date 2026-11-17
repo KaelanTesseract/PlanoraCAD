@@ -61,6 +61,8 @@ pub const DIALOG_KEYS: &[&str] = &[
     "curvature_display",
     // Verlorene Projektionen verwalten (Skizzen 11a)
     "lost_projections",
+    // Skizze als DXF speichern (Skizzen 11b)
+    "sketch_dxf",
     // Baum und Zeichnung
     "tree_rename",
     "tree_delete",

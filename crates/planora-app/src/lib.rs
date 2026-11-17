@@ -69,6 +69,7 @@ pub mod sketch_cursor;
 pub mod sketch_dimension;
 pub mod sketch_drag3;
 pub mod sketch_draw3;
+pub mod sketch_dxf_dialog;
 pub mod sketch_grips;
 pub mod sketch_handles;
 pub mod sketch_inline;

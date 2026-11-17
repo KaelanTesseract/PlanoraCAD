@@ -97,6 +97,8 @@ action_table! {
     /// Vorgabetaste wie in Fusion, belegbar.
     ManageLostProjections, "modell.verlorene_projektionen", "action-manage-lost-projections",
         Model, [];
+    /// Fusion „Als DXF speichern“ (Skizzen 11b) für die gewählte Skizze; ohne Vorbelegung, belegbar.
+    SketchSaveAsDxf, "modell.skizze_als_dxf", "action-sketch-save-as-dxf", Model, [];
     /// Öffnet das Fenster „Tastenkürzel“ mit aktivem Suchfeld (Fusion „Shortcuts“); wie
     /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
     ShowShortcuts, "ansicht.tastenkuerzel", "action-show-shortcuts", Model, [key(Key::S)];
