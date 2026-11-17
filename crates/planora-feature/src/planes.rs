@@ -238,7 +238,7 @@ pub fn compute_plane(
 
 /// Achse als Punkt, Einheitsrichtung und Normale der Bezugsebene durch die Achse (Kante: erste
 /// angrenzende ebene Fläche, X/Y: XY, Z: XZ, Skizzenlinie: Skizzenebene).
-fn resolve_axis(
+pub(crate) fn resolve_axis(
     doc: &Document,
     axis: &AxisRef,
     solids: &[&Solid],

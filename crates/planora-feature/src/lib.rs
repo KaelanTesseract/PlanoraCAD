@@ -89,7 +89,7 @@ pub use step_bodies::{
 };
 // `ProjectError` bleibt im Modul (`surface_project::ProjectError`), damit es nicht mit
 // `planora_project::ProjectError` in Glob-Imports zusammenstößt.
-pub use spun_profile::{SpunAxis, SpunSelection, SpunSpec};
+pub use spun_profile::{SpunAxis, SpunError, SpunSelection, SpunSpec, spun_profile};
 pub use surface_project::{
     CurveSource, DocView, FaceTarget, IntersectTarget, IntersectionSpec, MAX_SURFACE_SAMPLES,
     ProjectType, SURFACE_PROJECT_BUDGET, SurfaceProjection, intersection_curve, project_to_surface,

@@ -86,7 +86,8 @@ pub fn sketch_curve_points(
         frame,
         tol: &tol,
     };
-    let (_, pieces) = source_pieces(&ctx, &CopySource::SketchCurve { sketch, curve }, true).ok()?;
+    let (_, pieces) =
+        source_pieces(&ctx, &CopySource::SketchCurve { sketch, curve }, true, None).ok()?;
     pieces
         .into_iter()
         .map(|p| match p {
@@ -106,7 +107,8 @@ pub(crate) enum Unfollowed {
 }
 
 /// Rechnet die Stücke der Herkunft `source` neu (nur die Arten aus Skizzen 10) und liefert die
-/// Herkunft mit nachgeführten Hinweispunkten. `points` heißt: Die Ziele der Gruppe sind Punkte
+/// Herkunft mit nachgeführten Hinweispunkten. `own` ist die Skizze selbst (für die eigene Achse
+/// eines Drehprofils). `points` heißt: Die Ziele der Gruppe sind Punkte
 /// (bei einer Skizzenkurve als Quelle: Schneiden statt Projizieren). „Auf Fläche projizieren“ und
 /// „Schnittkurve“ rechnen mit der Zeitgrenze der Neuberechnung; trifft nichts mehr, sind es null
 /// Stücke (also eine andere Stückzahl).
@@ -114,6 +116,7 @@ pub(crate) fn source_pieces(
     ctx: &IncludeCtx<'_>,
     source: &CopySource,
     points: bool,
+    own: Option<&Sketch>,
 ) -> Result<(CopySource, Vec<Piece>), Unfollowed> {
     use crate::surface_project::{intersection_curve, project_to_surface, recompute_budget};
     let view = crate::surface_project::DocView::new(ctx.doc, ctx.idx, *ctx.frame);
@@ -152,12 +155,45 @@ pub(crate) fn source_pieces(
             intersection_curve(&view, p, ctx.tol, recompute_budget()),
             || CopySource::Intersection(p.with_hints(ctx.solids, ctx.tol)),
         ),
-        // Drehprofil und Isokurve rechnen erst ab Task 13 bzw. 15; bis dahin bleibt die Lage
-        // (Warnung wie bei einem verlorenen Bezug).
-        CopySource::SpunProfile(_) | CopySource::Isoparametric { .. } => Err(lost),
+        // Drehprofil: Stücke neu wie bei „Auf Fläche projizieren“. Ergibt die geänderte Quelle
+        // keinen Drehkörper mehr (oder liegt die Achse nicht mehr passend), ist das ein
+        // verlorener Bezug (Warnung, die Kurven bleiben), kein Fehler.
+        CopySource::SpunProfile(p) => {
+            use crate::spun_profile::{SpunAxis, SpunError, spun_profile};
+            let own_axis = match &p.axis {
+                SpunAxis::Own(c) => Some(own_axis(own, *c).ok_or(lost)?),
+                SpunAxis::Ref(_) => None,
+            };
+            match spun_profile(&view, p, own_axis, ctx.tol) {
+                Ok(g) => Ok((source.clone(), g.into_iter().map(Piece::Include).collect())),
+                Err(SpunError::Nothing) => Ok((source.clone(), Vec::new())),
+                Err(SpunError::Lost | SpunError::NotRevolved | SpunError::AxisNotInPlane) => {
+                    Err(lost)
+                }
+            }
+        }
+        // Die Isokurve rechnet erst ab Task 15; bis dahin bleibt die Lage (Warnung wie bei einem
+        // verlorenen Bezug).
+        CopySource::Isoparametric { .. } => Err(lost),
         CopySource::Edge(_) | CopySource::Section { .. } | CopySource::Silhouette { .. } => {
             Err(lost)
         }
+    }
+}
+
+/// Punkt und Richtung (Welt) der Linie `c` der eigenen Skizze `own` als Achse eines Drehprofils;
+/// `None`, wenn die Kurve fehlt (gelöscht) oder keine Linie ist (Prüfauftrag aus Task 7).
+fn own_axis(own: Option<&Sketch>, c: planora_sketch::CurveId) -> Option<(DVec3, DVec3)> {
+    let sk = own?;
+    if !matches!(
+        sk.curve(c)?.kind,
+        planora_sketch::model::CurveKind::Line { .. }
+    ) {
+        return None;
+    }
+    match sk.curve_world(c)? {
+        (Curve::Line { origin, dir }, _, _) => Some((origin, dir)),
+        _ => None,
     }
 }
 

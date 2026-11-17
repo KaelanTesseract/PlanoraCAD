@@ -1006,7 +1006,7 @@ fn follow_copies(
             .map(|&j| (sf.copies[j].piece as usize + 1).max(sf.copies[j].of as usize))
             .max()
             .unwrap_or(0);
-        match crate::include::source_pieces(ctx, &c.source, points) {
+        match crate::include::source_pieces(ctx, &c.source, points, Some(&*sketch)) {
             Err(why) => {
                 for &j in &group {
                     restore_copy(sketch, &sf.copies[j], previous);
