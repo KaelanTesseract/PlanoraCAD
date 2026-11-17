@@ -2210,6 +2210,7 @@ state-patterns-dissolved-on-load = { $n ->
 ## Math error messages
 math-subcurve-range = the sub-range ({ $u0 }, { $u1 }) is not inside the curve ({ $a }, { $b }) or is empty
 math-knot-outside = the knot { $u } is not inside the range ({ $a }, { $b })
+math-iso-outside = the parameter { $t } is outside the range [{ $a }, { $b }]
 math-knot-multiplicity = inserting the knot { $u } { $r } times (currently { $s } times) would give a multiplicity above the degree { $p }
 math-sweep-finite = start angle and sweep angle must be finite
 math-extend-rational = only non-rational curves can be extended

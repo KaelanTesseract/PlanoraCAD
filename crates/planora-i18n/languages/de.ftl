@@ -2193,6 +2193,7 @@ state-patterns-dissolved-on-load = { $n ->
 ## Fehlermeldungen der Mathematik
 math-subcurve-range = der Teilbereich ({ $u0 }, { $u1 }) liegt nicht in der Kurve ({ $a }, { $b }) oder ist leer
 math-knot-outside = der Knoten { $u } liegt nicht im Inneren des Bereichs ({ $a }, { $b })
+math-iso-outside = der Parameter { $t } liegt außerhalb des Bereichs [{ $a }, { $b }]
 math-knot-multiplicity = { $r }-faches Einfügen des Knotens { $u } (bisher { $s }-fach) ergäbe eine Vielfachheit über dem Grad { $p }
 math-sweep-finite = Anfangswinkel und Öffnungswinkel müssen endlich sein
 math-extend-rational = Verlängern geht nur bei nicht rationalen Kurven

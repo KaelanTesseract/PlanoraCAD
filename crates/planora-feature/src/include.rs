@@ -172,9 +172,28 @@ pub(crate) fn source_pieces(
                 }
             }
         }
-        // Die Isokurve rechnet erst ab Task 15; bis dahin bleibt die Lage (Warnung wie bei einem
-        // verlorenen Bezug).
-        CopySource::Isoparametric { .. } => Err(lost),
+        // Isokurve: Stücke neu wie bei „Auf Fläche projizieren“ (Gruppe, Zeitgrenze, kein Stück
+        // = null Stücke); eine verlorene Fläche ist eine Warnung, die Kurven bleiben.
+        CopySource::Isoparametric {
+            face,
+            direction,
+            value,
+        } => surface_pieces(
+            source,
+            crate::isoparametric::iso_curves(
+                &view,
+                face,
+                *direction,
+                *value,
+                ctx.tol,
+                recompute_budget(),
+            ),
+            || CopySource::Isoparametric {
+                face: crate::surface_project::face_hinted(ctx.solids, face, ctx.tol),
+                direction: *direction,
+                value: *value,
+            },
+        ),
         CopySource::Edge(_) | CopySource::Section { .. } | CopySource::Silhouette { .. } => {
             Err(lost)
         }
