@@ -3005,3 +3005,13 @@ Spec `specs/2026-11-15-skizzen-pruefen-design.md`, Plan `plans/2026-11-15-skizze
 - **„Neu verknüpfen“ an einer geschlossenen Skizze (Schlussprüfung M-10):** Der Befehl öffnet die Skizze, um die neue Quelle zu wählen. Nach Esc oder Abbruch bleibt sie offen, statt wieder zu schließen. Am Dokument ändert sich nichts. Besser wäre: nach dem Abbruch schließen, wenn der Dialog sie geöffnet hat.
 - **Übergangskurve: Meldung und Enter (Schlussprüfung M-11):** Taugt eine Kurve nicht als Quelle (3D-Kurve in einer 2D-Skizze, Text, geschlossene Kurve), kommt die Meldung erst beim Klick, nicht schon am Zeiger, wie die Spec es sagt. Enter setzt die erste Wahl nicht zurück (`blend.first` bleibt stehen).
 - **Getippter Z-Abstand der Mittelpunktlinie in 3D (Schlussprüfung M-12):** Bei der Mittelpunktlinie in einer 3D-Skizze wird ein getippter Z-Abstand still verworfen: Er wird nur zum Maß, wenn die Linie am ersten Klick beginnt, und das tut die Mittelpunktlinie nicht (der erste Klick ist die Mitte). Es erscheint keine Meldung.
+
+## Teilprojekt Skizzen 11b (Übernehmen und Ordnen)
+
+Spec `specs/2026-11-17-skizzen-uebernehmen-design.md`, Plan `plans/2026-11-17-skizzen-uebernehmen.md`.
+
+- **Task 1, Zwischenablage im Modell (`planora-sketch/src/clipboard.rs`):**
+  - **Annahme:** Die Kopie ist frei: `Fixed`/`Fixed3` fallen beim Kopieren weg, wie bei Verschieben/Kopieren (`copy_transformed`).
+  - **Abweichung davon (nötig):** Die Enden eines festen Splines bleiben fest. Ein lebender fester Spline ohne `Fixed` an beiden Enden ist im Modell ungültig (`from_data`: „Ein fester Spline hat ungültige Daten“), und die Vorgabe „feste Splines bleiben feste Splines“ geht nur so. Folge für Task 3: Das Verschieben nach dem Einfügen sperrt, sobald ein fester Spline dabei ist (`FixedInSet`); dann bleibt die Kopie an der Quelllage stehen.
+  - **Festlegung:** Die Auswahl wächst wie beim Verschieben (`transform_set`: Hilfsgeometrie, deren Bindungen ganz in der Auswahl liegen, Spline-Griffe, ganze Texte). Muster werden zu gewöhnlicher Geometrie (Musterwerte und Musterdaten gehen nicht mit).
+  - **Festlegung:** Eingefügte Texte sind „noch nicht gesetzt“, ihre Kurven stehen wie in der Quelle; gesetzt werden sie beim nächsten Neusetzen.

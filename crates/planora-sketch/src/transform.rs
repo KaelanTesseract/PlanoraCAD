@@ -230,7 +230,7 @@ pub struct CopyMap {
 }
 
 /// Die Abhängigkeit mit abgebildeten Punkten und Kurven.
-fn map_ids(
+pub(crate) fn map_ids(
     kind: &ConstraintKind,
     p: impl Fn(PointId) -> PointId,
     c: impl Fn(CurveId) -> CurveId,
@@ -674,7 +674,7 @@ impl Sketch {
 
     /// Die Texte, die mit der Menge gehen: deren Buchstaben oder Rahmenlinien darin liegen (über
     /// `transform_set` dann alle ihre Kurven).
-    fn texts_in_set(&self, set: &TransformSet) -> Vec<TextId> {
+    pub(crate) fn texts_in_set(&self, set: &TransformSet) -> Vec<TextId> {
         if self.texts.is_empty() {
             return Vec::new();
         }
@@ -691,7 +691,7 @@ impl Sketch {
 
     /// Ist unter `texts` ein Text auf Pfad, dessen Pfad nicht in der Menge ist? Er folgt seinem
     /// Pfad und geht nicht allein (Spec E).
-    fn text_off_its_path(&self, set: &TransformSet, texts: &[TextId]) -> bool {
+    pub(crate) fn text_off_its_path(&self, set: &TransformSet, texts: &[TextId]) -> bool {
         texts.iter().any(|&t| {
             matches!(self.texts[t].placement, TextPlacement::Path { path, .. }
                 if !set.curves.contains(&path))
