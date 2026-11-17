@@ -2564,6 +2564,7 @@ feature-value-angle = Winkel ergibt { $value }°, er muss zwischen 1° und 179°
 feature-value-dimension = Ein Maß ergibt { $value }{ $suffix }: { $reason }
 feature-formula-in-field = { $name }, { $field }: { $msg }
 feature-formula-in-dim = { $name }: { $msg }
+feature-formula-in-text-height = Formel der Texthöhe: { $msg }
 feature-field-width = Breite
 feature-field-depth = Tiefe
 feature-param-replace-blocked = Parameter „{ $name }“ lässt sich nicht durch den Wert ersetzen: „{ $feature }“ hat gerade einen Fehler. Beheben Sie zuerst den Fehler.

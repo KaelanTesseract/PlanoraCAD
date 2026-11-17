@@ -2581,6 +2581,7 @@ feature-value-angle = Angle gives { $value }°, it must be between 1° and 179°
 feature-value-dimension = A dimension gives { $value }{ $suffix }: { $reason }
 feature-formula-in-field = { $name }, { $field }: { $msg }
 feature-formula-in-dim = { $name }: { $msg }
+feature-formula-in-text-height = Formula of the text height: { $msg }
 feature-field-width = Width
 feature-field-depth = Depth
 feature-param-replace-blocked = Parameter "{ $name }" cannot be replaced by its value: "{ $feature }" currently has an error. Fix the error first.

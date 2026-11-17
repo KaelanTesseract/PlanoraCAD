@@ -12,6 +12,7 @@
 //!   (Parameter vorhanden), sonst bleibt der Wert (Spec-Entscheidung 3). Nie ein Eintrag in
 //!   `copies`. Bei einem Fehler bleibt die Skizze unverändert.
 
+use crate::expr::ParamUnit;
 use crate::formulas::constraint_unit;
 use crate::model::{CopyTarget, SketchFeature};
 use crate::params::ParamScope;
@@ -20,6 +21,7 @@ use planora_sketch::clipboard::ClipSet;
 use planora_sketch::constraint::ConstraintId;
 use planora_sketch::error::SketchError;
 use planora_sketch::model::Sketch;
+use planora_sketch::text::TextId;
 use planora_sketch::transform::{CopyMap, Rigid3, TransformSet};
 use std::collections::HashSet;
 
@@ -27,10 +29,12 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClipSlot {
     Dim(ConstraintId),
+    /// Die Höhe eines Textes (Skizzen 11b, Texthöhe als Formel).
+    TextHeight(TextId),
 }
 
-/// Eine Formel in der Ablage mit dem Wert, den das Maß beim Kopieren hatte (gespeichert, bei
-/// Winkeln im Bogenmaß).
+/// Eine Formel in der Ablage mit dem Wert, den das Maß (bzw. die Texthöhe) beim Kopieren hatte
+/// (gespeichert, bei Winkeln im Bogenmaß).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClipFormula {
     pub slot: ClipSlot,
@@ -98,6 +102,19 @@ pub fn copy_selection(
             value,
         });
     }
+    for (id, text) in &sf.text_formulas {
+        let Some(&clip_id) = ex.map.texts.get(id) else {
+            continue;
+        };
+        let Some(value) = ex.clip.text(clip_id).map(|t| t.height) else {
+            continue;
+        };
+        formulas.push(ClipFormula {
+            slot: ClipSlot::TextHeight(clip_id),
+            text: text.clone(),
+            value,
+        });
+    }
     Ok(FeatureClip {
         sketch: ex.clip,
         frame: *frame,
@@ -153,7 +170,26 @@ pub fn paste_clip(
     let mut formulas_dropped = 0;
     let mut seen: HashSet<ConstraintId> = HashSet::new();
     for f in &clip.formulas {
-        let ClipSlot::Dim(clip_id) = f.slot;
+        let clip_id = match f.slot {
+            ClipSlot::Dim(clip_id) => clip_id,
+            ClipSlot::TextHeight(clip_text) => {
+                // Dieselbe Regel wie bei Maßen: Rechnet die Formel im Ziel nicht (Parameter
+                // fehlt), bleibt nur der Wert, und die Meldung zählt es.
+                let ok = map.texts.get(&clip_text).copied().filter(|&t| {
+                    work.sketch.text(t).is_some()
+                        && scope
+                            .eval(&f.text, ParamUnit::Length)
+                            .is_ok_and(|v| v.is_finite() && v > work.sketch.tolerance().linear)
+                });
+                match ok {
+                    Some(t) => {
+                        work.text_formulas.insert(t, f.text.clone());
+                    }
+                    None => formulas_dropped += 1,
+                }
+                continue;
+            }
+        };
         let Some(&id) = map.constraints.get(&clip_id) else {
             formulas_dropped += 1;
             continue;

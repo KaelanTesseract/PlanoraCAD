@@ -1579,3 +1579,133 @@ fn a_radius_formula_steps_from_the_geometry_before_the_refit() {
     assert!((got.radius(ids.arc).unwrap() - 8.0).abs() < 1e-6);
     assert!(!planora_sketch::shapes::folded_over(&base, got));
 }
+
+// ---- Texthöhe als Formel (Skizzen 11b, Task 10) ----
+
+use planora_sketch::TextId;
+use planora_sketch::text::{HAlign, TextParams, VAlign};
+use planora_sketch::text_shape::{TextShaper, TextStyle};
+use planora_text::FontLibrary;
+use std::sync::Arc;
+
+/// Parameter H = 10; Skizze mit dem Text „Ho“ (Höhe 5, Formel „H/2“) im Rahmen (0, 0)–(60, 30).
+fn text_doc(formula: &str) -> (Document, ParamId, FeatureId, TextId) {
+    let lib = FontLibrary::bundled_only();
+    let style = TextStyle {
+        font: "Montserrat".into(),
+        bold: false,
+        italic: false,
+        spacing: 0.0,
+    };
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let t = sk
+        .add_text_box(
+            DVec2::new(0.0, 0.0),
+            DVec2::new(60.0, 30.0),
+            TextParams {
+                content: "Ho".into(),
+                style: style.clone(),
+                height: 5.0,
+                flip_h: false,
+                flip_v: false,
+            },
+            HAlign::Left,
+            VAlign::Bottom,
+            Arc::new(lib.shape("Ho", &style).unwrap()),
+        )
+        .unwrap();
+    let mut d = Document::new();
+    let h = d.add_parameter("H", "10", Length, "").unwrap();
+    let mut sf = on_xy(sk, Default::default());
+    sf.text_formulas.insert(t, formula.into());
+    let s = d.add_feature("Skizze 1", FeatureKind::Sketch(sf)).unwrap();
+    d.check_invariants().unwrap();
+    (d, h, s, t)
+}
+
+fn text_box(d: &Document, s: FeatureId, t: TextId) -> (f64, Vec<planora_sketch::PointId>, DVec2) {
+    let sk = d.sketch_of(s).expect("berechnete Skizze");
+    let data = sk.text(t).unwrap();
+    let pts: Vec<DVec2> = data
+        .points
+        .iter()
+        .map(|&p| sk.point_xy(p).unwrap())
+        .collect();
+    let lo = pts
+        .iter()
+        .fold(DVec2::splat(f64::INFINITY), |a, p| a.min(*p));
+    let hi = pts
+        .iter()
+        .fold(DVec2::splat(f64::NEG_INFINITY), |a, p| a.max(*p));
+    (data.height, data.points.clone(), hi - lo)
+}
+
+#[test]
+fn text_height_follows_parameter() {
+    let (mut d, h, s, t) = text_doc("H/2");
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    let (height, points, size) = text_box(&d, s, t);
+    assert_eq!(height, 5.0);
+    let curves = d.sketch_of(s).unwrap().text(t).unwrap().curves.clone();
+    let report = d.set_parameter(h, edit(&d, h, "20")).unwrap();
+    assert!(report.computed.contains(&s), "{report:?}");
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    let (height2, points2, size2) = text_box(&d, s, t);
+    assert_eq!(height2, 10.0);
+    assert_eq!(points2, points, "gleiche Ids");
+    assert_eq!(
+        d.sketch_of(s).unwrap().text(t).unwrap().curves,
+        curves,
+        "gleiche Kurven"
+    );
+    assert!((size2.y - 2.0 * size.y).abs() <= 1e-6, "{size:?} {size2:?}");
+    assert!((size2.x - 2.0 * size.x).abs() <= 1e-6, "{size:?} {size2:?}");
+    assert_eq!(sketch_feature(&d, s).text_formulas[&t], "H/2");
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn text_height_formula_renamed_with_param() {
+    let (mut d, h, s, t) = text_doc("H/2");
+    assert_eq!(d.parameter_users(h), vec!["Skizze 1".to_string()]);
+    let mut e = edit(&d, h, "10");
+    e.name = "Hoehe".into();
+    d.set_parameter(h, e).unwrap();
+    assert_eq!(sketch_feature(&d, s).text_formulas[&t], "Hoehe/2");
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    assert_eq!(text_box(&d, s, t).0, 5.0);
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn bad_text_height_formula_is_issue() {
+    let (mut d, h, s, t) = text_doc("H-30");
+    // Mit H = 10 ergibt die Formel −20: Fehlerstatus, die Höhe bleibt bei 5.
+    // (Anlegen nimmt eine Formel mit unzulässigem Ergebnis an, wie bei Maßen.)
+    let msg = error_text(&d, s);
+    assert_eq!(
+        msg,
+        planora_i18n::tr!(
+            "feature-formula-in-text-height",
+            msg = planora_i18n::tr!("sketch-text-height")
+        )
+    );
+    assert_eq!(
+        sketch_feature(&d, s).sketch.text(t).unwrap().height,
+        5.0,
+        "alte Höhe"
+    );
+    d.set_parameter(h, edit(&d, h, "40")).unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    assert_eq!(text_box(&d, s, t).0, 10.0);
+    // Eine Formel, die sich nicht auswerten lässt, lehnt das Setzen ab.
+    let before = d.snapshot();
+    let bad = d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            sf.text_formulas.insert(t, "H+".into());
+        }
+    });
+    assert!(matches!(bad, Err(FeatureError::Formula(_))), "{bad:?}");
+    assert!(d.snapshot().same_content(&before));
+    d.check_invariants().unwrap();
+}

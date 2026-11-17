@@ -1272,6 +1272,37 @@ impl Sketch {
         d.shaped = ShapedCache::set(shape);
     }
 
+    /// Setzt die Höhe des Textes `t` auf `h` mm (Skizzen 11b, Texthöhe als Formel): wie die Höhe in
+    /// [`Sketch::edit_text_box`] und [`Sketch::edit_text`] werden die Kurven der Reihe nach
+    /// wiederverwendet, der Rahmen bleibt. Eine Höhe, die nicht endlich oder nicht größer als die
+    /// Toleranz ist, lehnt die Skizze wie die Prüfung der Werte ab; ein gleicher Wert ändert nichts,
+    /// auch nicht den Stand. Ein Text, der noch nicht gesetzt ist (nach dem Laden), bekommt nur den
+    /// Wert; [`Sketch::reshape_texts`] setzt ihn danach. Bei einem Fehler bleibt die Skizze
+    /// unverändert.
+    pub fn set_text_height(&mut self, t: TextId, h: f64) -> Result<(), SketchError> {
+        let d = self.text(t).ok_or(SketchError::UnknownObject)?;
+        if !(h.is_finite() && h > self.tol.linear) {
+            return Err(SketchError::InvalidInput(tr!("sketch-text-height")));
+        }
+        if d.height == h {
+            return Ok(());
+        }
+        let before = d.clone();
+        let shape = before.shaped.shape.clone();
+        self.texts[t].height = h;
+        let Some(shape) = shape else {
+            self.touch_structure();
+            return Ok(());
+        };
+        let Some(placed) = self.placed_contours(t, &shape) else {
+            self.texts[t] = before;
+            return Err(out_of_range());
+        };
+        self.touch_structure();
+        self.sync_text(t, &placed);
+        Ok(())
+    }
+
     /// Der Winkel eines Textes im Rahmen (Spec C5): die Richtung der Grundlinie von Ecke 0 nach
     /// Ecke 1 im Bogenmaß, in `(−π, π]`. `None` für Text auf Pfad, einen unbekannten Text und
     /// solange die Grundlinie keine Länge hat.

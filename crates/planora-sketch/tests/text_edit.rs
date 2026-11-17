@@ -793,3 +793,87 @@ fn angle_with_length_and_outside_distance_follows() {
     assert!((s.text_angle(t).unwrap() - 0.5).abs() <= 1e-9);
     assert!((at(&s, corners[0]).distance(at(&s, corners[1])) - 40.0).abs() <= 1e-9);
 }
+
+/// Texthöhe als Wert (Skizzen 11b, Task 10): Die Kurven werden der Reihe nach wiederverwendet,
+/// die Glyphen wachsen mit der Höhe, der Rahmen bleibt.
+#[test]
+fn set_text_height_reuses_curves() {
+    let mut s = sketch();
+    let t = text(&mut s, "ab");
+    let (curves, points, before) = (glyph_curves(&s, t), glyph_points(&s, t), positions(&s, t));
+    let frame_before = frame(&s, t);
+    let (lo0, hi0) = bbox(&before);
+    s.set_text_height(t, 10.0).unwrap();
+    assert_eq!(glyph_curves(&s, t), curves, "gleiche Kurven");
+    assert_eq!(glyph_points(&s, t), points, "gleiche Punkte");
+    assert_eq!(frame(&s, t), frame_before, "der Rahmen bleibt");
+    assert_eq!(s.text(t).unwrap().height, 10.0);
+    let (lo1, hi1) = bbox(&positions(&s, t));
+    assert!(
+        ((hi1 - lo1).x - 2.0 * (hi0 - lo0).x).abs() <= 1e-9,
+        "doppelt so breit"
+    );
+    assert!(
+        ((hi1 - lo1).y - 2.0 * (hi0 - lo0).y).abs() <= 1e-9,
+        "doppelt so hoch"
+    );
+    // Wie edit_text mit der neuen Höhe.
+    let mut other = sketch();
+    let u = text(&mut other, "ab");
+    let mut p = params("ab");
+    p.height = 10.0;
+    other
+        .edit_text(
+            u,
+            p.clone(),
+            TextKindEdit::Box {
+                h: HAlign::Left,
+                v: VAlign::Bottom,
+            },
+            shape_of(&p),
+        )
+        .unwrap();
+    assert_eq!(positions(&s, t), positions(&other, u), "wie edit_text");
+    // Ungültige Höhen lehnt sie ab, ohne etwas zu ändern.
+    let (data, rev) = (s.to_data(), s.revision());
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        says(
+            s.set_text_height(t, bad),
+            tr!("sketch-text-height"),
+            "ungültige Höhe",
+        );
+        unchanged(&s, &data, rev, "ungültige Höhe");
+    }
+}
+
+#[test]
+fn set_text_height_same_value_keeps_revision() {
+    let mut s = sketch();
+    let t = text(&mut s, "ab");
+    let rev = s.revision();
+    s.set_text_height(t, 5.0).unwrap();
+    assert_eq!(s.revision(), rev, "gleicher Wert: kein neuer Stand");
+    s.set_text_height(t, 6.0).unwrap();
+    assert_ne!(s.revision(), rev, "anderer Wert: neuer Stand");
+}
+
+/// Ein geladener, noch nicht gesetzter Text bekommt nur den Wert; das Neusetzen setzt ihn.
+#[test]
+fn set_text_height_on_unset_text_only_stores_value() {
+    let mut s = sketch();
+    let t = text(&mut s, "ab");
+    let mut loaded = Sketch::from_data(s.to_data()).unwrap();
+    let before = positions(&loaded, t);
+    loaded.set_text_height(t, 10.0).unwrap();
+    assert_eq!(loaded.text(t).unwrap().height, 10.0);
+    assert_eq!(
+        positions(&loaded, t),
+        before,
+        "Kurven bleiben bis zum Neusetzen"
+    );
+    loaded.reshape_texts(&BoxShaper);
+    let mut want = sketch();
+    let u = text(&mut want, "ab");
+    want.set_text_height(u, 10.0).unwrap();
+    assert_eq!(positions(&loaded, t), positions(&want, u));
+}
