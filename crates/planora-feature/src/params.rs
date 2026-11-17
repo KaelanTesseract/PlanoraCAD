@@ -278,8 +278,8 @@ impl Document {
         self.apply_table(table, self.next_param, features, renamed)
     }
 
-    /// Löscht einen Parameter; gesperrt, solange eine Formel ihn nennt
-    /// ([`FeatureError::ParameterInUse`]).
+    /// Löscht einen Parameter; gesperrt, solange eine Formel oder ein Skizzentext (`{Name}`) ihn
+    /// nennt ([`FeatureError::ParameterInUse`]).
     pub fn remove_parameter(&mut self, id: ParamId) -> Result<(), FeatureError> {
         let idx = self.param_index(id)?;
         let users = self.parameter_users(id);
@@ -346,7 +346,8 @@ impl Document {
     }
 
     /// Wo der Parameter direkt benutzt wird, für Meldungen: zuerst die Namen der Features, deren
-    /// Formeln ihn nennen (Zeitleistenreihenfolge), dann „Parameter {name}“ je Parameter, dessen
+    /// Formeln ihn nennen oder in deren Skizzentexten `{Name}` steht (Skizzen 11b, Korrektur K2a;
+    /// Zeitleistenreihenfolge), dann „Parameter {name}“ je Parameter, dessen
     /// Formel ihn nennt (Tabellenreihenfolge). Leer bei unbekannter Kennung.
     pub fn parameter_users(&self, id: ParamId) -> Vec<String> {
         let Some(me) = self.parameter(id) else {
@@ -355,7 +356,11 @@ impl Document {
         let features = self
             .features
             .iter()
-            .filter(|f| mentions(&f.kind, &f.formulas, &me.name))
+            .filter(|f| {
+                mentions(&f.kind, &f.formulas, &me.name)
+                    || matches!(&f.kind, FeatureKind::Sketch(sf)
+                        if text_refs::sketch_mentions(&sf.sketch, &me.name))
+            })
             .map(|f| f.name.clone());
         let params = self
             .parameters

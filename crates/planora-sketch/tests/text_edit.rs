@@ -877,3 +877,150 @@ fn set_text_height_on_unset_text_only_stores_value() {
     want.set_text_height(u, 10.0).unwrap();
     assert_eq!(positions(&loaded, t), positions(&want, u));
 }
+
+// ---- Skizzen 11b, Korrektur K2c (Handtest 2): Rahmen wächst mit dem Text ----------------------
+
+/// Toleranz für „Glyphen im Rahmen“ (mm).
+const FIT_TOL: f64 = 1e-6;
+
+/// Liegen alle Punkte der Glyphen (samt Kontrollpunkten) im Rechteck des Rahmens? Gemessen in
+/// der Basis der Grundlinie (Ecke 0 → 1) und der Senkrechten links davon.
+fn glyphs_inside(s: &Sketch, t: TextId) -> bool {
+    let (_, corners) = frame(s, t);
+    let c = corners.map(|p| at(s, p));
+    let u = (c[1] - c[0]).normalize();
+    let n = u.perp();
+    let w = (c[1] - c[0]).length();
+    let h = (c[3] - c[0]).dot(n);
+    positions(s, t).iter().all(|&q| {
+        let x = (q - c[0]).dot(u);
+        let y = (q - c[0]).dot(n);
+        x >= -FIT_TOL && x <= w + FIT_TOL && y >= -FIT_TOL && y <= h + FIT_TOL
+    })
+}
+
+fn corner_positions(s: &Sketch, t: TextId) -> [DVec2; 4] {
+    frame(s, t).1.map(|p| at(s, p))
+}
+
+fn near2(a: DVec2, b: DVec2) -> bool {
+    (a - b).length() < 1e-6
+}
+
+/// Ändert nur den Inhalt (Rahmen bleibt Rahmen, Ausrichtung `h`/`v`).
+fn edit_content(s: &mut Sketch, t: TextId, content: &str, h: HAlign, v: VAlign) {
+    let p = params(content);
+    let shape = shape_of(&p);
+    s.edit_text(t, p, TextKindEdit::Box { h, v }, shape)
+        .unwrap();
+}
+
+#[test]
+fn frame_grows_when_edited_text_is_longer() {
+    let mut s = sketch();
+    let t = text(&mut s, "ABC");
+    assert!(glyphs_inside(&s, t));
+    let before = corner_positions(&s, t);
+    // 12 Zeichen à 4 mm: 47 mm Breite, der Rahmen ist 40 mm breit.
+    edit_content(&mut s, t, "ABCDEFGHIJKL", HAlign::Left, VAlign::Bottom);
+    let after = corner_positions(&s, t);
+    assert!(glyphs_inside(&s, t), "Rahmen umschließt alle Glyphen");
+    assert!(near2(after[0], before[0]), "Ecke 0 bleibt");
+    assert!(after[1].x > 40.0 + 1.0, "breiter: {:?}", after[1]);
+    assert!((after[3].y - before[3].y).abs() < 1e-6, "Höhe passt schon");
+    // Kürzer: Der Rahmen schrumpft nicht von selbst.
+    edit_content(&mut s, t, "AB", HAlign::Left, VAlign::Bottom);
+    let shorter = corner_positions(&s, t);
+    for (a, b) in shorter.iter().zip(after) {
+        assert!(near2(*a, b), "kein Schrumpfen: {a:?} statt {b:?}");
+    }
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+}
+
+#[test]
+fn frame_grows_with_text_height() {
+    let mut s = sketch();
+    let t = text(&mut s, "ABC");
+    let before = corner_positions(&s, t);
+    s.set_text_height(t, 20.0).unwrap();
+    let after = corner_positions(&s, t);
+    assert!(glyphs_inside(&s, t), "Rahmen umschließt alle Glyphen");
+    assert!(near2(after[0], before[0]), "Ecke 0 bleibt");
+    assert!(after[3].y > 10.0 + 1.0, "höher: {:?}", after[3]);
+    // Kleiner: kein Schrumpfen.
+    s.set_text_height(t, 5.0).unwrap();
+    let back = corner_positions(&s, t);
+    for (a, b) in back.iter().zip(after) {
+        assert!(near2(*a, b));
+    }
+}
+
+#[test]
+fn frame_grows_toward_alignment() {
+    // Rechts ausgerichtet wächst der Rahmen nach links: Die rechte Kante bleibt, der Text steht
+    // weiter an ihr. Mittig wächst er nach beiden Seiten gleich, die Mitte bleibt.
+    for (h, keep) in [(HAlign::Right, 1usize), (HAlign::Center, 99)] {
+        let mut s = sketch();
+        let t = text(&mut s, "ABC");
+        edit_content(&mut s, t, "ABC", h, VAlign::Bottom);
+        let before = corner_positions(&s, t);
+        edit_content(&mut s, t, "ABCDEFGHIJKL", h, VAlign::Bottom);
+        let after = corner_positions(&s, t);
+        assert!(glyphs_inside(&s, t), "{h:?}");
+        if keep == 1 {
+            assert!(near2(after[1], before[1]), "rechte Kante bleibt");
+            assert!(near2(after[2], before[2]));
+            assert!(after[0].x < -1.0);
+        } else {
+            let mid = |c: [DVec2; 4]| (c[0] + c[1]) * 0.5;
+            assert!(near2(mid(after), mid(before)), "Mitte bleibt");
+            assert!(after[0].x < -1.0 && after[1].x > 41.0);
+        }
+    }
+}
+
+#[test]
+fn frame_held_by_dimension_stays_without_error() {
+    let mut s = sketch();
+    let t = text(&mut s, "ABC");
+    let (_, corners) = frame(&s, t);
+    s.add_constraint(K::Distance(corners[0], corners[1], 40.0))
+        .unwrap();
+    let before = corner_positions(&s, t);
+    let p = params("ABCDEFGHIJKL");
+    let shape = shape_of(&p);
+    s.edit_text(
+        t,
+        p,
+        TextKindEdit::Box {
+            h: HAlign::Left,
+            v: VAlign::Bottom,
+        },
+        shape,
+    )
+    .expect("kein Fehler");
+    let after = corner_positions(&s, t);
+    for (a, b) in after.iter().zip(before) {
+        assert!(near2(*a, b), "Rahmen bleibt: {a:?} statt {b:?}");
+    }
+    assert!(!glyphs_inside(&s, t), "der Text ragt hinaus");
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+}
+
+#[test]
+fn reshape_after_load_does_not_grow_frame() {
+    // Ein geladener Text, der schon hinausragt, bleibt beim ersten Setzen, wie er ist (die Datei
+    // bleibt bytegleich); erst eine Änderung lässt den Rahmen wachsen.
+    let mut s = sketch();
+    let t = text(&mut s, "ABC");
+    let (_, corners) = frame(&s, t);
+    let k = s
+        .add_constraint(K::Distance(corners[0], corners[1], 40.0))
+        .unwrap();
+    edit_content(&mut s, t, "ABCDEFGHIJKL", HAlign::Left, VAlign::Bottom);
+    s.remove_constraint(k).unwrap();
+    let data = s.to_data();
+    let mut back = Sketch::from_data(data.clone()).unwrap();
+    back.reshape_texts(&BoxShaper);
+    assert_eq!(back.to_data(), data, "unverändert nach dem Laden");
+}

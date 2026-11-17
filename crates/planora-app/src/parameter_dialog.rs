@@ -328,8 +328,9 @@ impl ParameterDialog {
         Ok(id.expect("gelungen"))
     }
 
-    /// Löschsymbol einer Zeile: Nennt keine Formel den Parameter, wird er gelöscht; sonst öffnet
-    /// die Rückfrage ([`ParameterDialog::confirm_text`]). Bei offener Skizze gesperrt.
+    /// Löschsymbol einer Zeile: Nennt weder eine Formel noch ein Skizzentext (`{Name}`) den
+    /// Parameter, wird er gelöscht; sonst öffnet die Rückfrage
+    /// ([`ParameterDialog::confirm_text`]). Bei offener Skizze gesperrt.
     pub fn request_delete(&mut self, id: ParamId, state: &mut AppState) -> Result<(), String> {
         let Some(p) = state.document.parameter(id) else {
             return Err(self.gone(state));

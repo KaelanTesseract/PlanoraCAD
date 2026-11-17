@@ -2697,7 +2697,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 /// eines Körpers (`picked`), dann eine Kurve einer fertigen Skizze davor, der Ursprung und die
 /// Achsen des Ursprungs (über den Bildschirmabstand), dann Fläche oder Konstruktionsebene, zuletzt
 /// eine eingeblendete Grundebene.
-fn include_pick(
+pub fn include_pick(
     state: &AppState,
     map: &Mapper,
     p: Pos2,
@@ -2719,16 +2719,22 @@ fn include_pick(
     if world(DVec3::ZERO).is_some_and(|s| s.distance(p) <= PICK_RADIUS_PX) {
         return Some(IncludePick::Origin);
     }
-    // Die Achsen so lang, wie das Einbeziehen sie anlegt.
+    // Die Achsen überall, wo die Ansicht sie zeichnet (Korrektur K2b), mindestens aber so lang,
+    // wie das Einbeziehen sie anlegt.
     let h =
         planora_feature::plane_rect::plane_half_for_bounds(state.bodies.iter().map(|b| b.bounds));
+    let drawn = planora_render::axis_half_length(map.camera.target, map.camera.distance)
+        .map_or(0.0, f64::from);
     for (axis, dir) in [
         (AxisId::X, DVec3::X),
         (AxisId::Y, DVec3::Y),
         (AxisId::Z, DVec3::Z),
     ] {
-        if let (Some(a), Some(b)) = (world(-dir * h), world(dir * h))
-            && dist_to_segment(p, a, b) <= PICK_RADIUS_PX / 2.0
+        let (back, ahead) = axis_pick_span(axis, h, drawn);
+        if let (Some(a), Some(b)) = (
+            axis_end_on_screen(&world, -dir, back, h),
+            axis_end_on_screen(&world, dir, ahead, h),
+        ) && dist_to_segment(p, a, b) <= PICK_RADIUS_PX / 2.0
         {
             return Some(IncludePick::Axis(axis));
         }
@@ -2751,6 +2757,35 @@ fn include_pick(
         .filter_map(|(plane, rect)| planora_render::pick_plane(&ray, &rect).map(|t| (plane, t)))
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(plane, _)| IncludePick::Plane(PlaneId::Standard(plane)))
+}
+
+/// Wählbares Stück einer Ursprungsachse für [`include_pick`] (Korrektur K2b): wie weit hinter und
+/// vor dem Ursprung (mm). Die Ansicht zeichnet x und y beidseits bis `drawn`, z nur nach oben
+/// ([`planora_render::axis_lines`]); das angelegte Stück `±include_half` bleibt immer wählbar.
+fn axis_pick_span(axis: planora_feature::AxisId, include_half: f64, drawn: f64) -> (f64, f64) {
+    let ahead = include_half.max(drawn);
+    match axis {
+        planora_feature::AxisId::Z => (include_half, ahead),
+        _ => (ahead, ahead),
+    }
+}
+
+/// Bildschirmlage des Achsenendes `dir · len`. Liegt es hinter der Kamera (eine lange Achse bei
+/// naher Kamera), wird das Stück halbiert, bis das Ende im Bild liegt, höchstens bis `min_len`.
+fn axis_end_on_screen(
+    world: &impl Fn(DVec3) -> Option<Pos2>,
+    dir: DVec3,
+    len: f64,
+    min_len: f64,
+) -> Option<Pos2> {
+    let mut t = len;
+    while t > min_len {
+        if let Some(s) = world(dir * t) {
+            return Some(s);
+        }
+        t *= 0.5;
+    }
+    world(dir * min_len)
 }
 
 /// Die Kurve einer fertigen, eingeblendeten Skizze vor der offenen (Spec 10) unter dem Zeiger

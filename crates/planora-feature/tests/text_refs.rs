@@ -560,3 +560,186 @@ fn followed_selection_survives_save_and_undo() {
         assert_follows(&d, s, t, e, false);
     });
 }
+
+// ---- Korrekturrunde K2 (Handtest 2) ------------------------------------------------------------
+
+#[test]
+fn text_reference_counts_as_use() {
+    // K2a: Ein Verweis `{Name}` im Text zählt als Benutzung; mit einer Formel nennt die Meldung
+    // beide Stellen.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, _, _) = doc("20", "{Breite} mm", &lib);
+        assert_eq!(d.parameter_users(p), vec!["Skizze 1".to_string()]);
+        let err = d.remove_parameter(p).unwrap_err();
+        assert_eq!(err.to_string(), "Breite wird in Skizze 1 benutzt.");
+        assert!(d.parameter(p).is_some());
+        let mut formulas = Formulas::new();
+        formulas.insert(FieldKey::Breite, "Breite".into());
+        d.add_feature_with_formulas(
+            "Quader 1",
+            FeatureKind::Box {
+                size: planora_math::DVec3::ONE,
+                origin: planora_math::DVec3::ZERO,
+            },
+            formulas,
+        )
+        .unwrap();
+        assert_eq!(
+            d.parameter_users(p),
+            vec!["Skizze 1".to_string(), "Quader 1".to_string()]
+        );
+        // Ein Text ohne Verweis zählt nicht.
+        let (d2, p2, _, _) = doc("20", "Breite mm", &lib);
+        assert!(d2.parameter_users(p2).is_empty());
+    });
+}
+
+/// Text `content` im Rahmen (0, 0)–(b, 8), Höhe 5, links unten: `b` 1 mm breiter als „10,00 mm“.
+/// Mit `height_formula` steht die Höhe als Formel am Text (Parameter `H` = 5 gibt es immer).
+fn narrow_doc(
+    breite: &str,
+    content: &str,
+    lib: &FontLibrary,
+    height_formula: Option<&str>,
+) -> (Document, ParamId, FeatureId, TextId) {
+    let mut d = Document::new();
+    let p = length(&mut d, "Breite", breite);
+    length(&mut d, "H", "5");
+    let b = reference_points("10,00 mm", 5.0, lib)
+        .iter()
+        .map(|q| q.x)
+        .fold(0.0, f64::max)
+        + 1.0;
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let shape = lib.shape(content, &style()).unwrap();
+    let t = sk
+        .add_text_box(
+            DVec2::new(0.0, 0.0),
+            DVec2::new(b, 8.0),
+            TextParams {
+                content: content.into(),
+                style: style(),
+                height: 5.0,
+                flip_h: false,
+                flip_v: false,
+            },
+            HAlign::Left,
+            VAlign::Bottom,
+            Arc::new(shape),
+        )
+        .unwrap();
+    let FeatureKind::Sketch(mut sf) = sketch_kind(sk) else {
+        unreachable!()
+    };
+    if let Some(f) = height_formula {
+        sf.text_formulas.insert(t, f.into());
+    }
+    let s = d.add_feature("Skizze 1", FeatureKind::Sketch(sf)).unwrap();
+    (d, p, s, t)
+}
+
+fn corners_of(sk: &Sketch, t: TextId) -> [DVec2; 4] {
+    match sk.text(t).unwrap().placement {
+        planora_sketch::text::TextPlacement::Box { corners, .. } => {
+            corners.map(|p| sk.point_xy(p).unwrap())
+        }
+        _ => panic!("kein Rahmen"),
+    }
+}
+
+/// Alle Punkte der Glyphen im (achsparallelen) Rahmen, mit Toleranz.
+fn glyphs_in_frame(sk: &Sketch, t: TextId) -> bool {
+    let c = corners_of(sk, t);
+    let (lo, hi) = (c[0].min(c[2]), c[0].max(c[2]));
+    text_points(sk, t).iter().all(|q| {
+        q.x >= lo.x - 1e-6 && q.x <= hi.x + 1e-6 && q.y >= lo.y - 1e-6 && q.y <= hi.y + 1e-6
+    })
+}
+
+fn set_len(d: &mut Document, id: ParamId, name: &str, formula: &str) {
+    d.set_parameter(
+        id,
+        ParamEdit {
+            name: name.into(),
+            formula: formula.into(),
+            unit: ParamUnit::Length,
+            comment: String::new(),
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn frame_grows_with_parameter_value() {
+    // K2c: „{Breite} mm“, Breite 10 → 1234: Der Rahmen wächst mit, Ecke 0 bleibt; ein kürzerer
+    // Wert danach lässt ihn nicht schrumpfen. Eine Extrusion aus dem Text rechnet weiter.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t) = narrow_doc("10", "{Breite} mm", &lib, None);
+        d.reshape_texts(&lib);
+        let sk = &sketch_def(&d, s).sketch;
+        assert!(glyphs_in_frame(sk, t), "passt anfangs");
+        let before = corners_of(sk, t);
+        let refs: Vec<_> = sk
+            .profiles()
+            .refs
+            .into_iter()
+            .filter(|r| sk.text_of_profile(r) == Some(t))
+            .collect();
+        let e = d
+            .add_feature(
+                "Extrusion 1",
+                FeatureKind::Extrude {
+                    sketch: s,
+                    profiles: ProfileSel::Refs(refs),
+                    height: 2.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+        set_len(&mut d, p, "Breite", "1234");
+        assert!(d.reshape_texts(&lib));
+        let sk = &sketch_def(&d, s).sketch;
+        assert_eq!(shown(&d, s, t).as_deref(), Some("1234,00 mm"));
+        let grown = corners_of(sk, t);
+        assert!(glyphs_in_frame(sk, t), "Rahmen umschließt alle Glyphen");
+        assert!((grown[0] - before[0]).length() < 1e-9, "Ecke 0 bleibt");
+        assert!(grown[1].x > before[1].x + 1.0, "breiter: {grown:?}");
+        let ef = d.feature(e).unwrap();
+        assert_eq!(ef.status, FeatureStatus::Ok, "{:?}", ef.status);
+        assert!(!d.visible_bodies().is_empty());
+        // Kürzer: kein Schrumpfen.
+        set_len(&mut d, p, "Breite", "1");
+        d.reshape_texts(&lib);
+        let sk = &sketch_def(&d, s).sketch;
+        let after = corners_of(sk, t);
+        for (a, b) in after.iter().zip(grown) {
+            assert!(
+                (*a - b).length() < 1e-9,
+                "kein Schrumpfen: {a:?} statt {b:?}"
+            );
+        }
+        assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+    });
+}
+
+#[test]
+fn frame_grows_with_height_formula() {
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, _, s, t) = narrow_doc("10", "{Breite} mm", &lib, Some("H"));
+        let h = d.parameters().iter().find(|p| p.name == "H").unwrap().id;
+        d.reshape_texts(&lib);
+        let before = corners_of(&sketch_def(&d, s).sketch, t);
+        set_len(&mut d, h, "H", "12");
+        d.reshape_texts(&lib);
+        let sk = &sketch_def(&d, s).sketch;
+        assert_eq!(sk.text(t).unwrap().height, 12.0);
+        let after = corners_of(sk, t);
+        assert!(glyphs_in_frame(sk, t), "Rahmen umschließt alle Glyphen");
+        assert!((after[0] - before[0]).length() < 1e-9, "Ecke 0 bleibt");
+        assert!(after[3].y > 8.0, "höher: {after:?}");
+        assert_eq!(d.feature(s).unwrap().status, FeatureStatus::Ok);
+    });
+}

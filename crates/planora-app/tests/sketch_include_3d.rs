@@ -834,3 +834,43 @@ fn include_click_where_the_ray_misses_the_sketch_plane() {
         CopySource::Include(IncludeRef::Edge(_))
     ));
 }
+
+// ---- Skizzen 11b, Korrektur K2b (Handtest 2): Achse auf der ganzen sichtbaren Länge -----------
+
+#[test]
+fn origin_axis_pickable_along_drawn_length() {
+    // Die Kamera steht weit weg: Die Ansicht zeichnet die z-Achse viel länger als das Stück, das
+    // das Einbeziehen anlegt (halbe Kantenlänge 25 mm beim kleinen Quader). Ein Klick weit oben auf
+    // der gezeichneten Achse trifft sie trotzdem.
+    let mut s = box_and_sketch();
+    let mut cam = OrbitCamera {
+        target: Vec3::ZERO,
+        distance: 400.0,
+        ..Default::default()
+    };
+    cam.look_along(Vec3::new(0.3, -1.0, 0.2), Vec3::Z);
+    cam.set_viewport(W, H);
+    s.camera = cam;
+    let map = Mapper {
+        camera: s.camera,
+        frame: planora_math::Frame::WORLD,
+        rect: SCREEN,
+    };
+    let half = include_plane_half(&[&s.bodies[0].solid]);
+    assert!(half < 30.0, "kleiner Quader: {half}");
+    let far = DVec3::new(0.0, 0.0, 120.0);
+    let p = map.to_screen3(far).expect("im Bild");
+    assert!(SCREEN.contains(p), "{p:?}");
+    let pick = sketch_view::include_pick(&s, &map, p, None);
+    assert!(
+        matches!(pick, Some(IncludePick::Axis(planora_feature::AxisId::Z))),
+        "{pick:?}"
+    );
+    // Unterhalb des Ursprungs zeichnet die Ansicht die z-Achse nicht: dort weit weg kein Treffer.
+    let below = map.to_screen3(DVec3::new(0.0, 0.0, -120.0)).unwrap();
+    let pick = sketch_view::include_pick(&s, &map, below, None);
+    assert!(
+        !matches!(pick, Some(IncludePick::Axis(planora_feature::AxisId::Z))),
+        "{pick:?}"
+    );
+}

@@ -534,3 +534,79 @@ fn language_change_reshapes_text() {
     assert_eq!(shown(def(rig.ws())), before);
     assert_eq!(before.as_deref(), Some("20,00 mm"));
 }
+
+// ---- Korrekturrunde K2a (Handtest 2): Parameter nur im Text löschen ---------------------------
+
+/// Der Name der ersten Skizze des Dokuments.
+fn sketch_name(w: &Workspace) -> String {
+    let doc = &w.active_tab().state.document;
+    doc.features()
+        .iter()
+        .find(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        .unwrap()
+        .name
+        .clone()
+}
+
+#[test]
+fn deleting_parameter_used_only_in_text_asks_first() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut rig, p) = text_rig("planora-text-params-delete");
+    planora_app::parameter_dialog::open(rig.ws().active_tab_mut());
+    rig.settle();
+    let name = sketch_name(rig.ws());
+    let want = tr!(
+        "feature-err-parameter-in-use",
+        name = "Breite",
+        users = name.as_str()
+    );
+    let tab = rig.ws().active_tab_mut();
+    let before = tab.state.snapshot();
+    let steps = tab.history().undo_len();
+    {
+        let d = tab.parameter_dialog.as_mut().unwrap();
+        d.request_delete(p, &mut tab.state).unwrap();
+        assert_eq!(d.confirm_text(), Some(want), "erst die Rückfrage");
+    }
+    assert!(
+        tab.state.snapshot().same_content(&before),
+        "noch nichts gelöscht"
+    );
+    // Abbrechen: nichts ändert sich.
+    tab.parameter_dialog.as_mut().unwrap().cancel_delete();
+    rig.settle();
+    let tab = rig.ws().active_tab_mut();
+    assert!(tab.state.snapshot().same_content(&before));
+    assert_eq!(tab.history().undo_len(), steps);
+    assert!(tab.state.document.parameter(p).is_some());
+
+    // Nochmals, nun „Durch den Wert ersetzen“: wörtlich + Warnung, ein Rückgängig-Schritt.
+    {
+        let d = tab.parameter_dialog.as_mut().unwrap();
+        d.request_delete(p, &mut tab.state).unwrap();
+        assert!(d.confirm_text().is_some());
+        d.replace_confirmed(&mut tab.state).unwrap();
+    }
+    rig.settle();
+    let w = rig.ws();
+    assert!(w.active_tab().state.document.parameter(p).is_none());
+    assert_eq!(shown(def(w)), Some("{Breite} mm".to_string()));
+    assert_eq!(content(def(w)), "{Breite} mm");
+    let f = w
+        .active_tab()
+        .state
+        .document
+        .features()
+        .iter()
+        .find(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        .unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok);
+    let warn = tr!("feature-sketch-text-param-unknown", names = "Breite");
+    assert_eq!(f.warning(), Some(warn.as_str()));
+    assert_eq!(undo_len(w), steps + 1, "ein Schritt");
+    w.active_tab_mut().undo().unwrap();
+    rig.settle();
+    let w = rig.ws();
+    assert!(w.active_tab().state.document.parameter(p).is_some());
+    assert_eq!(shown(def(w)), Some(format!("{} mm", fmt_len_num(20.0))));
+}
