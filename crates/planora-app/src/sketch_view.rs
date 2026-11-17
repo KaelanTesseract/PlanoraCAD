@@ -1180,6 +1180,44 @@ pub fn insert_preview_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     out
 }
 
+/// Vorschau des offenen Dialogs „Isoparametrische Kurve“ (Skizzen 11b) als Linien in der
+/// Hervorhebungsfarbe über der Ansicht in `rect` (wie die Vorschau eines Einfügen-Fensters).
+/// Abschnitte mit einem Punkt hinter der Kamera fehlen.
+pub fn iso_preview_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    let Some(crate::surface_project_dialog::SurfaceDialog::Iso(d)) = &state.surface_dialog else {
+        return out;
+    };
+    if rect.width() < 2.0 || rect.height() < 2.0 {
+        return out;
+    }
+    let col = colors(state.dark);
+    let map = Mapper {
+        camera: state.camera,
+        frame: Frame::WORLD,
+        rect,
+    };
+    let stroke = Stroke::new(INSERT_PREVIEW_WIDTH, col.plane_edge_active);
+    for line in d.preview_lines() {
+        let mut run: Vec<Pos2> = Vec::new();
+        for p in line {
+            match map.to_screen3(*p) {
+                Some(q) => run.push(q),
+                None => {
+                    if run.len() >= 2 {
+                        out.push(Shape::line(std::mem::take(&mut run), stroke));
+                    }
+                    run.clear();
+                }
+            }
+        }
+        if run.len() >= 2 {
+            out.push(Shape::line(run, stroke));
+        }
+    }
+    out
+}
+
 /// Bildpunkte je Millimeter der Skizze in der Mitte der Ansicht (für die Mindestlänge der Zähne
 /// des Krümmungskamms); `None`, wenn die Ansicht sie dort nicht bestimmen kann.
 fn px_per_mm(map: &Mapper) -> Option<f64> {
@@ -2495,18 +2533,22 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Körper unter dem Zeiger (die Markierung zeigt, was der Zeiger trifft). Schneiden und
     // Silhouette wählen nur Flächen (Schneiden mit „Körper“ den ganzen Körper). Einbeziehen
     // (Skizzen 10) wählt dazu Ecken und Ebenen.
-    let faces_only = matches!(kind, ToolKind::Intersect | ToolKind::Silhouette);
+    // Die Isokurve (Skizzen 11b) wählt nur Flächen: keine Ebene davor verdeckt sie.
+    let faces_only = matches!(
+        kind,
+        ToolKind::Intersect | ToolKind::Silhouette | ToolKind::Isoparametric
+    );
     let pick_at = |state: &AppState, p: Pos2| {
-        if kind.picks_like_include() {
+        if faces_only {
+            state
+                .pick_face_under(map.local(p), map.viewport())
+                .map(Pick::Face)
+        } else if kind.picks_like_include() {
             state.pick_with(
                 map.local(p),
                 map.viewport(),
                 crate::spun_profile_dialog::pick_filter(state),
             )
-        } else if faces_only {
-            state
-                .pick_face_under(map.local(p), map.viewport())
-                .map(Pick::Face)
         } else {
             state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY)
         }
@@ -2516,6 +2558,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let relink_filter = |family: &planora_feature::CopySource| {
         if crate::state::relink_picks_like_include(family) {
             PickFilter::INCLUDE
+        } else if matches!(family, planora_feature::CopySource::Isoparametric { .. }) {
+            // Die Isokurve wählt eine neue Fläche (Skizzen 11b).
+            PickFilter::FACES
         } else {
             PickFilter::GEOMETRY
         }
@@ -2556,6 +2601,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         let picked = pick_at(state, p);
         // „Auf Fläche projizieren“ und „Schnittkurve“ (Skizzen 10): Der Klick füllt das aktive
         // Feld des Dialogs; erst dessen OK legt an.
+        // „Isoparametrische Kurve“ (Skizzen 11b): Fläche oder Punkt darauf; ein Klick neben
+        // jede Fläche bekommt den Hinweis im Dialog.
+        if crate::isoparametric_dialog::is_open(state) {
+            match state.face_point_under(map.local(p), map.viewport()) {
+                Some((body, face, at)) => {
+                    crate::isoparametric_dialog::click(state, body, face, at);
+                }
+                None => crate::surface_project_dialog::refuse(state),
+            }
+            return;
+        }
         if kind.has_dialog() {
             // „Drehprofil“: Wartet der Dialog auf die Achse, gilt zuerst eine Linie der offenen
             // Skizze (Skizzen 11b).

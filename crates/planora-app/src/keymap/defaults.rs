@@ -182,6 +182,8 @@ action_table! {
     SketchIntersectionCurve, "skizze.schnittkurve", "action-sketch-intersection-curve", Sketch, [];
     /// Fusion „Drehprofil“ (Skizzen 11b): ohne Vorgabetaste wie in Fusion, belegbar.
     SketchSpunProfile, "skizze.drehprofil", "action-sketch-spun-profile", Sketch, [];
+    /// Fusion „Isoparametrische Kurve“ (Skizzen 11b): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchIsoparametric, "skizze.isokurve", "action-sketch-isoparametric", Sketch, [];
     // Skizzen 7: die Arten am Spline-Knopf, ohne Vorgabetaste wie in Fusion (Annahme), belegbar.
     /// Fusion „Spline durch Stützpunkte“.
     SketchSplineFit, "skizze.spline_stuetzpunkte", "action-sketch-spline-fit", Sketch, [];

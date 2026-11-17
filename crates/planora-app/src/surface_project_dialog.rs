@@ -13,6 +13,7 @@
 
 use crate::browser::error_color;
 use crate::dialog::{Dialog, DialogSize};
+use crate::isoparametric_dialog::IsoDialog;
 use crate::msg::Msg;
 use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::Tool;
@@ -162,6 +163,8 @@ pub enum SurfaceDialog {
     Intersection(IntersectionCurveDialog),
     /// „Drehprofil“ (Skizzen 11b).
     Spun(SpunProfileDialog),
+    /// „Isoparametrische Kurve“ (Skizzen 11b).
+    Iso(IsoDialog),
 }
 
 // ---- Öffnen, Klicks, Zeigen -----------------------------------------------------------------------
@@ -187,6 +190,7 @@ pub fn sync(state: &mut AppState) {
                 SurfaceDialog::Intersection(IntersectionCurveDialog::new())
             }
             ToolKind::SpunProfile => SurfaceDialog::Spun(SpunProfileDialog::default()),
+            ToolKind::Isoparametric => SurfaceDialog::Iso(IsoDialog::default()),
             _ => SurfaceDialog::Project(SurfaceProjectDialog::new()),
         });
     }
@@ -230,6 +234,9 @@ pub fn refuse(state: &mut AppState) {
         Some(SurfaceDialog::Spun(d)) => {
             d.error = Some(crate::msg!("sketch-pick-spun-profile"));
         }
+        Some(SurfaceDialog::Iso(d)) => {
+            d.error = Some(crate::msg!("iso-pick-face"));
+        }
         None => {}
     }
 }
@@ -263,6 +270,7 @@ impl SurfaceDialog {
             SurfaceDialog::Project(_) => ToolKind::ProjectToSurface,
             SurfaceDialog::Intersection(_) => ToolKind::IntersectionCurve,
             SurfaceDialog::Spun(_) => ToolKind::SpunProfile,
+            SurfaceDialog::Iso(_) => ToolKind::Isoparametric,
         }
     }
 
@@ -272,6 +280,7 @@ impl SurfaceDialog {
             SurfaceDialog::Project(d) => d.take_pick(state, pick),
             SurfaceDialog::Intersection(d) => d.take_pick(state, pick),
             SurfaceDialog::Spun(d) => d.take_pick(state, pick),
+            SurfaceDialog::Iso(d) => d.take_pick(state, pick),
         }
     }
 
@@ -281,6 +290,7 @@ impl SurfaceDialog {
             SurfaceDialog::Project(d) => d.show(ctx, state),
             SurfaceDialog::Intersection(d) => d.show(ctx, state),
             SurfaceDialog::Spun(d) => d.show(ctx, state),
+            SurfaceDialog::Iso(d) => d.show(ctx, state),
         }
     }
 
@@ -290,6 +300,7 @@ impl SurfaceDialog {
             SurfaceDialog::Project(d) => d.marks(),
             SurfaceDialog::Intersection(d) => d.marks(),
             SurfaceDialog::Spun(d) => d.marks(),
+            SurfaceDialog::Iso(d) => d.marks(),
         }
     }
 }

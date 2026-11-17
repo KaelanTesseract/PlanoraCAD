@@ -844,6 +844,16 @@ fn surface_kinds_stay_locked() {
     });
     assert!(!relink_pickable(&on));
     assert!(!relink_pickable(&cut));
+    // Skizzen 11b, Task 16: Die Isokurve wählt ihre Fläche neu (Richtung und Wert bleiben).
+    assert!(relink_pickable(&CopySource::Isoparametric {
+        face: planora_feature::FaceRef {
+            origin: 1,
+            role: "Mantel".into(),
+            hint: DVec3::ZERO,
+        },
+        direction: planora_feature::IsoDirection::U,
+        value: 0.5,
+    }));
     assert!(!relink_pickable(&CopySource::Include(
         IncludeRef::ConstructionPoint(FeatureId(1))
     )));

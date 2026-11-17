@@ -59,6 +59,7 @@ pub const DIALOG_KEYS: &[&str] = &[
     "sketch_intersection_curve",
     // Drehprofil (Skizzen 11b)
     "sketch_spun_profile",
+    "sketch_isoparametric",
     // Krümmungsanzeige einrichten (Skizzen 11a)
     "curvature_display",
     // Verlorene Projektionen verwalten (Skizzen 11a)

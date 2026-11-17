@@ -2708,6 +2708,26 @@ impl AppState {
             })
     }
 
+    /// Wie [`AppState::pick_face_under`], dazu die getroffene Stelle in Weltkoordinaten (für den
+    /// Punkt der Isokurve, Skizzen 11b).
+    pub fn face_point_under(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+    ) -> Option<(usize, Id<Face>, DVec3)> {
+        if viewport.x < 1.0 || viewport.y < 1.0 {
+            return None;
+        }
+        let ndc = Vec2::new(
+            2.0 * cursor.x / viewport.x - 1.0,
+            1.0 - 2.0 * cursor.y / viewport.y,
+        );
+        let (origin, dir) = self.camera.ray(ndc);
+        let (body, hit) = self.nearest_face_hit(cursor, viewport)?;
+        let at = origin.as_dvec3() + dir.as_dvec3() * f64::from(hit.distance);
+        Some((body, hit.face, at))
+    }
+
     /// Die vorderste sichtbare Fläche unter dem Zeiger (Index des Körpers und Treffer).
     fn nearest_face_hit(
         &self,
@@ -3789,6 +3809,17 @@ impl AppState {
             (CopySource::Include(IncludeRef::FaceBoundary(_)), ProjectTarget::Face(b, f)) => {
                 CopySource::Include(IncludeRef::FaceBoundary(face(b, f)?))
             }
+            // Isokurve (Skizzen 11b): neue Fläche, Richtung und Anteil bleiben.
+            (
+                CopySource::Isoparametric {
+                    direction, value, ..
+                },
+                ProjectTarget::Face(b, f),
+            ) => CopySource::Isoparametric {
+                face: face(b, f)?,
+                direction: *direction,
+                value: *value,
+            },
             (CopySource::SketchCurve { .. }, ProjectTarget::SketchCurve(sketch, curve)) => {
                 self.check_source_sketch(sketch)?;
                 CopySource::SketchCurve { sketch, curve }
@@ -4897,6 +4928,96 @@ impl AppState {
         })
     }
 
+    /// Fusion „Isoparametrische Kurve“ (Skizzen 11b, Spec 6): je Richtung aus `dirs` und Anteil
+    /// aus `values` die Kurven `u = const` bzw. `v = const` der Fläche `face`, gerechnet mit
+    /// [`planora_feature::isoparametric::iso_curves`] (wie die Neuberechnung). Mit `linked` ist
+    /// jedes Paar eine violette Gruppe (`CopySource::Isoparametric`), sonst freie Kurven (ohne
+    /// Fixierung, nur feste Splines behalten ihre Enden, ohne Eintrag in `copies`). Die Skizze
+    /// wird zur 3D-Skizze. Ein Rückgängig-Schritt („Isoparametrische Kurve“); ein Paar ohne Stück
+    /// fällt weg, ergibt keines ein Stück, ist es ein Fehler. Bei einem Fehler bleibt die Skizze
+    /// unverändert, die Meldung steht auch in der Sitzung.
+    pub fn add_isoparametric(
+        &mut self,
+        face: planora_feature::FaceRef,
+        dirs: &[planora_feature::IsoDirection],
+        values: &[f64],
+        linked: bool,
+    ) -> Result<usize, Msg> {
+        let r = self.try_isoparametric(face, dirs, values, linked);
+        if let Err(m) = &r
+            && let Some(se) = self.sketch_session.as_mut()
+        {
+            se.message = Some(m.clone());
+        }
+        r
+    }
+
+    fn try_isoparametric(
+        &mut self,
+        face: planora_feature::FaceRef,
+        dirs: &[planora_feature::IsoDirection],
+        values: &[f64],
+        linked: bool,
+    ) -> Result<usize, Msg> {
+        let mut groups = Vec::new();
+        for &direction in dirs {
+            for &value in values {
+                let pieces = self.iso_pieces(&face, direction, value)?;
+                if !pieces.is_empty() {
+                    let source = CopySource::Isoparametric {
+                        face: face.clone(),
+                        direction,
+                        value,
+                    };
+                    groups.push((pieces, source));
+                }
+            }
+        }
+        if groups.is_empty() {
+            return Err(crate::msg!("iso-no-hit"));
+        }
+        let n = self.place_groups(groups, linked, crate::msg!("undo-isoparametric"))?;
+        // Wie „Auf Fläche projizieren“ liegen die Kurven im Raum: Die Skizze wird zur
+        // 3D-Skizze, im selben Schritt.
+        if let Some(draft) = self.sketch_draft.as_mut() {
+            draft.sketch.set_three_d(true);
+        }
+        Ok(n)
+    }
+
+    /// Die Isokurven der Fläche `face` in der Richtung `dir` beim Anteil `value` in der offenen
+    /// Skizze, gerechnet wie die Neuberechnung; die Vorschau des Dialogs nutzt dieselbe Rechnung.
+    /// Trifft der Wert nichts, ist das Ergebnis leer; verlorene Fläche und Zeitgrenze sind
+    /// Fehler (Meldung in der aktuellen Sprache).
+    pub fn iso_pieces(
+        &self,
+        face: &planora_feature::FaceRef,
+        dir: planora_feature::IsoDirection,
+        value: f64,
+    ) -> Result<Vec<Included>, Msg> {
+        use planora_feature::surface_project::{ProjectError, surface_budget};
+        use planora_feature::{DocView, SURFACE_PROJECT_BUDGET};
+        let (idx, frame) = self.open_sketch_place()?;
+        let view = DocView::new(&self.document, idx, frame);
+        let tol = self.document.kernel().tolerance;
+        match planora_feature::isoparametric::iso_curves(
+            &view,
+            face,
+            dir,
+            value,
+            &tol,
+            surface_budget(),
+        ) {
+            Ok(p) => Ok(p),
+            Err(ProjectError::NoHit) => Ok(Vec::new()),
+            Err(ProjectError::Lost) => Err(crate::msg!("iso-lost")),
+            Err(ProjectError::TooSlow) => Err(crate::msg!(
+                "feature-surface-too-slow",
+                seconds = i64::try_from(SURFACE_PROJECT_BUDGET.as_secs()).unwrap_or(i64::MAX)
+            )),
+        }
+    }
+
     /// Gemeinsamer Abschluss von Projizieren, Schneiden und Silhouette: legt die Kurvenstücke
     /// `pieces` über [`SketchSession::project_pieces`] in die Skizze (ohne Punkte und Doppelte),
     /// hängt je neue Kurve ihre Herkunft aus `sources` an (gleicher Index; `None`: ohne
@@ -5225,20 +5346,21 @@ fn spun_axis_include(axis: &planora_feature::SpunAxis) -> Option<planora_feature
 /// Schnitt, Silhouette und Skizzenkurve über die Auswahl von „Projizieren“ (Ruling F9),
 /// eingezogene 3D-Geometrie (Kante, Flächenrand, Ecke, Ebene, Achse, Ursprung, Skizzenkurve)
 /// über die Auswahl von „3D-Geometrie einbeziehen“ (Ruling T18-1). Nicht: Konstruktionspunkte
-/// (gibt es noch nicht als Features), „Auf Fläche projizieren“ und die Schnittkurve (mehrteilige
-/// Eingaben ihres Dialogs; Abweichung in offene-punkte).
+/// (gibt es noch nicht als Features), „Auf Fläche projizieren“, die Schnittkurve und das
+/// Drehprofil (mehrteilige Eingaben ihres Dialogs; Abweichung in offene-punkte). Die Isokurve
+/// (Skizzen 11b) wählt ihre Fläche neu, Richtung und Anteil bleiben.
 pub fn relink_pickable(source: &CopySource) -> bool {
     use planora_feature::IncludeRef;
     match source {
         CopySource::Edge(_)
         | CopySource::Section { .. }
         | CopySource::Silhouette { .. }
-        | CopySource::SketchCurve { .. } => true,
+        | CopySource::SketchCurve { .. }
+        | CopySource::Isoparametric { .. } => true,
         CopySource::Include(r) => !matches!(r, IncludeRef::ConstructionPoint(_)),
-        CopySource::OnSurface(_)
-        | CopySource::Intersection(_)
-        | CopySource::SpunProfile(_)
-        | CopySource::Isoparametric { .. } => false,
+        CopySource::OnSurface(_) | CopySource::Intersection(_) | CopySource::SpunProfile(_) => {
+            false
+        }
     }
 }
 
