@@ -34,6 +34,8 @@ const CARET: f32 = 8.0;
 /// Breite des Auges vor einer Körperzeile und Größe seines Symbols.
 const EYE_W: f32 = 20.0;
 const EYE_ICON: f32 = 14.0;
+/// Deckkraft des Auges, das eine ausgeblendete Gruppe verdeckt.
+const COVERED_EYE: f32 = 0.5;
 /// Kantenlänge des Farbquadrats einer Körperzeile.
 const SWATCH: f32 = 10.0;
 /// Rot für Fehler im dunklen Thema (Wert aus der Palette); die Oberfläche nutzt `error_color`.
@@ -1300,11 +1302,24 @@ fn eye_button(
     state: (bool, bool),
     texts: (String, String),
 ) -> bool {
+    eye_button_covered(ui, full, key, name, state, false, texts)
+}
+
+/// Wie [`eye_button`]; `covered`: eine ausgeblendete Gruppe darüber verdeckt das Auge.
+fn eye_button_covered(
+    ui: &mut egui::Ui,
+    full: egui::Rect,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    name: &str,
+    state: (bool, bool),
+    covered: bool,
+    texts: (String, String),
+) -> bool {
     let eye = egui::Rect::from_min_size(
         egui::pos2(full.min.x + theme::SPACE_2 - theme::SPACE_1, full.min.y),
         vec2(EYE_W, ROW_HEIGHT),
     );
-    eye_at(ui, eye, key, name, state, texts)
+    eye_at_covered(ui, eye, key, name, state, covered, texts)
 }
 
 /// Auge im Rechteck `eye` (Name `name` für [`eye_rects`]). `state`: Steht es selbst auf „aus“
@@ -1318,6 +1333,21 @@ fn eye_at(
     (hidden, dimmed): (bool, bool),
     texts: (String, String),
 ) -> bool {
+    eye_at_covered(ui, eye, key, name, (hidden, dimmed), false, texts)
+}
+
+/// Wie [`eye_at`]; `covered`: eine ausgeblendete Gruppe darüber verdeckt das Auge. Es zeichnet
+/// dann deutlich gedämpft (im durchsichtigen Baum ist „schwach“ kaum dunkler als „Ruhe“), bleibt
+/// aber schaltbar und behält sein Zeichen; wie jede gedämpfte Zeile ohne eigenen Layout-Bereich.
+fn eye_at_covered(
+    ui: &mut egui::Ui,
+    eye: egui::Rect,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    name: &str,
+    (hidden, dimmed): (bool, bool),
+    covered: bool,
+    texts: (String, String),
+) -> bool {
     let weak = ui.visuals().weak_text_color();
     let e = ui.interact(eye, ui.id().with(key), Sense::click());
     remember(ui, eyes_id(), (name.to_string(), eye));
@@ -1328,7 +1358,13 @@ fn eye_at(
         ui.painter(),
         egui::Rect::from_center_size(eye.center(), vec2(EYE_ICON, EYE_ICON)),
         IconSource::Font(glyph),
-        if dimmed { weak } else { c },
+        if covered {
+            c.gamma_multiply(COVERED_EYE)
+        } else if dimmed {
+            weak
+        } else {
+            c
+        },
     );
     let (show, hide) = texts;
     let e = e.on_hover_ui(|ui| {
@@ -1447,7 +1483,8 @@ fn sketch_row(
         let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
         let eye = (r.own_hidden, r.hidden);
         let lead = resp.rect.with_min_x(resp.rect.min.x + indent);
-        if eye_button(ui, lead, ("eye-sketch", r.id), &name, eye, texts) {
+        let covered = crate::sketch_tree::covered_by_group(&state.document, GroupItem::Sketch(id));
+        if eye_button_covered(ui, lead, ("eye-sketch", r.id), &name, eye, covered, texts) {
             *action = Some(Action::ToggleFeatureHidden(id));
         }
     }
@@ -1570,12 +1607,14 @@ fn group_row(
     let eye_rect =
         egui::Rect::from_min_size(egui::pos2(eye_x, rect.min.y), vec2(EYE_W, ROW_HEIGHT));
     let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
-    let eye = eye_at(
+    let covered = crate::sketch_tree::covered_by_group(&state.document, GroupItem::Group(g));
+    let eye = eye_at_covered(
         ui,
         eye_rect,
         ("eye-group", g.0),
         &name,
         (own_hidden, hidden),
+        covered,
         texts,
     );
     resp.dnd_set_drag_payload(GroupItem::Group(g));

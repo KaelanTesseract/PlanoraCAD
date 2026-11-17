@@ -123,3 +123,13 @@ pub fn group_hidden(doc: &Document, g: SketchGroupId) -> bool {
     }
     false
 }
+
+/// Verdeckt eine ausgeblendete Gruppe über der Zeile deren Auge? Für eine Skizze zählen alle
+/// Gruppen auf dem Weg nach oben, für eine Gruppe nur die darüber, nicht sie selbst. Das eigene
+/// Auge der Zeile bleibt, wie es ist; es wird nur gedämpft gezeichnet (Skizzen 11b, Handtest 1).
+pub fn covered_by_group(doc: &Document, item: GroupItem) -> bool {
+    match item {
+        GroupItem::Sketch(id) => doc.sketch_hidden_by_group(id),
+        GroupItem::Group(_) => parent_of(doc, item).is_some_and(|p| group_hidden(doc, p)),
+    }
+}

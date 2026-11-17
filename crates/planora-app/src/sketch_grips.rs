@@ -952,6 +952,20 @@ impl SketchSession {
             self.message = Some(Msg::Raw(e.clone()));
             return Err(e);
         }
+        // Nach dem Einfügen schließt OK/Enter auch ohne Verschiebung (wie Fusion): Die Kopie bleibt
+        // an der Quelllage, und es bleibt der eine Schritt „Einfügen“ (Spec-Entscheidung 5).
+        if self.transform.pasted
+            && !self.transform.copy
+            && let (Some(now), Some(set)) = (self.transform_now(), self.sketch_set(&sf.sketch))
+            && matches!(
+                sf.sketch.check_transform(&set, &now),
+                Err(TransformBlock::NothingToDo)
+            )
+        {
+            self.message = None;
+            self.set_tool(&mut sf.sketch, Tool::Select);
+            return Ok(());
+        }
         let scale = self.tool == Tool::Scale;
         let mut formulas = sf.formulas.clone();
         let copied = self.atomic(&mut sf.sketch, |se, sk, prior| {

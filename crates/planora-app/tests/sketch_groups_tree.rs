@@ -577,3 +577,126 @@ fn a_long_group_name_is_shortened_with_an_ellipsis() {
     );
     assert!(!drawn.contains(&long), "nicht in voller Länge");
 }
+
+// ---- Augen in ausgeblendeter Gruppe (Korrektur K2, Handtest 1) ------------------------------
+
+/// Farbe des Auges (Symbolschrift) mit Mitte im Rechteck `eye` in einem Bild des Baums.
+fn eye_color(r: &mut Rig, name: &str) -> egui::Color32 {
+    let eye = r.eye(name);
+    r.time += 0.05;
+    let raw = egui::RawInput {
+        screen_rect: Some(SCREEN),
+        time: Some(r.time),
+        ..Default::default()
+    };
+    let c = r.c.clone();
+    // Wie in der App: der durchsichtige Baum (dort ist „schwach“ kaum heller als „Ruhe“).
+    let out = c.run_ui(raw, |ui| browser::show_in_panel(ui, r.s(), false, 80));
+    fn walk(shape: &egui::epaint::Shape, eye: Rect, found: &mut Vec<egui::Color32>) {
+        match shape {
+            egui::epaint::Shape::Text(t) if eye.contains(t.visual_bounding_rect().center()) => {
+                found.push(t.galley.job.sections[0].format.color);
+            }
+            egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, eye, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    out.shapes
+        .iter()
+        .for_each(|c| walk(&c.shape, eye, &mut found));
+    out.drop_without_applying_deltas();
+    assert_eq!(found.len(), 1, "ein Auge bei „{name}“: {found:?}");
+    found[0]
+}
+
+#[test]
+fn eyes_inside_a_hidden_group_are_dimmed_but_keep_their_state() {
+    let mut r = rig(4);
+    let [a, b, c, d] = [r.sketches[0], r.sketches[1], r.sketches[2], r.sketches[3]];
+    let inner = r.group(&[GroupItem::Sketch(b)]);
+    let outer = r.group(&[GroupItem::Sketch(a), GroupItem::Group(inner)]);
+    let _ = (c, d);
+    r.settle();
+    let open = r.s().tree_groups_open.clone();
+    let names: Vec<String> = sketch_tree(&r.s().document, &open)
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    let [outer_n, inner_n] = [
+        names
+            .iter()
+            .find(|n| n.starts_with("Gruppe"))
+            .unwrap()
+            .clone(),
+        names
+            .iter()
+            .filter(|n| n.starts_with("Gruppe"))
+            .nth(1)
+            .unwrap()
+            .clone(),
+    ];
+    let a_n = r.s().document.feature(a).unwrap().name.clone();
+    let b_n = r.s().document.feature(b).unwrap().name.clone();
+    let c_n = r.s().document.feature(c).unwrap().name.clone();
+    let normal = eye_color(&mut r, &c_n);
+    // Alles sichtbar: kein Auge gedämpft.
+    for n in [&outer_n, &inner_n, &a_n, &b_n] {
+        assert_eq!(eye_color(&mut r, n), normal, "{n} in Ruhe");
+    }
+    // Die Obergruppe aus: Skizze und Untergruppe darin, und die Skizze in der Untergruppe, dämpfen.
+    r.s().set_sketch_group_hidden(outer, true);
+    r.settle();
+    let own_inner_before = r.s().document.sketch_groups().group(inner).unwrap().hidden;
+    let own_a_before = r.s().own_feature_hidden(a);
+    for n in [&inner_n, &a_n, &b_n] {
+        let dim = eye_color(&mut r, n);
+        // Deutlich dunkler, nicht nur eine Nuance (im durchsichtigen Baum ist „schwach“ kaum
+        // dunkler als „Ruhe“).
+        assert!(
+            f32::from(dim.r()) <= 0.75 * f32::from(normal.r()),
+            "{n} gedämpft: {dim:?} gegen {normal:?}"
+        );
+    }
+    assert_eq!(eye_color(&mut r, &c_n), normal, "außerhalb bleibt");
+    // Das eigene Auge behält seinen Zustand und bleibt schaltbar.
+    assert_eq!(
+        r.s().document.sketch_groups().group(inner).unwrap().hidden,
+        own_inner_before
+    );
+    assert_eq!(r.s().own_feature_hidden(a), own_a_before);
+    let eye = r.eye(&a_n).center();
+    r.click(eye);
+    r.settle();
+    assert!(r.s().own_feature_hidden(a), "schaltbar trotz Gruppe");
+    assert!(r.s().is_feature_hidden(b));
+}
+
+#[test]
+fn a_row_is_covered_only_by_a_hidden_group_above_it() {
+    use planora_app::sketch_tree::covered_by_group;
+    let mut r = rig(4);
+    let [a, b, c, _d] = [r.sketches[0], r.sketches[1], r.sketches[2], r.sketches[3]];
+    let inner = r.group(&[GroupItem::Sketch(b)]);
+    let outer = r.group(&[GroupItem::Sketch(a), GroupItem::Group(inner)]);
+    let doc = &mut r.s().document;
+    let all = [
+        GroupItem::Sketch(a),
+        GroupItem::Sketch(b),
+        GroupItem::Sketch(c),
+        GroupItem::Group(inner),
+        GroupItem::Group(outer),
+    ];
+    assert!(all.iter().all(|i| !covered_by_group(doc, *i)), "alles an");
+    doc.set_sketch_group_hidden(outer, true);
+    let covered: Vec<bool> = all.iter().map(|i| covered_by_group(doc, *i)).collect();
+    // a, b (über die Untergruppe) und die Untergruppe; die Obergruppe selbst und c nicht.
+    assert_eq!(covered, [true, true, false, true, false]);
+    // Die Untergruppe allein aus: nur b ist verdeckt, die Obergruppe ist an.
+    doc.set_sketch_group_hidden(outer, false);
+    doc.set_sketch_group_hidden(inner, true);
+    let covered: Vec<bool> = all.iter().map(|i| covered_by_group(doc, *i)).collect();
+    assert_eq!(covered, [false, true, false, false, false]);
+    // Das eigene Auge bleibt, wie es ist.
+    assert!(!r.s().own_feature_hidden(b));
+}

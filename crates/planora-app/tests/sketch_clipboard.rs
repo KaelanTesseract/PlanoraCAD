@@ -308,6 +308,68 @@ fn paste_then_cancel_move_keeps_copy() {
     );
 }
 
+/// Einfügen, dann Verschieben bestätigen, ohne zu verschieben (Handtest 1): Der Zug schließt, die
+/// Kopie bleibt an der Quelllage, es bleibt der eine Schritt „Einfügen“.
+fn assert_paste_closed_in_place(w: &mut Workspace, before: usize, at_source: &[(u64, u64)]) {
+    assert_eq!(point_bits(sk(w)), at_source, "die Kopie bleibt liegen");
+    assert_eq!(sk(w).curves().count(), 4);
+    assert_eq!(undo_len(w), before + 1, "ein Schritt „Einfügen“");
+    assert_eq!(
+        state(w).sketch_undo_label().as_deref(),
+        Some(t("undo-sketch-paste").as_str())
+    );
+    let se = session(w);
+    assert_eq!(se.tool, Tool::Select, "das Verschieben ist zu");
+    assert!(!se.transform.pasted);
+    assert_eq!(se.message_text(), None, "keine Meldung „Nichts zu tun“");
+}
+
+fn paste_ready() -> (Workspace, usize, Vec<(u64, u64)>) {
+    let mut w = ws();
+    open_sketch(&mut w, StandardPlane::XY);
+    rectangle_with_dims(&mut w);
+    commands::run_action(&mut w, Action::SketchCopy);
+    state(&mut w).close_sketch();
+    open_sketch(&mut w, StandardPlane::XY);
+    let before = undo_len(&mut w);
+    commands::run_action(&mut w, Action::SketchPaste);
+    let at_source = point_bits(sk(&mut w));
+    (w, before, at_source)
+}
+
+#[test]
+fn paste_then_ok_without_moving_closes_the_move() {
+    let (mut w, before, at_source) = paste_ready();
+    {
+        let (se, sf) = state(&mut w).session_draft_mut().unwrap();
+        assert_eq!(se.tool, Tool::MoveCopy);
+        se.confirm_transform(sf).expect("OK bei 0 schließt");
+    }
+    state(&mut w).observe_sketch(false);
+    assert_paste_closed_in_place(&mut w, before, &at_source);
+    // Rückgängig nimmt die ganze Kopie zurück.
+    assert!(state(&mut w).undo_sketch());
+    assert_eq!(sk(&mut w).curves().count(), 0);
+    assert_eq!(undo_len(&mut w), before);
+}
+
+#[test]
+fn paste_then_enter_without_moving_closes_the_move() {
+    let (w, before, at_source) = paste_ready();
+    let mut rig = Rig::new(w);
+    let enter = |pressed| Event::Key {
+        key: Key::Enter,
+        physical_key: Some(Key::Enter),
+        pressed,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    };
+    rig.frame(vec![enter(true)]);
+    rig.frame(vec![enter(false)]);
+    rig.settle();
+    assert_paste_closed_in_place(rig.ws(), before, &at_source);
+}
+
 #[test]
 fn cut_is_one_step_with_delete_rule() {
     let mut w = ws();
