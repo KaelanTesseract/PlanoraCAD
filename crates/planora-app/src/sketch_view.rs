@@ -2498,7 +2498,11 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let faces_only = matches!(kind, ToolKind::Intersect | ToolKind::Silhouette);
     let pick_at = |state: &AppState, p: Pos2| {
         if kind.picks_like_include() {
-            state.pick_with(map.local(p), map.viewport(), PickFilter::INCLUDE)
+            state.pick_with(
+                map.local(p),
+                map.viewport(),
+                crate::spun_profile_dialog::pick_filter(state),
+            )
         } else if faces_only {
             state
                 .pick_face_under(map.local(p), map.viewport())

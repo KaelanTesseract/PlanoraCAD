@@ -546,12 +546,19 @@ fn unlinked_outline_stays_joined_when_a_corner_is_dragged() {
     // Eine Ecke ziehen (auf eine neue Lage festhalten): beide Enden folgen, nichts reißt auf.
     let (p, q) = joints[0];
     let target = (-7.0, 3.5);
-    {
+    let before = sk0.point_xy(q).unwrap();
+    assert!(
+        (before.x - target.0).abs() > 1e-3 || (before.y - target.1).abs() > 1e-3,
+        "die Ecke muss sich wirklich bewegen"
+    );
+    let report = {
         let (_, sk) = s.session_sketch_mut().unwrap();
         sk.add_constraint(ConstraintKind::Fixed(p, target.0, target.1))
             .unwrap();
-        sk.solve();
-    }
+        sk.solve()
+    };
+    assert_eq!(report.status, planora_sketch::solver::SolveStatus::Solved);
+    assert!(report.conflicting.is_empty() && report.redundant.is_empty());
     let sk1 = sk(&s);
     for e in [p, q] {
         let at = sk1.point_xy(e).unwrap();
@@ -559,6 +566,11 @@ fn unlinked_outline_stays_joined_when_a_corner_is_dragged() {
             (at.x - target.0).abs() < 1e-6 && (at.y - target.1).abs() < 1e-6,
             "{at:?}"
         );
+    }
+    // Alle Ecken des Umrisses fallen weiter zusammen.
+    for (a, b) in &joints {
+        let (pa, pb) = (sk1.point_xy(*a).unwrap(), sk1.point_xy(*b).unwrap());
+        assert!(pa.distance(pb) < 1e-6, "{pa:?} {pb:?}");
     }
 }
 
@@ -703,4 +715,174 @@ fn hint_does_not_promise_a_link() {
     assert!(!de.contains("verknüpft"), "{de}");
     let en = planora_i18n::with_lang(&planora_i18n::english(), || ToolKind::SpunProfile.hint());
     assert!(!en.contains("linked"), "{en}");
+}
+
+/// Eine Linie in Skizzenkoordinaten: Anfang und Ende.
+type Segment = ((f64, f64), (f64, f64));
+
+/// Eine fertige Skizze auf `plane` mit Linien (Skizzenkoordinaten); liefert Skizze und Linien.
+fn source_sketch(
+    s: &mut AppState,
+    plane: SketchPlane,
+    lines: &[Segment],
+) -> (FeatureId, Vec<planora_sketch::model::CurveId>) {
+    let id = s.add_sketch(plane).unwrap();
+    s.open_sketch(id).unwrap();
+    s.observe_sketch(false);
+    let curves = {
+        let (_, sk) = s.session_sketch_mut().unwrap();
+        lines
+            .iter()
+            .map(|(a, b)| {
+                let pa = sk.add_point(a.0, a.1).unwrap();
+                let pb = sk.add_point(b.0, b.1).unwrap();
+                sk.add_line(pa, pb).unwrap()
+            })
+            .collect()
+    };
+    s.observe_sketch(false);
+    s.close_sketch();
+    (id, curves)
+}
+
+#[test]
+fn unlinked_profile_with_fixed_spline_keeps_the_spline_pinned() {
+    use planora_sketch::model::CurveKind;
+    let mut s = AppState::new();
+    // Ebene x = 5 (YZ um 5 versetzt): darauf eine schräge Linie (windschief zur Achse Z, wird
+    // ein fester Spline) und eine senkrechte; dazu auf YZ eine Linie, die an ihr hängt.
+    let plane = s
+        .document
+        .add_feature(
+            "Ebene",
+            FeatureKind::Plane(planora_feature::planes::PlaneFeature {
+                def: planora_feature::planes::PlaneDef::Offset {
+                    base: planora_feature::planes::PlaneBase::Standard(StandardPlane::YZ),
+                    distance: 5.0,
+                },
+            }),
+        )
+        .unwrap();
+    s.refresh();
+    let r = 125.0_f64.sqrt();
+    let (a, la) = source_sketch(
+        &mut s,
+        SketchPlane::OnPlane(plane),
+        &[((-10.0, 0.0), (10.0, 20.0)), ((10.0, 20.0), (10.0, 40.0))],
+    );
+    let (b, lb) = source_sketch(
+        &mut s,
+        SketchPlane::Standard(StandardPlane::YZ),
+        &[((r, 40.0), (20.0, 50.0))],
+    );
+    open_new(&mut s, StandardPlane::XZ);
+    choose(&mut s);
+    dialog(&mut s).set_filter(SpunFilter::Elements);
+    for (sketch, curve) in [(a, la[0]), (a, la[1]), (b, lb[0])] {
+        assert!(spd::deliver(
+            &mut s,
+            IncludePick::SketchCurve { sketch, curve }
+        ));
+    }
+    dialog(&mut s).focus = SpunField::Axis;
+    assert!(spd::deliver(&mut s, IncludePick::Axis(AxisId::Z)));
+    {
+        let d = dialog(&mut s);
+        assert!(d.ok_enabled(), "{:?}", d.error());
+        d.linked = false;
+    }
+    let mut screen = Screen::new(W, H);
+    assert_eq!(
+        frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]),
+        Some(DialogOutcome::Applied),
+        "ein fester Spline im Umriss darf das Anlegen nicht kippen"
+    );
+    s.observe_sketch(false);
+    assert!(draft(&s).copies.is_empty());
+    let sk0 = sk(&s);
+    // Der feste Spline behält seine Fixierungen an beiden Enden, sonst ist nichts fixiert.
+    let spline_ends: Vec<_> = sk0
+        .curves()
+        .filter_map(|(_, d)| match &d.kind {
+            CurveKind::FixedSpline { start, end, .. } => Some([*start, *end]),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(spline_ends.len(), 2, "genau ein fester Spline");
+    let pinned: Vec<_> = sk0
+        .constraints()
+        .filter_map(|(_, c)| c.kind.fixed_point())
+        .collect();
+    assert_eq!(pinned.len(), 2, "nur die Enden des Splines: {pinned:?}");
+    assert!(pinned.iter().all(|p| spline_ends.contains(p)));
+    // Die Nachbarn hängen am Spline, die freie Ecke zwischen den beiden Linien ebenso.
+    let joints: Vec<_> = sk0
+        .constraints()
+        .filter_map(|(_, c)| match c.kind {
+            ConstraintKind::Coincident(p, q) => Some((p, q)),
+            _ => None,
+        })
+        .collect();
+    assert!(joints.len() >= 2, "{joints:?}");
+    // Eine freie Ecke ziehen: der Nachbar folgt, nichts reißt auf, der Spline bleibt.
+    let free = joints
+        .iter()
+        .copied()
+        .find(|(p, q)| !spline_ends.contains(p) && !spline_ends.contains(q))
+        .expect("freie Ecke zwischen zwei Linien");
+    let ends_before: Vec<_> = spline_ends
+        .iter()
+        .map(|e| sk0.point_xyz(*e).unwrap())
+        .collect();
+    let target = (-14.0, 41.0);
+    let report = {
+        let (_, sk) = s.session_sketch_mut().unwrap();
+        sk.add_constraint(ConstraintKind::Fixed(free.0, target.0, target.1))
+            .unwrap();
+        sk.solve()
+    };
+    assert_eq!(report.status, planora_sketch::solver::SolveStatus::Solved);
+    let sk1 = sk(&s);
+    for e in [free.0, free.1] {
+        let at = sk1.point_xy(e).unwrap();
+        assert!(
+            (at.x - target.0).abs() < 1e-6 && (at.y - target.1).abs() < 1e-6,
+            "{at:?}"
+        );
+    }
+    for (p, q) in &joints {
+        assert!(
+            sk1.point_xy(*p)
+                .unwrap()
+                .distance(sk1.point_xy(*q).unwrap())
+                < 1e-6
+        );
+    }
+    // Der Spline hat sich nicht bewegt.
+    for (e, before) in spline_ends.iter().zip(&ends_before) {
+        assert!(sk1.point_xyz(*e).unwrap().distance(*before) < 1e-9);
+    }
+}
+
+#[test]
+fn body_filter_picks_with_the_geometry_filter() {
+    use planora_app::state::PickFilter;
+    let (mut s, _) = shaft_rig();
+    // Körper: ohne Ebenen und Ecken, damit keine Konstruktionsebene den Körper verdeckt.
+    assert_eq!(
+        planora_app::spun_profile_dialog::pick_filter(&s),
+        PickFilter::GEOMETRY
+    );
+    dialog(&mut s).focus = SpunField::Axis;
+    assert_eq!(
+        planora_app::spun_profile_dialog::pick_filter(&s),
+        PickFilter::INCLUDE
+    );
+    dialog(&mut s).focus = SpunField::Selection;
+    dialog(&mut s).set_filter(SpunFilter::Elements);
+    assert_eq!(
+        planora_app::spun_profile_dialog::pick_filter(&s),
+        PickFilter::INCLUDE
+    );
 }

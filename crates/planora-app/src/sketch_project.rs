@@ -147,25 +147,42 @@ impl SketchSession {
                 }
             }
             if !fixed {
-                // Frei: weder `Fixed` noch `Fixed3` (3D-Punkte, etwa eine versetzte Achse) ...
+                // Feste Splines bleiben fest, samt der Fixierung ihrer Enden (der Löser bindet die
+                // Enden sonst nicht an die Form); alles andere wird frei: weder `Fixed` noch
+                // `Fixed3` (3D-Punkte, etwa eine versetzte Achse).
+                let mut ends = Vec::new();
+                let mut keep = Vec::new();
+                for target in &out {
+                    match *target {
+                        CopyTarget::Point(p) => ends.push(p),
+                        CopyTarget::Curve(c) => {
+                            let e = curve_ends(sk, c);
+                            if matches!(
+                                sk.curve(c).map(|d| &d.kind),
+                                Some(CurveKind::FixedSpline { .. })
+                            ) {
+                                keep.extend(e.iter().copied());
+                            }
+                            ends.extend(e);
+                        }
+                    }
+                }
                 let pins: Vec<_> = sk
                     .constraints()
-                    .filter(|(id, d)| !known.contains(id) && d.kind.fixed_point().is_some())
+                    .filter(|(id, d)| {
+                        !known.contains(id)
+                            && d.kind.fixed_point().is_some_and(|p| !keep.contains(&p))
+                    })
                     .map(|(id, _)| id)
                     .collect();
                 for id in pins {
                     sk.remove_constraint(id).map_err(err)?;
                 }
-                // ... und zusammenfallende Enden hängen zusammen, damit der Umriss beim Ziehen
-                // einer Ecke nicht aufreißt (je Ecke ein `Coincident` zum ersten Punkt dort).
+                // Zusammenfallende Enden hängen zusammen, damit der Umriss beim Ziehen einer Ecke
+                // nicht aufreißt (je Ecke ein `Coincident` zum ersten Punkt dort; die festen
+                // Enden der Splines zuerst, sie bleiben die Anker; zwei feste Enden brauchen keins).
+                ends.sort_by_key(|p| !keep.contains(p));
                 let (linear, mut reps): (f64, Vec<PointId>) = (sk.tolerance().linear, Vec::new());
-                let mut ends = Vec::new();
-                for target in &out {
-                    match *target {
-                        CopyTarget::Point(p) => ends.push(p),
-                        CopyTarget::Curve(c) => ends.extend(curve_ends(sk, c)),
-                    }
-                }
                 for p in ends {
                     let at = sk.point_xyz(p).map_err(err)?;
                     let mut joined = false;
@@ -175,8 +192,10 @@ impl SketchSession {
                             break;
                         }
                         if sk.point_xyz(q).map_err(err)?.distance(at) <= linear {
-                            sk.add_constraint(ConstraintKind::Coincident(q, p))
-                                .map_err(err)?;
+                            if !(keep.contains(&q) && keep.contains(&p)) {
+                                sk.add_constraint(ConstraintKind::Coincident(q, p))
+                                    .map_err(err)?;
+                            }
                             joined = true;
                             break;
                         }

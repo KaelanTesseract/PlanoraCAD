@@ -130,6 +130,17 @@ pub fn wants_body_only(state: &AppState) -> bool {
     )
 }
 
+/// Was ein Klick in der 3D-Ansicht finden darf: bei der Auswahl „Körper“ nur Flächen und Kanten
+/// (keine Konstruktionsebenen, die den Körper verdecken könnten), sonst wie „3D-Geometrie
+/// einbeziehen“.
+pub fn pick_filter(state: &AppState) -> crate::state::PickFilter {
+    if wants_body_only(state) {
+        crate::state::PickFilter::GEOMETRY
+    } else {
+        crate::state::PickFilter::INCLUDE
+    }
+}
+
 /// Der Klick der Auswahl „Körper“ aus dem Treffer der Ansicht: nur Fläche, Kante oder Ecke eines
 /// Körpers, sonst `None`.
 pub fn body_pick(picked: Option<planora_render::Pick>) -> Option<IncludePick> {
@@ -160,7 +171,7 @@ impl SpunProfileDialog {
 
     /// Ist die Vorschau fehlerfrei? Nur dann ist OK frei. Eine Meldung eines abgelehnten Klicks
     /// sperrt OK nicht: Die Felder sind gültig, die Meldung ist ein Hinweis und verschwindet mit
-    /// dem nächsten passenden Klick oder jeder Änderung.
+    /// dem nächsten passenden Klick oder jeder Änderung im Dialog (Filter, Leeren, Toleranz, Umkehren, Haken).
     pub fn ok_enabled(&self) -> bool {
         self.preview_count().is_some()
     }
@@ -444,17 +455,24 @@ impl SpunProfileDialog {
                         )
                         .changed()
                         {
+                            self.error = None;
                             self.dirty = true;
                         }
                         ui.end_row();
                         ui.label("");
                         if ui.checkbox(&mut self.flip, tr!("spun-flip")).changed() {
+                            self.error = None;
                             self.dirty = true;
                         }
                         ui.end_row();
                         ui.label("");
-                        ui.checkbox(&mut self.linked, tr!("spun-link"))
-                            .on_hover_text(tr!("sketch-project-link-hint"));
+                        if ui
+                            .checkbox(&mut self.linked, tr!("spun-link"))
+                            .on_hover_text(tr!("sketch-project-link-hint"))
+                            .changed()
+                        {
+                            self.error = None;
+                        }
                         ui.end_row();
                     });
                 if let Some(r) = &result {
