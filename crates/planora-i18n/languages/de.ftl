@@ -2335,6 +2335,7 @@ feature-sketch-text-unset = { $count ->
     [one] Ein Text lässt sich mit den Schriften dieses Rechners nicht setzen und behält seine gespeicherten Kurven.
    *[other] { $count } Texte lassen sich mit den Schriften dieses Rechners nicht setzen und behalten ihre gespeicherten Kurven.
 }
+feature-sketch-text-param-unknown = Unbekannter Parameter im Text: { $names }
 feature-kind-fixed = Die Art des Features lässt sich nicht ändern
 feature-name-empty = Der Name darf nicht leer sein
 feature-mesh-ids-used = Die Netz-Kennungen sind aufgebraucht

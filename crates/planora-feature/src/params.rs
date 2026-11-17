@@ -11,6 +11,7 @@ use crate::expr::{self, MAX_COMMENT_CHARS, ParamDef, ParamUnit, TableError};
 use crate::formulas::{Formulas, mentions, rewrite_formulas};
 use crate::model::{Document, FeatureKind};
 use crate::recompute::RecomputeReport;
+use crate::text_refs;
 use planora_i18n::tr;
 use std::collections::HashMap;
 
@@ -243,14 +244,26 @@ impl Document {
                     p.formula = expr::rename_in(&p.formula, &old_name, &edit.name);
                 }
             }
-            // Feature- und Skizzenformeln ebenso (P6: ganze Namen, übriger Text zeichengleich).
+            // Feature- und Skizzenformeln ebenso (P6: ganze Namen, übriger Text zeichengleich),
+            // dazu `{alt}` → `{neu}` in den Skizzentexten (Skizzen 11b).
             for (i, f) in self.features.iter().enumerate() {
-                if mentions(&f.kind, &f.formulas, &old_name) {
-                    let (kind, formulas) = rewrite_formulas(&f.kind, &f.formulas, |t| {
-                        Some(expr::rename_in(t, &old_name, &edit.name))
-                    });
-                    features.push((i, kind, formulas));
+                let in_formulas = mentions(&f.kind, &f.formulas, &old_name);
+                let in_texts = matches!(&f.kind, FeatureKind::Sketch(sf)
+                    if text_refs::sketch_mentions(&sf.sketch, &old_name));
+                if !in_formulas && !in_texts {
+                    continue;
                 }
+                let (mut kind, formulas) = if in_formulas {
+                    rewrite_formulas(&f.kind, &f.formulas, |t| {
+                        Some(expr::rename_in(t, &old_name, &edit.name))
+                    })
+                } else {
+                    (f.kind.clone(), f.formulas.clone())
+                };
+                if let FeatureKind::Sketch(sf) = &mut kind {
+                    text_refs::rename_in_sketch(&mut sf.sketch, &old_name, &edit.name);
+                }
+                features.push((i, kind, formulas));
             }
         }
         let new_name = edit.name.clone();
@@ -389,8 +402,11 @@ impl Document {
             // Ändern sich die Formeln einer Skizze, rechnet sie neu: Ob sie Formeln hat,
             // entscheidet über die Auswertung des Solverstatus (P12); ein gespeicherter
             // Fehlschlag darf diese Änderung nicht überdauern.
+            // Ebenso ein umgeschriebener Text (neuer Stand der Skizze, Skizzen 11b).
             let sketch_changed = match (&self.features[i].kind, &kind) {
-                (FeatureKind::Sketch(a), FeatureKind::Sketch(b)) => a.formulas != b.formulas,
+                (FeatureKind::Sketch(a), FeatureKind::Sketch(b)) => {
+                    a.formulas != b.formulas || a.sketch.revision() != b.sketch.revision()
+                }
                 _ => false,
             };
             if sketch_changed {

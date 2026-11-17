@@ -707,6 +707,10 @@ pub struct SketchSession {
     /// dem Arbeitsbereich ([`crate::state::AppState::share_text_memory`]): Sie gelten für den
     /// Programmlauf, über das Ende der Sitzung und über alle Tabs hinweg.
     pub text_memory: crate::sketch_text::TextMemoryShare,
+    /// Die Parameter des Dokuments beim Öffnen (Skizzen 11b, Parameter im Text): Das Werkzeug
+    /// „Text“ setzt damit den ersetzten Inhalt. Bei offener Skizze ändert sich die
+    /// Parametertabelle nicht (gesperrt), der Stand bleibt also gültig.
+    pub text_scope: ParamScope,
 }
 
 /// Die Skizze vor dem ersten Klick eines laufenden Befehls und ihr Stand nach seinem letzten
@@ -873,6 +877,7 @@ impl SketchSession {
             constraint_last: None,
             text: None,
             text_memory: Default::default(),
+            text_scope: ParamScope::default(),
         }
     }
 

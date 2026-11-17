@@ -151,9 +151,15 @@ impl Document {
     /// Zähler gleich. Ändert sich dabei nur die Warnung zu fehlenden Schriften oder zu Texten, die
     /// sich nicht setzen lassen (Spec C10), bekommt die Skizze eine neue Version und wird neu
     /// berechnet, damit die Warnung erscheint.
+    ///
+    /// Vorher bekommt jeder Text seinen gezeigten Inhalt mit den aktuellen Parametern und der
+    /// Anzeigeeinheit (Skizzen 11b, [`crate::text_refs::apply_shown`]): Die App ruft das nach
+    /// jeder Änderung der Parametertabelle, nach Rückgängig/Wiederholen und nach einem Wechsel
+    /// der Längeneinheit.
     pub fn reshape_texts(&mut self, shaper: &dyn TextShaper) -> bool {
         let mut changed = false;
         let mut stale = false;
+        let scope = self.param_scope();
         for idx in 0..self.features.len() {
             let FeatureKind::Sketch(sf) = &mut self.features[idx].kind else {
                 continue;
@@ -162,6 +168,7 @@ impl Document {
                 continue;
             }
             let before = text_warning_lines(&sf.sketch);
+            crate::text_refs::apply_shown(&mut sf.sketch, &scope);
             let report = sf.sketch.reshape_texts(shaper);
             let warning_changed = text_warning_lines(&sf.sketch) != before;
             if report.changed || warning_changed {

@@ -501,6 +501,8 @@ impl Sketch {
                 curves: t.curves,
                 points: t.points,
                 alive: t.alive,
+                // Ein geladener Text zeigt noch nichts Ersetztes (Skizzen 11b).
+                shown: None,
                 // Noch nicht gesetzt: Die gespeicherten Kurven bleiben (Spec G4).
                 shaped: ShapedCache::default(),
                 walk: WalkCache::default(),

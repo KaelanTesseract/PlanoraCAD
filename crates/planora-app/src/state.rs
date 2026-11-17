@@ -316,6 +316,9 @@ pub struct AppState {
     /// erkennt (etwa „Kalibrieren“, das sonst wie „Leinwand bearbeiten“ aussähe). Gilt nur für
     /// genau den nächsten Schritt.
     pub undo_label_hint: Option<fn() -> String>,
+    /// Die Parametertabelle hat sich geändert (Skizzen 11b, Parameter im Text): Der Tab setzt
+    /// seine Texte im nächsten Bild neu ([`crate::workspace::DocTab::apply_fonts`]).
+    pub(crate) texts_due: bool,
     /// Ist ein Fenster „DXF einfügen“ oder „SVG einfügen“ offen (Stand des letzten Bildes)? Dann
     /// gehört Esc dem Fenster: Die offene Skizze bricht damit nicht auch ihr Werkzeug ab
     /// (Gesamtprüfung M1).
@@ -763,6 +766,7 @@ impl AppState {
             pending_pick: None,
             calibrate: None,
             undo_label_hint: None,
+            texts_due: false,
             insert_dialog_open: false,
             insert_preview: None,
             insert_grips: None,
@@ -3211,6 +3215,9 @@ impl AppState {
         session.body_vertices = self.body_vertices(id, &frame);
         session.last_report = Some(draft.sketch.clone().solve());
         session.text_memory = self.text_memory.clone();
+        // Parameter im Text (Skizzen 11b): Der Entwurf zeigt den ersetzten Inhalt.
+        session.text_scope = self.document.param_scope();
+        planora_feature::text_refs::apply_shown(&mut draft.sketch, &session.text_scope);
         if !switching {
             self.saved_camera = Some(self.camera);
         }
@@ -5554,6 +5561,7 @@ impl AppState {
         if self.document.edit_count() == count {
             return Ok(out);
         }
+        self.texts_due = true;
         self.refresh();
         // Skizzen 5: Senkt eine Formel die Anzahl eines Musters, entfallen die Abhängigkeiten an
         // den wegfallenden Exemplaren; die Meldung nennt ihre Zahl wie im Werkzeug.

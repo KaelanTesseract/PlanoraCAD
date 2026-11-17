@@ -147,6 +147,11 @@ pub struct TextData {
     /// und das Ende, außer beim letzten Stück (es endet am Anfang).
     pub points: Vec<PointId>,
     pub(crate) alive: bool,
+    /// Der gezeigte Inhalt (Skizzen 11b, Parameter im Text): der Inhalt mit ersetzten `{Name}`,
+    /// aus dem die Kurven entstehen; `None` heißt: wie `content`. Nur zur Laufzeit, nie in der
+    /// Datei ([`TextRecord`](crate::data::TextRecord) hat ihn nicht); gesetzt mit
+    /// [`Sketch::set_text_shown`] (die Feature-Seite ersetzt, `planora_feature::text_refs`).
+    pub shown: Option<String>,
     pub(crate) shaped: ShapedCache,
     pub(crate) walk: WalkCache,
 }
@@ -409,11 +414,13 @@ pub fn path_content(content: &str) -> String {
     content.replace("\r\n", "\n").replace(['\r', '\n'], " ")
 }
 
-/// Was für den Text `d` gesetzt wird: der Inhalt, auf einem Pfad mit verbundenen Zeilen.
+/// Was für den Text `d` gesetzt wird: der gezeigte Inhalt ([`TextData::shown`], sonst der
+/// Inhalt), auf einem Pfad mit verbundenen Zeilen.
 fn shaping_content(d: &TextData) -> Cow<'_, str> {
+    let content = d.shown.as_deref().unwrap_or(&d.content);
     match d.placement {
-        TextPlacement::Box { .. } => Cow::Borrowed(&d.content),
-        TextPlacement::Path { .. } => Cow::Owned(path_content(&d.content)),
+        TextPlacement::Box { .. } => Cow::Borrowed(content),
+        TextPlacement::Path { .. } => Cow::Owned(path_content(content)),
     }
 }
 
@@ -894,6 +901,7 @@ impl Sketch {
                 curves: Vec::new(),
                 points: Vec::new(),
                 alive: true,
+                shown: None,
                 shaped: ShapedCache::set(shape),
                 walk: WalkCache::default(),
             });
@@ -970,6 +978,7 @@ impl Sketch {
                 curves: Vec::new(),
                 points: Vec::new(),
                 alive: true,
+                shown: None,
                 shaped: ShapedCache::set(shape.clone()),
                 walk: WalkCache::default(),
             });
@@ -1031,6 +1040,7 @@ impl Sketch {
             curves: Vec::new(),
             points: Vec::new(),
             alive: true,
+            shown: None,
             shaped: ShapedCache::set(shape),
             walk: WalkCache::default(),
         });
@@ -1301,6 +1311,29 @@ impl Sketch {
         self.touch_structure();
         self.sync_text(t, &placed);
         Ok(())
+    }
+
+    /// Setzt den gezeigten Inhalt des Textes `t` ([`TextData::shown`], Skizzen 11b). Nur zur
+    /// Laufzeit: Stand und Kurven bleiben; [`Sketch::reshape_texts`] setzt danach neu. `true`,
+    /// wenn er sich geändert hat; ein unbekannter Text ändert nichts.
+    pub fn set_text_shown(&mut self, t: TextId, shown: Option<String>) -> bool {
+        if self.text(t).is_none_or(|d| d.shown == shown) {
+            return false;
+        }
+        self.texts[t].shown = shown;
+        true
+    }
+
+    /// Setzt nur den Rohinhalt des Textes `t` (Skizzen 11b: Umbenennen eines Parameters schreibt
+    /// `{alt}` → `{neu}`). Form, Kurven und gezeigter Inhalt bleiben; der Stand der Skizze ändert
+    /// sich (der Inhalt steht in der Datei). `true`, wenn er sich geändert hat.
+    pub fn set_text_content(&mut self, t: TextId, content: String) -> bool {
+        if self.text(t).is_none_or(|d| d.content == content) {
+            return false;
+        }
+        self.texts[t].content = content;
+        self.touch_structure();
+        true
     }
 
     /// Der Winkel eines Textes im Rahmen (Spec C5): die Richtung der Grundlinie von Ecke 0 nach

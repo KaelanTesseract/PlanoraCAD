@@ -35,6 +35,7 @@ use crate::sketch_state::{Item, SketchSession, Tool, err};
 use crate::sketch_triad::Triad;
 use crate::theme;
 use egui::{Key, Modifiers, RichText};
+use planora_feature::text_refs::{apply_shown, substitute};
 use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_math::{DVec2, DVec3};
@@ -507,11 +508,13 @@ impl TextTool {
         ])
     }
 
-    /// Was gesetzt wird: im Rahmen der Inhalt, auf dem Pfad mit verbundenen Zeilen.
-    fn shaping_content(&self) -> String {
+    /// Was gesetzt wird: der Inhalt mit ersetzten Parametern (`{Name}`, Skizzen 11b), im Rahmen
+    /// wie er ist, auf dem Pfad mit verbundenen Zeilen.
+    fn shaping_content(&self, scope: &ParamScope) -> String {
+        let content = substitute(&self.params.content, scope).0;
         match self.kind {
-            TextToolKind::Box => self.params.content.clone(),
-            TextToolKind::Path => path_content(&self.params.content),
+            TextToolKind::Box => content,
+            TextToolKind::Path => path_content(&content),
         }
     }
 
@@ -803,7 +806,7 @@ impl SketchSession {
         }
         if let Some(lib) = fonts {
             t.resolve_font(lib);
-            let key = (t.shaping_content(), t.params.style.clone());
+            let key = (t.shaping_content(&self.text_scope), t.params.style.clone());
             if t.shaped_for.as_ref() != Some(&key) {
                 let shaped = shape_now(lib, &key.0, &key.1);
                 t.shape_error = shaped.as_ref().err().copied();
@@ -1124,7 +1127,7 @@ impl SketchSession {
             _ => {}
         }
         t.resolve_font(lib);
-        let key = (t.shaping_content(), t.params.style.clone());
+        let key = (t.shaping_content(&self.text_scope), t.params.style.clone());
         let shaped = match (&t.shaped_for, &t.preview, t.shape_error) {
             (Some(k), Some(s), _) if *k == key => Ok(s.clone()),
             (Some(k), None, Some(e)) if *k == key => Err(e),
@@ -1201,6 +1204,8 @@ impl SketchSession {
                     );
                 }
             }
+            // Der neue Text ist aus dem ersetzten Inhalt gesetzt; das merkt er sich (Skizzen 11b).
+            apply_shown(sk, &se.text_scope);
             se.solve_checked(sk, prior)?;
             se.edit_label = Some(crate::msg!("undo-sketch-text-create"));
             Ok(made)
@@ -1231,6 +1236,7 @@ impl SketchSession {
         let untouched = (sf.sketch.to_data(), sf.text_formulas.clone());
         self.atomic(&mut sf.sketch, |se, sk, prior| {
             tool.apply_edit(sk, id, shape).map_err(err)?;
+            apply_shown(sk, &se.text_scope);
             se.solve_checked(sk, prior)?;
             se.edit_label = Some(crate::msg!("undo-sketch-text-edit"));
             Ok(())

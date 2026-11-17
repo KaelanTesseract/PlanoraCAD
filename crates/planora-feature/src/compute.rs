@@ -18,8 +18,10 @@ use planora_mesh::{
     BLEND_REL, BLEND_SLACK_FACTOR, Discretizer, TessellationOptions, blend_volume_plausible,
     boolean_volume_plausible, curved_area, mass_properties, tessellate, tessellate_with,
 };
+use planora_sketch::text::TextId;
 use planora_sketch::{
-    ExtractedProfiles, Sketch, SolveStatus, extrude_profile, plane_of_face, revolve_profile,
+    ExtractedProfiles, ProfileRef, Sketch, SolveStatus, extrude_profile, plane_of_face,
+    revolve_profile,
 };
 
 /// Größter Betrag einer Koordinate oder eines Maßes in mm (wie
@@ -632,7 +634,10 @@ fn selected_profiles(
     match sel {
         ProfileSel::Refs(refs) => match extracted.resolve(refs) {
             Ok(idx) if !idx.is_empty() => Ok(extracted.merged(&idx)),
-            _ => Err(FeatureError::InvalidInput(tr!("feature-profile-lost"))),
+            _ => match follow_texts(sk, &extracted, refs) {
+                Some(idx) => Ok(extracted.merged(&idx)),
+                None => Err(FeatureError::InvalidInput(tr!("feature-profile-lost"))),
+            },
         },
         ProfileSel::Index(n) => {
             if let Some(idx) = sk
@@ -648,6 +653,52 @@ fn selected_profiles(
             Err(no_profile(&extracted, *n))
         }
     }
+}
+
+/// Profile, die einem Text folgen (Skizzen 11b, Parameter im Text): Setzt sich ein Text neu
+/// (anderer Wert, gelöschter Parameter, andere Einheit), ändern sich seine Buchstaben und die
+/// Verweise auf ihre Flächen gehen verloren. Wie in Fusion, wo ein Text als Ganzes Profil ist,
+/// nimmt die Auswahl dann alle heutigen Flächen der Texte, deren Kurven die Verweise nennen, dazu
+/// die übrigen auffindbaren. Jeder verlorene Verweis muss eine Kurve eines lebenden Textes nennen,
+/// sonst `None` (das Profil bleibt verloren).
+fn follow_texts(
+    sk: &Sketch,
+    extracted: &ExtractedProfiles,
+    refs: &[ProfileRef],
+) -> Option<Vec<usize>> {
+    let mut idx: Vec<usize> = Vec::new();
+    let mut texts: Vec<TextId> = Vec::new();
+    for r in refs {
+        let own: Vec<TextId> = r
+            .outer
+            .iter()
+            .chain(&r.holes)
+            .filter_map(|p| sk.text_of_curve(p.curve))
+            .collect();
+        match extracted.find(r) {
+            Some(f) if own.is_empty() => {
+                if !idx.contains(&f) {
+                    idx.push(f);
+                }
+            }
+            None if own.is_empty() => return None,
+            _ => {}
+        }
+        for t in own {
+            if !texts.contains(&t) {
+                texts.push(t);
+            }
+        }
+    }
+    if texts.is_empty() {
+        return None;
+    }
+    for (i, r) in extracted.refs.iter().enumerate() {
+        if sk.text_of_profile(r).is_some_and(|t| texts.contains(&t)) && !idx.contains(&i) {
+            idx.push(i);
+        }
+    }
+    (!idx.is_empty()).then_some(idx)
 }
 
 /// Meldung „Profil `n` gibt es nicht“ mit den Gründen der abgelehnten Kurvenzüge.
@@ -895,7 +946,23 @@ fn compute_sketch(
         sketch.solve()
     };
     let locked = sketch.is_locked(&report);
-    let warning = sketch_warning(&followed.counts, &sketch);
+    let mut warning = sketch_warning(&followed.counts, &sketch);
+    // Parameter im Text (Skizzen 11b): Unbekannte Namen bleiben wörtlich stehen und warnen, der
+    // Status bleibt Ok. Ersetzt wird in `Document::reshape_texts`.
+    let unknown = crate::text_refs::unknown_names(&sketch, &doc.param_scope());
+    if !unknown.is_empty() {
+        let line = tr!(
+            "feature-sketch-text-param-unknown",
+            names = unknown.join(", ")
+        );
+        warning = Some(match warning {
+            Some(w) => format!(
+                "{w}
+{line}"
+            ),
+            None => line,
+        });
+    }
     Ok(Computed {
         locked,
         lost: followed.lost,

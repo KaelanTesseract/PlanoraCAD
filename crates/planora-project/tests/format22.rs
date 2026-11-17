@@ -114,6 +114,18 @@ fn document_with(features: Vec<(&str, FeatureKind)>) -> Document {
     d
 }
 
+/// Wie [`document_with`], vorher mit dem Parameter `Breite` = 20 (eine Höhenformel muss sich
+/// beim Anlegen auswerten lassen, Task 10).
+fn document_with_breite(features: Vec<(&str, FeatureKind)>) -> Document {
+    let mut d = Document::new();
+    d.add_parameter("Breite", "20", ParamUnit::Length, "")
+        .unwrap();
+    for (name, kind) in features {
+        d.add_feature(name, kind).unwrap();
+    }
+    d
+}
+
 fn sketch_of(s: &Snapshot, i: usize) -> &SketchFeature {
     let FeatureKind::Sketch(sf) = &s.features[i].kind else {
         panic!("keine Skizze");
@@ -358,7 +370,7 @@ fn text_formula_writes_22() {
     let (sk, t) = text_sketch("Abc");
     let mut sf = sketch_feature(sk);
     sf.text_formulas.insert(t, "Breite / 4".into());
-    let d = document_with(vec![("Skizze1", FeatureKind::Sketch(sf))]);
+    let d = document_with_breite(vec![("Skizze1", FeatureKind::Sketch(sf))]);
     let (back, text) = roundtrip(&d.snapshot());
     let mut expected = BTreeMap::new();
     expected.insert(t, "Breite / 4".to_string());
@@ -410,6 +422,56 @@ fn format_21_file_with_param_ref_loads_unchanged() {
     assert!(text.contains("{Breite} mm"));
     let snap = decode_version(&text, "x.json").unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(encode_version(&snap).unwrap(), text);
+}
+
+/// Task 11: Der gezeigte (ersetzte) Inhalt eines Textes ist nur zur Laufzeit da; die Datei hat den
+/// Rohinhalt, und ein Dokument mit `{…}` als einzigem Neuen bleibt bei Format 18.
+#[test]
+fn shown_never_in_file() {
+    let (mut sk, t) = text_sketch("{Breite} mm");
+    assert!(sk.set_text_shown(t, Some("20,00 mm".into())));
+    let mut d = document_with(vec![("Skizze1", FeatureKind::Sketch(sketch_feature(sk)))]);
+    d.add_parameter("Breite", "20", ParamUnit::Length, "")
+        .unwrap();
+    let snap = d.snapshot();
+    assert_eq!(required_format(&snap), 18);
+    let text = encode_version(&snap).unwrap();
+    assert_eq!(format_of(&text), 18);
+    assert!(text.contains("{Breite} mm"));
+    assert!(!text.contains("20,00 mm"));
+    let back = decode_version(&text, "x.json").unwrap();
+    assert_eq!(encode_version(&back).unwrap(), text);
+}
+
+/// Task 11: Umbenennen eines Parameters schreibt den Verweis im Text um; das Dateiformat bleibt
+/// das alte (18 für Texte), die Datei hat den neuen Rohinhalt.
+#[test]
+fn rename_keeps_old_format() {
+    let (sk, _) = text_sketch("{Breite} mm");
+    let mut d = document_with(vec![("Skizze1", FeatureKind::Sketch(sketch_feature(sk)))]);
+    let p = d
+        .add_parameter("Breite", "20", ParamUnit::Length, "")
+        .unwrap();
+    let before = encode_version(&d.snapshot()).unwrap();
+    assert_eq!(format_of(&before), 18);
+    d.set_parameter(
+        p,
+        ParamEdit {
+            name: "Neu".into(),
+            formula: "20".into(),
+            unit: ParamUnit::Length,
+            comment: String::new(),
+        },
+    )
+    .unwrap();
+    let snap = d.snapshot();
+    assert_eq!(required_format(&snap), 18);
+    let text = encode_version(&snap).unwrap();
+    assert_eq!(format_of(&text), 18);
+    assert!(text.contains("{Neu} mm"), "{text}");
+    assert!(!text.contains("{Breite}"));
+    let back = decode_version(&text, "x.json").unwrap();
+    assert_eq!(encode_version(&back).unwrap(), text);
 }
 
 /// Die nächste Gruppenkennung steht in der Datei (`naechste_gruppe`) und kommt gleich zurück,
@@ -551,7 +613,7 @@ fn bad_text_formulas_refused() {
     sk.remove_text(b).unwrap();
     let mut sf = sketch_feature(sk);
     sf.text_formulas.insert(a, "Breite".into());
-    let snap = document_with(vec![("Skizze1", FeatureKind::Sketch(sf))]).snapshot();
+    let snap = document_with_breite(vec![("Skizze1", FeatureKind::Sketch(sf))]).snapshot();
     let base: serde_json::Value = serde_json::from_str(&encode_version(&snap).unwrap()).unwrap();
     // Formel am gelöschten Text
     let mut v = base.clone();

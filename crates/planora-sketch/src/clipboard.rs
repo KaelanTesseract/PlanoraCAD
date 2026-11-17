@@ -301,6 +301,7 @@ impl Sketch {
             };
             new_texts.push(TextData {
                 content: d.content.clone(),
+                shown: d.shown.clone(),
                 style: d.style.clone(),
                 height: d.height,
                 flip_h: d.flip_h,

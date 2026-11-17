@@ -197,6 +197,11 @@ impl DocTab {
             self.state.set_fonts(fonts.clone());
             stale = true;
         }
+        // Parameter im Text (Skizzen 11b): Nach einer Änderung der Parametertabelle zeigen die
+        // Texte neue Werte.
+        if std::mem::take(&mut self.state.texts_due) {
+            self.reshape_due = true;
+        }
         if !self.reshape_due
             || self.state.sketch_session.is_some()
             || self.tracker.is_pending(self.state.document.edit_count())
@@ -1827,6 +1832,10 @@ impl Workspace {
     /// kommt beim nächsten gelungenen Schreiben mit ([`Workspace::length_unit_pending`]).
     pub fn set_length_unit(&mut self, unit: planora_i18n::DisplayUnit) -> bool {
         planora_i18n::set_global_unit(unit);
+        // Parameter im Text (Skizzen 11b): Längen stehen in der Anzeigeeinheit im Text.
+        for t in &mut self.tabs {
+            t.reshape_due = true;
+        }
         let id = unit.id().to_string();
         self.config.length_unit = Some(id.clone());
         let transparency = self
