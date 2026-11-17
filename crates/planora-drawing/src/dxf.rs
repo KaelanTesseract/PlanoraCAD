@@ -136,7 +136,7 @@ use std::io::Write;
 
 /// Ebenenname für die Datei: ohne Leerraum an den Enden, unzulässige Zeichen und Leerzeichen als
 /// `_`, Zeichen außerhalb von ASCII wie bei den Blocknamen kodiert.
-fn layer_name(text: &str) -> String {
+pub(crate) fn layer_name(text: &str) -> String {
     let clean: String = text
         .trim()
         .chars()
@@ -287,24 +287,13 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
 
     // Handles der Tabellen und Blockeinträge im Voraus; alles Weitere beim Schreiben.
     let mut hs = Handles(0);
-    let mut t = TableHandles {
-        vport: hs.next(),
-        ltype: hs.next(),
-        layer: hs.next(),
-        style: hs.next(),
-        view: hs.next(),
-        ucs: hs.next(),
-        appid: hs.next(),
-        dimstyle: hs.next(),
-        block_record: hs.next(),
-        plot_placeholder: 0,
-    };
-    let br_model = hs.next();
-    let br_paper = hs.next();
-    let br_views: Vec<u64> = names.iter().map(|_| hs.next()).collect();
-    let (dict_root, dict_group) = (hs.next(), hs.next());
-    let (dict_plot, placeholder) = (hs.next(), hs.next());
-    t.plot_placeholder = placeholder;
+    let Ids {
+        t,
+        br_model,
+        br_paper,
+        br_views,
+        dict,
+    } = Ids::alloc(&mut hs, names.len());
 
     let used = UsedKinds::of(model);
     let layers = Layers::new();
@@ -313,12 +302,16 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
         &mut tables,
         &mut hs,
         &t,
-        (w, h),
+        View {
+            center: DVec2::new(0.5 * w, 0.5 * h),
+            w,
+            h,
+        },
         &names,
         [br_model, br_paper],
         &br_views,
-        used,
-        &layers,
+        &sheet_layer_specs(used, &layers),
+        used.center || used.section,
     )?;
 
     let mut blocks = Out::new();
@@ -345,8 +338,80 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
         entities.point(10, DVec2::ZERO)?;
     }
 
+    let head = header(4, true, DVec2::ZERO, DVec2::new(w, h), hs.0 + 1)?;
+    Ok(assemble(&head, &tables, &blocks, &entities, &dict))
+}
+
+/// Handles der Wörterbücher der Objektliste.
+pub(crate) struct Dicts {
+    root: u64,
+    group: u64,
+    plot: u64,
+    placeholder: u64,
+}
+
+/// Alle im Voraus vergebenen Handles einer Datei (Tabellen, Blockeinträge, Wörterbücher).
+pub(crate) struct Ids {
+    pub(crate) t: TableHandles,
+    pub(crate) br_model: u64,
+    pub(crate) br_paper: u64,
+    pub(crate) br_views: Vec<u64>,
+    pub(crate) dict: Dicts,
+}
+
+impl Ids {
+    /// Vergibt in fester Reihenfolge; `views` Blockeinträge je Ansicht (ebenes Modell: keine).
+    pub(crate) fn alloc(hs: &mut Handles, views: usize) -> Ids {
+        let mut t = TableHandles {
+            vport: hs.next(),
+            ltype: hs.next(),
+            layer: hs.next(),
+            style: hs.next(),
+            view: hs.next(),
+            ucs: hs.next(),
+            appid: hs.next(),
+            dimstyle: hs.next(),
+            block_record: hs.next(),
+            plot_placeholder: 0,
+        };
+        let br_model = hs.next();
+        let br_paper = hs.next();
+        let br_views: Vec<u64> = (0..views).map(|_| hs.next()).collect();
+        let (root, group) = (hs.next(), hs.next());
+        let (plot, placeholder) = (hs.next(), hs.next());
+        t.plot_placeholder = placeholder;
+        Ids {
+            t,
+            br_model,
+            br_paper,
+            br_views,
+            dict: Dicts {
+                root,
+                group,
+                plot,
+                placeholder,
+            },
+        }
+    }
+}
+
+/// Setzt die Abschnitte zur Datei zusammen; CLASSES und OBJECTS sind für Blatt und ebenes Modell
+/// gleich.
+pub(crate) fn assemble(
+    head: &str,
+    tables: &Out,
+    blocks: &Out,
+    entities: &Out,
+    dict: &Dicts,
+) -> String {
+    let Dicts {
+        root: dict_root,
+        group: dict_group,
+        plot: dict_plot,
+        placeholder,
+    } = *dict;
     let mut s = String::new();
-    s.push_str(&header(w, h, hs.0 + 1)?);
+    s.push_str(head);
     s.push_str("  0\r\nSECTION\r\n  2\r\nCLASSES\r\n");
     for (name, cpp) in [
         ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault"),
@@ -405,7 +470,7 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     s.push_str(&objects.s);
     s.push_str("  0\r\nENDSEC\r\n");
     s.push_str("  0\r\nEOF\r\n");
-    Ok(s)
+    s
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -413,16 +478,25 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
 // ---------------------------------------------------------------------------------------------
 
 /// Fortlaufende Handles ab 1.
-struct Handles(u64);
+pub(crate) struct Handles(u64);
 
 impl Handles {
-    fn next(&mut self) -> u64 {
+    pub(crate) fn new() -> Handles {
+        Handles(0)
+    }
+
+    /// Wert für `$HANDSEED`: größer als jedes vergebene Handle.
+    pub(crate) fn seed(&self) -> u64 {
+        self.0 + 1
+    }
+
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 += 1;
         self.0
     }
 }
 
-fn hex(h: u64) -> String {
+pub(crate) fn hex(h: u64) -> String {
     format!("{h:X}")
 }
 
@@ -491,7 +565,7 @@ fn encoded_len(c: char) -> usize {
 }
 
 /// Namen in der Schreibweise der Datei: ASCII, alles andere als `\U+XXXX`.
-fn encode(s: &str) -> String {
+pub(crate) fn encode(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
         if c.is_ascii() {
@@ -522,7 +596,7 @@ fn fit_name(base: &str, suffix: &str) -> String {
 
 /// Eindeutiger, zulässiger Blockname: Zeichen ersetzen, kürzen, bei Wiederholung ` 2`, ` 3`, …
 /// anhängen; leer wird zu „Ansicht“. Der Vergleich ignoriert Groß-/Kleinschreibung.
-fn unique_name(used: &mut BTreeSet<String>, raw: &str) -> String {
+pub(crate) fn unique_name(used: &mut BTreeSet<String>, raw: &str) -> String {
     let cleaned: String = raw
         .chars()
         .map(|c| if illegal(c) { '_' } else { c })
@@ -550,45 +624,45 @@ fn unique_name(used: &mut BTreeSet<String>, raw: &str) -> String {
     }
 }
 
-struct Out {
-    s: String,
+pub(crate) struct Out {
+    pub(crate) s: String,
 }
 
 impl Out {
-    fn new() -> Out {
+    pub(crate) fn new() -> Out {
         Out { s: String::new() }
     }
 
-    fn text(&mut self, code: i32, v: &str) {
+    pub(crate) fn text(&mut self, code: i32, v: &str) {
         self.s.push_str(&format!("{code:>3}\r\n{v}\r\n"));
     }
 
-    fn int(&mut self, code: i32, v: i64) {
+    pub(crate) fn int(&mut self, code: i32, v: i64) {
         self.text(code, &v.to_string());
     }
 
-    fn num(&mut self, code: i32, v: f64) -> Result<(), DrawError> {
+    pub(crate) fn num(&mut self, code: i32, v: f64) -> Result<(), DrawError> {
         let t = num(v)?;
         self.text(code, &t);
         Ok(())
     }
 
     /// Punkt in der Ebene als Gruppen `base`, `base + 10`, `base + 20` (z = 0).
-    fn point(&mut self, base: i32, p: DVec2) -> Result<(), DrawError> {
+    pub(crate) fn point(&mut self, base: i32, p: DVec2) -> Result<(), DrawError> {
         self.num(base, p.x)?;
         self.num(base + 10, p.y)?;
         self.num(base + 20, 0.0)
     }
 
     /// Normale `0, 0, 1`.
-    fn normal(&mut self) {
+    pub(crate) fn normal(&mut self) {
         self.text(210, "0");
         self.text(220, "0");
         self.text(230, "1");
     }
 
     /// Anfang eines Objekts: Art, Handle, Besitzer, `AcDbEntity`, Ebene.
-    fn entity_head(&mut self, kind: &str, handle: u64, owner: u64, layer: &str) {
+    pub(crate) fn entity_head(&mut self, kind: &str, handle: u64, owner: u64, layer: &str) {
         self.text(0, kind);
         self.text(5, &hex(handle));
         self.text(330, &hex(owner));
@@ -597,7 +671,7 @@ impl Out {
     }
 
     /// Anfang einer Tabelle.
-    fn table_head(&mut self, name: &str, handle: u64, count: usize) {
+    pub(crate) fn table_head(&mut self, name: &str, handle: u64, count: usize) {
         self.text(0, "TABLE");
         self.text(2, name);
         self.text(5, &hex(handle));
@@ -611,7 +685,7 @@ impl Out {
     }
 
     /// Anfang eines Tabelleneintrags.
-    fn record_head(&mut self, kind: &str, handle: u64, table: u64, marker: &str) {
+    pub(crate) fn record_head(&mut self, kind: &str, handle: u64, table: u64, marker: &str) {
         self.text(0, kind);
         self.text(if kind == "DIMSTYLE" { 105 } else { 5 }, &hex(handle));
         self.text(330, &hex(table));
@@ -619,7 +693,7 @@ impl Out {
         self.text(100, marker);
     }
 
-    fn end_table(&mut self) {
+    pub(crate) fn end_table(&mut self) {
         self.text(0, "ENDTAB");
     }
 }
@@ -628,7 +702,15 @@ impl Out {
 // Kopf und Tabellen
 // ---------------------------------------------------------------------------------------------
 
-fn header(w: f64, h: f64, handseed: u64) -> Result<String, DrawError> {
+/// Kopf: Einheit (`$INSUNITS`, `$MEASUREMENT`) und Ausdehnung (`$EXTMIN`/`$EXTMAX`, zugleich die
+/// Zeichengrenzen `$LIMMIN`/`$LIMMAX`).
+pub(crate) fn header(
+    insunits: i64,
+    metric: bool,
+    min: DVec2,
+    max: DVec2,
+    handseed: u64,
+) -> Result<String, DrawError> {
     let mut o = Out::new();
     o.text(0, "SECTION");
     o.text(2, "HEADER");
@@ -641,21 +723,21 @@ fn header(w: f64, h: f64, handseed: u64) -> Result<String, DrawError> {
     o.text(9, "$INSBASE");
     o.point(10, DVec2::ZERO)?;
     o.text(9, "$EXTMIN");
-    o.point(10, DVec2::ZERO)?;
+    o.point(10, min)?;
     o.text(9, "$EXTMAX");
-    o.point(10, DVec2::new(w, h))?;
+    o.point(10, max)?;
     o.text(9, "$LIMMIN");
-    o.num(10, 0.0)?;
-    o.num(20, 0.0)?;
+    o.num(10, min.x)?;
+    o.num(20, min.y)?;
     o.text(9, "$LIMMAX");
-    o.num(10, w)?;
-    o.num(20, h)?;
+    o.num(10, max.x)?;
+    o.num(20, max.y)?;
     o.text(9, "$LTSCALE");
     o.num(40, 1.0)?;
     o.text(9, "$MEASUREMENT");
-    o.int(70, 1);
+    o.int(70, i64::from(metric));
     o.text(9, "$INSUNITS");
-    o.int(70, 4);
+    o.int(70, insunits);
     o.text(0, "ENDSEC");
     Ok(o.s)
 }
@@ -756,7 +838,7 @@ fn mark_kind(m: &Mark) -> MarkKind {
     }
 }
 
-struct TableHandles {
+pub(crate) struct TableHandles {
     vport: u64,
     ltype: u64,
     layer: u64,
@@ -770,108 +852,24 @@ struct TableHandles {
     plot_placeholder: u64,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn write_tables(
-    o: &mut Out,
-    hs: &mut Handles,
-    t: &TableHandles,
-    (w, h): (f64, f64),
-    names: &[String],
-    [br_model, br_paper]: [u64; 2],
-    br_views: &[u64],
-    used: UsedKinds,
-    l: &Layers,
-) -> Result<(), DrawError> {
-    // VPORT: eine aktive Ansicht, die das ganze Blatt zeigt.
-    o.table_head("VPORT", t.vport, 1);
-    o.record_head("VPORT", hs.next(), t.vport, "AcDbViewportTableRecord");
-    o.text(2, "*ACTIVE");
-    o.int(70, 0);
-    o.num(10, 0.0)?;
-    o.num(20, 0.0)?;
-    o.num(11, 1.0)?;
-    o.num(21, 1.0)?;
-    o.num(12, 0.5 * w)?;
-    o.num(22, 0.5 * h)?;
-    o.num(13, 0.0)?;
-    o.num(23, 0.0)?;
-    o.num(14, 1.0)?;
-    o.num(24, 1.0)?;
-    o.num(15, 1.0)?;
-    o.num(25, 1.0)?;
-    o.num(16, 0.0)?;
-    o.num(26, 0.0)?;
-    o.num(36, 1.0)?;
-    o.num(17, 0.0)?;
-    o.num(27, 0.0)?;
-    o.num(37, 0.0)?;
-    o.num(40, 1.1 * h)?;
-    o.num(41, w / h)?;
-    o.num(42, 50.0)?;
-    o.num(43, 0.0)?;
-    o.num(44, 0.0)?;
-    o.num(50, 0.0)?;
-    o.num(51, 0.0)?;
-    for (code, v) in [
-        (71, 0),
-        (72, 100),
-        (73, 1),
-        (74, 3),
-        (75, 0),
-        (76, 0),
-        (77, 0),
-        (78, 0),
-    ] {
-        o.int(code, v);
-    }
-    o.end_table();
+/// Ausschnitt der Zeichnung für die aktive Ansicht (`VPORT`): Mitte und Größe.
+pub(crate) struct View {
+    pub(crate) center: DVec2,
+    pub(crate) w: f64,
+    pub(crate) h: f64,
+}
 
-    // LTYPE: ByBlock, ByLayer, CONTINUOUS, HIDDEN (Strich 3 mm, Lücke 1 mm), CENTER nur mit
-    // Mittellinien.
-    let center_ltype = used.center || used.section;
-    o.table_head("LTYPE", t.ltype, 4 + usize::from(center_ltype));
-    for (name, desc) in [
-        ("ByBlock", ""),
-        ("ByLayer", ""),
-        ("CONTINUOUS", "Solid line"),
-    ] {
-        o.record_head("LTYPE", hs.next(), t.ltype, "AcDbLinetypeTableRecord");
-        o.text(2, name);
-        o.int(70, 0);
-        o.text(3, desc);
-        o.int(72, 65);
-        o.int(73, 0);
-        o.num(40, 0.0)?;
-    }
-    o.record_head("LTYPE", hs.next(), t.ltype, "AcDbLinetypeTableRecord");
-    o.text(2, "HIDDEN");
-    o.int(70, 0);
-    o.text(3, "Hidden __ __ __ __ __ __ __ __");
-    o.int(72, 65);
-    o.int(73, 2);
-    o.num(40, 4.0)?;
-    o.num(49, 3.0)?;
-    o.int(74, 0);
-    o.num(49, -1.0)?;
-    o.int(74, 0);
-    if center_ltype {
-        // Strichpunkt: Strich, Lücke, kurzer Strich, Lücke (Lücken negativ).
-        o.record_head("LTYPE", hs.next(), t.ltype, "AcDbLinetypeTableRecord");
-        o.text(2, "CENTER");
-        o.int(70, 0);
-        o.text(3, "Center ____ _ ____ _ ____ _ ____");
-        o.int(72, 65);
-        o.int(73, CENTER_PATTERN.len() as i64);
-        o.num(40, CENTER_PATTERN.iter().sum())?;
-        for (i, len) in CENTER_PATTERN.iter().enumerate() {
-            o.num(49, if i % 2 == 0 { *len } else { -*len })?;
-            o.int(74, 0);
-        }
-    }
-    o.end_table();
+/// Eine Ebene der Tabelle `LAYER`.
+pub(crate) struct LayerSpec {
+    pub(crate) name: String,
+    pub(crate) ltype: &'static str,
+    pub(crate) color: i64,
+    /// Linienstärke (Gruppe 370, Hundertstel Millimeter; -3 = Vorgabe).
+    pub(crate) weight: i64,
+}
 
-    // LAYER: 0, SICHTBAR (0,5 mm), VERDECKT (0,25 mm, gestrichelt); dahinter die Ebenen der
-    // Markierungen, die vorkommen.
+/// Die Ebenen des Blatts: 0, SICHTBAR, VERDECKT und dahinter die der Markierungen, die vorkommen.
+fn sheet_layer_specs(used: UsedKinds, l: &Layers) -> Vec<LayerSpec> {
     let mut layers = vec![
         ("0", "CONTINUOUS", 7, -3),
         (l.visible.as_str(), "CONTINUOUS", 7, 50),
@@ -937,14 +935,125 @@ fn write_tables(
             layers.push(layer);
         }
     }
-    o.table_head("LAYER", t.layer, layers.len());
-    for (name, ltype, color, weight) in layers {
-        o.record_head("LAYER", hs.next(), t.layer, "AcDbLayerTableRecord");
+    layers
+        .into_iter()
+        .map(|(name, ltype, color, weight)| LayerSpec {
+            name: name.to_string(),
+            ltype,
+            color,
+            weight,
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_tables(
+    o: &mut Out,
+    hs: &mut Handles,
+    t: &TableHandles,
+    view: View,
+    names: &[String],
+    [br_model, br_paper]: [u64; 2],
+    br_views: &[u64],
+    layers: &[LayerSpec],
+    center_ltype: bool,
+) -> Result<(), DrawError> {
+    let (w, h) = (view.w, view.h);
+    // VPORT: eine aktive Ansicht, die das ganze Blatt zeigt.
+    o.table_head("VPORT", t.vport, 1);
+    o.record_head("VPORT", hs.next(), t.vport, "AcDbViewportTableRecord");
+    o.text(2, "*ACTIVE");
+    o.int(70, 0);
+    o.num(10, 0.0)?;
+    o.num(20, 0.0)?;
+    o.num(11, 1.0)?;
+    o.num(21, 1.0)?;
+    o.num(12, view.center.x)?;
+    o.num(22, view.center.y)?;
+    o.num(13, 0.0)?;
+    o.num(23, 0.0)?;
+    o.num(14, 1.0)?;
+    o.num(24, 1.0)?;
+    o.num(15, 1.0)?;
+    o.num(25, 1.0)?;
+    o.num(16, 0.0)?;
+    o.num(26, 0.0)?;
+    o.num(36, 1.0)?;
+    o.num(17, 0.0)?;
+    o.num(27, 0.0)?;
+    o.num(37, 0.0)?;
+    o.num(40, 1.1 * h)?;
+    o.num(41, w / h)?;
+    o.num(42, 50.0)?;
+    o.num(43, 0.0)?;
+    o.num(44, 0.0)?;
+    o.num(50, 0.0)?;
+    o.num(51, 0.0)?;
+    for (code, v) in [
+        (71, 0),
+        (72, 100),
+        (73, 1),
+        (74, 3),
+        (75, 0),
+        (76, 0),
+        (77, 0),
+        (78, 0),
+    ] {
+        o.int(code, v);
+    }
+    o.end_table();
+
+    // LTYPE: ByBlock, ByLayer, CONTINUOUS, HIDDEN (Strich 3 mm, Lücke 1 mm), CENTER nur mit
+    // Mittellinien.
+    o.table_head("LTYPE", t.ltype, 4 + usize::from(center_ltype));
+    for (name, desc) in [
+        ("ByBlock", ""),
+        ("ByLayer", ""),
+        ("CONTINUOUS", "Solid line"),
+    ] {
+        o.record_head("LTYPE", hs.next(), t.ltype, "AcDbLinetypeTableRecord");
         o.text(2, name);
         o.int(70, 0);
-        o.int(62, color);
-        o.text(6, ltype);
-        o.int(370, weight);
+        o.text(3, desc);
+        o.int(72, 65);
+        o.int(73, 0);
+        o.num(40, 0.0)?;
+    }
+    o.record_head("LTYPE", hs.next(), t.ltype, "AcDbLinetypeTableRecord");
+    o.text(2, "HIDDEN");
+    o.int(70, 0);
+    o.text(3, "Hidden __ __ __ __ __ __ __ __");
+    o.int(72, 65);
+    o.int(73, 2);
+    o.num(40, 4.0)?;
+    o.num(49, 3.0)?;
+    o.int(74, 0);
+    o.num(49, -1.0)?;
+    o.int(74, 0);
+    if center_ltype {
+        // Strichpunkt: Strich, Lücke, kurzer Strich, Lücke (Lücken negativ).
+        o.record_head("LTYPE", hs.next(), t.ltype, "AcDbLinetypeTableRecord");
+        o.text(2, "CENTER");
+        o.int(70, 0);
+        o.text(3, "Center ____ _ ____ _ ____ _ ____");
+        o.int(72, 65);
+        o.int(73, CENTER_PATTERN.len() as i64);
+        o.num(40, CENTER_PATTERN.iter().sum())?;
+        for (i, len) in CENTER_PATTERN.iter().enumerate() {
+            o.num(49, if i % 2 == 0 { *len } else { -*len })?;
+            o.int(74, 0);
+        }
+    }
+    o.end_table();
+
+    o.table_head("LAYER", t.layer, layers.len());
+    for s in layers {
+        o.record_head("LAYER", hs.next(), t.layer, "AcDbLayerTableRecord");
+        o.text(2, &s.name);
+        o.int(70, 0);
+        o.int(62, s.color);
+        o.text(6, s.ltype);
+        o.int(370, s.weight);
         o.text(390, &hex(t.plot_placeholder));
     }
     o.end_table();
@@ -1028,6 +1137,19 @@ fn write_tables(
 // Blöcke und Objekte
 // ---------------------------------------------------------------------------------------------
 
+/// Die leeren Blöcke der zwei Räume (Modell- und Papierraum).
+pub(crate) fn write_space_blocks(
+    o: &mut Out,
+    hs: &mut Handles,
+    [br_model, br_paper]: [u64; 2],
+) -> Result<(), DrawError> {
+    block_begin(o, hs.next(), br_model, "*Model_Space", false)?;
+    block_end(o, hs.next(), br_model, false);
+    block_begin(o, hs.next(), br_paper, "*Paper_Space", true)?;
+    block_end(o, hs.next(), br_paper, true);
+    Ok(())
+}
+
 fn write_blocks(
     o: &mut Out,
     hs: &mut Handles,
@@ -1037,10 +1159,7 @@ fn write_blocks(
     br_views: &[u64],
     l: &Layers,
 ) -> Result<(), DrawError> {
-    block_begin(o, hs.next(), br_model, "*Model_Space", false)?;
-    block_end(o, hs.next(), br_model, false);
-    block_begin(o, hs.next(), br_paper, "*Paper_Space", true)?;
-    block_end(o, hs.next(), br_paper, true);
+    write_space_blocks(o, hs, [br_model, br_paper])?;
     for ((view, name), &br) in model.views.iter().zip(names).zip(br_views) {
         block_begin(o, hs.next(), br, &encode(name), false)?;
         for line in &view.lines {
@@ -1095,7 +1214,7 @@ fn block_end(o: &mut Out, handle: u64, record: u64, paper: bool) {
     o.text(100, "AcDbBlockEnd");
 }
 
-fn write_curve(
+pub(crate) fn write_curve(
     o: &mut Out,
     hs: &mut Handles,
     owner: u64,
