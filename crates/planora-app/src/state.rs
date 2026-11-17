@@ -216,6 +216,10 @@ pub struct AppState {
     /// Der Hinweis `info` beschreibt die Änderung, aus der der nächste Verlaufsschritt wird (etwa
     /// die Zusammenfassung von „STEP importieren“): dieser eine Schritt beendet ihn nicht.
     pub info_outlives_step: bool,
+    /// Ein Eintrag des Rechtsklickmenüs der Skizze (Kopieren, Ausschneiden, Einfügen) wurde
+    /// gewählt; der Verteiler der App führt ihn mit der Zwischenablage des Arbeitsbereichs aus
+    /// (Skizzen 11b).
+    pub clip_request: Option<crate::keymap::Action>,
     /// Laufende Nummer je Bezeichnung für neue Features („Quader 1“, „Quader 2“, …); zählt
     /// nur hoch, damit Namen auch nach dem Löschen eindeutig bleiben.
     name_counters: BTreeMap<String, u64>,
@@ -709,6 +713,7 @@ impl AppState {
             message: None,
             info: None,
             info_outlives_step: false,
+            clip_request: None,
             name_counters: BTreeMap::new(),
             selected_feature: None,
             history_choice: None,
@@ -3737,6 +3742,7 @@ impl AppState {
             {
                 se.edit_label = None;
                 se.included_vertices.clear();
+                se.replace_step = false;
             }
             return;
         };
@@ -3745,6 +3751,25 @@ impl AppState {
         let Some((h, draft, _)) = self.sketch_open_change() else {
             return;
         };
+        // Bestätigtes Verschieben der eingefügten Kopie: kein zweiter Schritt, das Bild des
+        // Schritts „Einfügen“ wird ersetzt (Skizzen 11b, Spec-Entscheidung 5). Der Name bleibt.
+        let replace = self
+            .sketch_session
+            .as_ref()
+            .is_some_and(|se| se.replace_step)
+            && h.undo_len() > 0;
+        if replace {
+            let after = draft.clone();
+            let bytes = sketch_bytes(&after);
+            if let Some(h) = self.sketch_history.as_mut() {
+                h.replace_current(after, bytes);
+            }
+            if let Some(se) = self.sketch_session.as_mut() {
+                se.edit_label = None;
+                se.replace_step = false;
+            }
+            return;
+        }
         let label = self.sketch_label(h.current(), draft);
         crate::diag::step(&crate::diag::in_english(|| {
             self.sketch_label(h.current(), draft)
@@ -3757,6 +3782,143 @@ impl AppState {
         if let Some(se) = self.sketch_session.as_mut() {
             se.edit_label = None;
         }
+    }
+
+    // ---- Zwischenablage der Skizze (Skizzen 11b, Task 3) ----------------------------------
+
+    /// Die Auswahl der offenen Skizze als Zwischenablage. Ändert die Skizze nicht; die Meldung
+    /// sagt, wie viele Elemente es sind. Fehler: keine Skizze offen, nichts gewählt, Text auf
+    /// einem Pfad ohne seinen Pfad.
+    pub fn copy_sketch_selection(&mut self) -> Result<planora_feature::FeatureClip, Msg> {
+        let (Some(se), Some(sf)) = (self.sketch_session.as_mut(), self.sketch_draft.as_ref())
+        else {
+            return Err(crate::msg!("state-no-open-sketch"));
+        };
+        let set = clip_set_of(se, &sf.sketch);
+        let n = set.curves.len() + set.points.len();
+        if n == 0 {
+            let m = crate::msg!("sketch-nothing-selected");
+            se.message = Some(m.clone());
+            return Err(m);
+        }
+        let frame = *sf.sketch.frame();
+        match planora_feature::copy_selection(sf, &frame, &set) {
+            Ok(clip) => {
+                se.message = Some(crate::msg!("sketch-copy-done", n = n));
+                Ok(clip)
+            }
+            Err(e) => {
+                let m = crate::sketch_state::err(e);
+                se.message = Some(m.clone());
+                Err(m)
+            }
+        }
+    }
+
+    /// Ausschneiden: kopieren und die Auswahl wie mit Entf löschen (Löschregel der Skizze), ein
+    /// Schritt „Ausschneiden“. Scheitert das Kopieren, bleibt die Skizze, wie sie war.
+    pub fn cut_sketch_selection(&mut self) -> Result<planora_feature::FeatureClip, Msg> {
+        // Was davor offen war, ist ein eigener Schritt.
+        self.observe_sketch(false);
+        let clip = self.copy_sketch_selection()?;
+        if let Some((se, sf)) = self.session_draft_mut() {
+            se.delete_selection_in(sf);
+            sf.prune_formulas();
+            se.edit_label = Some(crate::msg!("undo-sketch-cut"));
+        }
+        self.observe_sketch(false);
+        Ok(clip)
+    }
+
+    /// Einfügen: die Zwischenablage an die Lage der Quelle in die offene Skizze, ein Schritt
+    /// „Einfügen“. Danach sind alle eingefügten Elemente gewählt und Verschieben/Kopieren ist
+    /// damit offen (`TransformState::pasted`); ein bestätigtes Verschieben ersetzt das Bild dieses
+    /// Schritts, ein Abbruch lässt die Kopie an der Quelllage. Enthält die Kopie einen festen
+    /// Spline, bleibt sie gewählt, das Werkzeug geht nicht auf, und eine Meldung sagt es. Ein
+    /// Fehler (etwa „sketch-move-fixed“ beim Einfügen von 3D-Inhalt in eine andere Ebene) ändert
+    /// nichts.
+    pub fn paste_sketch_clip(
+        &mut self,
+        clip: &planora_feature::FeatureClip,
+    ) -> Result<planora_feature::PasteReport, Msg> {
+        use crate::sketch_state::{Item, Tool};
+        if self.sketch_session.is_none() || self.sketch_draft.is_none() {
+            return Err(crate::msg!("state-no-open-sketch"));
+        }
+        // Was davor offen war, ist ein eigener Schritt; ein laufendes Werkzeug endet.
+        self.observe_sketch(false);
+        let scope = self.document.param_scope();
+        let Some((se, sf)) = self.session_draft_mut() else {
+            return Err(crate::msg!("state-no-open-sketch"));
+        };
+        se.set_tool(&mut sf.sketch, Tool::Select);
+        let frame = *sf.sketch.frame();
+        let before = sf.clone();
+        let report = match planora_feature::paste_clip(sf, &frame, clip, &scope) {
+            Ok(r) => r,
+            Err(e) => {
+                let m = crate::sketch_state::err(e);
+                se.message = Some(m.clone());
+                return Err(m);
+            }
+        };
+        if let Err(m) = se.solve_checked(&mut sf.sketch, &before.sketch) {
+            *sf = before;
+            se.message = Some(m.clone());
+            return Err(m);
+        }
+        // Alle eingefügten Elemente sind gewählt: die Kurven und die freien Punkte.
+        let curves: Vec<CurveId> = report.map.curves.values().copied().collect();
+        let grown = sf.sketch.transform_set(&curves, &[]);
+        let mut selection: Vec<Item> = curves.iter().map(|&c| Item::Curve(c)).collect();
+        selection.extend(
+            report
+                .map
+                .points
+                .values()
+                .filter(|p| !grown.points.contains(p))
+                .map(|&p| Item::Point(p)),
+        );
+        let points: Vec<PointId> = report.map.points.values().copied().collect();
+        se.selection = selection.clone();
+        se.drop_curve_picks();
+        se.edit_label = Some(crate::msg!("undo-sketch-paste"));
+        let mut notes = Vec::new();
+        if clip.made_free > 0 {
+            notes.push(crate::msg!("sketch-paste-made-free", n = clip.made_free));
+        }
+        if report.formulas_dropped > 0 {
+            notes.push(crate::msg!(
+                "sketch-paste-formulas-dropped",
+                n = report.formulas_dropped
+            ));
+        }
+        if report.constraints_dropped > 0 {
+            notes.push(crate::msg!(
+                "sketch-move-dropped",
+                n = report.constraints_dropped
+            ));
+        }
+        // Ein fester Spline in der Kopie: Sie lässt sich nicht verschieben.
+        let movable = !paste_is_fixed(&sf.sketch, &curves, &points);
+        if !movable {
+            notes.push(crate::msg!("sketch-paste-fixed-spline"));
+        }
+        se.message = match notes.len() {
+            0 => None,
+            1 => notes.pop(),
+            _ => Some(Msg::Join(notes)),
+        };
+        // Die Kopie ist ein Schritt, bevor sie bewegt wird.
+        self.observe_sketch(false);
+        if movable && let Some((se, sf)) = self.session_draft_mut() {
+            let message = se.message.take();
+            se.set_tool(&mut sf.sketch, Tool::MoveCopy);
+            se.transform.selection_before = selection;
+            se.transform.pasted = true;
+            se.message = message;
+        }
+        Ok(report)
     }
 
     /// Rückgängig in der offenen Skizze. Offene Änderungen werden vorher ein Schritt. Bleibt
@@ -5227,4 +5389,41 @@ impl AppState {
             })
             .collect()
     }
+}
+
+/// Die Auswahl der Sitzung als Menge für die Zwischenablage: gewählte Kurven und Punkte (was nicht
+/// mehr lebt, fällt weg).
+fn clip_set_of(se: &SketchSession, sk: &Sketch) -> planora_sketch::clipboard::ClipSet {
+    use crate::sketch_state::Item;
+    let mut set = planora_sketch::clipboard::ClipSet::default();
+    for item in &se.selection {
+        match *item {
+            Item::Curve(c) if sk.curve(c).is_some() => set.curves.push(c),
+            Item::Point(p) if sk.point_xy(p).is_ok() => set.points.push(p),
+            _ => {}
+        }
+    }
+    set
+}
+
+/// Hält etwas in der eingefügten Menge fest (fester Spline: seine Enden bleiben `Fixed`)? Dann
+/// geht Verschieben/Kopieren dafür nicht.
+fn paste_is_fixed(sk: &Sketch, curves: &[CurveId], points: &[PointId]) -> bool {
+    use planora_sketch::transform::{Similarity, TransformBlock};
+    let set = sk.transform_set(curves, points);
+    let base = set
+        .points
+        .first()
+        .and_then(|&p| sk.point_xy(p).ok())
+        .unwrap_or(DVec2::ZERO);
+    let probe = Similarity {
+        base,
+        offset: DVec2::new(1.0, 0.0),
+        angle: 0.0,
+        factor: 1.0,
+    };
+    matches!(
+        sk.check_transform(&set, &probe),
+        Err(TransformBlock::FixedInSet(_) | TransformBlock::BoundToFixed(_))
+    )
 }

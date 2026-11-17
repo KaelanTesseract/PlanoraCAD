@@ -2610,6 +2610,28 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         ui.close();
     }
     ui.separator();
+    // Kopieren, Ausschneiden, Einfügen der Skizze (Skizzen 11b): ohne offene Skizze gedämpft.
+    let tab = ws.active_tab();
+    let sketch_open = tab.state.sketch_session.is_some() && !tab.read_only;
+    for (action, label) in [
+        (Action::SketchCopy, tr!("action-sketch-copy")),
+        (Action::SketchCut, tr!("action-sketch-cut")),
+        (Action::SketchPaste, tr!("action-sketch-paste")),
+    ] {
+        let keys = keymap::shortcut_hint(&ws.keymap, action);
+        let mut button = egui::Button::new(label);
+        if !keys.is_empty() {
+            button = button.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()));
+        }
+        if entry(ui, sketch_open, button)
+            .on_disabled_hover_text(tr!("sketch-clip-needs-sketch"))
+            .clicked()
+        {
+            commands::run_action(ws, action);
+            ui.close();
+        }
+    }
+    ui.separator();
     // Parameter: gesperrt, solange eine Skizze offen ist (ihr Entwurf hängt an den alten Werten).
     let tab = ws.active_tab_mut();
     let sketch_open = tab.state.sketch_session.is_some();
@@ -3284,6 +3306,10 @@ impl eframe::App for PlanoraApp {
         // Maustaste mehr gedrückt ist und kein Eingabefeld die Tastatur hat, damit Ziehen und
         // Tippen je ein Schritt sind. Vor `remember_keyboard_focus` zählt dabei auch das vorige
         // Bild; das verschiebt den Schritt nach Enter nur um ein Bild (beides ein Schritt).
+        if self.ws.active_tab().state.clip_request.is_some() {
+            ctx.request_repaint();
+        }
+        self.ws.serve_sketch_clip();
         let gesture = ctx.input(|i| i.pointer.any_down())
             || viewport::typing_for_history(&ctx)
             || crate::history_bar::is_playing(&ctx);

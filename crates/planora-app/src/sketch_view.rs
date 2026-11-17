@@ -2,6 +2,7 @@
 //! über der Szene und Weiterleiten der Eingaben an [`SketchSession`]. Die Logik (Werkzeuge, Fang,
 //! Abhängigkeiten) liegt in `sketch_state`; hier wird nur gezeichnet und weitergereicht.
 
+use crate::keymap::Action;
 use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_grips::{self, Grip, GripLayout};
 use crate::sketch_handles::HandlePart;
@@ -1517,9 +1518,12 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
     response.hovered()
 }
 
-/// Rechtsklickmenü der gewählten Kurve (Skizzen 11a): „Krümmungsanzeige ein/aus“, gedämpft, wenn
-/// nur Linien gewählt sind. Ein Klick auf den Punkt führt ihn aus; ein Linksklick daneben schließt
-/// das Menü (Esc und ein neuer Rechtsklick über die Sitzung).
+/// Rechtsklickmenü der Skizze (Skizzen 11a, 11b): „Kopieren“, „Ausschneiden“ und „Einfügen“ mit
+/// ihren Tasten (Kopieren und Ausschneiden gedämpft ohne Auswahl, Einfügen gedämpft bei leerer
+/// Zwischenablage), dann „Krümmungsanzeige ein/aus“, gedämpft, wenn nur Linien gewählt sind. Ein
+/// Klick auf einen Punkt führt ihn aus (die Zwischenablage gehört dem Arbeitsbereich, der Eintrag
+/// geht über [`AppState::clip_request`]); ein Linksklick daneben schließt das Menü (Esc und ein
+/// neuer Rechtsklick über die Sitzung).
 fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
     let Some(at) = state.sketch_session.as_ref().and_then(|se| se.curve_menu) else {
         return;
@@ -1528,13 +1532,36 @@ fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
         .session_sketch()
         .zip(state.sketch_session.as_ref())
         .is_some_and(|(sk, se)| se.can_toggle_curvature(sk));
+    let has_selection = state.sketch_session.as_ref().is_some_and(|se| {
+        se.selection
+            .iter()
+            .any(|i| matches!(i, Item::Curve(_) | Item::Point(_)))
+    });
+    let has_clip = state
+        .sketch_session
+        .as_ref()
+        .is_some_and(|se| se.clip_filled);
+    let km = crate::keymap::mouse::current(ui.ctx());
     let mut run = false;
+    let mut clip = None;
     let response = theme::field_area(egui::Id::new("planora-sketch-curve-menu"), pos2(at.0, at.1))
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.scope(|ui| {
                     theme::menu_style(ui.style_mut());
+                    for (action, label, enabled) in [
+                        (Action::SketchCopy, tr!("action-sketch-copy"), has_selection),
+                        (Action::SketchCut, tr!("action-sketch-cut"), has_selection),
+                        (Action::SketchPaste, tr!("action-sketch-paste"), has_clip),
+                    ] {
+                        let button = egui::Button::new(label)
+                            .shortcut_text(crate::keymap::shortcut_hint(&km, action));
+                        if ui.add_enabled(enabled, button).clicked() {
+                            clip = Some(action);
+                        }
+                    }
+                    ui.separator();
                     let item = ui.add_enabled(
                         can,
                         egui::Button::new(tr!("action-sketch-toggle-curvature")),
@@ -1551,7 +1578,12 @@ fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
         && ui
             .input(|i| i.pointer.interact_pos())
             .is_some_and(|p| !response.response.rect.contains(p));
-    if run {
+    if let Some(action) = clip {
+        state.clip_request = Some(action);
+        if let Some(se) = state.sketch_session.as_mut() {
+            se.curve_menu = None;
+        }
+    } else if run {
         crate::curvature_dialog::toggle(state);
     } else if outside && let Some(se) = state.sketch_session.as_mut() {
         se.curve_menu = None;

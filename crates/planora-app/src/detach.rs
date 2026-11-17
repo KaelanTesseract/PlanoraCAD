@@ -922,6 +922,9 @@ fn collect_keys(ctx: &egui::Context, dialog: bool) {
     if ctx.input(|i| !i.events.is_empty()) {
         ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
+    // Strg+C/X/V sind für egui `Copy`/`Cut`/`Paste`: zu Tasten machen (Skizzen 11b), außer ein
+    // Feld im Fenster hat die Tastatur; der Riegel für Strg+V liegt je Fenster.
+    crate::keymap::clipboard_keys::convert_input(ctx, crate::viewport::typing(ctx));
     // Klick oder Taste im Fenster: Das Hauptfenster gibt seinen Tastaturfokus ab, wie es
     // angedockt ein Klick daneben täte (egui zählt einen Klick in einem anderen Fenster nicht
     // als „daneben“); sonst behielte ein Feld dort alle weitergereichten Tasten.

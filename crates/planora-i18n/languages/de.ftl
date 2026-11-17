@@ -113,6 +113,9 @@ action-sketch-toggle-grid = Skizzenraster ein/aus
 action-sketch-toggle-snap = Fang ein/aus
 action-sketch-triad-plane = Triadenebene wechseln
 action-sketch-triad-handle = Triadengriff wechseln
+action-sketch-copy = Kopieren
+action-sketch-cut = Ausschneiden
+action-sketch-paste = Einfügen
 action-sketch-lock-z = Z-Lage sperren
 action-sketch-project-edge = Projizieren
 action-sketch-intersect = Schneiden
@@ -1378,6 +1381,23 @@ sketch-scale-hint = Enter nimmt die ganze Skizze
 sketch-scale-base = Bezugspunkt anklicken oder mit Enter in der Mitte bleiben
 sketch-scale-formulas-replaced = Formeln durch ihren Wert ersetzt: { $n }. Sie waren nach dem Skalieren zu lang.
 sketch-move-dropped = Abhängigkeiten entfallen: { $n }.
+undo-sketch-cut = Ausschneiden
+undo-sketch-paste = Einfügen
+sketch-copy-done = { $n ->
+    [one] { $n } Element kopiert.
+   *[other] { $n } Elemente kopiert.
+}
+sketch-clip-needs-sketch = Dafür muss eine Skizze offen sein.
+sketch-paste-empty = Die Zwischenablage ist leer.
+sketch-paste-made-free = { $n ->
+    [one] { $n } Projektion ist jetzt frei.
+   *[other] { $n } Projektionen sind jetzt frei.
+}
+sketch-paste-formulas-dropped = { $n ->
+    [one] { $n } Formel ist zum Wert geworden.
+   *[other] { $n } Formeln sind zu Werten geworden.
+}
+sketch-paste-fixed-spline = Die Kopie bleibt an der Quelllage: Wegen eines festen Splines lässt sie sich nicht verschieben.
 sketch-pattern-direction-n = Richtung { $n }
 sketch-pattern-axis-x = x-Achse
 sketch-pattern-axis-y = y-Achse

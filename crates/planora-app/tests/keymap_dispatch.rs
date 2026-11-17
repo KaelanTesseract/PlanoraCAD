@@ -729,3 +729,140 @@ fn prompt_hint_uses_the_current_projects_key() {
     assert!(!hint.contains("Strg"), "{hint}");
     assert!(hint.contains(&app::projects_entry()), "{hint}");
 }
+
+// ---- Strg+C, Strg+X, Strg+V als Tasten (Skizzen 11b, Task 3) ------------------------------------
+
+use planora_app::keymap::clipboard_keys::{PasteLatch, clipboard_events_as_keys};
+
+fn release(k: Key, modifiers: Modifiers) -> Event {
+    Event::Key {
+        key: k,
+        physical_key: Some(k),
+        pressed: false,
+        repeat: false,
+        modifiers,
+    }
+}
+
+/// Wie ein Bild des Hauptfensters: erst die Umwandlung, dann der Verteiler im Bereich Skizze.
+fn sketch_frame(
+    km: &Keymap,
+    events: &mut Vec<Event>,
+    typing: bool,
+    latch: &mut PasteLatch,
+) -> Vec<Action> {
+    clipboard_events_as_keys(events, typing, latch);
+    dispatch::pressed_in(events, false, km, Area::Sketch, |_| true)
+}
+
+#[test]
+fn copy_event_becomes_ctrl_c() {
+    let km = Keymap::defaults();
+    let mut events = vec![Event::Copy];
+    let got = sketch_frame(&km, &mut events, false, &mut PasteLatch::default());
+    assert_eq!(got, vec![Action::SketchCopy]);
+    let mut events = vec![Event::Cut];
+    let got = sketch_frame(&km, &mut events, false, &mut PasteLatch::default());
+    assert_eq!(got, vec![Action::SketchCut]);
+}
+
+#[test]
+fn paste_event_becomes_ctrl_v_once() {
+    let km = Keymap::defaults();
+    let mut latch = PasteLatch::default();
+    // Mit Text in der Systemzwischenablage: `Paste`, dann das Loslassen von V.
+    let mut events = vec![
+        Event::Paste("x".into()),
+        release(Key::V, Modifiers::COMMAND),
+    ];
+    let got = sketch_frame(&km, &mut events, false, &mut latch);
+    assert_eq!(got, vec![Action::SketchPaste], "genau einmal");
+    assert!(!latch.paste_seen, "das Loslassen setzt den Riegel zurück");
+    // Das Loslassen liegt nicht mehr herum, ein zweiter Aufruf im selben Bild findet nichts.
+    let again = sketch_frame(&km, &mut events, false, &mut latch);
+    assert!(again.is_empty());
+    // Das Loslassen in einem späteren Bild als `Paste`: auch dann nur einmal.
+    let mut latch = PasteLatch::default();
+    let mut first = vec![Event::Paste("x".into())];
+    assert_eq!(
+        sketch_frame(&km, &mut first, false, &mut latch),
+        vec![Action::SketchPaste]
+    );
+    assert!(latch.paste_seen);
+    let mut later = vec![release(Key::V, Modifiers::COMMAND)];
+    assert!(sketch_frame(&km, &mut later, false, &mut latch).is_empty());
+}
+
+#[test]
+fn ctrl_v_with_empty_system_clipboard_pastes() {
+    // Prüf-Schwerpunkt 1: Ohne Text in der Systemzwischenablage kommt kein `Paste`, nur das
+    // Loslassen von V mit Strg.
+    let km = Keymap::defaults();
+    let mut latch = PasteLatch::default();
+    let mut events = vec![release(Key::V, Modifiers::COMMAND)];
+    assert_eq!(
+        sketch_frame(&km, &mut events, false, &mut latch),
+        vec![Action::SketchPaste]
+    );
+    // Wird Strg vor V losgelassen, ist das Loslassen von V kein Strg+V mehr.
+    let mut events = vec![release(Key::V, Modifiers::NONE)];
+    assert!(sketch_frame(&km, &mut events, false, &mut latch).is_empty());
+    // Ein weiteres Strg+V ist ein weiteres Einfügen (es kommt wieder nur das Loslassen).
+    let mut events = vec![release(Key::V, Modifiers::COMMAND)];
+    assert_eq!(
+        sketch_frame(&km, &mut events, false, &mut latch),
+        vec![Action::SketchPaste]
+    );
+}
+
+#[test]
+fn typing_keeps_clipboard_events() {
+    let km = Keymap::defaults();
+    let mut latch = PasteLatch::default();
+    let before = vec![
+        Event::Copy,
+        Event::Cut,
+        Event::Paste("x".into()),
+        release(Key::V, Modifiers::COMMAND),
+    ];
+    let mut events = before.clone();
+    let got = sketch_frame(&km, &mut events, true, &mut latch);
+    assert!(got.is_empty(), "keine Aktion");
+    assert_eq!(events, before, "Copy, Cut und Paste bleiben dem Feld");
+    // Dasselbe über den Kontext mit einem fokussierten Textfeld.
+    let ctx = egui::Context::default();
+    let mut text = String::new();
+    // Erstes Bild: Fokus holen; zweites: die Ereignisse.
+    let (_, _) = dispatch_frame(&ctx, &km, Area::Sketch, vec![], &mut |ui| {
+        ui.text_edit_singleline(&mut text).request_focus();
+    });
+    let (got, _) = dispatch_frame(&ctx, &km, Area::Sketch, vec![Event::Copy], &mut |ui| {
+        ui.text_edit_singleline(&mut text);
+    });
+    assert!(
+        got.is_empty(),
+        "im Textfeld keine Aktion der Skizze: {got:?}"
+    );
+}
+
+#[test]
+fn rebound_copy_works_with_plain_key() {
+    let mut km = Keymap::defaults();
+    assert_eq!(
+        km.set(
+            Action::SketchCopy,
+            0,
+            Binding::Key(chord(Key::K, true, false, false))
+        ),
+        SetResult::Ok
+    );
+    // Strg+K kopiert.
+    let mut events = vec![key(Key::K, Modifiers::COMMAND)];
+    assert_eq!(
+        sketch_frame(&km, &mut events, false, &mut PasteLatch::default()),
+        vec![Action::SketchCopy]
+    );
+    // `Event::Copy` ist Strg+C und tut nichts mehr.
+    let mut events = vec![Event::Copy];
+    assert!(sketch_frame(&km, &mut events, false, &mut PasteLatch::default()).is_empty());
+}

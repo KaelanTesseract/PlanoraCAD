@@ -1034,7 +1034,10 @@ impl SketchSession {
         }
         sf.prune_formulas();
         self.forget_removed(&sf.sketch);
+        // Nach dem Einfügen ersetzt das Verschieben das Bild des Schritts „Einfügen“ (Spec 5).
+        let pasted = self.transform.pasted;
         self.set_tool(&mut sf.sketch, Tool::Select);
+        self.replace_step = pasted;
         Ok(())
     }
 

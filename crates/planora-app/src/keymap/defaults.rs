@@ -265,6 +265,15 @@ action_table! {
     SketchCollinear, "skizze.kollinear", "action-sketch-collinear", Sketch, [];
     /// Fusion „Glatt“.
     SketchSmooth, "skizze.glatt", "action-sketch-smooth", Sketch, [];
+    // Skizzen 11b: Zwischenablage der Skizze. Die drei Tasten kommen von egui nicht als Tasten,
+    // sondern als `Event::Copy`/`Cut`/`Paste`; `keymap::clipboard_keys` macht sie vor dem
+    // Verteiler dazu, damit die Belegung (auch eine Umbelegung) gilt.
+    /// Fusion „Kopieren“ (Copy): die Auswahl der offenen Skizze in die Zwischenablage.
+    SketchCopy, "skizze.kopieren", "action-sketch-copy", Sketch, [ctrl(Key::C)];
+    /// Fusion „Ausschneiden“ (Cut): kopieren und löschen wie Entf, ein Schritt.
+    SketchCut, "skizze.ausschneiden", "action-sketch-cut", Sketch, [ctrl(Key::X)];
+    /// Fusion „Einfügen“ (Paste): die Zwischenablage an die Lage der Quelle, danach Verschieben.
+    SketchPaste, "skizze.einfuegen", "action-sketch-paste", Sketch, [ctrl(Key::V)];
     /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
     SketchShowShortcuts, "skizze.tastenkuerzel", "action-sketch-show-shortcuts", Sketch,
         [key(Key::S)];

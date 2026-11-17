@@ -113,6 +113,9 @@ action-sketch-toggle-grid = Sketch Grid on/off
 action-sketch-toggle-snap = Snap on/off
 action-sketch-triad-plane = Switch Triad Plane
 action-sketch-triad-handle = Switch Triad Handle
+action-sketch-copy = Copy
+action-sketch-cut = Cut
+action-sketch-paste = Paste
 action-sketch-lock-z = Lock Z Position
 action-sketch-project-edge = Project
 action-sketch-intersect = Intersect
@@ -1395,6 +1398,23 @@ sketch-scale-hint = Enter takes the whole sketch
 sketch-scale-base = Click the base point or press Enter to keep the middle
 sketch-scale-formulas-replaced = Formulas replaced by their value: { $n }. They would have become too long after scaling.
 sketch-move-dropped = Constraints removed: { $n }.
+undo-sketch-cut = Cut
+undo-sketch-paste = Paste
+sketch-copy-done = { $n ->
+    [one] { $n } item copied.
+   *[other] { $n } items copied.
+}
+sketch-clip-needs-sketch = A sketch must be open for this.
+sketch-paste-empty = The clipboard is empty.
+sketch-paste-made-free = { $n ->
+    [one] { $n } projection is now free.
+   *[other] { $n } projections are now free.
+}
+sketch-paste-formulas-dropped = { $n ->
+    [one] { $n } formula became a value.
+   *[other] { $n } formulas became values.
+}
+sketch-paste-fixed-spline = The copy stays at its source position: It cannot be moved because of a fixed spline.
 sketch-pattern-direction-n = Direction { $n }
 sketch-pattern-axis-x = X axis
 sketch-pattern-axis-y = Y axis

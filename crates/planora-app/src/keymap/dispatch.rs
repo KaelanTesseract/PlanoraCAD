@@ -41,6 +41,9 @@ pub fn pressed_if(
     want: impl Fn(Action) -> bool,
 ) -> Vec<Action> {
     let focus = crate::viewport::keyboard_taken(ctx);
+    // Strg+C/X/V kommen von egui als `Copy`/`Cut`/`Paste`: erst zu Tasten machen (Skizzen 11b),
+    // außer ein Textfeld hat die Tastatur.
+    super::clipboard_keys::convert_input(ctx, crate::viewport::typing(ctx));
     ctx.input_mut(|i| pressed_in(&mut i.events, focus, km, area, want))
 }
 
