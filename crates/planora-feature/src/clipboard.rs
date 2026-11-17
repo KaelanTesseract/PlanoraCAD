@@ -58,6 +58,8 @@ pub struct PasteReport {
     pub formulas_dropped: usize,
     /// Die Zielskizze wurde auf 3D umgeschaltet.
     pub made_3d: bool,
+    /// Abhängigkeiten, die das Verschieben bei 3D in 3D entfernt hat (`MoveReport::removed_constraints`).
+    pub constraints_dropped: usize,
 }
 
 /// Legt die Auswahl der Skizze `sf` (Ebene mit der Weltlage `frame`) ab.
@@ -130,6 +132,7 @@ pub fn paste_clip(
         work.sketch.set_three_d(true);
     }
     let map = work.sketch.paste_from(&clip.sketch)?;
+    let mut constraints_dropped = 0;
     // 3D-Inhalt in eine schon 3D-Skizze: dieselben Weltpunkte.
     if three && !made_3d {
         let m = frame_move(&clip.frame, frame);
@@ -141,7 +144,10 @@ pub fn paste_clip(
                 points: map.points.values().copied().collect(),
                 curves: map.curves.values().copied().collect(),
             };
-            work.sketch.move_rigid3(&set, &m, false)?;
+            constraints_dropped = work
+                .sketch
+                .move_rigid3(&set, &m, false)?
+                .removed_constraints;
         }
     }
     let mut formulas_dropped = 0;
@@ -152,8 +158,8 @@ pub fn paste_clip(
             formulas_dropped += 1;
             continue;
         };
+        // Fehlt das Maß nach dem Verschieben, zählt es als entfernte Abhängigkeit, nicht als Formel.
         let Some(c) = work.sketch.constraint(id) else {
-            formulas_dropped += 1;
             continue;
         };
         let ok = c.kind.is_dimension()
@@ -170,5 +176,6 @@ pub fn paste_clip(
         map,
         formulas_dropped,
         made_3d,
+        constraints_dropped,
     })
 }

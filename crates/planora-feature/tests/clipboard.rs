@@ -349,3 +349,178 @@ fn paste_after_source_deleted_into_other_document() {
         }
     }
 }
+
+fn sketch_3d_in(frame: Frame) -> SketchFeature {
+    let mut sf = empty_on(StandardPlane::XY);
+    sf.sketch = Sketch::new(frame, "", tol());
+    sf.sketch.set_three_d(true);
+    sf
+}
+
+#[test]
+fn paste_3d_into_3d_offset_planes_keeps_world() {
+    let src_frame = Frame {
+        origin: DVec3::new(1.0, 2.0, 3.0),
+        ..StandardPlane::XY.frame()
+    };
+    let dst_frame = Frame {
+        origin: DVec3::new(-4.0, 5.0, 0.5),
+        ..StandardPlane::YZ.frame()
+    };
+    let mut src = sketch_3d_in(src_frame);
+    let pts = [DVec3::new(1.0, 2.0, 3.0), DVec3::new(4.0, -1.0, 2.5)];
+    let a = src.sketch.add_point3(pts[0]).unwrap();
+    let b = src.sketch.add_point3(pts[1]).unwrap();
+    src.sketch.add_line(a, b).unwrap();
+    let clip = copy_selection(&src, &src_frame, &all_curves(&src)).unwrap();
+    let mut dst = sketch_3d_in(dst_frame);
+    let rep = paste_clip(&mut dst, &dst_frame, &clip, &Document::new().param_scope()).unwrap();
+    assert_eq!(rep.constraints_dropped, 0);
+    for (id, p) in [(a, pts[0]), (b, pts[1])] {
+        let new = rep.map.points[&clip_point(&clip, &src, id)];
+        let w = world(&dst_frame, dst.sketch.point_xyz(new).unwrap());
+        let want = world(&src_frame, p);
+        assert!((w - want).length() < 1e-9, "{w:?} != {want:?}");
+    }
+}
+
+#[test]
+fn moving_paste_keeps_constraints_and_formulas() {
+    let mut d = Document::new();
+    d.add_parameter("Breite", "5", ParamUnit::Length, "")
+        .unwrap();
+    let src_frame = StandardPlane::XY.frame();
+    let dst_frame = StandardPlane::YZ.frame();
+    let mut src = sketch_3d(StandardPlane::XY);
+    let a = src.sketch.add_point3(DVec3::new(0.0, 0.0, 1.0)).unwrap();
+    let b = src.sketch.add_point3(DVec3::new(10.0, 0.0, 1.0)).unwrap();
+    src.sketch.add_line(a, b).unwrap();
+    let dim = src
+        .sketch
+        .add_constraint(ConstraintKind::Distance(a, b, 10.0))
+        .unwrap();
+    src.formulas.insert(dim, "Breite*2".to_string());
+    let clip = copy_selection(&src, &src_frame, &all_curves(&src)).unwrap();
+    let mut dst = sketch_3d(StandardPlane::YZ);
+    let rep = paste_clip(&mut dst, &dst_frame, &clip, &d.param_scope()).unwrap();
+    assert_eq!(rep.constraints_dropped, 0);
+    assert_eq!(rep.formulas_dropped, 0);
+    assert_eq!(dst.formulas.len(), 1);
+    let (id, _) = dst.formulas.iter().next().unwrap();
+    assert!(dst.sketch.constraint(*id).is_some());
+}
+
+/// Dokument mit einem Körper mit Freiformkante; liefert die Skizze mit der projizierten
+/// Freiformkante (fester Spline), auf 3D geschaltet und mit einem 3D-Punkt.
+fn fixed_spline_3d() -> SketchFeature {
+    let mut base = Sketch::new(Frame::WORLD, "Basis", tol());
+    let p: Vec<_> = [(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (5.0, 7.0), (0.0, 5.0)]
+        .iter()
+        .map(|&(x, y)| base.add_point(x, y).unwrap())
+        .collect();
+    base.add_line(p[0], p[1]).unwrap();
+    base.add_line(p[1], p[2]).unwrap();
+    base.add_spline(&p[2..5]).unwrap();
+    base.add_line(p[4], p[0]).unwrap();
+    let mut d = Document::new();
+    let bs = d
+        .add_feature(
+            "Basis",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: base,
+                plane: SketchPlane::Standard(StandardPlane::XY),
+                copies: Vec::new(),
+                formulas: Default::default(),
+            }),
+        )
+        .unwrap();
+    d.add_feature(
+        "Körper",
+        FeatureKind::Extrude {
+            sketch: bs,
+            profiles: ProfileSel::Index(0),
+            height: 4.0,
+        },
+    )
+    .unwrap();
+    let solid = d.visible_bodies()[0].solid.clone();
+    let (_, e) = solid
+        .edges
+        .iter()
+        .find(|(_, e)| matches!(e.curve, planora_kernel::Curve::Nurbs(_)))
+        .expect("Freiformkante");
+    let mut sf = empty_on(StandardPlane::XY);
+    sf.sketch
+        .add_projected_curve(&e.curve, e.t0, e.t1, LINKED)
+        .unwrap();
+    sf.sketch.add_point3(DVec3::new(1.0, 1.0, 2.0)).unwrap();
+    sf.sketch.set_three_d(true);
+    sf
+}
+
+#[test]
+fn fixed_spline_between_different_planes_is_refused() {
+    let src = fixed_spline_3d();
+    let set = ClipSet {
+        curves: src.sketch.curves().map(|(c, _)| c).collect(),
+        points: src.sketch.points().map(|(p, _)| p).collect(),
+        ..ClipSet::default()
+    };
+    let clip = copy_selection(&src, &StandardPlane::XY.frame(), &set).unwrap();
+    assert!(clip.sketch.has_3d_entry());
+    let mut dst = sketch_3d(StandardPlane::YZ);
+    let before = dst.clone();
+    let rev = dst.sketch.revision();
+    let err = paste_clip(
+        &mut dst,
+        &StandardPlane::YZ.frame(),
+        &clip,
+        &Document::new().param_scope(),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains(&planora_i18n::tr!("sketch-move-fixed")),
+        "{err}"
+    );
+    assert_eq!(dst, before);
+    assert_eq!(dst.sketch.revision(), rev);
+    // Auf derselben Ebene geht dasselbe Einfügen (keine Bewegung nötig).
+    let mut same = sketch_3d(StandardPlane::XY);
+    paste_clip(
+        &mut same,
+        &StandardPlane::XY.frame(),
+        &clip,
+        &Document::new().param_scope(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn error_after_switch_to_3d_keeps_target_2d_and_unchanged() {
+    // Eine 3D-Ablage ohne Inhalt: das Umschalten geschieht, das Einfügen scheitert danach.
+    let mut clip = copy_selection(
+        &dimensioned_line(StandardPlane::XY, None).0,
+        &StandardPlane::XY.frame(),
+        &all_curves(&dimensioned_line(StandardPlane::XY, None).0),
+    )
+    .unwrap();
+    clip.sketch = Sketch::new(StandardPlane::XY.frame(), "", tol());
+    clip.sketch.set_three_d(true);
+    assert!(clip.sketch.has_3d_entry());
+    let mut dst = empty_on(StandardPlane::XZ);
+    let before = dst.clone();
+    let rev = dst.sketch.revision();
+    assert!(
+        paste_clip(
+            &mut dst,
+            &StandardPlane::XZ.frame(),
+            &clip,
+            &Document::new().param_scope()
+        )
+        .is_err()
+    );
+    assert_eq!(dst, before);
+    assert_eq!(dst.sketch.revision(), rev);
+    assert!(!dst.sketch.has_3d_entry());
+}
