@@ -549,6 +549,7 @@ undo-slot = Draw slot
 undo-elliptic-arc = Draw elliptical arc
 undo-spline = Draw spline
 undo-conic-rho = Change rho
+undo-text-rotate = Rotate text
 undo-handle-tangent = Turn on tangent handle
 undo-handle-curvature = Turn on curvature handle
 undo-handle-off = Turn off handle

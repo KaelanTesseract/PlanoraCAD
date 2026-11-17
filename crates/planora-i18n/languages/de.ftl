@@ -542,6 +542,7 @@ undo-elliptic-arc = Ellipsenbogen zeichnen
 undo-spline = Spline zeichnen
 undo-conic = Kegelschnitt zeichnen
 undo-conic-rho = Rho ändern
+undo-text-rotate = Text drehen
 undo-handle-tangent = Tangentengriff einschalten
 undo-handle-curvature = Krümmungsgriff einschalten
 undo-handle-off = Griff ausschalten

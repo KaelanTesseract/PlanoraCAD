@@ -402,6 +402,8 @@ pub struct CurveDrag {
     pub(crate) anchors: Vec<PointId>,
     /// Zug am Rho-Griff: ändert nur das Rho des Kegelschnitts.
     pub(crate) rho: Option<crate::sketch_handles::RhoGrab>,
+    /// Zug am Drehgriff eines Textes (Skizzen 11b): dreht den Rahmen um Ecke 0.
+    pub(crate) text_rot: Option<crate::sketch_handles::TextRotGrab>,
     /// Griffzug am Stützpunkt (der erste in `start`): Die übrigen Punkte gehen um das mit, was er
     /// wirklich schafft ([`carry_frame`](crate::sketch_handles::carry_frame)).
     pub(crate) carry: bool,
@@ -437,6 +439,7 @@ impl CurveDrag {
             rim: None,
             anchors: Vec::new(),
             rho: None,
+            text_rot: None,
             carry: false,
             before: None,
             activates: false,
@@ -2490,6 +2493,17 @@ impl SketchSession {
         self.cursor = Some(at);
         let before = sk.clone();
         let result = match (drag.rim, drag.rho) {
+            _ if drag.text_rot.is_some() => {
+                let Some(grab) = drag.text_rot else { return };
+                let r = crate::sketch_handles::text_rotate_frame(sk, grab, at);
+                if let Err(SketchError::InvalidInput(m)) = &r {
+                    // Eine Abhängigkeit hält den Winkel: Die Meldung sagt es, der Text bleibt.
+                    self.message = Some(err(m));
+                    *sk = before;
+                    return;
+                }
+                r
+            }
             (Some((c, offset)), _) => {
                 let center = sk.curve(c).and_then(|d| match d.kind {
                     CurveKind::Circle { center, .. } => sk.point_xy(center).ok(),

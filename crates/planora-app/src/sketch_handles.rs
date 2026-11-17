@@ -14,6 +14,7 @@ use planora_math::DVec2;
 use planora_sketch::SketchError;
 use planora_sketch::model::{CurveId, CurveKind, HandleCurvature, PointId, Sketch, SplineHandle};
 use planora_sketch::solver::{Drag, SolveReport};
+use planora_sketch::text::{TextId, TextPlacement};
 use planora_sketch::{conic_rho_at, conic_rho_ok, conic_shoulder};
 use std::collections::HashSet;
 
@@ -57,6 +58,21 @@ pub struct HiddenHandles {
 pub(crate) enum HandleGrip {
     Ghost(HandleView),
     Rho(CurveId),
+    /// Drehgriff am Rahmen des Textes (Skizzen 11b, Task 12).
+    TextRotate(TextId),
+}
+
+/// Abstand des Drehgriffs am Textrahmen von der oberen Rahmenlinie, in Bildpunkten.
+pub const TEXT_ROTATE_GRIP_PX: f64 = 20.0;
+
+/// Laufender Zug am Drehgriff eines Textes: Winkel des Textes beim Greifen und Winkel des Zeigers
+/// um Ecke 0 beim Greifen. Der Winkel jetzt ist Start plus Zeigerwinkel jetzt minus Zeigerwinkel
+/// beim Greifen, so springt nichts auf den Zeiger.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TextRotGrab {
+    pub(crate) text: TextId,
+    start: f64,
+    grab: f64,
 }
 
 /// Laufender Zug am Rho-Griff: Rho unter dem Zeiger beim Greifen minus Rho der Kurve.
@@ -91,6 +107,37 @@ fn conic_frame(sk: &Sketch, c: CurveId) -> Option<(DVec2, DVec2, DVec2, f64)> {
         sk.point_xy(end).ok()?,
         rho,
     ))
+}
+
+/// Ecke 0 des Textrahmens, wenn der Text einen Drehgriff haben darf: Rahmen in der Skizzenebene
+/// (nicht auf einem Pfad, nicht in 3D) mit lebender Grundlinie.
+fn text_rot_origin(sk: &Sketch, t: TextId) -> Option<DVec2> {
+    let d = sk.text(t)?;
+    let TextPlacement::Box { corners, .. } = d.placement else {
+        return None;
+    };
+    if d.normal.is_some() {
+        return None;
+    }
+    sk.text_angle(t)?;
+    sk.point_xy(corners[0]).ok()
+}
+
+/// Ein Bild des Zugs am Drehgriff: der Text auf den Winkel zum Zeiger `at`. Ein Winkel, den eine
+/// Abhängigkeit hält, kommt als Fehler mit der Meldung zurück.
+pub(crate) fn text_rotate_frame(
+    sk: &mut Sketch,
+    grab: TextRotGrab,
+    at: DVec2,
+) -> Result<SolveReport, SketchError> {
+    let origin = text_rot_origin(sk, grab.text).ok_or(SketchError::UnknownObject)?;
+    let d = at - origin;
+    if d.length() > sk.tolerance().linear {
+        let target = grab.start + (d.y.atan2(d.x) - grab.grab);
+        // In (−π, π], wie `text_angle` es liefert.
+        sk.set_text_angle(grab.text, target.sin().atan2(target.cos()))?;
+    }
+    Ok(sk.solve())
 }
 
 /// Ein Bild des Zugs am Rho-Griff: das Rho zum Zeiger `at`, begrenzt auf den Griffbereich, und das
@@ -338,19 +385,72 @@ impl SketchSession {
             .collect()
     }
 
-    /// Der gedämpfte Griff oder Rho-Griff bei `at`, wenn ihn kein Punkt verdeckt: Der nächste gewinnt,
-    /// bei Gleichstand der Punkt.
+    /// Der Text, den die Auswahl ganz und allein ausmacht (Buchstaben und Punkte eines Textes).
+    fn only_selected_text(&self, sk: &Sketch) -> Option<TextId> {
+        let mut found = None;
+        for &item in &self.selection {
+            let t = crate::sketch_text::text_of_item(sk, item)?;
+            if found.is_some_and(|f| f != t) {
+                return None;
+            }
+            found = Some(t);
+        }
+        found
+    }
+
+    /// Drehgriff am Rahmen des gewählten Textes (Skizzen 11b, Task 12), im Auswahlwerkzeug bei genau
+    /// einem gewählten Text im Rahmen in der Skizzenebene: über der Mitte der oberen Rahmenlinie,
+    /// [`TEXT_ROTATE_GRIP_PX`] Bildpunkte nach außen, senkrecht zur Grundlinie. `units_per_px` ist
+    /// der Maßstab der Ansicht in Skizzeneinheiten je Bildpunkt. Kein Griff an Text auf einem Pfad
+    /// und an 3D-Text (Annahme, `offene-punkte.md`).
+    pub fn text_rotate_grips(&self, sk: &Sketch, units_per_px: f64) -> Vec<(TextId, DVec2)> {
+        if self.tool != Tool::Select || !(units_per_px.is_finite() && units_per_px > 0.0) {
+            return Vec::new();
+        }
+        let Some(t) = self.only_selected_text(sk) else {
+            return Vec::new();
+        };
+        if text_rot_origin(sk, t).is_none() {
+            return Vec::new();
+        }
+        let Some(TextPlacement::Box { corners, .. }) = sk.text(t).map(|d| d.placement) else {
+            return Vec::new();
+        };
+        let at = |i: usize| sk.point_xy(corners[i]).ok();
+        let (Some(c0), Some(c1), Some(c2), Some(c3)) = (at(0), at(1), at(2), at(3)) else {
+            return Vec::new();
+        };
+        let (bottom, top) = ((c0 + c1) * 0.5, (c2 + c3) * 0.5);
+        let out = top - bottom;
+        if !(out.is_finite() && out.length() > sk.tolerance().linear) {
+            return Vec::new();
+        }
+        vec![(
+            t,
+            top + out.normalize() * (TEXT_ROTATE_GRIP_PX * units_per_px),
+        )]
+    }
+
+    /// Der gedämpfte Griff, Rho-Griff oder Drehgriff bei `at`, wenn ihn kein Punkt verdeckt: Der
+    /// nächste gewinnt, bei Gleichstand der Punkt.
     pub(crate) fn handle_grip_at(&self, sk: &Sketch, at: DVec2, radius: f64) -> Option<HandleGrip> {
         if self.tool != Tool::Select || !at.is_finite() {
             return None;
         }
         let ghosts = self.visible_handles(sk).into_iter().filter(|h| h.ghost);
+        // Die Pickgröße ist PICK_RADIUS_PX Bildpunkte; daraus der Maßstab des Drehgriffs.
+        let per_px = radius / f64::from(crate::sketch_view::PICK_RADIUS_PX);
         let grips = ghosts
             .map(|h| (h.tip, HandleGrip::Ghost(h)))
             .chain(
                 self.rho_grips(sk)
                     .into_iter()
                     .map(|(c, q)| (q, HandleGrip::Rho(c))),
+            )
+            .chain(
+                self.text_rotate_grips(sk, per_px)
+                    .into_iter()
+                    .map(|(t, q)| (q, HandleGrip::TextRotate(t))),
             )
             .map(|(q, grip)| (q.distance(at), grip))
             .filter(|(d, _)| *d <= radius)
@@ -413,6 +513,10 @@ impl SketchSession {
                 self.begin_rho_drag(sk, c, at);
                 true
             }
+            Some(HandleGrip::TextRotate(t)) => {
+                self.begin_text_rotate_drag(sk, t, at);
+                true
+            }
         }
     }
 
@@ -467,6 +571,27 @@ impl SketchSession {
         if let Some(drag) = self.curve_drag.as_mut() {
             drag.activates = true;
         }
+    }
+
+    /// Greift den Drehgriff des Textes `t`: Ein Abbruch stellt den Stand davor her (`before`), das
+    /// Loslassen ist ein Schritt „Text drehen“, Zurück auf den Anfang keiner.
+    fn begin_text_rotate_drag(&mut self, sk: &Sketch, t: TextId, at: DVec2) {
+        let (Some(origin), Some(start)) = (text_rot_origin(sk, t), sk.text_angle(t)) else {
+            return;
+        };
+        let d = at - origin;
+        if !(d.is_finite() && d.length() > sk.tolerance().linear) {
+            return;
+        }
+        let mut drag = CurveDrag::new(sk, at, Vec::new());
+        drag.text_rot = Some(TextRotGrab {
+            text: t,
+            start,
+            grab: d.y.atan2(d.x),
+        });
+        drag.label = Some(crate::msg!("undo-text-rotate"));
+        drag.before = Some(sk.clone());
+        self.curve_drag = Some(drag);
     }
 
     /// Greift den Rho-Griff des Kegelschnitts `c`.

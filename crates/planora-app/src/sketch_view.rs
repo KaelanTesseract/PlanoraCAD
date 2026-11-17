@@ -3352,6 +3352,43 @@ fn draw_handle_grips(
             }
         }
     }
+    // Drehgriff am Text (Skizzen 11b): Der Maßstab hängt von der Stelle ab, also einmal verfeinern.
+    let per_px = |p: Pos2| {
+        map.radius_at(p)
+            .map(|r| r / f64::from(PICK_RADIUS_PX))
+            .unwrap_or(0.0)
+    };
+    let mut at_px = per_px(map.rect.center());
+    for _ in 0..2 {
+        if let Some(s) = se
+            .text_rotate_grips(sk, at_px)
+            .first()
+            .and_then(|&(_, q)| map.to_screen(q))
+        {
+            at_px = per_px(s);
+        }
+    }
+    for (t, q) in se.text_rotate_grips(sk, at_px) {
+        let top = match sk.text(t).map(|d| d.placement) {
+            Some(planora_sketch::text::TextPlacement::Box { corners, .. }) => {
+                match (sk.point_xy(corners[2]), sk.point_xy(corners[3])) {
+                    (Ok(a), Ok(b)) => (a + b) * 0.5,
+                    _ => continue,
+                }
+            }
+            _ => continue,
+        };
+        if let (Some(a), Some(g)) = (map.to_screen(top), map.to_screen(q)) {
+            let ink = if hot(g) {
+                lighter(col.selected)
+            } else {
+                col.selected
+            };
+            draw_path(painter, vec![a, g], Stroke::new(1.0, ink), true);
+            painter.circle_filled(g, HANDLE_GRIP_PX + 1.0, ink);
+            painter.circle_stroke(g, HANDLE_GRIP_PX + 3.5, Stroke::new(1.0, ink));
+        }
+    }
     for (_, at) in se.rho_grips(sk) {
         if let Some(s) = map.to_screen(at) {
             let ink = if hot(s) {
