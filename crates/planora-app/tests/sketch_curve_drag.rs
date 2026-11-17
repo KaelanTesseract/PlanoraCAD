@@ -682,8 +682,8 @@ fn deleting_the_dragged_curve_ends_the_drag() {
     });
     assert!(begin(&mut s, v(10.0, 0.0)));
     {
-        let (se, sk) = s.session_sketch_mut().unwrap();
-        se.delete_selection(sk);
+        let (se, sf) = s.session_draft_mut().unwrap();
+        se.delete_selection_in(sf);
     }
     assert!(!se(&s).is_dragging());
 }
@@ -702,9 +702,9 @@ fn deleting_one_side_of_a_triangle_ends_the_drag() {
     assert!(begin(&mut s, v(10.0, 0.0)));
     drag_to(&mut s, v(10.0, 2.0));
     {
-        let (se, sk) = s.session_sketch_mut().unwrap();
+        let (se, sf) = s.session_draft_mut().unwrap();
         // Beide Enden der Seite leben in den anderen Seiten weiter.
-        se.delete_selection(sk);
+        se.delete_selection_in(sf);
     }
     assert!(!se(&s).is_dragging());
     assert_eq!(curves(&s), sides[1..].to_vec());

@@ -228,7 +228,14 @@ fn circular_pattern_center_stays() {
         let sk = sk(&s);
         assert!(sk.curve(line).is_none(), "{how}: Linie fort");
         assert!(sk.point_xy(center).is_ok(), "{how}: Mitte bleibt");
-        assert_eq!(sk.pattern_centers(), vec![center], "{how}: Muster bleibt");
+        let centers: Vec<_> = sk
+            .patterns()
+            .filter_map(|(_, d)| match d.kind {
+                planora_sketch::pattern::PatternKind::Circular { center, .. } => Some(center),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(centers, vec![center], "{how}: Muster bleibt");
         assert_eq!(
             sk.point_xy(center).unwrap(),
             DVec2::ZERO,

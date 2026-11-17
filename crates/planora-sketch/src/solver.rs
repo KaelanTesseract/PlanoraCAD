@@ -905,13 +905,22 @@ impl Sketch {
                         stalled =
                             step_len <= STALL_REL * size || (cost - trial_cost) <= STALL_REL * cost;
                         // Zug auf dem dünnen Weg (Ruling T3-3): Sind die harten Residuen schon
-                        // erfüllt und sinken die Kosten je Schritt nur noch langsam, ist das
-                        // Zugziel erreicht; weitere Schritte wandern nur entlang freier
-                        // Richtungen (unsichtbar, ~1e-6 mm). Der dichte Weg rechnet wie bisher.
+                        // erfüllt, das Zugziel erreicht und sinken die Kosten je Schritt nur noch
+                        // langsam, wandern weitere Schritte nur entlang freier Richtungen
+                        // (unsichtbar, ~1e-6 mm). Der dichte Weg rechnet wie bisher.
+                        // Das Zugziel wird eigens geprüft (M-5): Nach einem stark gedämpften
+                        // Schritt sind die harten Residuen einer linearen Gruppe proportional
+                        // zum Restzug, also schon klein, obwohl der Punkt noch weit weg ist; und
+                        // ein gedämpfter Schritt senkt die Kosten nur wenig. Darum gilt der
+                        // Abbruch auch nur, solange die Dämpfung nicht über dem Startwert liegt.
                         if !soft.is_empty()
                             && g.order.is_some()
+                            && lambda <= INITIAL_LAMBDA
                             && (cost - trial_cost) <= SOFT_STALL_RATIO * cost
                             && t.hard_inf() <= tol_r
+                            && soft
+                                .iter()
+                                .all(|s| (trial[s.var] - s.target).abs() <= tol_r)
                         {
                             stalled = true;
                         }

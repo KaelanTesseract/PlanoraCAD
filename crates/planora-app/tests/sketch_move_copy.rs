@@ -992,13 +992,13 @@ fn one_step_per_command_named_move_copy_and_redo_is_identical() {
 fn undo_clears_a_running_transform_and_a_deleted_curve_leaves_the_set() {
     let (mut s, ids) = active_rectangle();
     {
-        let (se, sk) = s.session_sketch_mut().unwrap();
+        let (se, sf) = s.session_draft_mut().unwrap();
         se.selection = vec![Item::Curve(ids.lines[0])];
-        se.delete_selection(sk);
+        se.delete_selection_in(sf);
         assert_eq!(se.transform.set.curves.len(), 3);
         assert!(!se.transform.set.curves.contains(&ids.lines[0]));
         se.selection = curves_of(&ids.lines[1..]);
-        se.delete_selection(sk);
+        se.delete_selection_in(sf);
         assert!(se.transform.set.curves.is_empty());
         assert_eq!(se.transform.stage, TransformStage::Picking);
         assert!(se.transform_now().is_none());

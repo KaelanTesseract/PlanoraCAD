@@ -566,6 +566,11 @@ pub struct SketchSession {
     /// Was der letzte Klick fertig angelegt hat.
     pub created: Option<Created>,
     pub last_report: Option<SolveReport>,
+    /// Bericht für Statuszeile und Fußfeld, solange `last_report` fehlt: gelöst an einer Kopie,
+    /// gemerkt mit dem Stand der Skizze ([`Sketch::revision`]), damit nicht jedes Bild neu löst.
+    status_cache: Option<(u64, SolveReport)>,
+    /// So oft hat [`status_report`](Self::status_report) gelöst (für Tests).
+    status_solves: usize,
     /// Die offene Liste „Unterbestimmte finden“ (bleibt, bis man sie schließt oder die Skizze
     /// verlässt; die Zeilen kommen je Bild aus `last_report`).
     pub under_list: Option<crate::sketch_under::UnderList>,
@@ -807,6 +812,8 @@ impl SketchSession {
             input: DrawInput::default(),
             created: None,
             last_report: None,
+            status_cache: None,
+            status_solves: 0,
             under_list: None,
             message: None,
             dragging: None,
@@ -3328,17 +3335,11 @@ impl SketchSession {
 
     // ---- Bearbeiten ---------------------------------------------------------------------
 
-    /// Löscht die Auswahl samt abhängiger Kurven und Abhängigkeiten. Punkte gelöschter (auch
-    /// mitgelöschter) Kurven, die danach nichts mehr benutzt, werden mit entfernt; andere freie
-    /// Punkte bleiben. Ohne Kopien des Entwurfs; Entf und das X der Liste nehmen
-    /// [`delete_selection_in`](Self::delete_selection_in).
-    pub fn delete_selection(&mut self, sk: &mut Sketch) {
-        self.delete_selection_keeping(sk, &[]);
-    }
-
-    /// [`delete_selection`](Self::delete_selection) am ganzen Entwurf `sf`: Eingezogene Punkte
-    /// (Punktziele in `sf.copies`) bleiben beim Löschen einer Kurve stehen, samt Fixierung und
-    /// Verknüpfung (Schlussprüfung I-1).
+    /// Löscht die Auswahl im Entwurf `sf` samt abhängiger Kurven und Abhängigkeiten (Entf und das X
+    /// der Liste „Unterbestimmte finden“). Punkte gelöschter (auch mitgelöschter) Kurven, die danach
+    /// nichts mehr benutzt, werden mit entfernt (siehe [`Sketch::remove_curve_ends`]); andere freie
+    /// Punkte bleiben. Eingezogene Punkte (Punktziele in `sf.copies`) bleiben beim Löschen einer
+    /// Kurve stehen, samt Fixierung und Verknüpfung (Schlussprüfung I-1).
     pub fn delete_selection_in(&mut self, sf: &mut SketchFeature) {
         let keep = kept_points(sf);
         self.delete_selection_keeping(&mut sf.sketch, &keep);
@@ -3426,32 +3427,9 @@ impl SketchSession {
                     }
                 }
             }
-            // Wie in Fusion gehen mit einer Kurve ihre Endpunkte samt Maßen und Abhängigkeiten:
-            // Was an einem nun freien Punkt der gelöschten Kurve hängt, fällt mit weg (sonst hielte
-            // es den Punkt am Leben). Punkte, die noch eine andere Kurve benutzt, die Mitte eines
-            // Kreismusters und die geschützten Punkte `keep` (eingezogene Punkte) bleiben mit
-            // allem, was an ihnen hängt.
-            if !orphans.is_empty() {
-                let mut still_used: std::collections::HashSet<PointId> =
-                    sk.curves().flat_map(|(_, c)| c.kind.points()).collect();
-                still_used.extend(sk.pattern_centers());
-                still_used.extend(keep.iter().copied());
-                let gone: Vec<PointId> = orphans
-                    .iter()
-                    .copied()
-                    .filter(|p| !still_used.contains(p))
-                    .collect();
-                let doomed: Vec<ConstraintId> = sk
-                    .constraints()
-                    .filter(|(_, k)| k.kind.points().iter().any(|p| gone.contains(p)))
-                    .map(|(id, _)| id)
-                    .collect();
-                for id in doomed {
-                    let _ = sk.remove_constraint(id);
-                }
-            }
-            orphans.retain(|p| !keep.contains(p));
-            sk.prune_points(&orphans);
+            // Die Löschregel des Modells: Mit einer Kurve gehen ihre freien Enden samt Maßen und
+            // Abhängigkeiten; geschützt sind die Punkte `keep` (eingezogene Punkte).
+            sk.remove_curve_ends(&orphans, keep);
             se.pending.retain(|&p| sk.point_xy(p).is_ok());
             se.forget_removed_curves(sk);
             se.line_arc = se
@@ -3661,10 +3639,23 @@ impl SketchSession {
 
     /// Statuszeile: Freiheitsgrade, Widerspruch, überzählige Abhängigkeiten.
     pub fn status(&self, sk: &Sketch) -> (String, Severity) {
-        let report = match &self.last_report {
-            Some(r) => r.clone(),
-            None => sk.clone().solve(),
+        let report = match (&self.last_report, &self.status_cache) {
+            (Some(r), _) => r.clone(),
+            (None, Some((at, r))) if *at == sk.revision() => r.clone(),
+            (None, _) => sk.clone().solve(),
         };
+        Self::status_of(&report)
+    }
+
+    /// Wie [`status`](Self::status), legt aber einen an einer Kopie gelösten Bericht in der
+    /// Sitzung ab (siehe [`status_report`](Self::status_report)); für die Anzeige je Bild.
+    pub fn status_cached(&mut self, sk: &Sketch) -> (String, Severity) {
+        let report = self.status_report(sk);
+        Self::status_of(&report)
+    }
+
+    /// Text und Schweregrad des Status zum Bericht `report`.
+    fn status_of(report: &SolveReport) -> (String, Severity) {
         match report.status {
             SolveStatus::Conflicting => (
                 tr!("sketch-status-conflict", n = report.conflicting.len()),
@@ -3685,6 +3676,30 @@ impl SketchSession {
                 }
             }
         }
+    }
+
+    /// Der Bericht für die Statusanzeigen: `last_report`, sonst der an einer Kopie gelöste und
+    /// je Stand der Skizze gemerkte Bericht (M-7: nicht jedes Bild neu lösen).
+    pub fn status_report(&mut self, sk: &Sketch) -> SolveReport {
+        if let Some(r) = &self.last_report {
+            return r.clone();
+        }
+        let rev = sk.revision();
+        match &self.status_cache {
+            Some((at, r)) if *at == rev => r.clone(),
+            _ => {
+                let r = sk.clone().solve();
+                self.status_solves += 1;
+                self.status_cache = Some((rev, r.clone()));
+                r
+            }
+        }
+    }
+
+    /// Wie oft [`status_report`](Self::status_report) bisher gelöst hat.
+    #[doc(hidden)]
+    pub fn status_solves(&self) -> usize {
+        self.status_solves
     }
 
     fn selected_curves(&self) -> Vec<CurveId> {

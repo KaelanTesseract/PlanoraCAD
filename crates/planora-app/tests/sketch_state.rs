@@ -6,6 +6,19 @@ use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::{CurveKind, Sketch};
 
+/// Entf an einer Skizze ohne Entwurf: als Entwurf ohne Kopien (nichts ist geschützt), wie
+/// `delete_selection_in` am offenen Entwurf.
+fn delete_in_draft(se: &mut SketchSession, sk: &mut Sketch) {
+    let mut sf = planora_feature::SketchFeature {
+        sketch: sk.clone(),
+        plane: planora_feature::SketchPlane::Standard(planora_app::state::StandardPlane::XY),
+        copies: Vec::new(),
+        formulas: Default::default(),
+    };
+    se.delete_selection_in(&mut sf);
+    *sk = sf.sketch;
+}
+
 const R: f64 = 0.5; // Fangradius in Skizzeneinheiten
 
 fn setup() -> (Sketch, SketchSession) {
@@ -242,7 +255,7 @@ fn delete_cascades_and_status_texts() {
     assert!(matches!(sev, Severity::Info));
     let line = sk.curves().next().unwrap().0;
     se.selection = vec![Item::Curve(line)];
-    se.delete_selection(&mut sk);
+    delete_in_draft(&mut se, &mut sk);
     assert_eq!(sk.curves().count(), 3);
     assert!(
         sk.constraints().count() < 4,
@@ -564,7 +577,7 @@ fn deleting_a_point_removes_orphaned_end_points_but_keeps_free_points() {
     sk.add_line(a, b).unwrap();
     let free = sk.add_point(20.0, 20.0).unwrap();
     se.selection = vec![Item::Point(a)];
-    se.delete_selection(&mut sk);
+    delete_in_draft(&mut se, &mut sk);
     assert_eq!(sk.curves().count(), 0);
     assert!(sk.point_xy(b).is_err(), "verwaister Endpunkt entfernt");
     assert!(sk.point_xy(free).is_ok(), "freier Punkt bleibt");

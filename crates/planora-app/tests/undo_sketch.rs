@@ -994,9 +994,9 @@ fn deleting_a_constraint_with_open_click_is_its_own_step() {
     open_new_sketch(&mut w);
     let (_, dim) = line_with_dimension_and_open_click(&mut w);
     let n = sk_undo_len(&w);
-    let (se, sk) = sess(&mut w);
+    let (se, sf) = st(&mut w).session_draft_mut().unwrap();
     se.selection = vec![Item::Constraint(dim)];
-    se.delete_selection(sk);
+    se.delete_selection_in(sf);
     assert!(!se.pending.is_empty(), "der offene Punkt bleibt");
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
@@ -1016,9 +1016,9 @@ fn deleting_a_point_with_open_click_is_its_own_step() {
     click(&mut w, 30.0, 30.0);
     observe(&mut w);
     let n = sk_undo_len(&w);
-    let (se, sk) = sess(&mut w);
+    let (se, sf) = st(&mut w).session_draft_mut().unwrap();
     se.selection = vec![Item::Point(lone)];
-    se.delete_selection(sk);
+    se.delete_selection_in(sf);
     assert!(!se.pending.is_empty());
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);

@@ -476,3 +476,61 @@ fn weak_source_behind_the_sketch_needs_format_21() {
     let back = decode_version(&text, "x.json").unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(encode_version(&back).unwrap(), text, "bytegleich");
 }
+
+// ---- Folgepunkte M-12 ----------------------------------------------------------------------------
+
+/// Eine Datei, die sich als Format 20 ausgibt, aber Glatt am Ellipsenbogen enthält, wird
+/// abgelehnt (Glatt am Ellipsenbogen gibt es erst ab 21).
+#[test]
+fn format_20_with_smooth_on_elliptic_arc_rejected() {
+    let text = with_format(
+        encode_version(&document(elliptic_smooth()).snapshot()).unwrap(),
+        21,
+        20,
+    );
+    let want = tr!(
+        "proj-since-format",
+        what = tr!("proj-feat-sketch-check"),
+        format = "21"
+    );
+    let e = err_text(&text);
+    assert!(e.contains(&want), "{e}");
+}
+
+/// Ein gelöschtes Glatt am Ellipsenbogen bleibt als Eintrag in der Datei; die Datei braucht
+/// darum weiter 21 (wie gelöschte Tangente am Ende und Kamm), der Rundlauf ist verlustfrei.
+#[test]
+fn deleted_smooth_on_elliptic_arc_needs_21() {
+    let mut s = elliptic_smooth();
+    let id = s
+        .constraints()
+        .find(|(_, c)| matches!(c.kind, K::Smooth(..)))
+        .map(|(id, _)| id)
+        .unwrap();
+    s.remove_constraint(id).unwrap();
+    assert!(s.constraint(id).is_none());
+    let (back, _) = roundtrip(s);
+    assert!(sketch_of(&back).constraint(id).is_none(), "bleibt gelöscht");
+}
+
+/// 3D-Inhalt allein braucht 20; kommt Neues aus 11a dazu, gewinnt 21.
+#[test]
+fn three_d_with_11a_content_writes_21() {
+    let mut s = new_sketch();
+    let a = s
+        .add_point3(planora_math::DVec3::new(0.0, 0.0, 0.0))
+        .unwrap();
+    let b = s
+        .add_point3(planora_math::DVec3::new(10.0, 2.0, 3.0))
+        .unwrap();
+    let c = s
+        .add_point3(planora_math::DVec3::new(15.0, 9.0, 4.0))
+        .unwrap();
+    let l1 = s.add_line(a, b).unwrap();
+    let l2 = s.add_line(b, c).unwrap();
+    assert_eq!(required_format(&document(s.clone()).snapshot()), 20);
+    s.add_constraint(K::EndTangent(l1, b, l2, b)).unwrap();
+    let (back, text) = roundtrip(s);
+    assert!(text.contains("tangente_ende"), "{text}");
+    assert!(sketch_of(&back).point_xyz(b).unwrap().z == 3.0);
+}

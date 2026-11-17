@@ -11,6 +11,19 @@ use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::{CurveId, PointId, Sketch};
 use std::sync::Arc;
 
+/// Entf an einer Skizze ohne Entwurf: als Entwurf ohne Kopien (nichts ist geschützt), wie
+/// `delete_selection_in` am offenen Entwurf.
+fn delete_in_draft(se: &mut SketchSession, sk: &mut Sketch) {
+    let mut sf = planora_feature::SketchFeature {
+        sketch: sk.clone(),
+        plane: planora_feature::SketchPlane::Standard(planora_app::state::StandardPlane::XY),
+        copies: Vec::new(),
+        formulas: Default::default(),
+    };
+    se.delete_selection_in(&mut sf);
+    *sk = sf.sketch;
+}
+
 /// Fangradius in Skizzeneinheiten; entspricht 8 px, ein Pixel ist also `PX`.
 const R: f64 = 8.0;
 const PX: f64 = R / 8.0;
@@ -218,7 +231,7 @@ fn a_first_corner_whose_curve_was_deleted_stays_free() {
     let wall = line(&mut sk, (100.0, 0.0), (100.0, 500.0));
     click(&mut se, &mut sk, 101.0, 100.0);
     se.selection = vec![Item::Curve(wall)];
-    se.delete_selection(&mut sk);
+    delete_in_draft(&mut se, &mut sk);
     click(&mut se, &mut sk, 300.0, 300.0);
     assert!(
         !kinds(&sk).iter().any(|k| matches!(k, K::PointOnCurve(..))),

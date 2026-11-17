@@ -1121,9 +1121,10 @@ fn deleted_path_while_section_open_counts_as_missing() {
     assert_eq!(rig.tool().path, Some(line));
     assert!(rig.settle().has(&tr!("sketch-text-path-chosen")));
     {
-        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+        let (se, sf) = rig.st().session_draft_mut().unwrap();
         se.selection = vec![Item::Curve(line)];
-        se.delete_selection(sk);
+        se.delete_selection_in(sf);
+        let sk = &mut sf.sketch;
         assert!(sk.curve(line).is_none(), "Pfad gelöscht");
     }
     let shot = rig.settle();

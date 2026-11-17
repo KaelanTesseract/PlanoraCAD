@@ -424,9 +424,10 @@ fn deleting_the_fixed_of_a_fixed_spline_end_is_refused_with_a_message() {
             .0;
         (curve, fixed)
     };
-    let (se, sk) = s.session_sketch_mut().unwrap();
+    let (se, sf) = s.session_draft_mut().unwrap();
     se.selection = vec![Item::Constraint(fixed)];
-    se.delete_selection(sk);
+    se.delete_selection_in(sf);
+    let sk = &mut sf.sketch;
     assert!(sk.constraint(fixed).is_some(), "bleibt");
     assert!(
         se.message_text()
@@ -437,7 +438,8 @@ fn deleting_the_fixed_of_a_fixed_spline_end_is_refused_with_a_message() {
     );
     // Fest-Wert zuerst gewählt, dann die Kurve: Beides geht.
     se.selection = vec![Item::Constraint(fixed), Item::Curve(curve)];
-    se.delete_selection(sk);
+    se.delete_selection_in(sf);
+    let sk = &mut sf.sketch;
     assert!(sk.curve(curve).is_none());
     assert!(sk.constraint(fixed).is_none());
 }

@@ -1925,11 +1925,8 @@ pub fn under_row_height(ui: &egui::Ui) -> f32 {
 }
 
 /// Die Statuszeile als Zeile der Palette.
-fn status_row(ui: &mut egui::Ui, se: &SketchSession, sk: &Sketch) {
-    let report = match &se.last_report {
-        Some(r) => r.clone(),
-        None => sk.clone().solve(),
-    };
+fn status_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &Sketch) {
+    let report = se.status_report(sk);
     let (text, tone) = status_line(sk, &report);
     let p = theme::palette(ui.visuals().dark_mode);
     let color = match tone {
@@ -1954,7 +1951,7 @@ fn foot_field(
     let inner = shell_panels::inner_size(&frame, rect.size());
     let margin = frame.total_margin().sum().x;
     let p = theme::palette(dark);
-    let (text, severity) = se.status(sk);
+    let (text, severity) = se.status_cached(sk);
     let color = match severity {
         Severity::Info if se.last_report.as_ref().is_some_and(|r| r.dof == 0) => p.ok,
         Severity::Info => p.text_secondary,

@@ -27,6 +27,19 @@ use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_sketch::model::{CurveId, Sketch};
 
+/// Entf an einer Skizze ohne Entwurf: als Entwurf ohne Kopien (nichts ist geschützt), wie
+/// `delete_selection_in` am offenen Entwurf.
+fn delete_in_draft(se: &mut SketchSession, sk: &mut Sketch) {
+    let mut sf = planora_feature::SketchFeature {
+        sketch: sk.clone(),
+        plane: planora_feature::SketchPlane::Standard(planora_app::state::StandardPlane::XY),
+        copies: Vec::new(),
+        formulas: Default::default(),
+    };
+    se.delete_selection_in(&mut sf);
+    *sk = sf.sketch;
+}
+
 const SIZE: Vec2 = vec2(1920.0, 1080.0);
 const NONE: Modifiers = Modifiers::NONE;
 /// Drei freie Stellen in der Zeichenfläche.
@@ -786,7 +799,7 @@ fn history_jump_and_removed_curves_clear_picked_curves() {
 
     // Löschen der Auswahl ebenso.
     se.selection = vec![Item::Curve(b)];
-    se.delete_selection(&mut sk);
+    delete_in_draft(&mut se, &mut sk);
     assert!(se.pending_curves.is_empty());
 
     // Esc vergisst die gewählten Kurven.

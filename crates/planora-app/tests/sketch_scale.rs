@@ -959,9 +959,9 @@ fn undo_clears_a_running_scale() {
     scale_about(&mut s, curves_of(&sh.rect.lines), v(0.0, 0.0));
     s.observe_sketch(false);
     {
-        let (se, sk) = s.session_sketch_mut().unwrap();
+        let (se, sf) = s.session_draft_mut().unwrap();
         se.selection = curves_of(&sh.rect.lines[..1]);
-        se.delete_selection(sk);
+        se.delete_selection_in(sf);
     }
     s.observe_sketch(false);
     assert!(s.undo_sketch());
