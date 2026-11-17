@@ -10,6 +10,7 @@ use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::helpers::ProjectStyle;
 use planora_sketch::model::Sketch;
+use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan};
 use planora_sketch::text::{HAlign, TextParams, VAlign};
 use planora_sketch::text_shape::{TextShaper, TextStyle};
 use planora_text::FontLibrary;
@@ -448,4 +449,159 @@ fn sketch_on_offset_plane_uses_local_xy() {
         assert!(a.distance(DVec2::new(10.0, 20.0)) < 1e-9, "{a} {b}");
         assert!(b.distance(DVec2::new(40.0, 20.0)) < 1e-9, "{a} {b}");
     }
+}
+
+#[test]
+fn deleted_three_d_content_does_not_block() {
+    let mut sk = new_sketch();
+    let (a, b) = (
+        sk.add_point(0.0, 0.0).unwrap(),
+        sk.add_point(10.0, 0.0).unwrap(),
+    );
+    sk.add_line(a, b).unwrap();
+    let p = sk.add_point3(DVec3::new(0.0, 0.0, 5.0)).unwrap();
+    let q = sk.add_point3(DVec3::new(10.0, 0.0, 5.0)).unwrap();
+    let l3 = sk.add_line(p, q).unwrap();
+    assert!(sk.has_3d_entry());
+    // Lebende 3D-Linie: abgelehnt.
+    let (d, s) = doc_with(sk.clone());
+    assert_eq!(
+        sketch_dxf(&d, s, &opts(DxfUnit::Millimeter)).unwrap_err(),
+        SketchDxfError::NotPlanar
+    );
+    // Gelöscht (samt Punkten): der Eintrag bleibt in der Skizze, sperrt aber nicht.
+    sk.remove_curve(l3).unwrap();
+    sk.remove_point(p).unwrap();
+    sk.remove_point(q).unwrap();
+    assert!(sk.has_3d_entry(), "der gelöschte Eintrag steht noch da");
+    let (d, s) = doc_with(sk);
+    let m = sketch_dxf(&d, s, &opts(DxfUnit::Millimeter)).unwrap();
+    assert_eq!(lines(&m).len(), 1);
+}
+
+#[test]
+fn three_d_flag_alone_does_not_block() {
+    let mut sk = new_sketch();
+    let (a, b) = (
+        sk.add_point(0.0, 0.0).unwrap(),
+        sk.add_point(10.0, 0.0).unwrap(),
+    );
+    sk.add_line(a, b).unwrap();
+    sk.set_three_d(true);
+    let (d, s) = doc_with(sk);
+    assert_eq!(
+        lines(&sketch_dxf(&d, s, &opts(DxfUnit::Millimeter)).unwrap()).len(),
+        1
+    );
+}
+
+#[test]
+fn deleted_curves_and_points_do_not_appear() {
+    let mut sk = new_sketch();
+    let (a, b) = (
+        sk.add_point(0.0, 0.0).unwrap(),
+        sk.add_point(10.0, 0.0).unwrap(),
+    );
+    sk.add_line(a, b).unwrap();
+    let (c, e) = (
+        sk.add_point(0.0, 5.0).unwrap(),
+        sk.add_point(10.0, 5.0).unwrap(),
+    );
+    let gone = sk.add_line(c, e).unwrap();
+    let free = sk.add_point(7.0, 7.0).unwrap();
+    sk.add_point(8.0, 8.0).unwrap();
+    sk.remove_curve(gone).unwrap();
+    sk.remove_point(free).unwrap();
+    let (d, s) = doc_with(sk);
+    let on = SketchDxfOptions {
+        points: true,
+        ..opts(DxfUnit::Millimeter)
+    };
+    let m = sketch_dxf(&d, s, &on).unwrap();
+    assert_eq!(lines(&m).len(), 1, "gelöschte Linie fehlt");
+    // Die Enden der gelöschten Linie sind jetzt freie Punkte, der gelöschte freie Punkt fehlt.
+    let ps = points(&m);
+    assert!(
+        ps.iter().all(|p| p.distance(DVec2::new(7.0, 7.0)) > 1e-9),
+        "{ps:?}"
+    );
+    assert!(
+        ps.iter().any(|p| p.distance(DVec2::new(8.0, 8.0)) < 1e-9),
+        "{ps:?}"
+    );
+}
+
+#[test]
+fn pattern_instances_appear_and_a_suppressed_one_does_not() {
+    let mut sk = new_sketch();
+    let (a, b) = (
+        sk.add_point(0.0, 0.0).unwrap(),
+        sk.add_point(10.0, 0.0).unwrap(),
+    );
+    let l = sk.add_line(a, b).unwrap();
+    let pid = sk
+        .add_pattern(&PatternPlan {
+            kind: PatternKind::Rect {
+                dirs: [PatternDir::SketchY, PatternDir::SketchX],
+                extent: [false, false],
+                symmetric: [false, false],
+            },
+            sources: vec![l],
+            counts: [3, 1],
+            values: [5.0, 5.0],
+            suppressed: Vec::new(),
+        })
+        .unwrap();
+    let ys = |sk: &Sketch| {
+        let (d, s) = doc_with(sk.clone());
+        let m = sketch_dxf(&d, s, &opts(DxfUnit::Millimeter)).unwrap();
+        let mut ys: Vec<f64> = lines(&m).iter().map(|l| l.0.y).collect();
+        ys.sort_by(f64::total_cmp);
+        ys
+    };
+    // Vorlage und zwei Exemplare.
+    let all = ys(&sk);
+    assert_eq!(all.len(), 3, "{all:?}");
+    assert!(
+        (all[1] - 5.0).abs() < 1e-9 && (all[2] - 10.0).abs() < 1e-9,
+        "{all:?}"
+    );
+    // Das mittlere Exemplar abwählen.
+    sk.suppress_instance(pid, [1, 0], true).unwrap();
+    let rest = ys(&sk);
+    assert_eq!(rest.len(), 2, "{rest:?}");
+    assert!((rest[1] - 10.0).abs() < 1e-9, "{rest:?}");
+}
+
+#[test]
+fn free_point_on_rotated_plane_is_local() {
+    let mut d = Document::new();
+    let rotated = d
+        .add_feature(
+            "Gedreht",
+            FeatureKind::Plane(PlaneFeature {
+                def: PlaneDef::Angle {
+                    axis: AxisRef::Standard(StdAxis::X),
+                    angle: 30.0,
+                },
+            }),
+        )
+        .unwrap();
+    let mut sk = new_sketch();
+    sk.add_point(12.7, 25.4).unwrap();
+    let s = d
+        .add_feature(
+            "Skizze",
+            sketch_on(SketchPlane::OnPlane(rotated), sk, vec![]),
+        )
+        .unwrap();
+    assert!(d.sketch_of(s).unwrap().frame().z.distance(DVec3::Z) > 1e-3);
+    let on = SketchDxfOptions {
+        points: true,
+        ..opts(DxfUnit::Inch)
+    };
+    let m = sketch_dxf(&d, s, &on).unwrap();
+    let ps = points(&m);
+    assert_eq!(ps.len(), 1);
+    assert!(ps[0].distance(DVec2::new(0.5, 1.0)) < 1e-9, "{ps:?}");
 }

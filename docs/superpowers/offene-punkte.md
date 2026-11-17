@@ -3044,7 +3044,7 @@ Spec `specs/2026-11-17-skizzen-uebernehmen-design.md`, Plan `plans/2026-11-17-sk
   - **Nachtrag zu Task 4 (mit Task 5 erledigt):** Ebenenfarben außerhalb 1…255 lehnt der Schreiber ab (`drawing-err-plain-color`, de/en): negativ hieße in DXF „Ebene aus“, 0 ist BYBLOCK. Ebene „0“ steht in der LAYER-Tabelle immer an erster Stelle (wie beim Blatt); nennt der Aufrufer sie weiter hinten, rückt sie vor und behält dort ihre Farbe, die Objekte darauf bleiben auf „0“.
 
 - **Task 5, Skizze als DXF-Modell (`planora-feature/src/sketch_dxf.rs`):**
-  - **Annahme:** 3D-Skizzen (`has_3d_entry`, auch ein gelöschter 3D-Eintrag) → `NotPlanar` mit der festen Meldung der Spec („Nur ebene Skizzen lassen sich als DXF speichern.“ / „Only planar sketches can be saved as DXF.“).
+  - **Abweichung vom Brief (Entscheid des Steuerers):** Die 3D-Sperre prüft nur lebenden Inhalt (lebende Kurve mit `is_3d_curve`, lebender Punkt mit `is_3d_point`, lebender Text mit Normale), nicht `has_3d_entry`: Ein gelöschter 3D-Eintrag und der Haken „3D-Skizze“ allein sperren nicht. Lebende 3D-Geometrie → `NotPlanar` mit der festen Meldung der Spec („Nur ebene Skizzen lassen sich als DXF speichern.“ / „Only planar sketches can be saved as DXF.“).
   - **Annahme:** Konstruktionsgeometrie ist in den Optionen nicht vorbelegt (Dialog in Task 6 setzt das Häkchen auf aus).
   - **Annahme:** Ebenennamen: „0“ (Farbe 7) und „Konstruktion“/„Construction“ (Farbe 8, übersetzt über `sketch-dxf-layer-construction`). Die Konstruktionsebene entsteht nur, wenn etwas darauf liegt.
   - **Annahme:** Mittellinien liegen auf der Konstruktionsebene (kein eigener Linientyp), zusammen mit Konstruktionslinien, Spline-Griffen und den Rahmenlinien der Texte (alles `construction`).

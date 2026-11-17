@@ -61,7 +61,12 @@ pub fn sketch_dxf(
     let FeatureKind::Sketch(def) = &doc.feature(id).ok_or(SketchDxfError::Unknown)?.kind else {
         return Err(SketchDxfError::Unknown);
     };
-    if sk.has_3d_entry() {
+    // Nur lebender Inhalt sperrt: ein gelöschter 3D-Eintrag oder der Haken „3D-Skizze“ allein
+    // nicht (`texts()`, `curves()` und `points()` liefern nur lebende Einträge).
+    let three_d = sk.curves().any(|(c, _)| sk.is_3d_curve(c))
+        || sk.points().any(|(p, _)| sk.is_3d_point(p))
+        || sk.texts().any(|(_, t)| t.normal.is_some());
+    if three_d {
         return Err(SketchDxfError::NotPlanar);
     }
     let projected_curves: HashSet<_> = def
