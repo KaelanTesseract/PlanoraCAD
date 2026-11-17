@@ -63,6 +63,8 @@ pub const DIALOG_KEYS: &[&str] = &[
     "lost_projections",
     // Skizze als DXF speichern (Skizzen 11b)
     "sketch_dxf",
+    // Skizzengruppe umbenennen (Skizzen 11b)
+    "tree_group_rename",
     // Baum und Zeichnung
     "tree_rename",
     "tree_delete",

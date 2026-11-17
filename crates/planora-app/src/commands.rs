@@ -379,6 +379,22 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 state.open_sketch_dxf(id);
             }
         }
+        Action::SketchGroupCreate => {
+            // Aus den im Ordner „Skizzen“ gewählten Skizzen; Fehler stehen in der Meldung.
+            let _ = ws
+                .active_tab_mut()
+                .state
+                .create_sketch_group_from_browser(None);
+        }
+        Action::SketchGroupUngroup => {
+            let state = &mut ws.active_tab_mut().state;
+            match state.browser_group.filter(|_| state.selected_feature.is_none()) {
+                Some(g) => {
+                    let _ = state.ungroup_sketch_group(g);
+                }
+                None => hint(state, &need_selection()),
+            }
+        }
         Action::SketchToggleCurvature => {
             crate::curvature_dialog::toggle(&mut ws.active_tab_mut().state);
         }
@@ -501,6 +517,13 @@ fn toggle_visibility(state: &mut AppState) {
 /// (Baum, Verlaufsleiste), sonst der gewählte Körper (sein Ursprung, wie die Körperzeile im
 /// Baum). Zurückgesetzte Körper sind nicht gesperrt.
 fn delete_selection(state: &mut AppState) {
+    // Skizzen 11b: Eine gewählte Skizzengruppe wird aufgelöst (keine Skizze gelöscht).
+    if state.selected_feature.is_none()
+        && let Some(g) = state.browser_group
+    {
+        let _ = state.ungroup_sketch_group(g);
+        return;
+    }
     let target = state
         .selected_feature
         .filter(|id| state.document.feature(*id).is_some())

@@ -99,6 +99,12 @@ action_table! {
         Model, [];
     /// Fusion „Als DXF speichern“ (Skizzen 11b) für die gewählte Skizze; ohne Vorbelegung, belegbar.
     SketchSaveAsDxf, "modell.skizze_als_dxf", "action-sketch-save-as-dxf", Model, [];
+    /// Fusion „Gruppe erstellen“ (Skizzen 11b) aus den im Ordner „Skizzen“ gewählten Skizzen;
+    /// ohne Vorbelegung, belegbar.
+    SketchGroupCreate, "modell.gruppe_erstellen", "action-sketch-group-create", Model, [];
+    /// Fusion „Gruppe auflösen“ (Skizzen 11b) für die gewählte Skizzengruppe; ohne Vorbelegung,
+    /// belegbar.
+    SketchGroupUngroup, "modell.gruppe_aufloesen", "action-sketch-group-ungroup", Model, [];
     /// Öffnet das Fenster „Tastenkürzel“ mit aktivem Suchfeld (Fusion „Shortcuts“); wie
     /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
     ShowShortcuts, "ansicht.tastenkuerzel", "action-show-shortcuts", Model, [key(Key::S)];

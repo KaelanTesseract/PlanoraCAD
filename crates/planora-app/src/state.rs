@@ -230,6 +230,13 @@ pub struct AppState {
     history_choice: Option<FeatureId>,
     /// Auf- und zugeklappte Ordner des Feature-Baums (je Tab).
     pub tree_folders: crate::browser::FolderState,
+    /// Aufgeklappte Skizzengruppen im Ordner „Skizzen“ (Skizzen 11b; Ansicht, nicht Dokument).
+    pub tree_groups_open: std::collections::BTreeSet<planora_feature::SketchGroupId>,
+    /// Per Strg-Klick im Ordner „Skizzen“ gewählte Skizzen (Skizzen 11b); gilt nur, solange
+    /// `selected_feature` darin steht (siehe [`AppState::browser_sketch_selection`]).
+    pub browser_sketches: Vec<FeatureId>,
+    /// Im Ordner „Skizzen“ gewählte Gruppe (Skizzen 11b); gilt nur ohne `selected_feature`.
+    pub browser_group: Option<planora_feature::SketchGroupId>,
     /// Grundebene unter dem Zeiger (hell gezeichnet; gilt nur für das laufende Bild).
     pub origin_hover: Option<StandardPlane>,
     /// Gewählte Grundebene; gelesen über [`AppState::selected_origin_plane`].
@@ -282,6 +289,8 @@ pub struct AppState {
     pub pending_delete: Option<crate::browser::DeletePlan>,
     /// Offenes Fenster „Umbenennen“: Feature und Entwurf des Namens.
     pub rename_draft: Option<(FeatureId, String)>,
+    /// Offenes Fenster „Umbenennen“ einer Skizzengruppe (Skizzen 11b): Gruppe und Entwurf.
+    pub group_rename_draft: Option<(planora_feature::SketchGroupId, String)>,
     /// Offene Rückfrage „Zeichnung oder Ansicht löschen“ aus dem Abschnitt „Zeichnungen“.
     pub pending_delete_drawing: Option<crate::drawing_browser::DrawingDeletePlan>,
     /// Offenes Fenster „Umbenennen“ einer Zeichnung: Zeichnung und Entwurf des Namens.
@@ -720,6 +729,9 @@ impl AppState {
             selected_feature: None,
             history_choice: None,
             tree_folders: crate::browser::FolderState::default(),
+            tree_groups_open: std::collections::BTreeSet::new(),
+            browser_sketches: Vec::new(),
+            browser_group: None,
             origin_hover: None,
             selected_origin: None,
             sketch_session: None,
@@ -740,6 +752,7 @@ impl AppState {
             profile_pick: None,
             pending_delete: None,
             rename_draft: None,
+            group_rename_draft: None,
             pending_delete_drawing: None,
             rename_drawing_draft: None,
             edit_request: None,
@@ -1029,7 +1042,143 @@ impl AppState {
             Some(FeatureKind::Canvas(_)) => v.folders.canvases,
             _ => false,
         };
-        folder || v.features.contains(&id)
+        // Skizzen 11b: eine Skizze in einer ausgeblendeten Gruppe (ihr eigenes Auge bleibt).
+        let by_group = matches!(
+            self.document.feature(id).map(|f| &f.kind),
+            Some(FeatureKind::Sketch(_))
+        ) && self.document.sketch_hidden_by_group(id);
+        folder || v.features.contains(&id) || by_group
+    }
+
+    /// Die im Ordner „Skizzen“ gewählten Skizzen (Skizzen 11b): die Strg-Klick-Wahl, solange
+    /// `selected_feature` darin steht, sonst die gewählte Skizze allein; nur vorhandene Skizzen.
+    pub fn browser_sketch_selection(&self) -> Vec<FeatureId> {
+        let is_sketch = |id: &FeatureId| {
+            self.document
+                .feature(*id)
+                .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        };
+        let Some(sel) = self.selected_feature.filter(is_sketch) else {
+            return Vec::new();
+        };
+        if self.browser_sketches.contains(&sel) {
+            self.browser_sketches
+                .iter()
+                .copied()
+                .filter(is_sketch)
+                .collect()
+        } else {
+            vec![sel]
+        }
+    }
+
+    /// Strg-Klick auf die Skizzenzeile `id`: nimmt sie in die Wahl auf oder heraus.
+    pub fn toggle_browser_sketch(&mut self, id: FeatureId) {
+        let mut list = self.browser_sketch_selection();
+        if let Some(i) = list.iter().position(|s| *s == id) {
+            list.remove(i);
+        } else {
+            list.push(id);
+        }
+        self.selected_feature = list.last().copied();
+        self.browser_sketches = list;
+        self.browser_group = None;
+        self.selected_body = None;
+        self.drawing_ui.selected_drawing = None;
+        self.set_selection(None);
+    }
+
+    /// Fusion „Gruppe erstellen“ (Skizzen 11b): die gewählten Skizzen und `row` (die Zeile des
+    /// Menüs) kommen in eine neue Gruppe; sie wird aufgeklappt und gewählt. Ein Schritt.
+    pub fn create_sketch_group_from_browser(
+        &mut self,
+        row: Option<FeatureId>,
+    ) -> Result<planora_feature::SketchGroupId, String> {
+        let mut list = self.browser_sketch_selection();
+        if let Some(r) = row
+            && !list.contains(&r)
+        {
+            list.push(r);
+        }
+        let items: Vec<planora_feature::GroupItem> = list
+            .into_iter()
+            .map(planora_feature::GroupItem::Sketch)
+            .collect();
+        match self.document.create_sketch_group(&items) {
+            Ok(g) => {
+                self.tree_groups_open.insert(g);
+                self.message = None;
+                Ok(g)
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Fusion „Gruppe auflösen“ (auch „Löschen“ einer Gruppe): der Inhalt geht eine Ebene höher,
+    /// keine Skizze wird gelöscht. Ein Schritt.
+    pub fn ungroup_sketch_group(
+        &mut self,
+        id: planora_feature::SketchGroupId,
+    ) -> Result<(), String> {
+        let hidden = self
+            .document
+            .sketch_groups()
+            .group(id)
+            .is_some_and(|g| g.hidden);
+        match self.document.ungroup_sketch_group(id) {
+            Ok(()) => {
+                self.tree_groups_open.remove(&id);
+                if self.browser_group == Some(id) {
+                    self.browser_group = None;
+                }
+                if self.group_rename_draft.as_ref().is_some_and(|d| d.0 == id) {
+                    self.group_rename_draft = None;
+                }
+                if hidden {
+                    self.sync_visibility();
+                }
+                Ok(())
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Legt eine Skizze oder Gruppe in die Gruppe `target` (`None`: oben in den Ordner).
+    pub fn move_to_sketch_group(
+        &mut self,
+        item: planora_feature::GroupItem,
+        target: Option<planora_feature::SketchGroupId>,
+    ) -> Result<(), String> {
+        match self.document.move_to_group(item, target) {
+            Ok(()) => {
+                self.sync_visibility();
+                Ok(())
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Benennt die Skizzengruppe `id` um (leere Namen sind ungültig).
+    pub fn rename_sketch_group(
+        &mut self,
+        id: planora_feature::SketchGroupId,
+        name: &str,
+    ) -> Result<(), String> {
+        match self.document.rename_sketch_group(id, name) {
+            Ok(()) => Ok(()),
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Auge der Skizzengruppe `id`: blendet alle Skizzen darin aus oder ein (ihr eigenes Auge
+    /// bleibt).
+    pub fn set_sketch_group_hidden(&mut self, id: planora_feature::SketchGroupId, hidden: bool) {
+        let before = self.document.sketch_groups().group(id).map(|g| g.hidden);
+        if before.is_none() || before == Some(hidden) {
+            return;
+        }
+        self.document.set_sketch_group_hidden(id, hidden);
+        self.sync_visibility();
     }
 
     /// Steht das Auge der Skizze oder Konstruktionsebene `id` selbst auf „aus“?
@@ -1258,6 +1407,7 @@ impl AppState {
             .filter_map(|f| carried_body(&f.kind).map(|b| (f.id, b)))
             .collect();
         let visibility_before = self.document.visibility().clone();
+        let groups_before = self.document.sketch_groups().clone();
         let kind = self.document.restore(s).map_err(|e| e.to_string())?;
         self.rebuild_name_counters();
         // Eine offene Skizze verwerfen: Ihr Entwurf (samt Verlauf) gehört zum alten Dokument.
@@ -1275,6 +1425,7 @@ impl AppState {
         self.pending_delete_drawing = None;
         self.pending_delete_dimension = None;
         self.rename_draft = None;
+        self.group_rename_draft = None;
         self.rename_drawing_draft = None;
         self.edit_request = None;
         self.sketch_request = None;
@@ -1312,7 +1463,9 @@ impl AppState {
             RestoreKind::Annotations if had_marks && !left_sketch => self.rebuild_scene(),
             RestoreKind::Annotations => {}
         }
-        if *self.document.visibility() != visibility_before {
+        if *self.document.visibility() != visibility_before
+            || *self.document.sketch_groups() != groups_before
+        {
             self.sync_visibility();
         }
         if left_sketch {
@@ -4092,6 +4245,21 @@ impl AppState {
             .is_some_and(|(id, _)| gone(&self.document, id))
         {
             self.rename_draft = None;
+        }
+        // Skizzen 11b: Fenster und Wahl einer Gruppe, die es nicht mehr gibt.
+        let groups = self.document.sketch_groups();
+        if self
+            .group_rename_draft
+            .as_ref()
+            .is_some_and(|(g, _)| groups.group(*g).is_none())
+        {
+            self.group_rename_draft = None;
+        }
+        if self
+            .browser_group
+            .is_some_and(|g| groups.group(g).is_none())
+        {
+            self.browser_group = None;
         }
         if self
             .open_sketch_id()

@@ -80,6 +80,7 @@ pub mod sketch_pattern;
 pub mod sketch_project;
 pub mod sketch_state;
 pub mod sketch_text;
+pub mod sketch_tree;
 pub mod sketch_triad;
 pub mod sketch_under;
 pub mod sketch_view;

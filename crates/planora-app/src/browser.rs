@@ -10,7 +10,10 @@ use crate::plane_dialog::PlaneClick;
 use crate::state::{AppState, SketchRequest};
 use crate::theme;
 use egui::{Color32, Sense, vec2};
-use planora_feature::{BodyRef, FeatureId, FeatureKind, FeatureStatus, SketchPlane, StandardPlane};
+use planora_feature::{
+    BodyRef, FeatureId, FeatureKind, FeatureStatus, GroupItem, SketchGroupId, SketchPlane,
+    StandardPlane,
+};
 use planora_i18n::tr;
 use planora_render::Pick;
 
@@ -513,6 +516,22 @@ enum Action {
     SaveAsDxf(FeatureId),
     /// „Kalibrieren“ dieser Leinwand (Klickmodus in der Ansicht).
     Calibrate(FeatureId),
+    /// Strg-Klick auf eine Skizzenzeile: in die Mehrfachwahl oder heraus (Skizzen 11b).
+    ToggleSketch(FeatureId),
+    /// Klick auf eine Gruppenzeile.
+    SelectGroup(SketchGroupId),
+    /// Pfeil einer Gruppenzeile: auf- oder zuklappen (nur die Ansicht).
+    FoldGroup(SketchGroupId),
+    /// Auge einer Gruppe.
+    ToggleGroupHidden(SketchGroupId),
+    /// „Gruppe erstellen“ aus dem Menü dieser Skizzenzeile.
+    CreateGroup(FeatureId),
+    /// „Umbenennen“ einer Gruppe.
+    RenameGroup(SketchGroupId),
+    /// „Gruppe auflösen“ oder „Löschen“ einer Gruppe.
+    Ungroup(SketchGroupId),
+    /// Abgelegt nach dem Ziehen: in diese Gruppe (`None`: oben in den Ordner „Skizzen“).
+    MoveToGroup(GroupItem, Option<SketchGroupId>),
 }
 
 /// Angaben einer Skizzenzeile (aus dem Dokument kopiert, damit danach geändert werden darf).
@@ -1011,7 +1030,15 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
             let eye = folder != Folder::Drawings
                 && folder_eye(ui, state, folder, head.rect, read_only)
                 && !read_only;
-            if eye {
+            // Skizzen 11b: Eine Skizze oder Gruppe auf der Ordnerzeile „Skizzen“ geht nach oben.
+            let dropped = (folder == Folder::Sketches && !read_only)
+                .then(|| head.dnd_release_payload::<GroupItem>())
+                .flatten()
+                .map(|p| *p)
+                .filter(|p| crate::sketch_tree::drop_target_ok(&state.document, *p, None));
+            if let Some(item) = dropped {
+                action = Some(Action::MoveToGroup(item, None));
+            } else if eye {
                 action = Some(Action::ToggleFolder(folder));
             } else if head.clicked() {
                 action = Some(Action::Fold(folder));
@@ -1060,15 +1087,18 @@ enum TreePrompt {
     DrawingRename,
     DrawingDelete,
     DimensionDelete,
+    /// Umbenennen einer Skizzengruppe (Skizzen 11b).
+    GroupRename,
 }
 
 impl TreePrompt {
-    const ALL: [TreePrompt; 5] = [
+    const ALL: [TreePrompt; 6] = [
         TreePrompt::Rename,
         TreePrompt::Delete,
         TreePrompt::DrawingRename,
         TreePrompt::DrawingDelete,
         TreePrompt::DimensionDelete,
+        TreePrompt::GroupRename,
     ];
 
     fn is_open(self, state: &AppState) -> bool {
@@ -1078,6 +1108,7 @@ impl TreePrompt {
             TreePrompt::DrawingRename => state.rename_drawing_draft.is_some(),
             TreePrompt::DrawingDelete => state.pending_delete_drawing.is_some(),
             TreePrompt::DimensionDelete => state.pending_delete_dimension.is_some(),
+            TreePrompt::GroupRename => state.group_rename_draft.is_some(),
         }
     }
 
@@ -1088,12 +1119,13 @@ impl TreePrompt {
             TreePrompt::DrawingRename => crate::drawing_browser::rename_window(ctx, state),
             TreePrompt::DrawingDelete => crate::drawing_browser::delete_window(ctx, state),
             TreePrompt::DimensionDelete => crate::dimension_browser::windows(ctx, state),
+            TreePrompt::GroupRename => group_rename_window(ctx, state),
         }
     }
 }
 
 /// Welche Rückfragen gerade offen sind (Reihenfolge wie [`TreePrompt::ALL`]).
-type PromptSet = [bool; 5];
+type PromptSet = [bool; 6];
 
 fn open_prompts(state: &AppState) -> PromptSet {
     TreePrompt::ALL.map(|p| p.is_open(state))
@@ -1313,100 +1345,275 @@ fn eye_at(
 
 /// Ordner „Skizzen“: je Skizze eine Zeile mit den bisherigen Befehlen.
 fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
-    let weak = ui.visuals().weak_text_color();
     prime_status_words(ui);
-    let open = state.open_sketch_id();
-    let rows: Vec<SketchRow> = state
-        .document
-        .features()
-        .iter()
-        .filter(|f| matches!(f.kind, FeatureKind::Sketch(_)))
-        .map(|f| SketchRow {
-            id: f.id,
-            name: f.name.clone(),
-            suppressed: f.suppressed,
-            status: f.status.clone(),
-            warning: sketch_row_warning(state, f.id),
-            hidden: state.is_feature_hidden(f.id),
-            own_hidden: state.own_feature_hidden(f.id),
-            locked: sketch_row_locked(state, f.id),
-        })
-        .collect();
+    // Skizzen 11b: Baum mit Gruppen (erst Gruppen, dann Skizzen je Ebene).
+    let rows = crate::sketch_tree::sketch_tree(&state.document, &state.tree_groups_open);
     if rows.is_empty() {
         ui.weak(no_sketches());
     }
-    let warn_color = theme::palette(ui.visuals().dark_mode).warning;
+    let chosen = state.browser_sketch_selection();
+    let folder_hidden = state.is_folder_hidden(Folder::Sketches);
     for r in rows {
-        let id = r.id;
-        let selected = state.selected_feature == Some(id) || open == Some(id);
-        let name = if open == Some(id) {
-            tr!("tree-in-progress", name = r.name.as_str())
-        } else {
-            r.name.clone()
-        };
-        let (status, mut color, reason) = status_view(&r.status, weak, row_error(ui));
-        if r.hidden && color.is_none() {
-            color = Some(weak);
-        }
-        // Mit Warnung: Warnzeichen über der Ecke des Symbols, der Text im Hinweis (wie Fusion).
-        let warned = r.warning.is_some();
-        let locked = r.locked;
-        let lock_color = theme::palette(ui.visuals().dark_mode).error;
-        let resp = row_lead(
-            ui,
-            0.0,
-            EYE_W,
-            selected,
-            &name,
-            color,
-            status.as_deref().zip(color),
-            None,
-            |p, rect, c| {
-                paint_feature_icon(p, rect, FeatureIcon::Sketch, c);
-                if warned {
-                    let size = rect.width() * WARN_BADGE;
-                    let badge = egui::Rect::from_min_size(
-                        rect.right_bottom() - vec2(size, size) * 0.75,
-                        vec2(size, size),
-                    );
-                    paint_source(p, badge, IconSource::Font(Icon::Warning), warn_color);
-                }
-                // Rotes Schloss unten links über dem Symbol (die Warnung sitzt unten rechts).
-                if locked {
-                    let size = rect.width() * WARN_BADGE;
-                    let badge = egui::Rect::from_min_size(
-                        rect.left_bottom() + vec2(-size * 0.25, -size * 0.75),
-                        vec2(size, size),
-                    );
-                    paint_source(p, badge, IconSource::Font(Icon::Lock), lock_color);
-                }
-            },
-        )
-        .on_hover_text(
-            reason
-                .or(r.warning.clone())
-                .or_else(|| locked.then(|| tr!("tree-sketch-locked")))
-                .unwrap_or_else(|| tr!("tree-sketch-hint")),
-        );
-        // Die geöffnete Skizze bleibt sichtbar: ohne Auge.
-        if open != Some(id) {
-            let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
-            let eye = (r.own_hidden, r.hidden);
-            if eye_button(ui, resp.rect, ("eye-sketch", id), &name, eye, texts) {
-                *action = Some(Action::ToggleFeatureHidden(id));
+        let indent = r.depth as f32 * FOLDER_INDENT;
+        match r.item {
+            GroupItem::Sketch(id) => {
+                sketch_row(ui, state, action, id, indent, chosen.contains(&id));
             }
+            GroupItem::Group(g) => group_row(ui, state, action, g, indent, folder_hidden),
         }
-        if resp.double_clicked() {
-            *action = Some(Action::Edit(id));
-        } else if resp.clicked() {
-            *action = Some(Action::Select(id));
+    }
+}
+
+/// Eine Skizzenzeile, um `indent` eingerückt (Tiefe im Gruppenbaum); `chosen`: in der Wahl.
+fn sketch_row(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    action: &mut Option<Action>,
+    id: FeatureId,
+    indent: f32,
+    chosen: bool,
+) {
+    let Some(f) = state.document.feature(id) else {
+        return;
+    };
+    let r = SketchRow {
+        id,
+        name: f.name.clone(),
+        suppressed: f.suppressed,
+        status: f.status.clone(),
+        warning: sketch_row_warning(state, id),
+        hidden: state.is_feature_hidden(id),
+        own_hidden: state.own_feature_hidden(id),
+        locked: sketch_row_locked(state, id),
+    };
+    let weak = ui.visuals().weak_text_color();
+    let open = state.open_sketch_id();
+    let warn_color = theme::palette(ui.visuals().dark_mode).warning;
+    let selected = chosen || open == Some(id);
+    let name = if open == Some(id) {
+        tr!("tree-in-progress", name = r.name.as_str())
+    } else {
+        r.name.clone()
+    };
+    let (status, mut color, reason) = status_view(&r.status, weak, row_error(ui));
+    if r.hidden && color.is_none() {
+        color = Some(weak);
+    }
+    // Mit Warnung: Warnzeichen über der Ecke des Symbols, der Text im Hinweis (wie Fusion).
+    let warned = r.warning.is_some();
+    let locked = r.locked;
+    let lock_color = theme::palette(ui.visuals().dark_mode).error;
+    let resp = row_lead(
+        ui,
+        indent,
+        EYE_W,
+        selected,
+        &name,
+        color,
+        status.as_deref().zip(color),
+        None,
+        |p, rect, c| {
+            paint_feature_icon(p, rect, FeatureIcon::Sketch, c);
+            if warned {
+                let size = rect.width() * WARN_BADGE;
+                let badge = egui::Rect::from_min_size(
+                    rect.right_bottom() - vec2(size, size) * 0.75,
+                    vec2(size, size),
+                );
+                paint_source(p, badge, IconSource::Font(Icon::Warning), warn_color);
+            }
+            // Rotes Schloss unten links über dem Symbol (die Warnung sitzt unten rechts).
+            if locked {
+                let size = rect.width() * WARN_BADGE;
+                let badge = egui::Rect::from_min_size(
+                    rect.left_bottom() + vec2(-size * 0.25, -size * 0.75),
+                    vec2(size, size),
+                );
+                paint_source(p, badge, IconSource::Font(Icon::Lock), lock_color);
+            }
+        },
+    )
+    .on_hover_text(
+        reason
+            .or(r.warning.clone())
+            .or_else(|| locked.then(|| tr!("tree-sketch-locked")))
+            .unwrap_or_else(|| tr!("tree-sketch-hint")),
+    );
+    // Skizzen 11b: Die Zeile lässt sich auf eine Gruppe oder den Ordner ziehen.
+    let resp = resp.interact(Sense::drag());
+    resp.dnd_set_drag_payload(GroupItem::Sketch(id));
+    // Die geöffnete Skizze bleibt sichtbar: ohne Auge.
+    if open != Some(id) {
+        let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
+        let eye = (r.own_hidden, r.hidden);
+        let lead = resp.rect.with_min_x(resp.rect.min.x + indent);
+        if eye_button(ui, lead, ("eye-sketch", r.id), &name, eye, texts) {
+            *action = Some(Action::ToggleFeatureHidden(id));
         }
-        // Neue Körper aus der Skizze eines zurückgesetzten Körpers sind gesperrt.
-        let lock = crate::history_bar::lock_reason(state, &[id]);
-        let lost = crate::lost_projections_dialog::offers(state, id);
-        resp.context_menu(|ui| {
-            feature_menu(ui, action, id, r.suppressed, Some((lock, lost)));
+    }
+    if resp.double_clicked() {
+        *action = Some(Action::Edit(id));
+    } else if resp.clicked() {
+        // Strg-Klick nimmt die Skizze in die Wahl auf oder heraus (Skizzen 11b).
+        let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+        *action = Some(if ctrl {
+            Action::ToggleSketch(id)
+        } else {
+            Action::Select(id)
         });
+    }
+    // Neue Körper aus der Skizze eines zurückgesetzten Körpers sind gesperrt.
+    let lock = crate::history_bar::lock_reason(state, &[id]);
+    let lost = crate::lost_projections_dialog::offers(state, id);
+    resp.context_menu(|ui| {
+        feature_menu(ui, action, id, r.suppressed, Some((lock, lost)));
+    });
+}
+
+/// Zeile einer Skizzengruppe (Skizzen 11b), um `indent` eingerückt: Pfeil (klappt auf und zu),
+/// Auge, Ordnersymbol, Name; Ablageziel beim Ziehen und Kontextmenü. `folder_hidden`: der
+/// Ordner „Skizzen“ ist ausgeblendet (dämpft wie bei den Skizzen).
+fn group_row(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    action: &mut Option<Action>,
+    g: SketchGroupId,
+    indent: f32,
+    folder_hidden: bool,
+) {
+    let Some(grp) = state.document.sketch_groups().group(g) else {
+        return;
+    };
+    let name = grp.name.clone();
+    let own_hidden = grp.hidden;
+    let hidden = folder_hidden || crate::sketch_tree::group_hidden(&state.document, g);
+    let open = state.tree_groups_open.contains(&g);
+    let selected = state.browser_group == Some(g) && state.selected_feature.is_none();
+    let (full, resp) = ui.allocate_exact_size(
+        vec2(ui.available_width(), ROW_HEIGHT),
+        Sense::click_and_drag(),
+    );
+    remember(ui, rows_id(), (name.clone(), full));
+    let rect = egui::Rect::from_min_max(full.min + vec2(indent, 0.0), full.max);
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, enabled, open, &name)
+    });
+    let p = theme::palette(ui.visuals().dark_mode);
+    let hovered = resp.hovered() && enabled;
+    let drop_ok =
+        |item: GroupItem| crate::sketch_tree::drop_target_ok(&state.document, item, Some(g));
+    let drop_hover = resp
+        .dnd_hover_payload::<GroupItem>()
+        .is_some_and(|item| drop_ok(*item));
+    if selected {
+        ui.painter()
+            .rect_filled(rect, theme::RADIUS_SM, p.bg_active);
+    } else if hovered || drop_hover {
+        ui.painter().rect_filled(rect, theme::RADIUS_SM, p.bg_field);
+    }
+    let weak = ui.visuals().weak_text_color();
+    let ink = if hidden {
+        weak
+    } else {
+        row_ink(ui, selected || hovered)
+    };
+    // Pfeil wie am Ordnerkopf.
+    let caret_c = egui::pos2(rect.min.x + theme::SPACE_1 + CARET / 2.0, rect.center().y);
+    let h = CARET / 2.0;
+    let points = if open {
+        vec![
+            caret_c + vec2(-h, -h / 2.0),
+            caret_c + vec2(h, -h / 2.0),
+            caret_c + vec2(0.0, h / 2.0 + 1.0),
+        ]
+    } else {
+        vec![
+            caret_c + vec2(-h / 2.0, -h),
+            caret_c + vec2(h / 2.0 + 1.0, 0.0),
+            caret_c + vec2(-h / 2.0, h),
+        ]
+    };
+    ui.painter()
+        .add(egui::Shape::convex_polygon(points, ink, egui::Stroke::NONE));
+    let eye_x = rect.min.x + theme::SPACE_1 + CARET + theme::SPACE_1;
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(eye_x + EYE_W + ICON_SIZE / 2.0, rect.center().y),
+        vec2(ICON_SIZE, ICON_SIZE),
+    );
+    paint_source(ui.painter(), icon_rect, IconSource::Font(Icon::Folder), ink);
+    ui.painter_at(rect).text(
+        egui::pos2(icon_rect.right() + theme::SPACE_2, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &name,
+        theme::label_font(),
+        ink,
+    );
+    // Pfeil und Auge liegen über der Zeile (ohne eigenen Layout-Bereich).
+    let caret_rect = egui::Rect::from_min_max(rect.min, egui::pos2(eye_x, rect.max.y));
+    let caret = ui.interact(
+        caret_rect,
+        ui.id().with(("caret-group", g.0)),
+        Sense::click(),
+    );
+    let eye_rect =
+        egui::Rect::from_min_size(egui::pos2(eye_x, rect.min.y), vec2(EYE_W, ROW_HEIGHT));
+    let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
+    let eye = eye_at(
+        ui,
+        eye_rect,
+        ("eye-group", g.0),
+        &name,
+        (own_hidden, hidden),
+        texts,
+    );
+    resp.dnd_set_drag_payload(GroupItem::Group(g));
+    let dropped = resp
+        .dnd_release_payload::<GroupItem>()
+        .map(|item| *item)
+        .filter(|item| drop_ok(*item));
+    if let Some(item) = dropped {
+        *action = Some(Action::MoveToGroup(item, Some(g)));
+    } else if eye {
+        *action = Some(Action::ToggleGroupHidden(g));
+    } else if caret.clicked() || resp.double_clicked() {
+        *action = Some(Action::FoldGroup(g));
+    } else if resp.clicked() {
+        *action = Some(Action::SelectGroup(g));
+    }
+    resp.context_menu(|ui| group_menu(ui, action, g));
+}
+
+/// Kontextmenü einer Gruppenzeile: „Umbenennen“, „Gruppe auflösen“ und „Löschen“ (löst die
+/// Gruppe ebenfalls auf und löscht keine Skizze, **Annahme**).
+fn group_menu(ui: &mut egui::Ui, action: &mut Option<Action>, g: SketchGroupId) {
+    let km = crate::keymap::mouse::current(ui.ctx());
+    let key_button = |label: String, a: crate::keymap::Action| {
+        let keys = crate::keymap::shortcut_hint(&km, a);
+        let b = egui::Button::new(label);
+        if keys.is_empty() {
+            b
+        } else {
+            b.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()))
+        }
+    };
+    if ui.button(tr!("tree-rename")).clicked() {
+        *action = Some(Action::RenameGroup(g));
+        ui.close();
+    }
+    let ungroup = key_button(
+        tr!("tree-group-ungroup"),
+        crate::keymap::Action::SketchGroupUngroup,
+    );
+    if ui.add(ungroup).clicked() {
+        *action = Some(Action::Ungroup(g));
+        ui.close();
+    }
+    ui.separator();
+    let delete = key_button(tr!("tree-delete"), crate::keymap::Action::DeleteSelection);
+    if ui.add(delete).clicked() {
+        *action = Some(Action::Ungroup(g));
+        ui.close();
     }
 }
 
@@ -1475,6 +1682,14 @@ fn feature_menu(
         );
         if ui.add(save_dxf).clicked() {
             pick(action, Action::SaveAsDxf(id), ui);
+        }
+        // Fusion „Gruppe erstellen“ (Skizzen 11b): die gewählten Skizzen und diese Zeile.
+        let group = key_button(
+            &tr!("tree-group-create"),
+            crate::keymap::Action::SketchGroupCreate,
+        );
+        if ui.add(group).clicked() {
+            pick(action, Action::CreateGroup(id), ui);
         }
         // Nur an Skizzen mit verlorenen Projektionen (Skizzen 11a).
         if lost {
@@ -1828,11 +2043,14 @@ fn run(state: &mut AppState, action: Action) {
         Action::Select(id) => {
             // Nur eines ist hervorgehoben: Feature statt Körper bzw. 3D-Auswahl.
             state.selected_feature = Some(id);
+            state.browser_sketches = vec![id];
+            state.browser_group = None;
             state.selected_body = None;
             state.drawing_ui.selected_drawing = None;
             state.set_selection(None);
         }
         Action::SelectBody(tip, index) => {
+            state.browser_group = None;
             state.set_selection(None);
             state.selected_feature = None;
             state.drawing_ui.selected_drawing = None;
@@ -1857,6 +2075,40 @@ fn run(state: &mut AppState, action: Action) {
         Action::Extrude(id) => state.request_sketch_dialog(SketchRequest::Extrude(id)),
         Action::Revolve(id) => state.request_sketch_dialog(SketchRequest::Revolve(id)),
         Action::Delete(id) => request_delete(state, id),
+        Action::ToggleSketch(id) => state.toggle_browser_sketch(id),
+        Action::SelectGroup(g) => {
+            state.selected_feature = None;
+            state.browser_sketches.clear();
+            state.selected_body = None;
+            state.drawing_ui.selected_drawing = None;
+            state.set_selection(None);
+            state.browser_group = Some(g);
+        }
+        Action::FoldGroup(g) => {
+            if !state.tree_groups_open.remove(&g) {
+                state.tree_groups_open.insert(g);
+            }
+        }
+        Action::ToggleGroupHidden(g) => {
+            if let Some(hidden) = state.document.sketch_groups().group(g).map(|g| g.hidden) {
+                state.set_sketch_group_hidden(g, !hidden);
+            }
+        }
+        // Fehler stehen in der Meldung.
+        Action::CreateGroup(id) => {
+            let _ = state.create_sketch_group_from_browser(Some(id));
+        }
+        Action::RenameGroup(g) => {
+            if let Some(grp) = state.document.sketch_groups().group(g) {
+                state.group_rename_draft = Some((g, grp.name.clone()));
+            }
+        }
+        Action::Ungroup(g) => {
+            let _ = state.ungroup_sketch_group(g);
+        }
+        Action::MoveToGroup(item, target) => {
+            let _ = state.move_to_sketch_group(item, target);
+        }
     }
 }
 
@@ -1917,6 +2169,56 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
         let _ = apply_rename(state);
     } else if cancel || !open {
         state.rename_draft = None;
+    }
+}
+
+/// Übernimmt den Namen aus dem Fenster „Umbenennen“ einer Skizzengruppe (Skizzen 11b). Bei
+/// einem ungültigen Namen bleibt das Fenster offen (die Meldung steht in `message`).
+pub fn apply_group_rename(state: &mut AppState) -> Result<(), String> {
+    let Some((id, name)) = state.group_rename_draft.take() else {
+        return Ok(());
+    };
+    match state.rename_sketch_group(id, name.trim()) {
+        Ok(()) => {
+            state.message = None;
+            Ok(())
+        }
+        Err(e) => {
+            state.group_rename_draft = Some((id, name));
+            Err(e)
+        }
+    }
+}
+
+/// Kleines Fenster „Umbenennen“ einer Skizzengruppe mit Textfeld.
+fn group_rename_window(ctx: &egui::Context, state: &mut AppState) {
+    let Some((_, name)) = state.group_rename_draft.as_mut() else {
+        return;
+    };
+    let (mut apply, mut cancel) = (false, false);
+    let mut open = true;
+    Dialog::new(tr!("tree-rename"), DialogSize::Prompt)
+        .dock_key("tree_group_rename")
+        .open(&mut open)
+        .show(ctx, |ui| {
+            let r = theme::text_field(ui, egui::TextEdit::singleline(name));
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                apply = true;
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button(tr!("tree-apply")).clicked() {
+                    apply = true;
+                }
+                if ui.button(tr!("common-cancel")).clicked() {
+                    cancel = true;
+                }
+            });
+        });
+    if apply {
+        let _ = apply_group_rename(state);
+    } else if cancel || !open {
+        state.group_rename_draft = None;
     }
 }
 
