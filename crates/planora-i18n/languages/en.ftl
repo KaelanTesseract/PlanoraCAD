@@ -3861,3 +3861,5 @@ setup-finish = Finish
 setup-close = Close
 action-sketch-edit-picked = Edit Sketch
 action-sketch-hide-picked = Hide
+tree-sketch-show-dimension = Show Dimension
+action-sketch-show-dimension-finished = Show Dimension (finished sketch) on/off

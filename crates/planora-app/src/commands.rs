@@ -413,6 +413,14 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         }
         Action::SketchEditPicked => ws.active_tab_mut().state.edit_picked_sketch(),
         Action::SketchHidePicked => ws.active_tab_mut().state.hide_picked_sketch(),
+        Action::SketchShowDimensionFinished => {
+            // Ein Schritt; die Skizze der Auswahl, nicht die geöffnete.
+            let state = &mut ws.active_tab_mut().state;
+            state.sketch_pick_menu = None;
+            if let Some(id) = state.sketch_for_dimension_menu() {
+                state.toggle_finished_dimensions(id);
+            }
+        }
         Action::SketchGroupCreate => {
             // Aus den im Ordner „Skizzen“ gewählten Skizzen; Fehler stehen in der Meldung.
             let _ = ws

@@ -3844,3 +3844,5 @@ setup-finish = Fertig
 setup-close = Schließen
 action-sketch-edit-picked = Skizze bearbeiten
 action-sketch-hide-picked = Ausblenden
+tree-sketch-show-dimension = Maße anzeigen
+action-sketch-show-dimension-finished = Maße anzeigen (fertige Skizze) ein/aus

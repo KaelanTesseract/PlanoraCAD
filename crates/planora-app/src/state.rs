@@ -1313,6 +1313,35 @@ impl AppState {
         }
     }
 
+    /// Der Haken „Maße anzeigen“ im Rechtsklickmenü einer Skizze (Baum und 3D-Ansicht, Skizzen 12):
+    /// `Some(an)` für eine fertige Skizze, `None` bei der gerade geöffneten (dort gilt der Haken
+    /// im Skizzenfeld) und bei einer Kennung ohne Skizze.
+    pub fn sketch_dimension_menu(&self, id: FeatureId) -> Option<bool> {
+        self.document.sketch_of(id)?;
+        (self.open_sketch_id() != Some(id))
+            .then(|| self.document.sketch_display(id).dimensions_finished)
+    }
+
+    /// Schaltet „Maße anzeigen“ der fertigen Skizze `id` um (ein Schritt, Beschriftung
+    /// „Skizzenanzeige ändern“). Bei der geöffneten Skizze und ohne Skizze geschieht nichts.
+    pub fn toggle_finished_dimensions(&mut self, id: FeatureId) {
+        let Some(on) = self.sketch_dimension_menu(id) else {
+            return;
+        };
+        let mut d = self.document.sketch_display(id);
+        d.dimensions_finished = !on;
+        self.document.set_sketch_display(id, d);
+    }
+
+    /// Die Skizze für den belegbaren Befehl „Maße anzeigen“ der fertigen Skizze: die gewählte
+    /// Skizzengeometrie in der 3D-Ansicht, sonst die im Baum gewählte Skizze.
+    pub fn sketch_for_dimension_menu(&self) -> Option<FeatureId> {
+        self.picked_sketch().or_else(|| {
+            let id = self.selected_feature?;
+            self.document.sketch_of(id).map(|_| id)
+        })
+    }
+
     /// Ist die Grundebene `p` eingeblendet (Auge im Ordner „Ursprung“)?
     pub fn is_origin_plane_shown(&self, p: StandardPlane) -> bool {
         self.document.visibility().origin_shown(p)

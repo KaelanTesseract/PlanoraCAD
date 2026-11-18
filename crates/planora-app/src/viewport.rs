@@ -1066,6 +1066,12 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     let mut overlay = crate::canvas::canvas_outlines(state, rect);
     // Was von den fertigen Skizzen obenauf bleibt (Krümmungskamm).
     overlay.extend(sketch_view::finished_sketch_shapes(state, rect));
+    // Maße fertiger Skizzen mit „Maße anzeigen“ (Skizzen 12, Task 9): nur zur Ansicht.
+    overlay.extend(sketch_view::finished_dimension_shapes(
+        painter.ctx(),
+        state,
+        rect,
+    ));
     overlay.extend(sketch_view::insert_preview_shapes(state, rect));
     // Vorschau der Isokurven (Skizzen 11b).
     overlay.extend(sketch_view::iso_preview_shapes(state, rect));

@@ -1603,6 +1603,71 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     out
 }
 
+/// Die Maße der fertigen Skizzen mit „Maße anzeigen“ ([`SketchDisplay::dimensions_finished`],
+/// Vorgabe aus) als Overlay obenauf (Skizzen 12, Task 9): derselbe Text wie in der offenen
+/// Skizze ([`overlay_text_with`]) am selben Anker ([`constraint_anchors`]), nur zur Ansicht, nicht
+/// anklickbar (kein [`LabelHit`]). Sichtbar wie die Linien der Skizze (Auge, Ordner, Gruppe über
+/// [`finished_sketches`]); die Schalter der Skizze gelten ([`DisplayFilter`], „Maße anzeigen“ im
+/// Skizzenfeld aus blendet auch hier aus). Wie bei der offenen Skizze zeigen Maße nur ihren Wert,
+/// Hilfslinien gibt es nur in der Vorschau der Bemaßung ([`dimension_helpers`]).
+/// `ctx` liefert die Schrift für die Textanordnung.
+///
+/// [`SketchDisplay::dimensions_finished`]: planora_feature::SketchDisplay::dimensions_finished
+pub fn finished_dimension_shapes(ctx: &egui::Context, state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    if rect.width() < 2.0 || rect.height() < 2.0 {
+        return out;
+    }
+    let col = colors(state.dark);
+    let mut placed: Vec<Rect> = Vec::new();
+    for (id, sk) in finished_sketches(state) {
+        if !state.document.sketch_display(id).dimensions_finished {
+            continue;
+        }
+        let display = match state.document.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Sketch(def)) => {
+                DisplayFilter::of(state.document.sketch_display(id), def)
+            }
+            _ => DisplayFilter::default(),
+        };
+        let map = Mapper {
+            camera: state.camera,
+            frame: *sk.frame(),
+            rect,
+        };
+        for (cid, c) in sk.constraints() {
+            if !c.kind.is_dimension() || display.hides(sk, Item::Constraint(cid)) {
+                continue;
+            }
+            let text = overlay_text_with(ctx, sk, &c.kind, c.driven, c.supplement());
+            if text.is_empty() {
+                continue;
+            }
+            let color = if c.driven { col.construction } else { col.text };
+            for a in constraint_anchors(sk, &c.kind) {
+                let Some(s) = map.to_screen3(a) else {
+                    continue;
+                };
+                let galley = ctx.fonts_mut(|f| {
+                    f.layout_job(egui::text::LayoutJob::simple_singleline(
+                        text.clone(),
+                        FontId::proportional(LABEL_SIZE),
+                        color,
+                    ))
+                });
+                let at = s + vec2(6.0, -18.0);
+                let r = place_label(
+                    Rect::from_min_size(at, galley.size()).expand(2.0),
+                    &mut placed,
+                );
+                out.push(Shape::rect_filled(r, 3.0, col.label_bg));
+                out.push(Shape::galley(r.min + vec2(2.0, 2.0), galley, color));
+            }
+        }
+    }
+    out
+}
+
 /// Sichtbarer Bereich der Skizzenebene `(min, max)`: die Ecken der Ansicht auf der Ebene, höchstens
 /// so weit wie das Bodenraster um das Ziel der Kamera reicht (der ganze Umkreis, wenn eine Ecke die
 /// Ebene nicht trifft).
@@ -1984,8 +2049,19 @@ pub fn show_sketch_pick_menu(ui: &egui::Ui, state: &mut AppState) {
                         Action::SketchEditPicked,
                         tr!("action-sketch-edit-picked"),
                     ));
-                    // Hier kommt in Task 9 der Haken „Maße anzeigen“
-                    // (`tree-sketch-show-dimension`), danach „Ausblenden“.
+                    // Haken „Maße anzeigen“ der fertigen Skizze (Task 9), danach „Ausblenden“.
+                    if let Some(on) = state
+                        .picked_sketch()
+                        .and_then(|id| state.sketch_dimension_menu(id))
+                    {
+                        let mut checked = on;
+                        if ui
+                            .checkbox(&mut checked, tr!("tree-sketch-show-dimension"))
+                            .clicked()
+                        {
+                            chosen = chosen.or(Some(Action::SketchShowDimensionFinished));
+                        }
+                    }
                     chosen = chosen.or(entry(
                         ui,
                         Action::SketchHidePicked,
@@ -2002,6 +2078,12 @@ pub fn show_sketch_pick_menu(ui: &egui::Ui, state: &mut AppState) {
     match chosen {
         Some(Action::SketchEditPicked) => state.edit_picked_sketch(),
         Some(Action::SketchHidePicked) => state.hide_picked_sketch(),
+        Some(Action::SketchShowDimensionFinished) => {
+            state.sketch_pick_menu = None;
+            if let Some(id) = state.picked_sketch() {
+                state.toggle_finished_dimensions(id);
+            }
+        }
         _ if outside || escape => state.sketch_pick_menu = None,
         _ => {}
     }

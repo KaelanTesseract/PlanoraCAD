@@ -106,6 +106,9 @@ action_table! {
     /// „Ausblenden“ im Rechtsklickmenü auf Skizzengeometrie (Skizzen 12): das Auge der Skizze
     /// der gewählten Skizzengeometrie; ohne Vorbelegung, belegbar.
     SketchHidePicked, "modell.skizze_ausblenden", "action-sketch-hide-picked", Model, [];
+    /// „Maße anzeigen“ (Haken im Rechtsklickmenü, Skizzen 12) für die fertige Skizze der Auswahl
+    /// (3D-Ansicht oder Baum); ohne Vorbelegung, belegbar.
+    SketchShowDimensionFinished, "modell.skizze_masse_fertig", "action-sketch-show-dimension-finished", Model, [];
     /// Fusion „Gruppe erstellen“ (Skizzen 11b) aus den im Ordner „Skizzen“ gewählten Skizzen;
     /// ohne Vorbelegung, belegbar.
     SketchGroupCreate, "modell.gruppe_erstellen", "action-sketch-group-create", Model, [];
