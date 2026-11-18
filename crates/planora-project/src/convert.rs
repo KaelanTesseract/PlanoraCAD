@@ -34,8 +34,8 @@ use planora_feature::{
     Visibility, field_keys, image_hash, step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
 use planora_feature::{
-    IsoDirection, SketchGroup, SketchGroupId, SketchGroups, SpunAxis, SpunSelection, SpunSpec,
-    TextFormulas,
+    IsoDirection, SketchDisplay, SketchGroup, SketchGroupId, SketchGroups, SpunAxis, SpunSelection,
+    SpunSpec, TextFormulas,
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
@@ -54,7 +54,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 22;
+pub const FORMAT_VERSION: u32 = 23;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
@@ -92,7 +92,7 @@ const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
 /// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
-/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8, 9, 10, 11a und 11b).
+/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8, 9, 10, 11a, 11b und 12).
 pub fn required_format(s: &Snapshot) -> u32 {
     format_with(s, &profile_fields(s))
 }
@@ -102,7 +102,9 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
     // Der Ordner „Leinwände“ kann nur mit einer Leinwand ausgeblendet sein (das Dokument räumt
     // ihn mit der letzten Leinwand weg); er braucht darum keine eigene Regel.
-    if has(needs_format_22) || !s.sketch_groups.is_empty() || s.sketch_groups.next != 0 {
+    if !s.sketch_display.is_empty() {
+        23
+    } else if has(needs_format_22) || !s.sketch_groups.is_empty() || s.sketch_groups.next != 0 {
         22
     } else if has(needs_format_21) || has_lost_source(&s.features) {
         21
@@ -2836,6 +2838,75 @@ fn sketch_groups_from(origin: &str, file: &VersionFile) -> Result<SketchGroups> 
     Ok(out)
 }
 
+/// Liest die Anzeigeschalter der Skizzen (ab Format 23): jede Kennung ist eine Skizze der Datei,
+/// kommt nur einmal vor und der Eintrag weicht in mindestens einem Feld von der Vorgabe ab.
+fn sketch_display_from(
+    origin: &str,
+    file: &VersionFile,
+) -> Result<BTreeMap<FeatureId, SketchDisplay>> {
+    let bad = |m: String| ProjectError::corrupt(origin, m);
+    let sketches: HashSet<u64> = file
+        .features
+        .iter()
+        .filter(|f| matches!(f.art, KindDto::Skizze(_)))
+        .map(|f| f.id)
+        .collect();
+    let def = SketchDisplay::default();
+    let mut out = BTreeMap::new();
+    for e in &file.skizzenanzeige {
+        if !sketches.contains(&e.skizze) {
+            return Err(bad(tr!(
+                "proj-sketch-display-unknown",
+                feature = e.skizze.to_string()
+            )));
+        }
+        let d = SketchDisplay {
+            slice: e.slice.unwrap_or(def.slice),
+            profiles: e.profil.unwrap_or(def.profiles),
+            points: e.punkte.unwrap_or(def.points),
+            dimensions: e.masse.unwrap_or(def.dimensions),
+            constraints: e.abhaengigkeiten.unwrap_or(def.constraints),
+            construction: e.konstruktion.unwrap_or(def.construction),
+            projected: e.projiziert.unwrap_or(def.projected),
+            dimensions_finished: e.masse_fertig.unwrap_or(def.dimensions_finished),
+        };
+        if d.is_default() {
+            return Err(bad(tr!(
+                "proj-sketch-display-default",
+                feature = e.skizze.to_string()
+            )));
+        }
+        if out.insert(FeatureId(e.skizze), d).is_some() {
+            return Err(bad(tr!(
+                "proj-sketch-display-twice",
+                feature = e.skizze.to_string()
+            )));
+        }
+    }
+    Ok(out)
+}
+
+/// Anzeigeschalter für die Datei, aufsteigend nach Skizze; nur Abweichungen von der Vorgabe,
+/// und jedes Feld nur, wenn es abweicht.
+fn sketch_display_to(m: &BTreeMap<FeatureId, SketchDisplay>) -> Vec<SkizzenanzeigeDto> {
+    let def = SketchDisplay::default();
+    let diff = |v: bool, d: bool| (v != d).then_some(v);
+    m.iter()
+        .filter(|(_, d)| !d.is_default())
+        .map(|(id, d)| SkizzenanzeigeDto {
+            skizze: id.0,
+            slice: diff(d.slice, def.slice),
+            profil: diff(d.profiles, def.profiles),
+            punkte: diff(d.points, def.points),
+            masse: diff(d.dimensions, def.dimensions),
+            abhaengigkeiten: diff(d.constraints, def.constraints),
+            konstruktion: diff(d.construction, def.construction),
+            projiziert: diff(d.projected, def.projected),
+            masse_fertig: diff(d.dimensions_finished, def.dimensions_finished),
+        })
+        .collect()
+}
+
 /// Skizzengruppen für die Datei, in Browser-Reihenfolge; die Skizzen je Gruppe aufsteigend.
 fn sketch_groups_to(g: &SketchGroups) -> Vec<SkizzengruppeDto> {
     g.groups
@@ -4087,6 +4158,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         projektangaben: s.project_info.as_ref().map(project_to),
         skizzengruppen: sketch_groups_to(&s.sketch_groups),
         naechste_gruppe: s.sketch_groups.next,
+        skizzenanzeige: sketch_display_to(&s.sketch_display),
         stueckliste: overrides_to(&s.parts_overrides),
         parameter: s.parameters.iter().map(parameter_to).collect(),
         // Der Zähler steht nur mit Parametern in der Datei (ohne fehlt er, alte Dateien bleiben
@@ -4455,7 +4527,18 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             ),
         ));
     }
+    if file.format < 23 && !file.skizzenanzeige.is_empty() {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-sketch-display"),
+                format = "23"
+            ),
+        ));
+    }
     let visibility = visibility_from(file.sichtbarkeit.as_ref());
+    let sketch_display = sketch_display_from(origin, &file)?;
     let sketch_groups = sketch_groups_from(origin, &file)?;
     let rollbacks = rollbacks_from(origin, &file)?;
     let (parameters, next_param) = parameters_from(origin, &file)?;
@@ -4550,7 +4633,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         project_info,
         parts_overrides,
         visibility,
-        sketch_display: Default::default(),
+        sketch_display,
         parameters,
         next_param,
         rollbacks,

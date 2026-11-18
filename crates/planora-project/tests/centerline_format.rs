@@ -105,8 +105,8 @@ fn a_centerline_without_construction_in_the_file_is_rejected() {
 
 // Skizzen 10: Format 20 ist jetzt gültig, zu neu ist erst 23.
 #[test]
-fn format_23_is_too_new() {
+fn format_24_is_too_new() {
     let text = encode_version(&document(2, false).snapshot()).unwrap();
-    let e = load(&text.replacen("\"format\": 14", "\"format\": 23", 1)).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 23, .. }), "{e:?}");
+    let e = load(&text.replacen("\"format\": 14", "\"format\": 24", 1)).unwrap_err();
+    assert!(matches!(e, ProjectError::TooNew { found: 24, .. }), "{e:?}");
 }

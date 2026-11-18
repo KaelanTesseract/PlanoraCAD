@@ -75,6 +75,15 @@ pub struct VersionFile {
     /// bleiben.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub naechste_gruppe: u64,
+    /// Anzeigeschalter je Skizze (ab Format 23, Skizzen 12), aufsteigend nach Skizze; nur
+    /// Skizzen, bei denen ein Schalter von der Vorgabe abweicht. Leer heißt: fehlt, damit alte
+    /// Dateien Byte für Byte bleiben. Schon beim Lesen begrenzt.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "de_sketch_display"
+    )]
+    pub skizzenanzeige: Vec<SkizzenanzeigeDto>,
     /// Bilder der Leinwände (ab Format 19, Skizzen 9): Kennung, Format und Base64 der Datei-Bytes,
     /// in jeder Version erneut (wie `netze`). Leer heißt: fehlt, damit alte Dateien Byte für Byte
     /// bleiben. Steht hinten, weil die Daten lang sind.
@@ -109,6 +118,40 @@ where
     D: serde::Deserializer<'de>,
 {
     de_bounded(d, MAX_FILE_SKETCH_GROUPS, || tr!("proj-l-sketch-groups"))
+}
+
+/// Höchstzahl der Skizzen-Anzeigeeinträge, die beim Lesen überhaupt angenommen wird.
+pub const MAX_FILE_SKETCH_DISPLAY: usize = 100_000;
+
+fn de_sketch_display<'de, D>(d: D) -> Result<Vec<SkizzenanzeigeDto>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    de_bounded(d, MAX_FILE_SKETCH_DISPLAY, || tr!("proj-l-sketch-display"))
+}
+
+/// Anzeigeschalter einer Skizze (ab Format 23). Jedes Feld steht nur, wenn es von der Vorgabe
+/// abweicht (Vorgabe: `slice` aus, `masse_fertig` aus, alle anderen an).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct SkizzenanzeigeDto {
+    /// Feature-Kennung der Skizze.
+    pub skizze: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slice: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profil: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub punkte: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub masse: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abhaengigkeiten: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub konstruktion: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projiziert: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub masse_fertig: Option<bool>,
 }
 
 /// Höhenformel eines Textes (ab Format 22): `text` ist der Index in `texte` (gleich
