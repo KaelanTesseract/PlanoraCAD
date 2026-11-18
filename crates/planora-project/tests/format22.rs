@@ -754,8 +754,30 @@ fn isoparametric_copy_roundtrips() {
             value,
         };
         let snap = copy_document(source.clone());
+        // Das Dokument führt den Hinweispunkt der Fläche beim Rechnen nach (seit Skizzen 11b,
+        // Task 15), darum steht im Schnappschuss nicht mehr der getippte Wert. Der Rundlauf darf
+        // nichts davon verändern (`roundtrip` prüft zusätzlich Speichern, Laden, Speichern
+        // bytegleich); Fläche (ohne Hinweis), Richtung und Anteil bleiben die der Quelle.
+        let stored = sketch_of(&snap, 1).copies[0].source.clone();
         let (back, text) = roundtrip(&snap);
-        assert_eq!(sketch_of(&back, 1).copies[0].source, source);
+        assert_eq!(sketch_of(&back, 1).copies[0].source, stored);
+        match (&stored, &source) {
+            (
+                CopySource::Isoparametric {
+                    face: f,
+                    direction: d,
+                    value: x,
+                },
+                CopySource::Isoparametric {
+                    face: g,
+                    direction: e,
+                    value: y,
+                },
+            ) => {
+                assert_eq!((f.origin, &f.role, d, x), (g.origin, &g.role, e, y));
+            }
+            other => panic!("{other:?}"),
+        }
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         let iso = &v["features"][1]["art"]["kopien"][0]["isokurve"];
         assert_eq!(iso["richtung"], name, "{text}");
