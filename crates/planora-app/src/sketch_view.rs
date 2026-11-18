@@ -274,9 +274,34 @@ pub(crate) fn hidden_in_3d(
 /// Lage (höchstens [`PICK_RADIUS_PX`]): Punkte vor Kurven, jeweils der nächste. Was die Ansicht
 /// nicht zeichnet, zählt nicht (wie beim 2D-Fang): unsichtbare Griffe, Exemplare eines Musters in
 /// Bearbeitung, Buchstaben und Rahmen eines Textes beim Ändern sowie die Punkte der Buchstaben.
-/// 2D-Geometrie trifft weiter [`SketchSession::snap`].
+/// 2D-Geometrie trifft weiter [`SketchSession::snap`]. Für Wählen und Ziehen: Mit „Punkte
+/// anzeigen“ aus (Skizzen 12) trifft es keinen Punkt; der Fang beim Zeichnen nimmt
+/// [`pick_3d_for_snap`].
 #[doc(hidden)]
 pub fn pick_3d(se: &SketchSession, sk: &Sketch, map: &Mapper, pointer: Pos2) -> Option<Item> {
+    pick_3d_with(se, sk, map, pointer, se.display.display.points)
+}
+
+/// Wie [`pick_3d`], aber für den Fang beim Zeichnen: 3D-Punkte fangen auch mit „Punkte
+/// anzeigen“ aus (Skizzen 12, Spec 1: der Fang an End- und Mittelpunkten bleibt).
+#[doc(hidden)]
+pub fn pick_3d_for_snap(
+    se: &SketchSession,
+    sk: &Sketch,
+    map: &Mapper,
+    pointer: Pos2,
+) -> Option<Item> {
+    pick_3d_with(se, sk, map, pointer, true)
+}
+
+/// [`pick_3d`] mit `points_shown`: ob Punkte getroffen werden.
+fn pick_3d_with(
+    se: &SketchSession,
+    sk: &Sketch,
+    map: &Mapper,
+    pointer: Pos2,
+    points_shown: bool,
+) -> Option<Item> {
     // Reine 2D-Skizze: nichts zu treffen, ohne die Mengen des Verborgenen zu bauen (eine 3D-Kurve
     // hat einen 3D-Punkt oder eine eigene Normale).
     if !sk.points().any(|(p, _)| sk.is_3d_point(p)) && !sk.curves().any(|(_, d)| d.normal.is_some())
@@ -284,8 +309,6 @@ pub fn pick_3d(se: &SketchSession, sk: &Sketch, map: &Mapper, pointer: Pos2) -> 
         return None;
     }
     let hidden = hidden_in_3d(se, sk);
-    // Mit „Punkte anzeigen“ aus (Skizzen 12) trifft der Klick keinen Punkt.
-    let points_shown = se.display.display.points;
     let nearest_point = sk
         .points()
         .map(|(p, _)| p)
@@ -2403,7 +2426,15 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             at.is_some_and(|a| matches!(se.snap(&sf.sketch, a, radius), Snap::Point(_)));
         pointer
             .filter(|_| !flat_point)
-            .and_then(|p| pick_3d(se, &sf.sketch, &map, p))
+            .and_then(|p| {
+                // Bemaßung und Abhängigkeitsbefehl wählen (ohne Punkte bei „Punkte anzeigen“
+                // aus); das Zeichnen in der Ebene fängt 3D-Punkte immer (Skizzen 12).
+                if picks_3d {
+                    pick_3d(se, &sf.sketch, &map, p)
+                } else {
+                    pick_3d_for_snap(se, &sf.sketch, &map, p)
+                }
+            })
             .filter(|&i| picks_3d || matches!(i, Item::Point(_)))
     } else {
         None

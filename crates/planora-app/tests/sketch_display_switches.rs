@@ -493,3 +493,117 @@ fn switch_does_not_end_sketch() {
     assert!(w.active_tab().state.document.sketch_display(id).points);
     assert_eq!(w.active_tab().history().undo_len(), len);
 }
+
+/// Fix-Runde 1: Mit „Punkte anzeigen“ aus fängt ein 2D-Zeichenwerkzeug in einer 3D-Skizze weiter
+/// an einem 3D-Punkt (über `pick3`), wie an 2D-Endpunkten.
+#[test]
+fn points_off_keeps_snap_to_3d_points_while_drawing() {
+    let ctx = context();
+    let mut s = AppState::new();
+    s.camera.set_viewport(W, H);
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    s.camera.set_iso_view();
+    let p = {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.set_three_d(sk, true);
+        let p = sk.add_point3(glam::DVec3::new(10.0, 10.0, 20.0)).unwrap();
+        se.set_tool(sk, Tool::Line);
+        p
+    };
+    set(&mut s, id, |d| d.points = false);
+    let frame = *s.session_sketch().unwrap().frame();
+    let mut cam = s.camera;
+    cam.set_viewport(W, H);
+    let v = sketch_view::sketch3_to_screen(
+        &cam,
+        &frame,
+        glam::Vec2::new(W, H),
+        glam::DVec3::new(10.0, 10.0, 20.0),
+    )
+    .unwrap();
+    overlay(&ctx, &mut s, Some(egui::pos2(v.x, v.y)));
+    let se = s.sketch_session.as_ref().unwrap();
+    assert_eq!(se.pick3, Some(Item::Point(p)), "3D-Punkt unter dem Zeiger");
+    assert_eq!(
+        se.draw_cursor.as_ref().map(|c| c.snap),
+        Some(Snap::Point(p)),
+        "fängt am 3D-Punkt"
+    );
+}
+
+/// `DisplayFilter::hidden` ergibt je Element dasselbe wie `hides` (also `hidden_by_display`),
+/// für alle Kombinationen der Schalter.
+#[test]
+fn display_filter_sets_match_the_per_item_filter() {
+    let (mut s, id, _) = open_sketch();
+    {
+        let (_, sf) = s.session_draft_mut().unwrap();
+        let l = sf.sketch.curves().next().unwrap().0;
+        sf.copies.push(EdgeCopy::new(
+            l,
+            CopySource::SketchCurve {
+                sketch: id,
+                curve: l,
+            },
+        ));
+        // Ein eingezogener Punkt der Kopien (ohne Kurve).
+        let c = sf.sketch.add_point(50.0, 50.0).unwrap();
+        sf.copies.push(EdgeCopy {
+            target: planora_feature::CopyTarget::Point(c),
+            source: CopySource::SketchCurve {
+                sketch: id,
+                curve: l,
+            },
+            piece: 0,
+            of: 1,
+        });
+    }
+    let draft = s.sketch_draft.as_ref().unwrap();
+    let sk = &draft.sketch;
+    for bits in 0..32u32 {
+        let display = SketchDisplay {
+            points: bits & 1 != 0,
+            dimensions: bits & 2 != 0,
+            constraints: bits & 4 != 0,
+            construction: bits & 8 != 0,
+            projected: bits & 16 != 0,
+            ..SketchDisplay::default()
+        };
+        let f = sketch_view::DisplayFilter::of(display, draft);
+        let sets = f.hidden(sk);
+        for (c, _) in sk.curves() {
+            assert_eq!(
+                sets.curves.contains(&c),
+                f.hides(sk, Item::Curve(c)),
+                "{display:?} {c:?}"
+            );
+            assert_eq!(
+                sets.curves.contains(&c),
+                sketch_view::hidden_by_display(&display, sk, &f.projected, Item::Curve(c))
+            );
+        }
+        for (p, _) in sk.points() {
+            assert_eq!(
+                sets.points.contains(&p),
+                f.hides(sk, Item::Point(p)),
+                "{display:?} {p:?}"
+            );
+            let geo = SketchDisplay {
+                points: true,
+                ..display
+            };
+            let g = sketch_view::DisplayFilter {
+                display: geo,
+                ..f.clone()
+            };
+            assert_eq!(
+                sets.unsnapped.contains(&p),
+                g.hides(sk, Item::Point(p)),
+                "Fang {display:?} {p:?}"
+            );
+        }
+    }
+}
