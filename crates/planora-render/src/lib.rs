@@ -14,7 +14,10 @@ pub use canvas::{CanvasDraw, CanvasTexture, CanvasVertex, canvas_hit, quad_verti
 pub use grid::{
     axis_half_length, axis_lines, exact_step, grid_lines, grid_radius, grid_step, line_weight,
 };
-pub use pick::{EdgeHit, FaceHit, PlaneRect, Ray, pick_edge, pick_face, pick_plane, pick_vertex};
+pub use pick::{
+    EdgeHit, FaceHit, PlaneRect, Ray, pick_edge, pick_edge_sliced, pick_face, pick_plane,
+    pick_vertex, pick_vertex_sliced,
+};
 pub use scene::{
     EdgeRef, FaceRef, FaceVertex, Highlight, LineVertex, Palette, Pick, SceneData, build_scene,
     build_scene_marked,

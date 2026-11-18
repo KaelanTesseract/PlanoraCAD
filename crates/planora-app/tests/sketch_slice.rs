@@ -143,3 +143,109 @@ fn slice_toggle_is_one_undo_step() {
     assert_eq!(w.active_tab().state.document.sketch_display(id), before);
     assert_eq!(w.active_tab().history().undo_len(), len);
 }
+
+/// Die Kante des ersten Körpers, deren Punkte alle `on` erfüllen.
+fn edge_where(
+    s: &AppState,
+    on: impl Fn(DVec3) -> bool,
+) -> planora_kernel::Id<planora_kernel::Edge> {
+    s.bodies[0]
+        .mesh
+        .edge_lines
+        .iter()
+        .find(|l| l.points.iter().all(|p| on(*p)))
+        .expect("Kante")
+        .edge
+}
+
+/// Bildpunkt eines Weltpunkts.
+fn screen(s: &AppState, p: DVec3) -> Vec2 {
+    s.camera.project(p.as_vec3(), VIEW).expect("im Bild")
+}
+
+/// Quader von (fast) senkrecht oben auf `target` mit Slice: obere und untere Kanten liegen im
+/// Bild fast übereinander; die weggeschnittene obere darf die sichtbare untere nicht verdrängen.
+fn steep_sliced(target: Vec3) -> AppState {
+    let mut s = AppState::new();
+    let id = box_with_mid_sketch(&mut s);
+    s.open_sketch(id).unwrap();
+    look_from_above(&mut s);
+    s.camera.pitch = 1.55;
+    s.camera.target = target;
+    set_slice(&mut s, id, true);
+    s
+}
+
+#[test]
+fn pick_finds_visible_edges_behind_sliced_ones() {
+    let s = steep_sliced(Vec3::new(5.0, 0.0, 2.5));
+    let bottom = edge_where(&s, |p| p.y.abs() < 1e-6 && p.z.abs() < 1e-6);
+    let (b, t) = (
+        screen(&s, DVec3::new(5.0, 0.0, 0.0)),
+        screen(&s, DVec3::new(5.0, 0.0, 5.0)),
+    );
+    assert!((t - b).length() < 6.0, "fast deckungsgleich: {b} {t}");
+    // Etwas näher an der weggeschnittenen oberen Kante, aber in Reichweite der unteren.
+    let cursor = b + (t - b) * 0.7;
+    match s.pick_with(cursor, VIEW, PickFilter::GEOMETRY) {
+        Some(Pick::Edge(e)) => assert_eq!(e.edge, bottom, "die sichtbare Bodenkante"),
+        other => panic!("Bodenkante erwartet, nicht {other:?}"),
+    }
+}
+
+#[test]
+fn pick_finds_visible_vertices_behind_sliced_ones() {
+    let s = steep_sliced(Vec3::new(0.0, 0.0, 2.5));
+    let (b, t) = (
+        screen(&s, DVec3::new(0.0, 0.0, 0.0)),
+        screen(&s, DVec3::new(0.0, 0.0, 5.0)),
+    );
+    let cursor = b + (t - b) * 0.7;
+    let Some(Pick::Vertex { body, edge, end }) = s.pick_with(cursor, VIEW, PickFilter::POINTS)
+    else {
+        panic!("Ecke erwartet");
+    };
+    let line = s.bodies[body]
+        .mesh
+        .edge_lines
+        .iter()
+        .find(|l| l.edge == edge)
+        .unwrap();
+    let p = if end {
+        *line.points.last().unwrap()
+    } else {
+        line.points[0]
+    };
+    assert!(p.length() < 1e-6, "die untere Ecke im Ursprung: {p}");
+}
+
+#[test]
+fn pick_ignores_the_sliced_part_of_an_edge() {
+    let mut s = AppState::new();
+    let id = box_with_mid_sketch(&mut s);
+    s.open_sketch(id).unwrap();
+    look_from_above(&mut s);
+    s.camera.pitch = 0.5;
+    set_slice(&mut s, id, true);
+    // Senkrechte Kante vorn bei (10, 20): unten sichtbar, oben weggeschnitten.
+    let upright = edge_where(&s, |p| {
+        (p.x - 10.0).abs() < 1e-6 && (p.y - 20.0).abs() < 1e-6
+    });
+    let at = |z: f64| {
+        s.pick_with(
+            screen(&s, DVec3::new(10.0, 20.0, z)),
+            VIEW,
+            PickFilter::GEOMETRY,
+        )
+    };
+    assert!(
+        matches!(at(1.0), Some(Pick::Edge(e)) if e.edge == upright),
+        "sichtbarer Teil: {:?}",
+        at(1.0)
+    );
+    assert!(
+        !matches!(at(4.5), Some(Pick::Edge(e)) if e.edge == upright),
+        "weggeschnittener Teil trifft die Kante nicht: {:?}",
+        at(4.5)
+    );
+}

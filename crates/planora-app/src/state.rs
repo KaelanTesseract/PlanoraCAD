@@ -18,7 +18,7 @@ use planora_mesh::{
 };
 use planora_render::{
     EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, PlaneRect, Ray, SceneData,
-    build_scene_marked, pick_edge, pick_face, pick_plane, pick_vertex, slice_cuts,
+    build_scene_marked, pick_edge_sliced, pick_face, pick_plane, pick_vertex_sliced, slice_cuts,
 };
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::helpers::Included;
@@ -2467,8 +2467,8 @@ impl AppState {
             return None;
         }
         let nearest_face = self.nearest_face_hit(cursor, viewport);
-        // Slice: weggeschnittene Kanten und Ecken zählen nicht (die Flächen schon in
-        // `nearest_face_hit`).
+        // Slice: weggeschnittene Kanten(-teile) und Ecken zählen nicht und verdrängen keine
+        // sichtbaren (die Flächen schon in `nearest_face_hit`).
         let slice = self.active_slice();
         let nearest_plane = if filter.planes {
             self.nearest_plane_hit(cursor, viewport)
@@ -2489,29 +2489,29 @@ impl AppState {
         };
         if filter.vertices {
             let meshes: Vec<(usize, &Mesh)> = shown().map(|(j, b)| (j, &b.mesh)).collect();
-            if let Some((body, edge, end)) = pick_vertex(
+            if let Some((body, edge, end)) = pick_vertex_sliced(
                 &meshes,
                 &self.camera,
                 viewport,
                 cursor,
                 PICK_VERTEX_PX,
                 occluder,
-            ) && !slice.is_some_and(|p| self.vertex_sliced(p, body, edge, end))
-            {
+                slice,
+            ) {
                 return Some(Pick::Vertex { body, edge, end });
             }
         }
         let mut best_edge: Option<(usize, planora_render::EdgeHit)> = None;
         for (body, b) in shown().filter(|_| filter.edges) {
-            if let Some(hit) = pick_edge(
+            if let Some(hit) = pick_edge_sliced(
                 &b.mesh,
                 &self.camera,
                 viewport,
                 cursor,
                 PICK_EDGE_PX,
                 occluder,
-            ) && !slice.is_some_and(|p| self.edge_sliced(p, body, hit.edge))
-                && best_edge.is_none_or(|(_, h)| hit.pixel_distance < h.pixel_distance)
+                slice,
+            ) && best_edge.is_none_or(|(_, h)| hit.pixel_distance < h.pixel_distance)
             {
                 best_edge = Some((body, hit));
             }
@@ -2780,35 +2780,6 @@ impl AppState {
             }
         }
         nearest_face
-    }
-
-    /// Slice: Liegt die Kante `edge` des Körpers `body` ganz weggeschnitten vor der Ebene?
-    fn edge_sliced(&self, plane: [f32; 4], body: usize, edge: Id<Edge>) -> bool {
-        self.bodies.get(body).is_some_and(|b| {
-            b.mesh
-                .edge_lines
-                .iter()
-                .filter(|l| l.edge == edge)
-                .all(|l| l.points.iter().all(|p| slice_cuts(plane, *p)))
-        })
-    }
-
-    /// Slice: Ist der Endpunkt (`end`: letzter, sonst erster Punkt) der Kante weggeschnitten?
-    fn vertex_sliced(&self, plane: [f32; 4], body: usize, edge: Id<Edge>, end: bool) -> bool {
-        self.bodies.get(body).is_some_and(|b| {
-            b.mesh
-                .edge_lines
-                .iter()
-                .find(|l| l.edge == edge)
-                .and_then(|l| {
-                    if end {
-                        l.points.last()
-                    } else {
-                        l.points.first()
-                    }
-                })
-                .is_some_and(|p| slice_cuts(plane, *p))
-        })
     }
 }
 
