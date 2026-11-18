@@ -633,8 +633,10 @@ pub struct PickFilter {
     pub edges: bool,
     /// Flächen der Körper.
     pub faces: bool,
-    /// Kurven und Punkte fertiger, sichtbarer Skizzen (Skizzen 12); nur die normale Auswahl.
-    pub sketches: bool,
+    /// Punkte fertiger, sichtbarer Skizzen (Skizzen 12); normale Auswahl und Punktfelder.
+    pub sketch_points: bool,
+    /// Kurven fertiger, sichtbarer Skizzen (Skizzen 12); normale Auswahl und Achsenfelder.
+    pub sketch_curves: bool,
 }
 
 impl PickFilter {
@@ -645,7 +647,8 @@ impl PickFilter {
         vertices: false,
         edges: true,
         faces: true,
-        sketches: true,
+        sketch_points: true,
+        sketch_curves: true,
     };
     /// Nur Flächen und Kanten (Projizieren und Schneiden im Skizzen-Modus).
     pub const GEOMETRY: PickFilter = PickFilter {
@@ -653,7 +656,8 @@ impl PickFilter {
         vertices: false,
         edges: true,
         faces: true,
-        sketches: false,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// Punktwahl: Eckpunkte vor allem anderen, dann Kanten und Flächen. Ebenen zählen nicht
     /// und verdecken keine Ecken (die Punkte liegen oft hinter einer schon gezeichneten Ebene).
@@ -662,7 +666,8 @@ impl PickFilter {
         vertices: true,
         edges: true,
         faces: true,
-        sketches: false,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// „3D-Geometrie einbeziehen“ (Skizzen 10): Ecken, Kanten, Flächen und Ebenen.
     pub const INCLUDE: PickFilter = PickFilter {
@@ -670,7 +675,8 @@ impl PickFilter {
         vertices: true,
         edges: true,
         faces: true,
-        sketches: false,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// Bezug eines Ebenen-Fensters: Flächen und Ebenen, keine Kanten.
     pub const BASES: PickFilter = PickFilter {
@@ -678,7 +684,8 @@ impl PickFilter {
         vertices: false,
         edges: false,
         faces: true,
-        sketches: false,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// Nur Flächen (Tangentialebene).
     pub const FACES: PickFilter = PickFilter {
@@ -686,7 +693,8 @@ impl PickFilter {
         vertices: false,
         edges: false,
         faces: true,
-        sketches: false,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// Nur Kanten (Achse der Ebene unter Winkel).
     pub const EDGES: PickFilter = PickFilter {
@@ -694,7 +702,8 @@ impl PickFilter {
         vertices: false,
         edges: true,
         faces: false,
-        sketches: false,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// Nur Eckpunkte („Ebene durch drei Punkte“).
     pub const VERTICES: PickFilter = PickFilter {
@@ -702,7 +711,8 @@ impl PickFilter {
         vertices: true,
         edges: false,
         faces: false,
-        sketches: false,
+        sketch_points: false,
+        sketch_curves: false,
     };
 }
 const BODY_GAP_MM: f64 = 10.0;
@@ -2611,7 +2621,7 @@ impl AppState {
         }
         // Skizzenpunkt, dann Skizzenkurve einer fertigen, sichtbaren Skizze (Skizzen 12); was ein
         // Körper verdeckt, zählt nicht.
-        if filter.sketches {
+        if filter.sketch_points || filter.sketch_curves {
             let map = crate::sketch_view::Mapper {
                 camera: self.camera,
                 frame: planora_math::Frame::WORLD,
@@ -2625,6 +2635,8 @@ impl AppState {
                 &map,
                 egui::pos2(cursor.x, cursor.y),
                 slice,
+                filter.sketch_points,
+                filter.sketch_curves,
             ) {
                 return Some(hit);
             }

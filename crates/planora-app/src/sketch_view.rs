@@ -3294,12 +3294,15 @@ fn covered_by_body(state: &AppState, map: &Mapper, at: DVec3, slice: Option<[f32
 /// ([`AppState::body_hit_distance`]; bei Slice zählt nur, was hinter der Skizzenebene liegt).
 /// Die Stelle wird je Kandidat geprüft: Ist der nächste verdeckt, gewinnt der nächste sichtbare.
 /// Körperkanten und -ecken gehen vor (siehe [`AppState::pick_with`]). `map` bildet Weltpunkte
-/// ab (`Frame::WORLD`).
+/// ab (`Frame::WORLD`). `with_points` und `with_curves` wählen, was überhaupt zählt (die
+/// Ebenen-Fenster nehmen nur Kurven bzw. nur Punkte).
 pub fn finished_sketch_under(
     state: &AppState,
     map: &Mapper,
     p: Pos2,
     slice: Option<[f32; 4]>,
+    with_points: bool,
+    with_curves: bool,
 ) -> Option<Pick> {
     // Kandidaten: (Abstand, Treffer, Stelle in der Welt).
     let mut points: Vec<(f32, Pick, DVec3)> = Vec::new();
@@ -3318,7 +3321,7 @@ pub fn finished_sketch_under(
         let handles = crate::sketch_handles::hidden_handles_of(sk, &[]);
         let glyphs = sk.glyph_points();
         let frame = *sk.frame();
-        for (pt, _) in sk.points() {
+        for (pt, _) in sk.points().filter(|_| with_points) {
             if gone.points.contains(&pt) || handles.points.contains(&pt) || glyphs.contains(&pt) {
                 continue;
             }
@@ -3339,7 +3342,7 @@ pub fn finished_sketch_under(
                 ));
             }
         }
-        for (c, _) in sk.curves() {
+        for (c, _) in sk.curves().filter(|_| with_curves) {
             if gone.curves.contains(&c) || handles.curves.contains(&c) {
                 continue;
             }

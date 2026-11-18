@@ -221,3 +221,80 @@ fn editing_refuses_later_sketch() {
         Some(SlotValue::Axis(AxisRef::SketchLine { .. }))
     ));
 }
+
+#[test]
+fn axis_field_takes_the_line_near_its_end() {
+    let mut s = AppState::new();
+    let (id, c, _) = finished_line(
+        &mut s,
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(20.0, 0.0, 0.0),
+    );
+    look_from_above(&mut s);
+    let mut d = PlaneDialog::new(PlaneCommand::Angle);
+    // Genau am Ende: die normale Auswahl träfe den Punkt, das Achsenfeld die Linie.
+    let hit = click_slot(&mut d, &mut s, DVec3::new(0.1, 0.0, 0.0));
+    assert_eq!(
+        hit,
+        Some(Pick::SketchCurve {
+            sketch: id,
+            curve: c
+        }),
+        "{hit:?}"
+    );
+    assert_eq!(d.error(), None);
+    assert!(matches!(
+        d.slot(0),
+        Some(SlotValue::Axis(AxisRef::SketchLine { .. }))
+    ));
+}
+
+#[test]
+fn point_field_ignores_curves() {
+    let mut s = AppState::new();
+    let (id, _, [p, _]) = finished_line(
+        &mut s,
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(20.0, 0.0, 0.0),
+    );
+    look_from_above(&mut s);
+    let mut d = PlaneDialog::new(PlaneCommand::ThreePoints);
+    // Mitten auf der Linie: kein Punkt in der Nähe, also nichts und keine Meldung.
+    let hit = click_slot(&mut d, &mut s, DVec3::new(10.0, 0.0, 0.0));
+    assert_eq!(hit, None);
+    assert_eq!(d.error(), None);
+    assert_eq!(d.slot(0), None);
+    // Nahe am Ende: der Punkt.
+    let hit = click_slot(&mut d, &mut s, DVec3::new(0.1, 0.0, 0.0));
+    assert_eq!(
+        hit,
+        Some(Pick::SketchPoint {
+            sketch: id,
+            point: p
+        })
+    );
+}
+
+#[test]
+fn editing_refuses_later_sketch_point() {
+    let mut s = AppState::new();
+    let plane = s
+        .add_plane(PlaneDef::ThreePoints([
+            PointRef::Origin,
+            PointRef::Origin,
+            PointRef::Origin,
+        ]))
+        .unwrap();
+    finished_line(
+        &mut s,
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(20.0, 0.0, 0.0),
+    );
+    look_from_above(&mut s);
+    let mut d = PlaneDialog::edit(&s, plane).unwrap();
+    let hit = click_slot(&mut d, &mut s, DVec3::new(20.0, 0.0, 0.0));
+    assert!(matches!(hit, Some(Pick::SketchPoint { .. })), "{hit:?}");
+    assert_eq!(d.slot(0), Some(&SlotValue::Point(PointRef::Origin)));
+    let e = d.error().expect("Meldung");
+    assert!(e.contains("nach der Ebene"), "{e}");
+}

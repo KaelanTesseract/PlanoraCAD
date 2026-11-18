@@ -162,14 +162,15 @@ impl SlotKind {
     pub fn filter(self) -> PickFilter {
         match self {
             SlotKind::Base => PickFilter::BASES,
-            // Skizzenlinien bzw. -punkte fertiger Skizzen zählen mit (Skizzen 12).
+            // Achse: nur Skizzenkurven, Punkt: nur Skizzenpunkte fertiger Skizzen (Skizzen 12); so trifft
+            // ein Klick nahe dem Linienende die Linie.
             SlotKind::Axis => PickFilter {
-                sketches: true,
+                sketch_curves: true,
                 ..PickFilter::EDGES
             },
             SlotKind::Face => PickFilter::FACES,
             SlotKind::Point => PickFilter {
-                sketches: true,
+                sketch_points: true,
                 ..PickFilter::VERTICES
             },
         }
