@@ -52,10 +52,11 @@ fn strokes(s: &AppState, ppp: f32) -> Vec<StrokeVertex> {
     out
 }
 
-/// Abstand der beiden ersten Ecken eines Linienvierecks in physischen Pixeln (= Strichbreite).
+/// Abstand der beiden ersten Ecken eines Linienvierecks in physischen Pixeln, ohne den Saum der
+/// Kantenglättung (= Strichbreite).
 fn quad_width(v: &[StrokeVertex], size_px: egui::Vec2) -> f32 {
     let px = |p: [f32; 3]| egui::vec2(p[0] * size_px.x * 0.5, p[1] * size_px.y * 0.5);
-    (px(v[0].ndc) - px(v[1].ndc)).length()
+    (px(v[0].ndc) - px(v[1].ndc)).length() - 2.0 * planora_render::STROKE_FEATHER_PX
 }
 
 #[test]

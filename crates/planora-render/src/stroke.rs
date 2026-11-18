@@ -64,6 +64,23 @@ pub struct StrokeVertex {
     pub edge: f32,
 }
 
+/// Saum der Kantenglättung in Pixeln je Seite (Handtest 1, Fund 2): Das Viereck einer Linie
+/// reicht `STROKE_FEATHER_PX` über die halbe Breite hinaus, die Deckkraft fällt über 1 px von
+/// `halbe Breite + Saum` bis `halbe Breite − Saum` ab (wie die Federung von egui). So deckt
+/// jede Linie in Summe ihre Breite, egal wie sie zum Pixelraster liegt. Vorher lag der Abfall
+/// innerhalb der Breite: Eine 1,2-px-Linie, deren Mitte zwischen zwei Pixelmitten lag, kam
+/// auf rund 10 % Deckkraft, ein Kreis wirkte gestrichelt.
+pub const STROKE_FEATHER_PX: f32 = 0.5;
+
+/// Deckkraft eines Linienpixels wie `fs_stroke` in `stroke.wgsl` (muss dazu passen):
+/// `edge` am Pixelmittelpunkt (±1 am äußeren Rand des Saums), `grad` = Änderung von `edge` je
+/// Pixel in x und y (`dpdx`, `dpdy`). `(1 − |edge|) / |grad|` ist der Abstand zum äußeren Rand
+/// in Pixeln; voll deckend ab 1 px Abstand. Flächen (`edge` = 0, kein Gefälle) decken voll.
+pub fn stroke_alpha(edge: f32, grad: Vec2) -> f32 {
+    let g = grad.length().max(0.0001);
+    ((1.0 - edge.abs()) / g).clamp(0.0, 1.0)
+}
+
 /// Ansicht, in die projiziert wird.
 #[derive(Clone, Copy, Debug)]
 pub struct StrokeView {
@@ -289,7 +306,8 @@ pub fn push_stroke_phased(
     dash_px: Option<[f32; 2]>,
     phase_px: f32,
 ) {
-    let half = width_px * 0.5;
+    // Mit Saum der Kantenglättung (siehe [`STROKE_FEATHER_PX`]).
+    let half = width_px * 0.5 + STROKE_FEATHER_PX;
     let pattern = dash_px.filter(|[d, g]| {
         *d > 0.0 && *g >= 0.0 && d.is_finite() && g.is_finite() && d + g >= MIN_DASH_PERIOD_PX
     });

@@ -1,6 +1,6 @@
 // Skizzenlinien und -flaechen (Skizzen 12): Eckpunkte kommen schon in NDC an (Breite und
 // Tiefenversatz sind auf der CPU berechnet). Der Fragment-Shader glaettet die Kanten quer zur
-// Linie ueber `edge` (-1...1, Flaechen 0).
+// Linie ueber `edge` (-1...1 bis zum Rand des Saums, Flaechen 0).
 
 struct StrokeIn {
     @location(0) ndc: vec3<f32>,
@@ -25,9 +25,11 @@ fn vs_stroke(input: StrokeIn) -> StrokeOut {
 
 @fragment
 fn fs_stroke(input: StrokeOut) -> @location(0) vec4<f32> {
-    // `edge` laeuft ueber die Linienbreite von -1 bis 1; fwidth ist etwa 2 / Breite in Pixeln, der
-    // Randstreifen fwidth / 2 = 1 / Breite ist also grob ein halbes bis ein Pixel breit. Flaechen (edge = 0) bleiben voll deckend.
-    let fade = max(fwidth(input.edge) * 0.5, 0.0001);
-    let a = 1.0 - smoothstep(1.0 - fade, 1.0, abs(input.edge));
+    // `edge` laeuft von -1 bis 1 ueber das Viereck, das einen Saum von 0,5 px je Seite ueber die
+    // Linienbreite hinaus hat (STROKE_FEATHER_PX). (1 - |edge|) / |Gefaelle| ist der Abstand zum
+    // aeusseren Rand in Pixeln; ab 1 px voll deckend. Muss zu `stroke_alpha` in stroke.rs passen.
+    // Flaechen (edge = 0, kein Gefaelle) bleiben voll deckend.
+    let g = max(length(vec2<f32>(dpdx(input.edge), dpdy(input.edge))), 0.0001);
+    let a = clamp((1.0 - abs(input.edge)) / g, 0.0, 1.0);
     return vec4<f32>(input.color.rgb, input.color.a * a);
 }

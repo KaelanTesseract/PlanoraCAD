@@ -2,8 +2,8 @@
 
 use glam::{DVec3, Mat4, Vec2, Vec3};
 use planora_render::{
-    FACE_SLOPE_SCALE, STROKE_DEPTH_BIAS, StrokeVertex, StrokeView, push_fill, push_stroke,
-    push_stroke_phased,
+    FACE_SLOPE_SCALE, STROKE_DEPTH_BIAS, STROKE_FEATHER_PX, StrokeVertex, StrokeView, push_fill,
+    push_stroke, push_stroke_phased, stroke_alpha,
 };
 
 const SIZE: Vec2 = Vec2::new(1000.0, 500.0);
@@ -41,12 +41,14 @@ fn stroke_width_in_pixels() {
     let ys: Vec<f32> = out.iter().map(|v| px(v).y).collect();
     let lo = ys.iter().copied().fold(f32::MAX, f32::min);
     let hi = ys.iter().copied().fold(f32::MIN, f32::max);
-    assert!((hi - lo - 2.0).abs() < 1e-3, "Höhe {}", hi - lo);
+    // Breite plus Saum der Kantenglättung auf beiden Seiten.
+    let tall = 2.0 + 2.0 * STROKE_FEATHER_PX;
+    assert!((hi - lo - tall).abs() < 1e-3, "Höhe {}", hi - lo);
     let xs: Vec<f32> = out.iter().map(|v| px(v).x).collect();
     let l = xs.iter().copied().fold(f32::MAX, f32::min);
     let h = xs.iter().copied().fold(f32::MIN, f32::max);
     assert!((h - l - 100.0).abs() < 1e-3);
-    // Querkoordinate liegt bei -1 und 1.
+    // Querkoordinate liegt bei -1 und 1 (äußerer Rand des Saums).
     assert!(out.iter().all(|v| (v.edge.abs() - 1.0).abs() < 1e-6));
 }
 
@@ -194,7 +196,8 @@ fn camera_at(orbit: f32, eye_dist: f32) -> Mat4 {
 #[test]
 fn stroke_bias_covers_half_width_at_grazing_angles() {
     let width = 1.2_f32;
-    let half = width / 2.0;
+    // Äußerer Rand des Vierecks: halbe Breite plus Saum der Kantenglättung.
+    let half = width / 2.0 + STROKE_FEATHER_PX;
     for distance in [1.0_f32, 100.0, 10_000.0] {
         // 85, 87, 88 und 89 Grad zur Ebenennormalen.
         for elevation in [5.0_f32, 3.0, 2.0, 1.0] {
@@ -231,7 +234,7 @@ fn stroke_bias_covers_half_width_at_grazing_angles() {
             let slope = (z1 - z0).abs() / (p1 - p0).length();
             assert!(slope > 0.0);
 
-            // Seitenpixel der Linie liegen bis `half` Pixel von der Mitte; dort kann die
+            // Randpixel des Vierecks liegen bis `half` Pixel von der Mitte; dort kann die
             // Fläche um `half * slope` näher an der Kamera liegen als in der Mitte. Der
             // Versatz allein reicht bei streifendem Blick nicht (das ist so gewollt), mit dem
             // Hardware-Bias der Flächen (slope_scale mal Gefälle) ist es gedeckt.
@@ -240,10 +243,10 @@ fn stroke_bias_covers_half_width_at_grazing_angles() {
                 bias + FACE_SLOPE_SCALE * slope >= worst,
                 "d = {distance}, {elevation} Grad: Versatz {bias} + Gefälle {slope} reichen nicht"
             );
-            // Der Hardware-Bias allein trägt mit Reserve (mindestens das Doppelte des
-            // Bedarfs), damit der Versatz nicht allein die Last tragen muss.
+            // Der Hardware-Bias allein trägt mit Reserve (mindestens das 1,8-Fache des
+            // Bedarfs bis zum Rand des Saums), damit der Versatz nicht allein die Last trägt.
             assert!(
-                FACE_SLOPE_SCALE * slope >= 2.0 * worst * 0.99,
+                FACE_SLOPE_SCALE * slope >= 1.8 * worst * 0.99,
                 "d = {distance}"
             );
         }
@@ -406,4 +409,123 @@ fn fill_triangles_projected() {
     ];
     push_fill(&mut none, &behind_view(), &[behind], [1.0; 4]);
     assert!(none.is_empty());
+}
+
+/// Querschnitt einer waagerechten Linie mit 4fach-MSAA wie auf der GPU (Handtest 1, Fund 2):
+/// Deckung der Pixelzeilen nach Abtastpunkten im Viereck mal `stroke_alpha` am Pixelmittelpunkt.
+/// Gibt (hellstes Pixel, Summe der Zeilen) zurück.
+fn cross_section(width: f32, offset_px: f32) -> (f32, f32) {
+    let view = flat_view();
+    let y = f64::from(offset_px) * 2.0 / f64::from(SIZE.y);
+    let path = [
+        DVec3::new(ndc_x(-50.0), y, 0.5),
+        DVec3::new(ndc_x(50.0), y, 0.5),
+    ];
+    let mut out = Vec::new();
+    push_stroke(&mut out, &view, &path, width, [1.0; 4], None);
+    let hi = out.iter().find(|v| v.edge > 0.5).map(|v| px(v).y).unwrap();
+    let lo = out.iter().find(|v| v.edge < -0.5).map(|v| px(v).y).unwrap();
+    let mid = (hi + lo) * 0.5;
+    // `edge` läuft linear von -1 (lo) bis 1 (hi).
+    let grad = 2.0 / (hi - lo);
+    let edge_at = |y: f32| (y - mid) * grad;
+    let (mut peak, mut sum) = (0.0_f32, 0.0_f32);
+    for row in -6..6 {
+        let c = row as f32 + 0.5;
+        let covered = [-0.375_f32, -0.125, 0.125, 0.375]
+            .iter()
+            .filter(|s| (lo..=hi).contains(&(c + **s)))
+            .count();
+        if covered == 0 {
+            continue;
+        }
+        let a = stroke_alpha(edge_at(c), Vec2::new(0.0, grad)) * covered as f32 / 4.0;
+        peak = peak.max(a);
+        sum += a;
+    }
+    (peak, sum)
+}
+
+/// Handtest 1, Fund 2: Dünne Linien (fertige Skizze 1,2 px) dürfen bei keiner Lage zum
+/// Pixelraster verblassen, sonst wirkt ein Kreis gestrichelt und die Lücken wandern beim Zoomen.
+#[test]
+fn thin_lines_stay_continuous_at_any_subpixel_offset() {
+    for width in [1.0_f32, 1.2, 2.0] {
+        let mut sums = Vec::new();
+        for i in 0..40 {
+            let offset = i as f32 * 0.025;
+            let (peak, sum) = cross_section(width, offset);
+            assert!(
+                peak >= 0.5,
+                "Breite {width}, Versatz {offset}: hellstes Pixel nur {peak}"
+            );
+            sums.push(sum);
+        }
+        let min = sums.iter().copied().fold(f32::MAX, f32::min);
+        let max = sums.iter().copied().fold(f32::MIN, f32::max);
+        assert!(
+            min >= 0.75 * width,
+            "Breite {width}: Linie zu schwach ({min})"
+        );
+        assert!(
+            max - min <= 0.25 * width,
+            "Breite {width}: Helligkeit schwankt {min}…{max}"
+        );
+    }
+}
+
+/// Handtest 1, Fund 2: Eine Kurve auf einer um 60°, 80° und 85° geneigten Fläche (Winkel
+/// zwischen Blick und Flächennormale) liegt an jedem Eckpunkt ihrer Dreiecke, auch am äußeren
+/// Rand der Kantenglättung, vor der Flächentiefe samt deren Neigungsversatz (`slope_scale`).
+/// Tiefen sind im Bild linear, also reicht die Prüfung an den Eckpunkten.
+#[test]
+fn coplanar_curve_stays_in_front_of_tilted_face() {
+    for distance in [1.0_f32, 100.0, 10_000.0] {
+        for tilt in [60.0_f32, 80.0, 85.0] {
+            let view_proj = camera(distance, 90.0 - tilt);
+            let inv = view_proj.as_dmat4().inverse();
+            let vp = view_proj.as_dmat4();
+            // Flächentiefe (z = 0) an einem Bildpunkt in Pixeln (Mitte = Ursprung).
+            let face_z = |p: Vec2| -> f64 {
+                let (nx, ny) = (
+                    f64::from(p.x) * 2.0 / f64::from(SIZE.x),
+                    f64::from(p.y) * 2.0 / f64::from(SIZE.y),
+                );
+                let a = inv.project_point3(DVec3::new(nx, ny, 0.0));
+                let b = inv.project_point3(DVec3::new(nx, ny, 1.0));
+                let hit = a + (b - a) * (-a.z / (b.z - a.z));
+                let c = vp * hit.extend(1.0);
+                c.z / c.w
+            };
+            for width in [1.0_f32, 1.2, 2.0, 3.0] {
+                let view = StrokeView {
+                    view_proj,
+                    size_px: SIZE,
+                    depth_bias: STROKE_DEPTH_BIAS,
+                    pixels_per_point: 1.0,
+                };
+                let d = f64::from(distance);
+                let path = [
+                    DVec3::new(0.0, -0.1 * d, 0.0),
+                    DVec3::new(0.0, 0.1 * d, 0.0),
+                ];
+                let mut out = Vec::new();
+                push_stroke(&mut out, &view, &path, width, [1.0; 4], None);
+                assert!(!out.is_empty());
+                for v in &out {
+                    let p = px(v);
+                    let z = face_z(p);
+                    let slope = (face_z(p + Vec2::X) - z)
+                        .abs()
+                        .max((face_z(p + Vec2::Y) - z).abs());
+                    let face = z + f64::from(FACE_SLOPE_SCALE) * slope;
+                    let margin = face - f64::from(v.ndc[2]);
+                    assert!(
+                        margin > 20.0 * f64::from(f32::EPSILON),
+                        "d = {distance}, {tilt} Grad, Breite {width}: Abstand {margin}"
+                    );
+                }
+            }
+        }
+    }
 }
