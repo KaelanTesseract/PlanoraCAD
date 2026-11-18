@@ -7,21 +7,28 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, Mat4, Vec2, Vec3, Vec4};
 
-/// Tiefenversatz (NDC-Tiefe 0…1, nicht umgekehrt), der von der Tiefe der Linien abgezogen
-/// wird, damit Linien in einer Fläche nicht von dieser überdeckt werden.
+/// Tiefenversatz als Bruchteil des Abstands zur Kamera: Die Linie wird in Blickrichtung um
+/// `depth_bias * w` zur Kamera hin geschoben (siehe [`StrokeView::depth_bias`]). 2e-3 = 0,2 %.
 ///
-/// Die Kamera nutzt `near = 0,01 * Abstand` und `far = 100 * Abstand + 10000`; damit ändert sich
-/// die Tiefe um rund `0,01 / Abstand` je Längeneinheit. 2e-5 entsprechen also 0,2 % des
-/// Abstands (0,2 mm bei 100 mm): weit über der f32-Genauigkeit der Tiefe (6e-8) und bei
-/// streifendem Blick (85°) deutlich genug, aber eine Linie 1 % des Abstands hinter einer
-/// Fläche (1e-4) bleibt verdeckt.
-pub const STROKE_DEPTH_BIAS: f32 = 2e-5;
+/// Ein fester Versatz in NDC-Tiefe wüchse mit dem Quadrat des Abstands (bei 3 facher Entfernung
+/// 9 fach so tief in der Welt) und ließe weit entfernte Linien durch dünne Wände scheinen; ein
+/// Versatz in Abstandsbruchteilen wächst nur linear. Bei `near = 0,01 * Abstand` sind das im
+/// Abstand der Szene rund 2e-5 NDC (weit über der f32-Genauigkeit 6e-8), im Dreifachen
+/// Abstand 0,6 % des Szenenabstands. Gegen die Fläche zusätzlich wirkt deren Hardware-Bias
+/// (`slope_scale` 2,0 in `gpu.rs`): bei streifendem Blick trägt er die Hauptlast, siehe
+/// den Test `stroke_bias_covers_half_width_at_grazing_angles`.
+pub const STROKE_DEPTH_BIAS: f32 = 2e-3;
+
+/// `slope_scale` des Tiefenversatzes der Flächen-Pipeline in `gpu.rs`: Flächen rutschen bei
+/// schrägem Blick um das Doppelte ihres Tiefengefälles je Pixel nach hinten. Die Linien
+/// verlassen sich bei streifendem Blick darauf (siehe Test).
+pub const FACE_SLOPE_SCALE: f32 = 2.0;
 
 /// Kleinster erlaubter `w`-Wert; davor wird abgeschnitten.
 const W_EPSILON: f32 = 1e-4;
 
-/// Mehr Striche als so viele je Strecke zeichnen wir nicht; darüber wird durchgezogen.
-const MAX_DASHES_PER_SEGMENT: f32 = 5000.0;
+/// Kleinste Musterlänge (Strich + Lücke) in Pixeln; kürzer wird durchgezogen gezeichnet.
+const MIN_DASH_PERIOD_PX: f32 = 0.5;
 
 /// Ein Eckpunkt der Skizzendreiecke. `ndc` ist fertig projiziert (x, y in −1…1, z Tiefe 0…1),
 /// `edge` läuft quer zur Linie von −1 bis 1 (Mitte 0, Flächen 0) für die Kantenglättung.
@@ -39,7 +46,8 @@ pub struct StrokeView {
     pub view_proj: Mat4,
     /// Größe des Viewports in physischen Pixeln.
     pub size_px: Vec2,
-    /// Wird von der NDC-Tiefe abgezogen (siehe [`STROKE_DEPTH_BIAS`]).
+    /// Bruchteil des Abstands, um den die Linien zur Kamera hin geschoben werden
+    /// (siehe [`STROKE_DEPTH_BIAS`]); 0 = kein Versatz.
     pub depth_bias: f32,
 }
 
@@ -53,8 +61,18 @@ impl StrokeView {
         let ndc = c.truncate() / c.w;
         (
             Vec2::new(ndc.x * self.size_px.x * 0.5, ndc.y * self.size_px.y * 0.5),
-            ndc.z - self.depth_bias,
+            self.biased_depth(ndc.z),
         )
+    }
+
+    /// Tiefe nach Verschiebung um `depth_bias * w` zur Kamera. Mit `d = -A + B / w`
+    /// (`A ≈ -1` bei `far >> near`) ist die neue Tiefe `d - k / (1 - k) * (1 - d)`.
+    fn biased_depth(&self, d: f32) -> f32 {
+        let k = self.depth_bias;
+        if k == 0.0 {
+            return d;
+        }
+        d - k / (1.0 - k) * (1.0 - d).max(0.0)
     }
 
     fn vertex(&self, px: Vec2, z: f32, color: [f32; 4], edge: f32) -> StrokeVertex {
@@ -144,44 +162,78 @@ fn emit_join(
     ]);
 }
 
+/// Teil der Strecke (als Anteile 0…1), der in einem Rechteck um die Bildmitte liegt
+/// (Liang-Barsky). `None`, wenn nichts davon im Rechteck liegt.
+fn visible_range(seg: &Seg, half_extent: Vec2) -> Option<(f64, f64)> {
+    let p0 = seg.p0.as_dvec2();
+    let d = seg.p1.as_dvec2() - p0;
+    let h = half_extent.as_dvec2();
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (p, q) in [
+        (-d.x, p0.x + h.x),
+        (d.x, h.x - p0.x),
+        (-d.y, p0.y + h.y),
+        (d.y, h.y - p0.y),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 {
+                t0 = t0.max(r);
+            } else {
+                t1 = t1.min(r);
+            }
+        }
+    }
+    (t0 < t1).then_some((t0, t1))
+}
+
 /// Läuft das Strichmuster ab `phase` über eine Strecke und gibt die Striche aus.
-/// Gibt die Phase am Ende der Strecke zurück.
+/// Gibt die Phase am Ende der Strecke zurück. Gezeichnet wird nur, was im Bild (mit Rand)
+/// liegt; die Phase läuft über den abgeschnittenen Teil trotzdem weiter. Die Striche werden aus
+/// ihrer laufenden Nummer berechnet (f64), nicht durch Aufsummieren, damit es immer endet.
 fn emit_dashed(
     out: &mut Vec<StrokeVertex>,
     view: &StrokeView,
     seg: &Seg,
     pattern: [f32; 2],
-    mut phase: f32,
+    phase: f32,
     half: f32,
     color: [f32; 4],
 ) -> f32 {
-    let [dash, gap] = pattern;
-    let period = dash + gap;
-    let len = (seg.p1 - seg.p0).length();
+    let dash = f64::from(pattern[0]);
+    let period = dash + f64::from(pattern[1]);
+    let len = f64::from((seg.p1 - seg.p0).length());
     if len <= 0.0 {
         return phase;
     }
-    let at = |s: f32| {
-        let t = s / len;
+    let phase0 = f64::from(phase);
+    let next_phase = ((phase0 + len) % period) as f32;
+    let guard = view.size_px.max_element() + half * 2.0;
+    let Some((t0, t1)) = visible_range(seg, view.size_px * 0.5 + Vec2::splat(guard)) else {
+        return next_phase;
+    };
+    let (s0, s1) = (t0 * len, t1 * len);
+    let at = |s: f64| {
+        let t = (s / len) as f32;
         (seg.p0.lerp(seg.p1, t), seg.z0 + (seg.z1 - seg.z0) * t)
     };
-    let mut pos = 0.0_f32;
-    while pos < len {
-        if phase < dash {
-            let end = (pos + (dash - phase)).min(len);
-            emit_quad(out, view, at(pos), at(end), half, color);
-            phase += end - pos;
-            pos = end;
-        } else {
-            let end = (pos + (period - phase)).min(len);
-            phase += end - pos;
-            pos = end;
+    let mut k = ((s0 + phase0) / period).floor().max(0.0);
+    loop {
+        let start = k * period - phase0;
+        if start >= s1 {
+            break;
         }
-        if phase >= period - 1e-4 {
-            phase = 0.0;
+        let (a, b) = (start.max(s0), (start + dash).min(s1));
+        if b > a {
+            emit_quad(out, view, at(a), at(b), half, color);
         }
+        k += 1.0;
     }
-    phase
+    next_phase
 }
 
 /// Polylinie als Dreiecke in Bildschirmbreite. `width_px` in physischen Pixeln; `dash_px` =
@@ -196,7 +248,9 @@ pub fn push_stroke(
     dash_px: Option<[f32; 2]>,
 ) {
     let half = width_px * 0.5;
-    let pattern = dash_px.filter(|[d, g]| *d > 0.0 && *g >= 0.0 && d.is_finite() && g.is_finite());
+    let pattern = dash_px.filter(|[d, g]| {
+        *d > 0.0 && *g >= 0.0 && d.is_finite() && g.is_finite() && d + g >= MIN_DASH_PERIOD_PX
+    });
     let mut phase = 0.0_f32;
     let mut prev: Option<Seg> = None;
     for pair in path.windows(2) {
@@ -214,9 +268,12 @@ pub fn push_stroke(
         }
         // Abgeschnittene Anfänge schließen nicht an das Vorherige an.
         let connected = prev.is_some() && ca == a;
-        let len = (p1 - p0).length();
+        // Strecken ohne Länge ändern weder Phase noch Anschluss.
+        if (p1 - p0).length() <= 1e-6 {
+            continue;
+        }
         match pattern {
-            Some(pat) if len / (pat[0] + pat[1]).max(1e-3) <= MAX_DASHES_PER_SEGMENT => {
+            Some(pat) => {
                 if connected
                     && let Some(p) = &prev
                     && phase > 0.0

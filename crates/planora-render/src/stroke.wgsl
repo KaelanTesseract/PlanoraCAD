@@ -25,8 +25,8 @@ fn vs_stroke(input: StrokeIn) -> StrokeOut {
 
 @fragment
 fn fs_stroke(input: StrokeOut) -> @location(0) vec4<f32> {
-    // `edge` laeuft ueber die Linienbreite von -1 bis 1; fwidth ist 2 / Breite in Pixeln, ein
-    // Pixel Randstreifen also fwidth / 2 = 1 / Breite. Flaechen (edge = 0) bleiben voll deckend.
+    // `edge` laeuft ueber die Linienbreite von -1 bis 1; fwidth ist etwa 2 / Breite in Pixeln, der
+    // Randstreifen fwidth / 2 = 1 / Breite ist also grob ein halbes bis ein Pixel breit. Flaechen (edge = 0) bleiben voll deckend.
     let fade = max(fwidth(input.edge) * 0.5, 0.0001);
     let a = 1.0 - smoothstep(1.0 - fade, 1.0, abs(input.edge));
     return vec4<f32>(input.color.rgb, input.color.a * a);

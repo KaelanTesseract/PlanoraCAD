@@ -137,7 +137,7 @@ impl GpuScene {
                 // Flächen leicht nach hinten schieben, damit Kanten darüber sauber erscheinen.
                 bias: wgpu::DepthBiasState {
                     constant: 2,
-                    slope_scale: 2.0,
+                    slope_scale: crate::stroke::FACE_SLOPE_SCALE,
                     clamp: 0.0,
                 },
             }),
