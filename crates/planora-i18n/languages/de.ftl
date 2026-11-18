@@ -478,6 +478,7 @@ undo-change = Ändern
 undo-sheet-info = Blattangaben ändern
 undo-parts-text = Stücklistentext ändern
 undo-visibility = Ein- oder ausblenden
+undo-sketch-display = Skizzenanzeige ändern
 undo-group-create = Gruppe erstellen
 undo-group-rename = Gruppe umbenennen
 undo-group-ungroup = Gruppe auflösen

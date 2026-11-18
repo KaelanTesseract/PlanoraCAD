@@ -4550,6 +4550,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         project_info,
         parts_overrides,
         visibility,
+        sketch_display: Default::default(),
         parameters,
         next_param,
         rollbacks,

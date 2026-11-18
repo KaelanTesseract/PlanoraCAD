@@ -3221,3 +3221,7 @@ Für Dennis, am Rechner mit Fusion zu prüfen. Jeder Punkt ist heute eine Annahm
 13. **DXF-Ausgabe:** Die DXF-Dateien aus dem Handtest 1 (Ordner `handtest1/`, bei Dennis) in Fusion importieren und Größe, Einheit, Ebenen und Lage prüfen.
 14. **Name und Vorgabe:** Der Name „Drehprofil“ und die Toleranzvorgabe 0,01 mm (Bereich 0,0001 bis 10 mm) sind Annahmen.
 15. **Gruppen im Baum:** „Löschen“ im Menü einer Gruppe löst sie nur auf (die Skizzen bleiben); der Standardname ist „Gruppe“ plus kleinste freie Zahl („Gruppe1“); das Auge der Gruppe blendet alle Skizzen darin aus. In Fusion löscht „Löschen“ an einer Zeitleisten-Gruppe die enthaltenen Elemente mit; ob das für Gruppen im Browser auch gilt, ist offen.
+
+## Teilprojekt Skizzen 12 (Anzeige in der Skizze)
+
+1. **Task 1, Anzeigeschalter am Dokument:** `SketchDisplay` je Skizze liegt im Dokument (`sketch_display`) und im Snapshot, nur Abweichungen von der Vorgabe. Einträge zu nicht vorhandenen oder Nicht-Skizzen-Features fallen beim Wiederherstellen, Bauen und Löschen weg; ein Eintrag mit Vorgabewerten wird nicht gehalten. Die Änderung zählt wie die Sichtbarkeit als Ansichtsänderung (`drawing_edits`), keine Neuberechnung. Datei lesen und schreiben folgt in Task 2.

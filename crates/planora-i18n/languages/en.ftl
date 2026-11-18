@@ -486,6 +486,7 @@ undo-change = Change
 undo-sheet-info = Change sheet info
 undo-parts-text = Change parts list text
 undo-visibility = Show or hide
+undo-sketch-display = Change Sketch Display
 undo-group-create = Create Group
 undo-group-rename = Rename Group
 undo-group-ungroup = Ungroup

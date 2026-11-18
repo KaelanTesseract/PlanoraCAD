@@ -459,6 +459,8 @@ impl Document {
         // Verweise auf gelöschte Features und der Ordner „Leinwände“ ohne Leinwand fallen weg.
         let v = std::mem::take(&mut self.visibility);
         self.visibility = self.pruned_visibility(v);
+        let d = std::mem::take(&mut self.sketch_display);
+        self.sketch_display = self.pruned_sketch_display(d);
         self.edits += 1;
         self.recompute();
         Ok(removed)

@@ -23,6 +23,7 @@ pub mod planes;
 pub mod recompute;
 pub mod refs;
 mod rollback;
+mod sketch_display;
 pub mod sketch_dxf;
 pub mod sketch_groups;
 mod snapshot;
@@ -89,6 +90,7 @@ pub use step_bodies::{
 };
 // `ProjectError` bleibt im Modul (`surface_project::ProjectError`), damit es nicht mit
 // `planora_project::ProjectError` in Glob-Imports zusammenstößt.
+pub use sketch_display::SketchDisplay;
 pub use spun_profile::{SpunAxis, SpunError, SpunSelection, SpunSpec, spun_profile};
 pub use surface_project::{
     CurveSource, DocView, FaceTarget, IntersectTarget, IntersectionSpec, MAX_SURFACE_SAMPLES,
