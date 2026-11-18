@@ -1022,6 +1022,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 grid: scene_lines(state),
                 canvases,
                 canvas_textures,
+                strokes: Vec::new(),
             },
         ),
     );
