@@ -351,14 +351,33 @@ fn body_values_are_shown_in_full() {
     }
 }
 
-/// Beide Schalter der Skizzenpalette stehen unter dem Namen ganz im Skizzenfeld (Breite 250),
-/// „Slice“ rechts in der Statuszeile, auch auf Englisch.
+/// Die Schalter der Skizzenpalette stehen unter dem Namen ganz im Skizzenfeld (Breite 250):
+/// „Skizzenraster“ und „Fang“ in einer Zeile, danach die sieben Anzeigeschalter der Skizze
+/// (Skizzen 12) in Fusions Reihenfolge, alles über der Statuszeile, auch auf Englisch.
 #[test]
 fn the_palette_switches_fit_the_sketch_field() {
     let size = vec2(1920.0, 1080.0);
-    for (lang, grid, snap) in [
-        (planora_i18n::german(), "Skizzenraster", "Fang"),
-        (planora_i18n::english(), "Sketch Grid", "Snap"),
+    let german = [
+        "Slice",
+        "Profil anzeigen",
+        "Punkte anzeigen",
+        "Maße anzeigen",
+        "Abhängigkeiten anzeigen",
+        "Konstruktionsgeometrie anzeigen",
+        "Projizierte Geometrie anzeigen",
+    ];
+    let english = [
+        "Slice",
+        "Show Profile",
+        "Show Points",
+        "Show Dimensions",
+        "Show Constraints",
+        "Show Construction Geometries",
+        "Show Projected Geometries",
+    ];
+    for (lang, grid, snap, switches) in [
+        (planora_i18n::german(), "Skizzenraster", "Fang", german),
+        (planora_i18n::english(), "Sketch Grid", "Snap", english),
     ] {
         planora_i18n::with_lang(&lang, || {
             let mut app = PlanoraApp::for_tests(library_ws());
@@ -398,25 +417,28 @@ fn the_palette_switches_fit_the_sketch_field() {
                 "eine Zeile"
             );
             assert!(g.rect.right() < n.rect.left(), "{g:?} {n:?}");
-            // Skizzen 12: „Slice“ steht unter den Schaltern rechts in der Statuszeile.
-            let slice = find("Slice");
-            assert!(
-                slice.rect.top() >= g.rect.bottom() - 0.5,
-                "unter den Schaltern"
-            );
+            // Skizzen 12: die sieben Schalter in Fusions Reihenfolge (Lesereihenfolge: in einer
+            // Zeile von links nach rechts, sonst eine Zeile tiefer), über der Statuszeile.
+            let shown: Vec<&Seen> = switches.iter().map(|s| find(s)).collect();
+            let mut prev = n;
+            for s in &shown {
+                let same_row = (s.rect.center().y - prev.rect.center().y).abs() < 1.0;
+                assert!(
+                    (same_row && s.rect.left() > prev.rect.right())
+                        || s.rect.top() >= prev.rect.bottom() - 0.5,
+                    "Reihenfolge: {prev:?} vor {s:?}"
+                );
+                prev = s;
+            }
             let status = texts
                 .iter()
                 .find(|t| t.text.starts_with("Status") && right.contains(t.rect.center()))
                 .expect("Statuszeile");
             assert!(
-                (slice.rect.center().y - status.rect.center().y).abs() < 2.0,
-                "Zeile des Status: {slice:?} {status:?}"
+                status.rect.top() >= prev.rect.bottom() - 0.5,
+                "Statuszeile darunter: {prev:?} {status:?}"
             );
-            assert!(
-                status.rect.right() < slice.rect.left(),
-                "{status:?} {slice:?}"
-            );
-            for t in [g, n, slice] {
+            for t in [g, n].into_iter().chain(shown) {
                 assert!(t.rect.right() <= right.right() + 0.5, "{t:?} in {right:?}");
                 assert!(t.clip.expand(0.5).contains_rect(t.rect), "{t:?}");
             }

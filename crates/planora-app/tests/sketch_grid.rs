@@ -523,6 +523,35 @@ fn the_grid_is_drawn_as_depth_tested_strokes_and_gone_when_switched_off() {
     s.sketch_show_grid = true;
     s.sketch_snap_grid = false;
     assert_eq!(strokes(&s).len(), on.len());
+    // Skizzen 12 (Review): Das Raster liegt unter den Profilflächen, das Achsenkreuz wie in Fusion
+    // darüber (es kommt nach den Flächen).
+    {
+        let (_, sk) = s.session_sketch_mut().unwrap();
+        let p: Vec<_> = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)]
+            .iter()
+            .map(|&(x, y)| sk.add_point(x, y).unwrap())
+            .collect();
+        for i in 0..4 {
+            sk.add_line(p[i], p[(i + 1) % 4]).unwrap();
+        }
+    }
+    let out = strokes(&s);
+    let col = planora_app::theme::sketch_colors(s.dark);
+    let axis = sketch_view::stroke_rgba(col.axis_x);
+    // Dreiecke: Flächen haben an allen Ecken `edge` 0.
+    let tris: Vec<_> = out.chunks(3).collect();
+    let is_fill = |t: &[planora_render::StrokeVertex]| t.iter().all(|v| v.edge == 0.0);
+    let first_axis = tris
+        .iter()
+        .position(|t| !is_fill(t) && t[0].color == axis)
+        .expect("Achse");
+    let first_fill = tris.iter().position(|t| is_fill(t)).expect("Fläche");
+    let last_fill = tris.iter().rposition(|t| is_fill(t)).unwrap();
+    assert!(first_axis > last_fill, "Achsenkreuz über den Flächen");
+    assert!(
+        first_fill >= 2 * 10,
+        "Raster unter den Flächen ({first_fill})"
+    );
 }
 
 // ---- Schalter und Konfiguration ---------------------------------------------------------------

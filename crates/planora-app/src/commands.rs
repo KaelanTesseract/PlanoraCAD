@@ -365,6 +365,27 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 state.document.set_sketch_display(id, d);
             }
         }
+        Action::SketchShowPoints
+        | Action::SketchShowDimensions
+        | Action::SketchShowConstraints
+        | Action::SketchShowConstruction
+        | Action::SketchShowProjected => {
+            // Wie die Haken im Skizzenfeld (Skizzen 12): ein Schritt, die Skizze bleibt offen.
+            let state = &mut ws.active_tab_mut().state;
+            if let Some(id) = state.open_sketch_id() {
+                let mut d = state.document.sketch_display(id);
+                let flag = match a {
+                    Action::SketchShowPoints => &mut d.points,
+                    Action::SketchShowDimensions => &mut d.dimensions,
+                    Action::SketchShowConstraints => &mut d.constraints,
+                    Action::SketchShowConstruction => &mut d.construction,
+                    _ => &mut d.projected,
+                };
+                *flag = !*flag;
+                state.document.set_sketch_display(id, d);
+                state.sync_sketch_display();
+            }
+        }
         Action::SketchConstruction => {
             if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
                 se.toggle_construction_if_possible(sk);

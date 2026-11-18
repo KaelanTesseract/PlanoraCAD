@@ -3290,6 +3290,7 @@ impl AppState {
         // Jede geöffnete Skizze beginnt mit einem eigenen, leeren Verlauf (R10).
         self.sketch_history = Some(History::new(draft.clone(), sketch_bytes(&draft)));
         self.sketch_draft = Some(draft);
+        self.sync_sketch_display();
         self.selected_feature = Some(id);
         // Senkrecht auf die Ebene blicken, dann mittig in das freie Rechteck einpassen. Die
         // Kamera kennt hier noch das freie Rechteck des vorigen Bildes (Modellmodus); die
@@ -3461,6 +3462,19 @@ impl AppState {
     pub fn session_sketch(&self) -> Option<&Sketch> {
         self.sketch_session.as_ref()?;
         self.sketch_draft.as_ref().map(|d| &d.sketch)
+    }
+
+    /// Übernimmt die Anzeigeschalter der geöffneten Skizze (Dokument) und die Kopien ihres
+    /// Entwurfs in die Sitzung (Skizzen 12), damit Wählen, Rahmenauswahl und Fang auslassen, was
+    /// die Schalter ausblenden. Je Bild vor den Eingaben ([`crate::sketch_view::show_overlay`])
+    /// und beim Öffnen; ohne offene Skizze nichts.
+    pub fn sync_sketch_display(&mut self) {
+        let filter = crate::sketch_view::DisplayFilter::of_open(self);
+        if let Some(se) = self.sketch_session.as_mut()
+            && se.display != filter
+        {
+            se.display = filter;
+        }
     }
 
     /// Sitzung und Entwurfsskizze gemeinsam (für die Werkzeuge des Skizzen-Modus).

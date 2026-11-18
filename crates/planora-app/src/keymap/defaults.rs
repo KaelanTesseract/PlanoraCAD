@@ -251,6 +251,20 @@ action_table! {
     SketchToggleSnap, "skizze.fang", "action-sketch-toggle-snap", Sketch, [];
     /// Fusion „Slice“ (Skizzen 12): Haken im Skizzenfeld, gehört zur Skizze; ohne Vorgabetaste.
     SketchSlice, "skizze.slice", "action-sketch-slice", Sketch, [];
+    /// Fusion „Punkte anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.
+    SketchShowPoints, "skizze.punkte_anzeigen", "action-sketch-show-points", Sketch, [];
+    /// Fusion „Maße anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.
+    SketchShowDimensions, "skizze.masse_anzeigen", "action-sketch-show-dimensions", Sketch, [];
+    /// Fusion „Abhängigkeiten anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.
+    SketchShowConstraints, "skizze.abhaengigkeiten_anzeigen", "action-sketch-show-constraints",
+        Sketch, [];
+    /// Fusion „Konstruktionsgeometrie anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne
+    /// Vorgabetaste.
+    SketchShowConstruction, "skizze.konstruktion_anzeigen", "action-sketch-show-construction",
+        Sketch, [];
+    /// Fusion „Projizierte Geometrie anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne
+    /// Vorgabetaste.
+    SketchShowProjected, "skizze.projiziert_anzeigen", "action-sketch-show-projected", Sketch, [];
     /// Wählt das zuletzt benutzte Skizzenwerkzeug wieder (eigenes Gedächtnis, siehe
     /// `commands::LastCommand`).
     SketchRepeatLast, "skizze.werkzeug_wiederholen", "action-sketch-repeat-last", Sketch,

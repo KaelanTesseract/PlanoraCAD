@@ -126,6 +126,16 @@ fn on_glyph(sk: &Sketch, snap: Snap) -> bool {
     matches!(snap, Snap::Curve(c) if sk.text_of_curve(c).is_some())
 }
 
+/// Gilt der Fang `snap` ausgeblendeter Geometrie (Skizzen 12, Anzeigeschalter)?
+fn hidden_snap(gone: &crate::sketch_view::DisplayHidden, snap: Snap) -> bool {
+    match snap {
+        Snap::Point(p) | Snap::Center(p) => gone.unsnapped.contains(&p),
+        Snap::Curve(c) | Snap::Midpoint(c) => gone.curves.contains(&c),
+        Snap::Intersection(a, b) => gone.curves.contains(&a) || gone.curves.contains(&b),
+        Snap::None | Snap::Origin | Snap::Grid => false,
+    }
+}
+
 /// Richtung, in der die Kurve `c` den Punkt `p` an ihrem Ende verlässt (Fortsetzung über das Ende
 /// hinaus, normiert); `None`, wenn `p` kein Ende von `c` ist.
 pub(crate) fn leaving_direction(sk: &Sketch, c: CurveId, p: PointId) -> Option<DVec2> {
@@ -390,13 +400,16 @@ impl SketchSession {
         // Zeiger frei, wie neben jeder Geometrie; liegt im Radius ein anderes Ziel (etwa die
         // Rahmenlinie neben dem Buchstaben), fängt dieses. Im Fang-Index bleiben sie nur für die
         // Wahl.
+        // Was die Anzeigeschalter mit Konstruktion oder Projektion ausblenden, fängt nicht
+        // (Skizzen 12); End- und Mittelpunkte fangen auch mit „Punkte anzeigen“ aus.
+        let gone = self.display.hidden(sk);
         let hit = index.find_avoiding_where(
             raw,
             radius,
             &self.own_open_spots(sk),
             tol,
             &shown,
-            &|snap| !on_glyph(sk, snap),
+            &|snap| !on_glyph(sk, snap) && !hidden_snap(&gone, snap),
         );
         // 3D-Punkte stehen nicht im Index (Skizzen 10): Der sichtbar getroffene (`pick3`, über den
         // Bildschirmabstand von der Ansicht gesetzt) fängt nach den 2D-Punkten und dem Ursprung,
@@ -634,6 +647,8 @@ impl SketchSession {
     /// Lagen).
     fn align_skip(&self, sk: &Sketch) -> Vec<PointId> {
         let mut skip = self.pending.clone();
+        // Ausgeblendete Konstruktion und Projektion richten nicht aus (Skizzen 12).
+        skip.extend(self.display.hidden(sk).unsnapped);
         if self.tool == Tool::Rectangle || self.planned_kind().is_some() {
             let tol = sk.tolerance().linear;
             for &spot in &self.pending_pos {

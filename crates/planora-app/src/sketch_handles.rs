@@ -351,20 +351,25 @@ impl SketchSession {
         hidden_handles_of(sk, &self.selection)
     }
 
-    /// Der nächste Punkt im Radius, ohne unsichtbare Griffe. 3D-Punkte (Skizzen 10) stehen nicht
-    /// in der Draufsicht: Sie trifft die Ansicht über den Bildschirmabstand
-    /// ([`crate::sketch_view`]), hier nie.
+    /// Der nächste Punkt im Radius, ohne unsichtbare Griffe und ohne die Punkte, die die
+    /// Anzeigeschalter mit Konstruktion oder Projektion ausblenden (Skizzen 12; „Punkte
+    /// anzeigen“ prüft erst [`snap`](Self::snap), der Fang beim Zeichnen bleibt). 3D-Punkte
+    /// (Skizzen 10) stehen nicht in der Draufsicht: Sie trifft die Ansicht über den
+    /// Bildschirmabstand ([`crate::sketch_view`]), hier nie.
     pub(crate) fn shown_point(&self, sk: &Sketch, at: DVec2, radius: f64) -> Option<PointId> {
         let mut skip = self.hidden_handles(sk).points;
         skip.extend(sk.points().map(|(p, _)| p).filter(|&p| sk.is_3d_point(p)));
+        skip.extend(self.display.hidden(sk).unsnapped);
         sk.pick_point_skipping(at, radius, &skip)
     }
 
-    /// Die nächste Kurve im Radius, ohne unsichtbare Griffe. 3D-Kurven (Skizzen 10) trifft wie
-    /// 3D-Punkte nur die Ansicht über den Bildschirmabstand.
+    /// Die nächste Kurve im Radius, ohne unsichtbare Griffe und ohne die Kurven, die die
+    /// Anzeigeschalter ausblenden (Skizzen 12). 3D-Kurven (Skizzen 10) trifft wie 3D-Punkte nur
+    /// die Ansicht über den Bildschirmabstand.
     pub(crate) fn shown_curve(&self, sk: &Sketch, at: DVec2, radius: f64) -> Option<CurveId> {
         let mut skip = self.hidden_handles(sk).curves;
         skip.extend(sk.curves().map(|(c, _)| c).filter(|&c| sk.is_3d_curve(c)));
+        skip.extend(self.display.hidden(sk).curves);
         sk.pick_curve_skipping(at, radius, &skip)
     }
 
