@@ -70,6 +70,8 @@ pub struct Snapshot {
     pub parts_overrides: BTreeMap<BodyKey, RowOverride>,
     /// Was im Browser ausgeblendet ist.
     pub visibility: crate::visibility::Visibility,
+    /// Skizzengruppen im Browser (Skizzen 11b, Format 22); zählen nicht zum Modell.
+    pub sketch_groups: crate::sketch_groups::SketchGroups,
     /// Parametertabelle (ohne Werte; sie werden beim Bauen berechnet).
     pub parameters: Vec<Parameter>,
     /// Nächste Parameterkennung (mindestens 1).
@@ -128,12 +130,13 @@ impl Snapshot {
             && self.project_info == other.project_info
             && self.parts_overrides == other.parts_overrides
             && self.visibility == other.visibility
+            && self.sketch_groups == other.sketch_groups
     }
 
     /// Gleiches Modell: Features (samt Formeltexten), Marker, Rückrollstellen, Kennungszähler,
     /// Netze, STEP-Formen, Bilder (alle als derselbe `Arc`) und Parametertabelle (samt
-    /// Parameterzähler) gleich; Zeichnungen, Projektangaben, Stücklistentexte und Sichtbarkeit
-    /// zählen nicht.
+    /// Parameterzähler) gleich; Zeichnungen, Projektangaben, Stücklistentexte, Sichtbarkeit und
+    /// Skizzengruppen zählen nicht.
     /// Eine Änderung nur an Parametern oder Formeln nimmt deshalb in [`Document::restore`] den
     /// vollen Weg.
     pub fn same_model(&self, other: &Snapshot) -> bool {
@@ -191,6 +194,7 @@ impl Document {
             project_info: self.project_info.clone(),
             parts_overrides: self.parts_overrides.clone(),
             visibility: self.pruned_visibility(self.visibility.clone()),
+            sketch_groups: self.sketch_groups.clone(),
             parameters: self.parameters.clone(),
             next_param: self.next_param,
             rollbacks: self.rollbacks.clone(),
@@ -237,11 +241,13 @@ impl Document {
                 })?;
             }
             crate::parts::check_overrides(&s.parts_overrides)?;
+            Document::check_snapshot_groups(&s)?;
             // Als letzte Prüfung: `set_drawings` ändert das Dokument erst, wenn alles stimmt.
             self.set_drawings(s.drawings, s.next_drawing)?;
             self.project_info = s.project_info;
             self.parts_overrides = s.parts_overrides;
             self.visibility = self.pruned_visibility(s.visibility);
+            self.sketch_groups = s.sketch_groups;
             self.drawing_edits += 1;
             return Ok(RestoreKind::Annotations);
         }
@@ -285,6 +291,7 @@ impl Document {
         if s.next_id == u64::MAX {
             return Err(bad(tr!("feature-snap-id-counter")));
         }
+        Document::check_snapshot_groups(&s)?;
         if s.marker > s.features.len() {
             return Err(bad(tr!("feature-snap-marker")));
         }
@@ -407,6 +414,7 @@ impl Document {
         crate::parts::check_overrides(&s.parts_overrides)?;
         doc.parts_overrides = s.parts_overrides;
         doc.visibility = doc.pruned_visibility(s.visibility);
+        doc.sketch_groups = s.sketch_groups;
         doc.marker = s.marker;
         doc.next_id = s.next_id;
         // Nach den Features, weil die Prüfung die Ketten braucht; ungültige Stellen sind ein

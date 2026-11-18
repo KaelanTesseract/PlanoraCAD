@@ -5,7 +5,7 @@ use super::bezier::{cartesian, check_insertion, decompose_row, homogeneous, inse
 use super::curve::binom;
 use super::{
     BezierPatch, KnotVector, MAX_BEZIER_PATCHES, MAX_CONTROL_POINTS, MAX_CONTROL_TOTAL, MAX_COORD,
-    MAX_WEIGHT, MIN_WEIGHT, NurbsError,
+    MAX_WEIGHT, MIN_WEIGHT, NurbsCurve, NurbsError,
 };
 use crate::DVec3;
 use glam::DVec4;
@@ -367,6 +367,36 @@ impl NurbsSurface {
         )
     }
 
+    /// Isokurve `u = const` über den ganzen v-Bereich, exakt (Skizzen 11b, Isoparametrische
+    /// Kurve): Im Inneren wird `u` bis zur vollen Vielfachheit (Grad) eingefügt; dann ist die
+    /// Kurve die zugehörige Kontrollzeile samt Gewichten mit den v-Knoten. Am Rand ist es die
+    /// Randzeile ohne Einfügen. Fehler, wenn `u` nicht endlich ist oder außerhalb des Bereichs
+    /// liegt.
+    pub fn iso_curve_u(&self, u: f64) -> Result<NurbsCurve, NurbsError> {
+        let (i, s) = iso_row(&self.knots_u, u, |u, r| self.insert_knot_u(u, r))?;
+        let s = s.as_ref().unwrap_or(self);
+        let nv = s.nv;
+        NurbsCurve::new(
+            s.degree_v(),
+            s.knots_v.knots().to_vec(),
+            (0..nv).map(|j| s.control_at(i, j)).collect(),
+            (0..nv).map(|j| s.weight_at(i, j)).collect(),
+        )
+    }
+
+    /// Isokurve `v = const` über den ganzen u-Bereich, exakt; sonst wie `iso_curve_u`.
+    pub fn iso_curve_v(&self, v: f64) -> Result<NurbsCurve, NurbsError> {
+        let (j, s) = iso_row(&self.knots_v, v, |v, r| self.insert_knot_v(v, r))?;
+        let s = s.as_ref().unwrap_or(self);
+        let nu = s.nu;
+        NurbsCurve::new(
+            s.degree_u(),
+            s.knots_u.knots().to_vec(),
+            (0..nu).map(|i| s.control_at(i, j)).collect(),
+            (0..nu).map(|i| s.weight_at(i, j)).collect(),
+        )
+    }
+
     /// Zerlegung in rationale Bézier-Flicken: alle inneren Knoten werden bis Vielfachheit Grad
     /// eingefügt (erst u, dann v); je ein Flicken pro nichtleerem Knotenrechteck, Reihenfolge
     /// u-Abschnitt außen, v-Abschnitt innen.
@@ -433,4 +463,37 @@ impl NurbsSurface {
 fn span_count(knots: &KnotVector) -> usize {
     let k = knots.knots();
     k.windows(2).filter(|w| w[1] > w[0]).count()
+}
+
+/// Zeile der Isokurve bei `t` in einer Richtung mit den Knoten `knots`: Index der Kontrollzeile
+/// und (im Inneren, wenn nötig) die Fläche mit `t` auf voller Vielfachheit (`insert`). Die Zahl
+/// der Knoten unter `t` ändert sich beim Einfügen nicht; bei voller Vielfachheit ist die Zeile
+/// die vor dem ersten Knoten `t`.
+fn iso_row(
+    knots: &KnotVector,
+    t: f64,
+    insert: impl FnOnce(f64, usize) -> Result<NurbsSurface, NurbsError>,
+) -> Result<(usize, Option<NurbsSurface>), NurbsError> {
+    let (a, b) = knots.domain();
+    if !t.is_finite() || t < a || t > b {
+        return Err(NurbsError::Input(tr!(
+            "math-iso-outside",
+            t = t.to_string(),
+            a = a.to_string(),
+            b = b.to_string()
+        )));
+    }
+    if t == a {
+        return Ok((0, None));
+    }
+    if t == b {
+        return Ok((knots.basis_count() - 1, None));
+    }
+    let p = knots.degree();
+    let k = knots.knots();
+    let s = k.iter().filter(|x| **x == t).count();
+    let below = k.iter().filter(|x| **x < t).count();
+    let r = p.saturating_sub(s);
+    let surface = if r > 0 { Some(insert(t, r)?) } else { None };
+    Ok((below - 1, surface))
 }

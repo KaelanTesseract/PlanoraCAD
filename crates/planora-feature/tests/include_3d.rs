@@ -30,6 +30,7 @@ fn sketch_kind(sketch: Sketch, plane: StandardPlane, copies: Vec<EdgeCopy>) -> F
         plane: SketchPlane::Standard(plane),
         copies,
         formulas: Default::default(),
+        text_formulas: Default::default(),
     })
 }
 

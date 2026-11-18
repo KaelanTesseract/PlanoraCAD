@@ -215,10 +215,10 @@ fn format_11_with_unknown_step_id_is_rejected() {
 #[test]
 fn older_program_limit() {
     let (text, _, _) = good();
-    let e = bad(&text.replacen("\"format\": 11", "\"format\": 22", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 22, .. }), "{e:?}");
-    let e = bad("{\"format\": 22, \"rueckrollstellen\": \"ganz anders\"}");
-    assert!(matches!(e, ProjectError::TooNew { found: 22, .. }), "{e:?}");
+    let e = bad(&text.replacen("\"format\": 11", "\"format\": 23", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 23, .. }), "{e:?}");
+    let e = bad("{\"format\": 23, \"rueckrollstellen\": \"ganz anders\"}");
+    assert!(matches!(e, ProjectError::TooNew { found: 23, .. }), "{e:?}");
     // Format 11 selbst ist nicht zu neu.
     assert!(decode_version(&text, "x.json").is_ok());
 }

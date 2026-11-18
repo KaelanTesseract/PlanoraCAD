@@ -320,7 +320,7 @@ fn positions_roundtrip_bit_exact() {
 #[test]
 fn format_4_with_drawings_and_5_with_centerlines() {
     // Format 6 gilt seit Teilprojekt 3c-1 (Blattangaben), Format 7 seit 3c-2; Mittellinien brauchen Format 5.
-    assert_eq!(FORMAT_VERSION, 21); // seit Skizzen 10 (3D-Skizze)
+    assert_eq!(FORMAT_VERSION, 22); // seit Skizzen 10 (3D-Skizze)
     let plain = box_document();
     assert_eq!(required_format(&plain.snapshot()), 1);
     let mut d = drawing_document();
@@ -738,18 +738,18 @@ fn missing_counters_are_derived_from_the_ids() {
 
 #[test]
 fn too_new_format_is_refused_with_clear_text() {
-    // Gültig ist bis Format 20 (seit der 3D-Skizze); „zu neu“ ist jetzt 22.
+    // Gültig ist bis Format 20 (seit der 3D-Skizze); „zu neu“ ist jetzt 23.
     let good = good();
-    let e = bad(&good.replacen("\"format\": 5", "\"format\": 22", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 22, .. }), "{e:?}");
+    let e = bad(&good.replacen("\"format\": 5", "\"format\": 23", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 23, .. }), "{e:?}");
     let msg = e.to_string();
     assert!(
-        msg.contains("neueren Programmversion") && msg.contains("Format 22"),
+        msg.contains("neueren Programmversion") && msg.contains("Format 23"),
         "{msg}"
     );
     // Auch eine Datei, deren übrige Struktur unbekannt ist.
-    let e = bad("{\"format\": 22, \"zeichnungen\": \"ganz anders\"}");
-    assert!(matches!(e, ProjectError::TooNew { found: 22, .. }), "{e:?}");
+    let e = bad("{\"format\": 23, \"zeichnungen\": \"ganz anders\"}");
+    assert!(matches!(e, ProjectError::TooNew { found: 23, .. }), "{e:?}");
 }
 
 // ---- Versionsspeicher und Autosave ------------------------------------------------------

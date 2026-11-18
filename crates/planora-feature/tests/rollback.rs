@@ -146,6 +146,7 @@ fn sketch_model() -> (Document, FeatureId, FeatureId) {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

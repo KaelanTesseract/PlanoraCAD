@@ -142,13 +142,21 @@ pub fn line_weight(k: i64, blend: f32) -> (f32, f32) {
     ((m1 + m2) / sum, a1.max(a2))
 }
 
+/// Gezeichnete Länge der Achsen ab dem Ursprung ([`axis_lines`]): die x- und die y-Achse laufen
+/// von `-l` bis `l`, die z-Achse von 0 bis `l`. Ungültige Kamera → `None`.
+pub fn axis_half_length(target: Vec3, distance: f32) -> Option<f32> {
+    if !target.is_finite() || !distance.is_finite() || distance <= 0.0 {
+        return None;
+    }
+    Some(target.length() + grid_radius(distance))
+}
+
 /// Die Achsen allein: durch den Ursprung, lang genug für das ganze sichtbare Raster um `target`
 /// (die z-Achse zeigt nach oben), als Linienliste wie bei [`grid_lines`]. Ungültige Kamera → leer.
 pub fn axis_lines(target: Vec3, distance: f32, palette: &Palette) -> Vec<LineVertex> {
-    if !target.is_finite() || !distance.is_finite() || distance <= 0.0 {
+    let Some(l) = axis_half_length(target, distance) else {
         return Vec::new();
-    }
-    let l = target.length() + grid_radius(distance);
+    };
     let axis = |a: [f32; 3], b: [f32; 3], color: [f32; 4]| {
         [
             LineVertex { position: a, color },

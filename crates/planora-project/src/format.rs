@@ -62,6 +62,19 @@ pub struct VersionFile {
     /// Byte für Byte bleiben.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sichtbarkeit: Option<SichtbarkeitDto>,
+    /// Skizzengruppen im Browser (ab Format 22, Skizzen 11b) in Browser-Reihenfolge. Leer heißt:
+    /// fehlt, damit alte Dateien Byte für Byte bleiben. Schon beim Lesen begrenzt.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "de_sketch_groups"
+    )]
+    pub skizzengruppen: Vec<SkizzengruppeDto>,
+    /// Nächste Kennung einer Skizzengruppe (ab Format 22); 0 oder fehlend heißt „aus den
+    /// Kennungen ableiten“ (größte + 1). Fehlt ohne Gruppen, damit alte Dateien Byte für Byte
+    /// bleiben.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub naechste_gruppe: u64,
     /// Bilder der Leinwände (ab Format 19, Skizzen 9): Kennung, Format und Base64 der Datei-Bytes,
     /// in jeder Version erneut (wie `netze`). Leer heißt: fehlt, damit alte Dateien Byte für Byte
     /// bleiben. Steht hinten, weil die Daten lang sind.
@@ -72,6 +85,38 @@ pub struct VersionFile {
     /// Byte für Byte bleiben. Steht am Ende, weil die Texte lang sind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub step_formen: Vec<StepFormDto>,
+}
+
+/// Eine Skizzengruppe (ab Format 22): Kennung, Name, übergeordnete Gruppe (fehlt oben),
+/// ausgeblendet (`aus`, fehlt, wenn sichtbar) und die Feature-Kennungen der Skizzen darin.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SkizzengruppeDto {
+    pub kennung: u64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eltern: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub aus: bool,
+    #[serde(default)]
+    pub skizzen: Vec<u64>,
+}
+
+/// Höchstzahl der Skizzengruppen, die beim Lesen überhaupt angenommen wird.
+pub const MAX_FILE_SKETCH_GROUPS: usize = 10_000;
+
+fn de_sketch_groups<'de, D>(d: D) -> Result<Vec<SkizzengruppeDto>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    de_bounded(d, MAX_FILE_SKETCH_GROUPS, || tr!("proj-l-sketch-groups"))
+}
+
+/// Höhenformel eines Textes (ab Format 22): `text` ist der Index in `texte` (gleich
+/// `TextId::index()`, auch gelöschte Texte zählen).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TextFormulaDto {
+    pub text: usize,
+    pub formel: String,
 }
 
 /// Sichtbarkeit im Browser (ab Format 16); jede Liste fehlt, wenn sie leer ist.
@@ -732,6 +777,52 @@ pub struct EdgeCopyDto {
     pub auf_flaeche: Option<AufFlaecheDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schnittkurve: Option<SchnittkurveDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drehprofil: Option<DrehprofilDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isokurve: Option<IsokurveDto>,
+}
+
+/// „Drehprofil“ (ab Format 22): Auswahl (Körper oder Elemente), Achse, Toleranz in mm und
+/// „Umkehren“.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DrehprofilDto {
+    pub auswahl: DrehauswahlDto,
+    pub achse: DrehachseDto,
+    pub toleranz: f64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub umkehren: bool,
+}
+
+/// Auswahl des Drehprofils (ab Format 22): ganze Körper oder bestimmte Elemente.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum DrehauswahlDto {
+    Koerper {
+        #[serde(default)]
+        koerper: Vec<BodyRefDto>,
+    },
+    Elemente {
+        #[serde(default)]
+        elemente: Vec<KurvenquelleDto>,
+    },
+}
+
+/// Achse des Drehprofils (ab Format 22): Linie (Kurvennummer) der eigenen Skizze oder ein
+/// Achsbezug wie bei der Ebene unter Winkel.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum DrehachseDto {
+    Eigene { kurve: usize },
+    Bezug { achse: AchseDto },
+}
+
+/// Isoparametrische Kurve (ab Format 22): Fläche, Richtung (`"u"` oder `"v"`) und Anteil 0–1.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct IsokurveDto {
+    pub flaeche: FaceRefDto,
+    pub richtung: String,
+    pub anteil: f64,
 }
 
 fn is_zero_u32(v: &u32) -> bool {
@@ -1385,6 +1476,10 @@ pub struct SketchFeatureDto {
     /// fehlt (alte Dateien Byte für Byte).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formeln: Vec<SketchFormulaDto>,
+    /// Höhenformeln der Texte (ab Format 22), aufsteigend nach Text. Leer heißt: fehlt (alte
+    /// Dateien Byte für Byte).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hoehenformeln: Vec<TextFormulaDto>,
 }
 
 /// Art einer Verrundung (Grad, Prozent und Millimeter wie im Feature).

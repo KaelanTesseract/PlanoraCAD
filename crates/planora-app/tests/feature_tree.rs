@@ -720,3 +720,29 @@ fn body_rows_keep_their_order_after_a_move() {
         "Verschieben ordnet nicht um"
     );
 }
+
+#[test]
+fn grouped_sketches_sit_indented_under_their_group() {
+    let mut s = AppState::new();
+    let a = sketch_with_rectangle(&mut s);
+    sketch_with_rectangle(&mut s);
+    let g = s
+        .document
+        .create_sketch_group(&[planora_feature::GroupItem::Sketch(a)])
+        .unwrap();
+    s.tree_groups_open.insert(g);
+    let mut t = Tree::new(true);
+    let shot = t.settle(&mut s);
+    let x = |name: &str| shot.text(name).1.min.x;
+    let y = |name: &str| shot.text(name).1.center().y;
+    // Die Gruppe steht vor der freien Skizze, ihre Skizze eingerückt darunter.
+    assert!(y("Gruppe1") < y("Skizze 1") && y("Skizze 1") < y("Skizze 2"));
+    assert!(x("Skizze 1") > x("Skizze 2") + 4.0, "eingerückt");
+    assert!(t.eye("Gruppe1").min.x < x("Gruppe1"), "Auge vor dem Namen");
+    // Zugeklappt: die Skizze der Gruppe fehlt, die Gruppe bleibt.
+    s.tree_groups_open.clear();
+    t.settle(&mut s);
+    assert!(t.row("Gruppe1").is_some());
+    assert!(t.row("Skizze 1").is_none());
+    assert!(t.row("Skizze 2").is_some());
+}

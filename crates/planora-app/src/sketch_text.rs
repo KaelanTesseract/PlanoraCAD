@@ -25,7 +25,9 @@
 //! ([`SketchSession::explode_selected_texts`]).
 
 use crate::fonts_library::Guarded;
-use crate::formula_field::{FormulaField, number_field_text, resolve, value_field_text};
+use crate::formula_field::{
+    FormulaField, number_field_text, resolve, stored_text, value_field_text,
+};
 use crate::msg::Msg;
 use crate::sketch_cursor::DrawCursor;
 use crate::sketch_draw3::{Cursor3, Hit3, Plane3, bind_new3};
@@ -33,6 +35,7 @@ use crate::sketch_state::{Item, SketchSession, Tool, err};
 use crate::sketch_triad::Triad;
 use crate::theme;
 use egui::{Key, Modifiers, RichText};
+use planora_feature::text_refs::{apply_shown, substitute};
 use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_math::{DVec2, DVec3};
@@ -249,6 +252,13 @@ pub struct TextTool {
     /// Warum die letzte Vorschau nicht gesetzt werden konnte.
     shape_error: Option<TextShapeError>,
     height_error: Option<String>,
+    /// Die Formel im Feld „Höhe“ (gespeicherter Text, Skizzen 11b); `None` bei einer Zahl.
+    pub height_formula: Option<String>,
+    /// Das Feld „Höhe“ wurde getippt: Beim Ändern gilt dann `height_formula`, sonst bleibt die
+    /// Formel des Textes, wie sie ist.
+    height_touched: bool,
+    /// Beim Ändern: Die Formel des Textes steht schon im Feld (siehe [`TextTool::show_height_formula`]).
+    height_shown: bool,
     spacing_error: Option<String>,
     angle_error: Option<String>,
     /// Die Schrift ist noch die Vorgabe und wird gewählt, sobald die Schriftliste da ist.
@@ -316,6 +326,9 @@ impl TextTool {
             shaped_for: None,
             shape_error: None,
             height_error: None,
+            height_formula: None,
+            height_touched: false,
+            height_shown: true,
             spacing_error: None,
             angle_error: None,
             font_pending: memory.is_none(),
@@ -349,6 +362,8 @@ impl TextTool {
             flip_v: d.flip_v,
         };
         tool.height_text = value_field_text(d.height, ParamUnit::Length);
+        // Die Formel des Textes zeigt `text_options`, sobald es sie kennt.
+        tool.height_shown = false;
         tool.spacing_text = number_field_text(d.style.spacing);
         match d.placement {
             TextPlacement::Box { corners, h, v, .. } => {
@@ -493,11 +508,13 @@ impl TextTool {
         ])
     }
 
-    /// Was gesetzt wird: im Rahmen der Inhalt, auf dem Pfad mit verbundenen Zeilen.
-    fn shaping_content(&self) -> String {
+    /// Was gesetzt wird: der Inhalt mit ersetzten Parametern (`{Name}`, Skizzen 11b), im Rahmen
+    /// wie er ist, auf dem Pfad mit verbundenen Zeilen.
+    fn shaping_content(&self, scope: &ParamScope) -> String {
+        let content = substitute(&self.params.content, scope).0;
         match self.kind {
-            TextToolKind::Box => self.params.content.clone(),
-            TextToolKind::Path => path_content(&self.params.content),
+            TextToolKind::Box => content,
+            TextToolKind::Path => path_content(&content),
         }
     }
 
@@ -546,14 +563,31 @@ impl TextTool {
     /// über null gilt sofort, sonst steht die Meldung unter dem Feld.
     pub fn set_height_text(&mut self, text: &str, scope: &ParamScope) {
         self.height_text = text.to_string();
+        self.height_touched = true;
+        self.height_shown = true;
         self.height_error = match resolve(text, ParamUnit::Length, scope) {
-            Ok((v, _)) if v.is_finite() && v > 0.0 => {
+            Ok((v, formula)) if v.is_finite() && v > 0.0 => {
                 self.params.height = v;
+                // Eine Formel bleibt am Text und rechnet mit (Skizzen 11b), eine Zahl nicht.
+                self.height_formula = formula;
                 None
             }
             Ok(_) => Some(tr!("sketch-text-height")),
             Err(e) => Some(e),
         };
+    }
+
+    /// Beim Ändern eines Textes mit Höhenformel: zeigt die Formel im Feld „Höhe“ (einmal; das
+    /// Feld gilt dadurch nicht als getippt). `formula` ist die gespeicherte Formel des Textes.
+    pub fn show_height_formula(&mut self, formula: Option<&str>, scope: &ParamScope) {
+        if self.height_shown {
+            return;
+        }
+        self.height_shown = true;
+        if let Some(f) = formula {
+            self.height_text = stored_text(self.params.height, Some(f), ParamUnit::Length, scope);
+            self.height_formula = Some(f.to_string());
+        }
     }
 
     /// Text des Felds „Zeichenabstand“ in Prozent, `0 ≤ p ≤ 1000`.
@@ -772,7 +806,7 @@ impl SketchSession {
         }
         if let Some(lib) = fonts {
             t.resolve_font(lib);
-            let key = (t.shaping_content(), t.params.style.clone());
+            let key = (t.shaping_content(&self.text_scope), t.params.style.clone());
             if t.shaped_for.as_ref() != Some(&key) {
                 let shaped = shape_now(lib, &key.0, &key.1);
                 t.shape_error = shaped.as_ref().err().copied();
@@ -1093,7 +1127,7 @@ impl SketchSession {
             _ => {}
         }
         t.resolve_font(lib);
-        let key = (t.shaping_content(), t.params.style.clone());
+        let key = (t.shaping_content(&self.text_scope), t.params.style.clone());
         let shaped = match (&t.shaped_for, &t.preview, t.shape_error) {
             (Some(k), Some(s), _) if *k == key => Ok(s.clone()),
             (Some(k), None, Some(e)) if *k == key => Err(e),
@@ -1111,8 +1145,9 @@ impl SketchSession {
             return self.confirm_text_edit(sf, &t, id, shape);
         }
         let tool = t.clone();
-        self.atomic(&mut sf.sketch, |se, sk, prior| {
+        let created = self.atomic(&mut sf.sketch, |se, sk, prior| {
             let params = tool.params.clone();
+            let mut made: Option<TextId> = None;
             match tool.kind {
                 // Ein Rahmen in 3D (Skizzen 10): in seiner Ebene; gefangene Ecken binden wie
                 // in 2D.
@@ -1122,6 +1157,7 @@ impl SketchSession {
                         let id = sk
                             .add_text_box3(corners, plane.normal(), params, tool.h, tool.v, shape)
                             .map_err(err)?;
+                        made = Some(id);
                         let own = match sk.text(id).map(|d| d.placement) {
                             Some(TextPlacement::Box { corners, .. }) => corners.to_vec(),
                             _ => Vec::new(),
@@ -1143,6 +1179,7 @@ impl SketchSession {
                             shape,
                         )
                         .map_err(err)?;
+                    made = Some(id);
                     let own = match sk.text(id).map(|d| d.placement) {
                         Some(TextPlacement::Box { corners, .. }) => corners.to_vec(),
                         _ => Vec::new(),
@@ -1161,14 +1198,22 @@ impl SketchSession {
                     let path = tool
                         .path
                         .ok_or_else(|| crate::msg!("sketch-text-need-path"))?;
-                    sk.add_text_path(path, params, tool.above, tool.fit, tool.h, shape)
-                        .map_err(err)?;
+                    made = Some(
+                        sk.add_text_path(path, params, tool.above, tool.fit, tool.h, shape)
+                            .map_err(err)?,
+                    );
                 }
             }
+            // Der neue Text ist aus dem ersetzten Inhalt gesetzt; das merkt er sich (Skizzen 11b).
+            apply_shown(sk, &se.text_scope);
             se.solve_checked(sk, prior)?;
             se.edit_label = Some(crate::msg!("undo-sketch-text-create"));
-            Ok(())
+            Ok(made)
         })?;
+        // Die Höhenformel gehört zum neuen Text (Skizzen 11b).
+        if let (Some(id), Some(f)) = (created, &t.height_formula) {
+            sf.text_formulas.insert(id, f.clone());
+        }
         self.text_memory.set(TextMemory::of(&t));
         let note = self.message.take();
         self.selection.clear();
@@ -1188,14 +1233,23 @@ impl SketchSession {
         id: TextId,
         shape: Arc<TextShape>,
     ) -> Result<(), String> {
-        let untouched = sf.sketch.to_data();
+        let untouched = (sf.sketch.to_data(), sf.text_formulas.clone());
         self.atomic(&mut sf.sketch, |se, sk, prior| {
             tool.apply_edit(sk, id, shape).map_err(err)?;
+            apply_shown(sk, &se.text_scope);
             se.solve_checked(sk, prior)?;
             se.edit_label = Some(crate::msg!("undo-sketch-text-edit"));
             Ok(())
         })?;
-        if sf.sketch.to_data() == untouched {
+        // Ein berührtes Feld „Höhe“ bestimmt die Formel neu (Zahl: Formel weg); ein unberührtes
+        // lässt sie, wie sie ist.
+        if tool.height_touched {
+            match &tool.height_formula {
+                Some(f) => sf.text_formulas.insert(id, f.clone()),
+                None => sf.text_formulas.remove(&id),
+            };
+        }
+        if (sf.sketch.to_data(), sf.text_formulas.clone()) == untouched {
             self.edit_label = None;
         }
         let note = self.message.take();
@@ -1321,6 +1375,9 @@ pub(crate) fn text_options(
     let Some(t) = se.text.as_mut() else {
         return;
     };
+    if let Some(id) = t.editing {
+        t.show_height_formula(sf.text_formulas.get(&id).map(String::as_str), scope);
+    }
     // Text: Enter bricht die Zeile, Strg+Enter ist OK.
     ui.label(tr!("sketch-text-content"));
     let r = theme::field(

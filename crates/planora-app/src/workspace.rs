@@ -197,6 +197,11 @@ impl DocTab {
             self.state.set_fonts(fonts.clone());
             stale = true;
         }
+        // Parameter im Text (Skizzen 11b): Nach einer Änderung der Parametertabelle zeigen die
+        // Texte neue Werte.
+        if std::mem::take(&mut self.state.texts_due) {
+            self.reshape_due = true;
+        }
         if !self.reshape_due
             || self.state.sketch_session.is_some()
             || self.tracker.is_pending(self.state.document.edit_count())
@@ -837,6 +842,9 @@ pub struct Workspace {
     /// Für „Letzten Befehl wiederholen“ (Leertaste): der zuletzt abgeschlossene Befehl, über
     /// alle Tabs.
     pub last_command: crate::commands::LastCommand,
+    /// Die Zwischenablage der Skizze (Skizzen 11b, Task 3): über Tabs und Dokumente, solange das
+    /// Programm läuft (**Annahme**: nicht in der Systemzwischenablage).
+    pub sketch_clipboard: Option<planora_feature::FeatureClip>,
     pub prompt: Option<Prompt>,
     pub quit: bool,
     /// Die Rückfrage zum Beenden kommt vom Neustart für ein Update (die App setzt das); sie
@@ -897,6 +905,7 @@ impl Workspace {
             length_unit_pending: false,
             sketch_grid_pending: false,
             last_command: Default::default(),
+            sketch_clipboard: None,
             prompt: None,
             quit: false,
             quit_for_update: false,
@@ -1574,6 +1583,26 @@ impl Workspace {
         stale
     }
 
+    /// Spiegelt, ob die Zwischenablage der Skizze gefüllt ist, in die Sitzungen der Tabs (das
+    /// Rechtsklickmenü der Skizze öffnet damit auch ohne Auswahl).
+    pub fn sync_sketch_clip_flag(&mut self) {
+        let filled = self.sketch_clipboard.is_some();
+        for t in &mut self.tabs {
+            if let Some(se) = t.state.sketch_session.as_mut() {
+                se.clip_filled = filled;
+            }
+        }
+    }
+
+    /// Führt den Eintrag des Rechtsklickmenüs der Skizze aus (Kopieren, Ausschneiden, Einfügen;
+    /// `AppState::clip_request`) und gleicht das Abbild der Zwischenablage ab. Je Bild.
+    pub fn serve_sketch_clip(&mut self) {
+        if let Some(a) = self.active_tab_mut().state.clip_request.take() {
+            crate::commands::run_action(self, a);
+        }
+        self.sync_sketch_clip_flag();
+    }
+
     /// Am Ende jedes Bildes: Änderungen aller Tabs werden Schritte ihres Verlaufs (R3, R4);
     /// `gesture` = Maustaste gedrückt oder Eingabefeld aktiv.
     pub fn observe_history(&mut self, gesture: bool) {
@@ -1803,6 +1832,10 @@ impl Workspace {
     /// kommt beim nächsten gelungenen Schreiben mit ([`Workspace::length_unit_pending`]).
     pub fn set_length_unit(&mut self, unit: planora_i18n::DisplayUnit) -> bool {
         planora_i18n::set_global_unit(unit);
+        // Parameter im Text (Skizzen 11b): Längen stehen in der Anzeigeeinheit im Text.
+        for t in &mut self.tabs {
+            t.reshape_due = true;
+        }
         let id = unit.id().to_string();
         self.config.length_unit = Some(id.clone());
         let transparency = self
@@ -1983,6 +2016,10 @@ impl Workspace {
     /// dann unangetastet. Wie [`Workspace::set_theme`].
     pub fn set_language(&mut self, lang: &planora_i18n::Lang) -> bool {
         planora_i18n::set_global(lang.clone());
+        // Parameter im Text (Skizzen 11b): Das Dezimalzeichen im Text folgt der Sprache.
+        for t in &mut self.tabs {
+            t.reshape_due = true;
+        }
         let id = lang.id().to_string();
         self.config.language = Some(id.clone());
         let transparency = self

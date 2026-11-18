@@ -232,6 +232,7 @@ fn bytes_grow() {
         plane: SketchPlane::Standard(planora_feature::StandardPlane::XY),
         copies: vec![],
         formulas: Default::default(),
+        text_formulas: Default::default(),
     };
     let mut sf_with = sf.clone();
     sf_with.formulas.insert(c, "5".into());

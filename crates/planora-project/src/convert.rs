@@ -33,13 +33,17 @@ use planora_feature::{
     Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId, SurfaceProjection, VertexRef,
     Visibility, field_keys, image_hash, step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
+use planora_feature::{
+    IsoDirection, SketchGroup, SketchGroupId, SketchGroups, SpunAxis, SpunSelection, SpunSpec,
+    TextFormulas,
+};
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DQuat, DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::comb::CombSettings;
 use planora_sketch::pattern::{CircularMode, PatternDir, PatternInstance, PatternKind};
-use planora_sketch::text::{HAlign, TextPlacement, VAlign};
+use planora_sketch::text::{HAlign, TextId, TextPlacement, VAlign};
 use planora_sketch::text_shape::TextStyle;
 use planora_sketch::{
     ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord,
@@ -50,7 +54,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 21;
+pub const FORMAT_VERSION: u32 = 22;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
@@ -61,7 +65,10 @@ const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 /// Einfügen). Ein einzelnes Bild ist zusätzlich auf `MAX_IMAGE_BYTES` begrenzt.
 const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 21
+/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 22
+/// mit einer Skizzengruppe (oder einer vergebenen Gruppenkennung), einer Höhenformel an einem
+/// Text, einem Drehprofil oder einer Isokurve ([`needs_format_22`]; ein `{Name}`-Verweis im Text
+/// zählt nicht, Korrekturrunde 1), 21
 /// mit Krümmungskamm, Gegenwinkel, Tangente am Ende oder Glatt am Ellipsenbogen in einer Skizze
 /// ([`needs_format_21`], auch in gelöschten Einträgen) oder einer Kopie mit fehlender oder
 /// dahinterstehender Quelle ([`has_lost_source`]), 20
@@ -85,7 +92,7 @@ const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
 /// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
-/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8, 9, 10 und 11a).
+/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8, 9, 10, 11a und 11b).
 pub fn required_format(s: &Snapshot) -> u32 {
     format_with(s, &profile_fields(s))
 }
@@ -95,7 +102,9 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
     // Der Ordner „Leinwände“ kann nur mit einer Leinwand ausgeblendet sein (das Dokument räumt
     // ihn mit der letzten Leinwand weg); er braucht darum keine eigene Regel.
-    if has(needs_format_21) || has_lost_source(&s.features) {
+    if has(needs_format_22) || !s.sketch_groups.is_empty() || s.sketch_groups.next != 0 {
+        22
+    } else if has(needs_format_21) || has_lost_source(&s.features) {
         21
     } else if has(needs_format_20) {
         20
@@ -147,6 +156,17 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     } else {
         1
     }
+}
+/// Braucht die Art Format 22 (Skizzen 11b)? Eine Skizze mit Höhenformel an einem Text oder einer
+/// Kopie mit Drehprofil oder Isokurve. Die Skizzengruppen prüft [`format_with`] am Snapshot.
+/// `{Name}` im Text braucht kein neues Format: Die Datenform des Textes bleibt, ältere Programme
+/// zeigen die Klammern wörtlich (Korrekturrunde 1).
+fn needs_format_22(k: &FeatureKind) -> bool {
+    matches!(k, FeatureKind::Sketch(sf) if !sf.text_formulas.is_empty()
+    || sf.copies.iter().any(|c| matches!(
+        c.source,
+        CopySource::SpunProfile(_) | CopySource::Isoparametric { .. }
+    )))
 }
 /// Braucht die Art Format 21 (Skizzen 11a)? Eine Skizze mit Krümmungskamm, Tangente am Ende,
 /// Gegenwinkel oder Glatt an einem Ellipsenbogen, auch in einem gelöschten Eintrag: Er steht in
@@ -1534,6 +1554,14 @@ fn kind_to(
                     formel: text.clone(),
                 })
                 .collect(),
+            hoehenformeln: s
+                .text_formulas
+                .iter()
+                .map(|(id, text)| TextFormulaDto {
+                    text: id.index(),
+                    formel: text.clone(),
+                })
+                .collect(),
         })),
         FeatureKind::Box { size, origin } => KindDto::Quader {
             groesse: v3(*size),
@@ -1837,6 +1865,8 @@ fn copy_to(c: &EdgeCopy) -> EdgeCopyDto {
         skizzenkurve: None,
         auf_flaeche: None,
         schnittkurve: None,
+        drehprofil: None,
+        isokurve: None,
     };
     match &c.source {
         CopySource::Edge(e) => d.kante = Some(edge_to(e)),
@@ -1861,8 +1891,154 @@ fn copy_to(c: &EdgeCopy) -> EdgeCopyDto {
         }
         CopySource::OnSurface(p) => d.auf_flaeche = Some(on_surface_to(p)),
         CopySource::Intersection(p) => d.schnittkurve = Some(intersection_to(p)),
+        CopySource::SpunProfile(p) => d.drehprofil = Some(spun_to(p)),
+        CopySource::Isoparametric {
+            face,
+            direction,
+            value,
+        } => {
+            d.isokurve = Some(IsokurveDto {
+                flaeche: face_to(face),
+                richtung: match direction {
+                    IsoDirection::U => "u",
+                    IsoDirection::V => "v",
+                }
+                .into(),
+                anteil: *value,
+            });
+        }
     }
     d
+}
+
+fn axis_ref_to(a: &AxisRef) -> AchseDto {
+    match a {
+        AxisRef::Standard(a) => AchseDto::Standard {
+            achse: axis_name(*a).into(),
+        },
+        AxisRef::Edge(e) => AchseDto::Kante { kante: edge_to(e) },
+        AxisRef::SketchLine { sketch, curve } => AchseDto::Skizzenlinie {
+            skizze: sketch.0,
+            kurve: curve.index(),
+        },
+    }
+}
+
+fn axis_ref_from(origin: &str, name: &str, d: &AchseDto) -> Result<AxisRef> {
+    Ok(match d {
+        AchseDto::Standard { achse } => AxisRef::Standard(match achse.as_str() {
+            "x" => StdAxis::X,
+            "y" => StdAxis::Y,
+            "z" => StdAxis::Z,
+            other => {
+                return Err(feature_corrupt(
+                    origin,
+                    name,
+                    tr!("proj-unknown-axis", value = quoted(other)),
+                ));
+            }
+        }),
+        AchseDto::Kante { kante } => AxisRef::Edge(edge_from(origin, name, kante)?),
+        AchseDto::Skizzenlinie { skizze, kurve } => AxisRef::SketchLine {
+            sketch: FeatureId(*skizze),
+            curve: CurveId::from_index(sketch_index(origin, name, *kurve)?),
+        },
+    })
+}
+
+fn spun_to(p: &SpunSpec) -> DrehprofilDto {
+    DrehprofilDto {
+        auswahl: match &p.selection {
+            SpunSelection::Bodies(b) => DrehauswahlDto::Koerper {
+                koerper: b.iter().map(body_to).collect(),
+            },
+            SpunSelection::Elements(e) => DrehauswahlDto::Elemente {
+                elemente: e.iter().map(curve_source_to).collect(),
+            },
+        },
+        achse: match &p.axis {
+            SpunAxis::Own(c) => DrehachseDto::Eigene { kurve: c.index() },
+            SpunAxis::Ref(a) => DrehachseDto::Bezug {
+                achse: axis_ref_to(a),
+            },
+        },
+        toleranz: p.tolerance,
+        umkehren: p.flip,
+    }
+}
+
+/// Liest ein Drehprofil (ab Format 22); die Toleranz muss positiv und endlich sein.
+fn spun_from(origin: &str, name: &str, d: &DrehprofilDto) -> Result<SpunSpec> {
+    let selection = match &d.auswahl {
+        DrehauswahlDto::Koerper { koerper } => {
+            check_len(origin, &|| tr!("proj-l-edge-copies"), koerper.len())?;
+            SpunSelection::Bodies(koerper.iter().map(body_from).collect())
+        }
+        DrehauswahlDto::Elemente { elemente } => {
+            check_len(origin, &|| tr!("proj-l-edge-copies"), elemente.len())?;
+            SpunSelection::Elements(
+                elemente
+                    .iter()
+                    .map(|s| curve_source_from(origin, name, s))
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        }
+    };
+    let axis = match &d.achse {
+        DrehachseDto::Eigene { kurve } => {
+            SpunAxis::Own(CurveId::from_index(sketch_index(origin, name, *kurve)?))
+        }
+        DrehachseDto::Bezug { achse } => SpunAxis::Ref(axis_ref_from(origin, name, achse)?),
+    };
+    let tolerance = num(
+        origin,
+        &|| field_label(name, tr!("proj-l-tolerance")),
+        d.toleranz,
+    )?;
+    if tolerance <= 0.0 {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-number-invalid",
+                what = field_label(name, tr!("proj-l-tolerance"))
+            ),
+        ));
+    }
+    Ok(SpunSpec {
+        selection,
+        axis,
+        tolerance,
+        flip: d.umkehren,
+    })
+}
+
+/// Liest eine Isokurve (ab Format 22): Richtung `u` oder `v`, Anteil endlich in 0–1.
+fn iso_from(origin: &str, name: &str, d: &IsokurveDto) -> Result<CopySource> {
+    let direction = match d.richtung.as_str() {
+        "u" => IsoDirection::U,
+        "v" => IsoDirection::V,
+        other => {
+            return Err(feature_corrupt(
+                origin,
+                name,
+                tr!("proj-unknown-iso-direction", value = quoted(other)),
+            ));
+        }
+    };
+    if !(d.anteil.is_finite() && (0.0..=1.0).contains(&d.anteil)) {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-number-invalid",
+                what = field_label(name, tr!("proj-l-iso-share"))
+            ),
+        ));
+    }
+    Ok(CopySource::Isoparametric {
+        face: face_from(origin, name, &d.flaeche)?,
+        direction,
+        value: d.anteil,
+    })
 }
 
 fn axis_name(a: StdAxis) -> &'static str {
@@ -2114,6 +2290,8 @@ fn copy_from(origin: &str, name: &str, d: &EdgeCopyDto) -> Result<EdgeCopy> {
         d.skizzenkurve.is_some(),
         d.auf_flaeche.is_some(),
         d.schnittkurve.is_some(),
+        d.drehprofil.is_some(),
+        d.isokurve.is_some(),
     ];
     if sources.iter().filter(|s| **s).count() != 1 {
         return Err(corrupt());
@@ -2141,6 +2319,10 @@ fn copy_from(origin: &str, name: &str, d: &EdgeCopyDto) -> Result<EdgeCopy> {
         CopySource::OnSurface(on_surface_from(origin, name, p)?)
     } else if let Some(p) = &d.schnittkurve {
         CopySource::Intersection(intersection_from(origin, name, p)?)
+    } else if let Some(p) = &d.drehprofil {
+        CopySource::SpunProfile(spun_from(origin, name, p)?)
+    } else if let Some(p) = &d.isokurve {
+        iso_from(origin, name, p)?
     } else {
         return Err(corrupt());
     };
@@ -2178,21 +2360,7 @@ fn plane_to(p: &PlaneFeature) -> PlaneFeatureDto {
             abstand: *distance,
         },
         PlaneDef::Angle { axis, angle } => PlaneFeatureDto::Winkel {
-            achse: match axis {
-                AxisRef::Standard(a) => AchseDto::Standard {
-                    achse: match a {
-                        StdAxis::X => "x",
-                        StdAxis::Y => "y",
-                        StdAxis::Z => "z",
-                    }
-                    .into(),
-                },
-                AxisRef::Edge(e) => AchseDto::Kante { kante: edge_to(e) },
-                AxisRef::SketchLine { sketch, curve } => AchseDto::Skizzenlinie {
-                    skizze: sketch.0,
-                    kurve: curve.index(),
-                },
-            },
+            achse: axis_ref_to(axis),
             winkel: *angle,
         },
         PlaneDef::Mid { a, b } => PlaneFeatureDto::Mitte {
@@ -2344,6 +2512,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto, dissolved: &mut usize) -> Re
             let (sketch, n) = sketch_from(origin, name, &s.skizze)?;
             *dissolved += n;
             let formulas = sketch_formulas_from(origin, name, s, &sketch)?;
+            let text_formulas = text_formulas_from(origin, name, s, &sketch)?;
             let mut sf = SketchFeature {
                 sketch,
                 plane: match base_from(origin, name, &s.lage)? {
@@ -2357,6 +2526,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto, dissolved: &mut usize) -> Re
                     .map(|c| copy_from(origin, name, c))
                     .collect::<Result<Vec<_>>>()?,
                 formulas,
+                text_formulas,
             };
             // Eine Projektion, deren Kurve in der Skizze nicht mehr lebt, ist tot und fällt beim
             // Laden weg (wie beim Bearbeiten).
@@ -2548,6 +2718,141 @@ fn sketch_formulas_from(
         }
     }
     Ok(out)
+}
+
+/// Höhenformeln der Texte einer Skizze (ab Format 22): nur an lebenden Texten (Index in
+/// `texte`), jeder Text höchstens einmal.
+fn text_formulas_from(
+    origin: &str,
+    feature: &str,
+    d: &SketchFeatureDto,
+    sketch: &Sketch,
+) -> Result<TextFormulas> {
+    let bad =
+        |m: &str| ProjectError::corrupt(origin, tr!("proj-ctx-feature", name = feature, msg = m));
+    let mut out = TextFormulas::new();
+    for f in &d.hoehenformeln {
+        // Erst gegen die Länge der Liste prüfen: `from_index` schneidet sonst große Zahlen ab.
+        if f.text >= d.skizze.texte.len() {
+            return Err(bad(&tr!("proj-text-formula-missing-text")));
+        }
+        let id = TextId::from_index(f.text);
+        if sketch.text(id).is_none() {
+            return Err(bad(&tr!("proj-text-formula-missing-text")));
+        }
+        let text = formula_from(origin, &tr!("proj-w-quoted", name = feature), &f.formel)?;
+        if out.insert(id, text).is_some() {
+            return Err(bad(&tr!("proj-text-formula-twice")));
+        }
+    }
+    Ok(out)
+}
+
+/// Liest die Skizzengruppen (ab Format 22): Kennungen eindeutig, die übergeordnete Gruppe steht
+/// in der Datei (ohne Kreis), jede genannte Skizze ist ein Skizzen-Feature der Datei und steht
+/// in höchstens einer Gruppe. Die nächste Kennung (`naechste_gruppe`) ist mindestens größte + 1;
+/// fehlt sie, ist sie größte + 1 (ohne Gruppen 0).
+fn sketch_groups_from(origin: &str, file: &VersionFile) -> Result<SketchGroups> {
+    let bad = |m: String| ProjectError::corrupt(origin, m);
+    let sketches: HashSet<u64> = file
+        .features
+        .iter()
+        .filter(|f| matches!(f.art, KindDto::Skizze(_)))
+        .map(|f| f.id)
+        .collect();
+    let mut out = SketchGroups::default();
+    let mut parent_of: HashMap<u64, Option<u64>> = HashMap::new();
+    for g in &file.skizzengruppen {
+        if parent_of.insert(g.kennung, g.eltern).is_some() {
+            return Err(bad(tr!(
+                "proj-sketch-group-twice",
+                id = g.kennung.to_string()
+            )));
+        }
+    }
+    for g in &file.skizzengruppen {
+        // Der Weg nach oben muss nach höchstens so vielen Schritten, wie es Gruppen gibt, oben
+        // ankommen; sonst fehlt eine Gruppe oder es gibt einen Kreis.
+        let mut at = g.eltern;
+        let mut steps = 0;
+        while let Some(p) = at {
+            match parent_of.get(&p) {
+                Some(next) if steps < parent_of.len() && p != g.kennung => {
+                    at = *next;
+                    steps += 1;
+                }
+                _ => {
+                    return Err(bad(tr!(
+                        "proj-sketch-group-parent",
+                        id = g.kennung.to_string()
+                    )));
+                }
+            }
+        }
+        check_len(origin, &|| tr!("proj-l-sketch-groups"), g.skizzen.len())?;
+        for s in &g.skizzen {
+            if !sketches.contains(s) {
+                return Err(bad(tr!(
+                    "proj-sketch-group-not-sketch",
+                    id = g.kennung.to_string(),
+                    feature = s.to_string()
+                )));
+            }
+            if out
+                .member
+                .insert(FeatureId(*s), SketchGroupId(g.kennung))
+                .is_some()
+            {
+                return Err(bad(tr!(
+                    "proj-sketch-group-member-twice",
+                    feature = s.to_string()
+                )));
+            }
+        }
+        out.groups.push(SketchGroup {
+            id: SketchGroupId(g.kennung),
+            name: g.name.clone(),
+            parent: g.eltern.map(SketchGroupId),
+            hidden: g.aus,
+        });
+    }
+    let min = match out.groups.iter().map(|g| g.id.0).max() {
+        Some(m) => m
+            .checked_add(1)
+            .ok_or_else(|| bad(tr!("proj-sketch-group-id-max")))?,
+        None => 0,
+    };
+    out.next = match file.naechste_gruppe {
+        0 => min,
+        n if n < min => {
+            return Err(bad(tr!(
+                "proj-sketch-group-next-small",
+                next = n.to_string(),
+                min = min.to_string()
+            )));
+        }
+        n => n,
+    };
+    Ok(out)
+}
+
+/// Skizzengruppen für die Datei, in Browser-Reihenfolge; die Skizzen je Gruppe aufsteigend.
+fn sketch_groups_to(g: &SketchGroups) -> Vec<SkizzengruppeDto> {
+    g.groups
+        .iter()
+        .map(|grp| SkizzengruppeDto {
+            kennung: grp.id.0,
+            name: grp.name.clone(),
+            eltern: grp.parent.map(|p| p.0),
+            aus: grp.hidden,
+            skizzen: g
+                .member
+                .iter()
+                .filter(|(_, m)| **m == grp.id)
+                .map(|(f, _)| f.0)
+                .collect(),
+        })
+        .collect()
 }
 
 /// Formeln der Zahlenfelder eines Features: bekannte Schlüssel, die die Art auch hat.
@@ -3712,6 +4017,15 @@ fn mb_text(bytes: usize) -> String {
 /// JSON-Text einer Versionsdatei. Enthält der Snapshot eine nicht endliche Zahl, ist das ein
 /// Fehler (das Dokument wird dann nicht geschrieben).
 pub fn encode_version(s: &Snapshot) -> Result<String> {
+    // Skizzengruppen müssen stimmig sein: Eine Zuordnung zu einer unbekannten Gruppe fiele beim
+    // Schreiben still weg, eine zu einer fehlenden Skizze ließe sich nicht mehr laden.
+    s.sketch_groups
+        .check(&|f| {
+            s.features
+                .iter()
+                .any(|x| x.id == f && matches!(x.kind, FeatureKind::Sketch(_)))
+        })
+        .map_err(|e| ProjectError::Invalid(tr!("proj-invalid-values", msg = e.to_string())))?;
     let profiles = profile_fields(s);
     let format = format_with(s, &profiles);
     let (step_formen, forms) = step_forms_to(s);
@@ -3771,6 +4085,8 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
             s.next_drawing
         },
         projektangaben: s.project_info.as_ref().map(project_to),
+        skizzengruppen: sketch_groups_to(&s.sketch_groups),
+        naechste_gruppe: s.sketch_groups.next,
         stueckliste: overrides_to(&s.parts_overrides),
         parameter: s.parameters.iter().map(parameter_to).collect(),
         // Der Zähler steht nur mit Parametern in der Datei (ohne fehlt er, alte Dateien bleiben
@@ -3858,6 +4174,19 @@ fn has_format_21_data(k: &KindDto) -> bool {
                     _ => false,
                 }
         })
+}
+
+/// Inhalt aus Format 22 in einer Feature-Art der Datei (Gegenstück zu [`needs_format_22`]):
+/// Höhenformel, Drehprofil oder Isokurve. Die Skizzengruppen prüft [`decode_version`] an der
+/// Datei.
+fn has_format_22_data(k: &KindDto) -> bool {
+    let KindDto::Skizze(s) = k else {
+        return false;
+    };
+    !s.hoehenformeln.is_empty()
+        || s.kopien
+            .iter()
+            .any(|c| c.drehprofil.is_some() || c.isokurve.is_some())
 }
 
 /// 3D-Geometrie in einer Skizze der Datei (Gegenstück zu [`needs_format_20`]).
@@ -4112,7 +4441,22 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             ),
         ));
     }
+    if file.format < 22
+        && (!file.skizzengruppen.is_empty()
+            || file.naechste_gruppe != 0
+            || file.features.iter().any(|f| has_format_22_data(&f.art)))
+    {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-sketch-transfer"),
+                format = "22"
+            ),
+        ));
+    }
     let visibility = visibility_from(file.sichtbarkeit.as_ref());
+    let sketch_groups = sketch_groups_from(origin, &file)?;
     let rollbacks = rollbacks_from(origin, &file)?;
     let (parameters, next_param) = parameters_from(origin, &file)?;
     let parts_overrides = overrides_from(origin, &file.stueckliste)?;
@@ -4211,6 +4555,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         rollbacks,
         images,
         dissolved_patterns,
+        sketch_groups,
     })
 }
 

@@ -3,6 +3,7 @@
 pub(crate) mod arrangement;
 pub mod blend;
 pub mod check;
+pub mod clipboard;
 pub mod comb;
 pub mod constraint;
 pub(crate) mod constraint3d;
@@ -47,6 +48,7 @@ pub mod transform;
 pub mod triangulate;
 
 pub use check::{CheckItem, SketchStatus};
+pub use clipboard::{ClipSet, Extracted};
 pub use constraint::{
     Axis3, ConstraintData, ConstraintId, ConstraintKind, Evaluation, FixToggle, LineOrPoints,
 };

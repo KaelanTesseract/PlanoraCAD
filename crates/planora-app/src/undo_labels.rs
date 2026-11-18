@@ -21,6 +21,7 @@ pub fn describe_change(before: &Snapshot, after: &Snapshot) -> String {
     parameters(before, after)
         .or_else(|| features(before, after))
         .or_else(|| drawings(before, after))
+        .or_else(|| sketch_groups(before, after))
         .or_else(|| (before.project_info != after.project_info).then_some(tr!("undo-sheet-info")))
         .or_else(|| {
             (before.parts_overrides != after.parts_overrides).then_some(tr!("undo-parts-text"))
@@ -51,6 +52,40 @@ fn parameters(before: &Snapshot, after: &Snapshot) -> Option<String> {
     }
     (before.parameters != after.parameters || before.next_param != after.next_param)
         .then_some(tr!("undo-param-change"))
+}
+
+/// Skizzengruppen (Skizzen 11b): eine neue Gruppe „Gruppe erstellen“, eine fehlende „Gruppe
+/// auflösen“ (auch „Löschen“), ein anderer Name „Gruppe umbenennen“, ein anderes Auge „Gruppe
+/// ein-/ausblenden“, sonst (Zuordnung oder übergeordnete Gruppe) „In Gruppe verschieben“.
+fn sketch_groups(before: &Snapshot, after: &Snapshot) -> Option<String> {
+    let (b, a) = (&before.sketch_groups, &after.sketch_groups);
+    if b == a {
+        return None;
+    }
+    fn find(
+        list: &[planora_feature::SketchGroup],
+        id: planora_feature::SketchGroupId,
+    ) -> Option<&planora_feature::SketchGroup> {
+        list.iter().find(|g| g.id == id)
+    }
+    if a.groups.iter().any(|g| find(&b.groups, g.id).is_none()) {
+        return Some(tr!("undo-group-create"));
+    }
+    if b.groups.iter().any(|g| find(&a.groups, g.id).is_none()) {
+        return Some(tr!("undo-group-ungroup"));
+    }
+    let pairs = || {
+        b.groups
+            .iter()
+            .filter_map(|x| find(&a.groups, x.id).map(|y| (x, y)))
+    };
+    if pairs().any(|(x, y)| x.name != y.name) {
+        return Some(tr!("undo-group-rename"));
+    }
+    if pairs().any(|(x, y)| x.hidden != y.hidden) {
+        return Some(tr!("undo-group-visibility"));
+    }
+    Some(tr!("undo-group-move"))
 }
 
 fn has(list: &[SnapshotFeature], f: &SnapshotFeature) -> bool {

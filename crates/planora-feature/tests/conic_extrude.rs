@@ -33,6 +33,7 @@ fn extrude_a_parabola_profile_has_the_exact_volume() {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

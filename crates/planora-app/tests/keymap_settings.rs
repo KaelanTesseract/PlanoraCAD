@@ -1101,3 +1101,47 @@ fn look_at_grid_and_snap_can_be_bound_and_are_saved() {
         assert_eq!(km.bindings(a), [chord(k, false, false, false)]);
     }
 }
+
+#[test]
+fn capturing_counts_the_clipboard_events_as_ctrl_c_x_v() {
+    // Skizzen 11b: egui macht aus Strg+C/X/V keine Tasten, sondern Copy/Cut/Paste; beim Erfassen
+    // zählen sie als diese Tasten (hier kollidiert Strg+C mit „Kopieren“ der Skizze).
+    for (event, key, other) in [
+        (Event::Copy, Key::C, Action::SketchCopy),
+        (Event::Cut, Key::X, Action::SketchCut),
+        (Event::Paste("x".into()), Key::V, Action::SketchPaste),
+    ] {
+        let mut r = rig();
+        r.filter(&Action::Save.label());
+        r.click(&change(), 0);
+        assert_eq!(r.state().capturing, Some((Action::Save, 0)));
+        r.frame_with(vec![event], CTRL);
+        r.settle();
+        assert_eq!(r.state().capturing, None);
+        let want = chord(key, true, false, false);
+        assert!(
+            matches!(r.state().pending_conflict, Some((Action::Save, 0, b, o)) if b == want && o == other),
+            "{key:?}: {:?}",
+            r.state().pending_conflict
+        );
+    }
+}
+
+#[test]
+fn capturing_ctrl_shift_c_is_not_plain_ctrl_c() {
+    let mut r = rig();
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
+    let ctrl_shift = Modifiers {
+        shift: true,
+        ..CTRL
+    };
+    r.frame_with(vec![Event::Copy], ctrl_shift);
+    r.settle();
+    assert_eq!(r.state().capturing, None);
+    // Keine Doppelbelegung mit Strg+C: die Belegung ist Strg+Umschalt+C.
+    assert_eq!(
+        r.km().bindings(Action::Save),
+        &[chord(Key::C, true, true, false)]
+    );
+}

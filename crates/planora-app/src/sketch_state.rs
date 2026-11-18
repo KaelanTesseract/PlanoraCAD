@@ -169,6 +169,10 @@ pub struct TransformState {
     pub selection_before: Vec<Item>,
     /// `message` sagt gerade, dass die Bewegung nicht geht ([`SketchSession::update_transform_block`]).
     pub blocked_note: bool,
+    /// Das Werkzeug wurde vom Einfügen geöffnet (Skizzen 11b, Spec-Entscheidung 5): Die Kopie
+    /// steht schon als Schritt „Einfügen“; bestätigt das Verschieben, ersetzt es dessen Bild
+    /// ([`SketchSession::replace_step`]), statt einen zweiten Schritt anzulegen.
+    pub pasted: bool,
 }
 
 impl Default for TransformState {
@@ -188,6 +192,7 @@ impl Default for TransformState {
             whole: false,
             selection_before: Vec::new(),
             blocked_note: false,
+            pasted: false,
         }
     }
 }
@@ -397,6 +402,8 @@ pub struct CurveDrag {
     pub(crate) anchors: Vec<PointId>,
     /// Zug am Rho-Griff: ändert nur das Rho des Kegelschnitts.
     pub(crate) rho: Option<crate::sketch_handles::RhoGrab>,
+    /// Zug am Drehgriff eines Textes (Skizzen 11b): dreht den Rahmen um Ecke 0.
+    pub(crate) text_rot: Option<crate::sketch_handles::TextRotGrab>,
     /// Griffzug am Stützpunkt (der erste in `start`): Die übrigen Punkte gehen um das mit, was er
     /// wirklich schafft ([`carry_frame`](crate::sketch_handles::carry_frame)).
     pub(crate) carry: bool,
@@ -432,6 +439,7 @@ impl CurveDrag {
             rim: None,
             anchors: Vec::new(),
             rho: None,
+            text_rot: None,
             carry: false,
             before: None,
             activates: false,
@@ -605,6 +613,14 @@ pub struct SketchSession {
     /// Name des nächsten Schritts für Rückgängig, wenn ein Werkzeug ihn besser kennt als der
     /// Vergleich der Stände (Stutzen, Dehnen, Brechen); der Verlauf nimmt und leert ihn.
     pub edit_label: Option<Msg>,
+    /// Das nächste Bild der Skizze ersetzt das aktuelle des Verlaufs, statt einen Schritt
+    /// anzulegen (bestätigtes Verschieben nach dem Einfügen); [`AppState::observe_sketch`]
+    /// nimmt und leert es.
+    pub replace_step: bool,
+    /// Die Zwischenablage der Skizze ist gefüllt (Abbild von `Workspace::sketch_clipboard`, je
+    /// Bild und nach jedem Kopieren abgeglichen); das Rechtsklickmenü öffnet damit auch ohne
+    /// Auswahl, um einzufügen.
+    pub clip_filled: bool,
     /// Rechtsklickmenü der gewählten Kurve (Skizzen 11a): Bildschirmlage, an der es steht; nicht
     /// Teil des Dokuments. Esc, ein Klick daneben oder ein Werkzeugwechsel schließen es.
     pub curve_menu: Option<(f32, f32)>,
@@ -694,6 +710,10 @@ pub struct SketchSession {
     /// dem Arbeitsbereich ([`crate::state::AppState::share_text_memory`]): Sie gelten für den
     /// Programmlauf, über das Ende der Sitzung und über alle Tabs hinweg.
     pub text_memory: crate::sketch_text::TextMemoryShare,
+    /// Die Parameter des Dokuments beim Öffnen (Skizzen 11b, Parameter im Text): Das Werkzeug
+    /// „Text“ setzt damit den ersetzten Inhalt. Bei offener Skizze ändert sich die
+    /// Parametertabelle nicht (gesperrt), der Stand bleibt also gültig.
+    pub text_scope: ParamScope,
 }
 
 /// Die Skizze vor dem ersten Klick eines laufenden Befehls und ihr Stand nach seinem letzten
@@ -826,6 +846,8 @@ impl SketchSession {
             history_jumps: 0,
             hover_preview: None,
             edit_label: None,
+            replace_step: false,
+            clip_filled: false,
             curve_menu: None,
             relink: None,
             triad: Default::default(),
@@ -858,6 +880,7 @@ impl SketchSession {
             constraint_last: None,
             text: None,
             text_memory: Default::default(),
+            text_scope: ParamScope::default(),
         }
     }
 
@@ -865,7 +888,13 @@ impl SketchSession {
     /// wie mit [`end_drag`](Self::end_drag) beendet, auch ein Griffzug. Nur der erste Zug, der einen
     /// Griff erst einschaltet, geht ganz zurück: Er bleibt nie halb stehen.
     pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
-        if self.curve_drag.as_ref().is_some_and(|d| d.activates) {
+        // Auch der Zug am Drehgriff eines Textes geht ganz zurück: Ein Werkzeugwechsel hinterlässt
+        // nichts. (Der Rho-Griff bleibt ein gewöhnlicher Zug, siehe `a_tool_change_takes_over_the_rho_drag`.)
+        if self
+            .curve_drag
+            .as_ref()
+            .is_some_and(|d| d.activates || d.text_rot.is_some())
+        {
             self.abort_handle_drag(sk);
         }
         self.end_drag(sk);
@@ -2470,6 +2499,17 @@ impl SketchSession {
         self.cursor = Some(at);
         let before = sk.clone();
         let result = match (drag.rim, drag.rho) {
+            _ if drag.text_rot.is_some() => {
+                let Some(grab) = drag.text_rot else { return };
+                let r = crate::sketch_handles::text_rotate_frame(sk, grab, at);
+                if let Err(SketchError::InvalidInput(m)) = &r {
+                    // Eine Abhängigkeit hält den Winkel: Die Meldung sagt es, der Text bleibt.
+                    self.message = Some(err(m));
+                    *sk = before;
+                    return;
+                }
+                r
+            }
             (Some((c, offset)), _) => {
                 let center = sk.curve(c).and_then(|d| match d.kind {
                     CurveKind::Circle { center, .. } => sk.point_xy(center).ok(),
@@ -3624,11 +3664,19 @@ impl SketchSession {
         }
     }
 
-    /// Rechtsklick in der Zeichnung an der Bildschirmlage `at`: Im Auswahlwerkzeug mit gewählter
-    /// Kurve öffnet er das Menü ([`curve_menu`](Self::curve_menu)), sonst bricht er wie bisher ab.
+    /// Rechtsklick in der Zeichnung an der Bildschirmlage `at`: Im Auswahlwerkzeug mit Auswahl
+    /// (Kurven, Punkte) oder mit gefüllter Zwischenablage öffnet er das Menü
+    /// ([`curve_menu`](Self::curve_menu): Kopieren, Ausschneiden, Einfügen, Krümmungsanzeige),
+    /// sonst bricht er wie bisher ab.
     pub fn secondary_click(&mut self, sk: &mut Sketch, at: (f32, f32)) {
-        let curve_selected = self.selection.iter().any(|i| matches!(i, Item::Curve(_)));
-        if self.tool == Tool::Select && curve_selected && !self.in_gesture() && !self.is_dragging()
+        let selected = self
+            .selection
+            .iter()
+            .any(|i| matches!(i, Item::Curve(_) | Item::Point(_)));
+        if self.tool == Tool::Select
+            && (selected || self.clip_filled)
+            && !self.in_gesture()
+            && !self.is_dragging()
         {
             self.curve_menu = Some(at);
         } else {

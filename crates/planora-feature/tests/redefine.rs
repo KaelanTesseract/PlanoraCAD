@@ -53,6 +53,7 @@ fn add_rect_sketch(d: &mut Document, plane: SketchPlane) -> FeatureId {
             plane,
             copies: vec![],
             formulas: Default::default(),
+            text_formulas: Default::default(),
         }),
     )
     .unwrap()
@@ -222,6 +223,7 @@ fn redefine_reprojects_copies() {
                     source: CopySource::Edge(edge),
                 }],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

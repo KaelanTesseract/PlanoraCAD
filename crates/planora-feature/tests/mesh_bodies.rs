@@ -324,6 +324,7 @@ fn mesh_bodies_cannot_be_edited_by_other_features() {
             plane: SketchPlane::OnFace(face),
             copies: vec![],
             formulas: Default::default(),
+            text_formulas: Default::default(),
         }),
     ];
     for kind in kinds {

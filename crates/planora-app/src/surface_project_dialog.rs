@@ -13,9 +13,11 @@
 
 use crate::browser::error_color;
 use crate::dialog::{Dialog, DialogSize};
+use crate::isoparametric_dialog::IsoDialog;
 use crate::msg::Msg;
 use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::Tool;
+use crate::spun_profile_dialog::SpunProfileDialog;
 use crate::state::{AppState, IncludePick};
 use planora_feature::planes::StdAxis;
 use planora_feature::surface_project::{
@@ -159,6 +161,10 @@ impl Picks {
 pub enum SurfaceDialog {
     Project(SurfaceProjectDialog),
     Intersection(IntersectionCurveDialog),
+    /// „Drehprofil“ (Skizzen 11b).
+    Spun(SpunProfileDialog),
+    /// „Isoparametrische Kurve“ (Skizzen 11b).
+    Iso(IsoDialog),
 }
 
 // ---- Öffnen, Klicks, Zeigen -----------------------------------------------------------------------
@@ -183,6 +189,8 @@ pub fn sync(state: &mut AppState) {
             ToolKind::IntersectionCurve => {
                 SurfaceDialog::Intersection(IntersectionCurveDialog::new())
             }
+            ToolKind::SpunProfile => SurfaceDialog::Spun(SpunProfileDialog::default()),
+            ToolKind::Isoparametric => SurfaceDialog::Iso(IsoDialog::default()),
             _ => SurfaceDialog::Project(SurfaceProjectDialog::new()),
         });
     }
@@ -223,6 +231,12 @@ pub fn refuse(state: &mut AppState) {
         Some(SurfaceDialog::Intersection(d)) => {
             d.error = Some(crate::msg!("sketch-pick-intersection-curve"));
         }
+        Some(SurfaceDialog::Spun(d)) => {
+            d.error = Some(crate::msg!("sketch-pick-spun-profile"));
+        }
+        Some(SurfaceDialog::Iso(d)) => {
+            d.error = Some(crate::msg!("iso-pick-face"));
+        }
         None => {}
     }
 }
@@ -255,6 +269,8 @@ impl SurfaceDialog {
         match self {
             SurfaceDialog::Project(_) => ToolKind::ProjectToSurface,
             SurfaceDialog::Intersection(_) => ToolKind::IntersectionCurve,
+            SurfaceDialog::Spun(_) => ToolKind::SpunProfile,
+            SurfaceDialog::Iso(_) => ToolKind::Isoparametric,
         }
     }
 
@@ -263,6 +279,8 @@ impl SurfaceDialog {
         match self {
             SurfaceDialog::Project(d) => d.take_pick(state, pick),
             SurfaceDialog::Intersection(d) => d.take_pick(state, pick),
+            SurfaceDialog::Spun(d) => d.take_pick(state, pick),
+            SurfaceDialog::Iso(d) => d.take_pick(state, pick),
         }
     }
 
@@ -271,6 +289,8 @@ impl SurfaceDialog {
         match self {
             SurfaceDialog::Project(d) => d.show(ctx, state),
             SurfaceDialog::Intersection(d) => d.show(ctx, state),
+            SurfaceDialog::Spun(d) => d.show(ctx, state),
+            SurfaceDialog::Iso(d) => d.show(ctx, state),
         }
     }
 
@@ -279,6 +299,8 @@ impl SurfaceDialog {
         match self {
             SurfaceDialog::Project(d) => d.marks(),
             SurfaceDialog::Intersection(d) => d.marks(),
+            SurfaceDialog::Spun(d) => d.marks(),
+            SurfaceDialog::Iso(d) => d.marks(),
         }
     }
 }
@@ -307,7 +329,11 @@ fn refuse_active(state: &AppState, pick: &IncludePick) -> Result<(), Msg> {
 }
 
 /// Die Kurve `curve` der früheren Skizze `sketch` muss es geben.
-fn existing_curve(state: &AppState, sketch: FeatureId, curve: CurveId) -> Result<(), Msg> {
+pub(crate) fn existing_curve(
+    state: &AppState,
+    sketch: FeatureId,
+    curve: CurveId,
+) -> Result<(), Msg> {
     state
         .document
         .sketch_of(sketch)
@@ -330,7 +356,7 @@ fn face_target(state: &AppState, pick: IncludePick) -> Result<FaceTarget, Msg> {
 }
 
 /// Feld „Kurven“: Kurve einer früheren Skizze (nie der aktiven), Körperkante oder -ecke.
-fn curve_source(state: &AppState, pick: IncludePick) -> Result<CurveSource, Msg> {
+pub(crate) fn curve_source(state: &AppState, pick: IncludePick) -> Result<CurveSource, Msg> {
     refuse_active(state, &pick)?;
     if !matches!(
         pick,
@@ -449,7 +475,7 @@ fn sketch_curve_2d(
 
 // ---- Anzeige ------------------------------------------------------------------------------------
 
-fn feature_name(state: &AppState, id: FeatureId) -> String {
+pub(crate) fn feature_name(state: &AppState, id: FeatureId) -> String {
     state
         .document
         .feature(id)
@@ -472,7 +498,7 @@ fn face_label(state: &AppState, r: &FaceRef) -> String {
     )
 }
 
-fn edge_label(state: &AppState, e: &EdgeRef) -> String {
+pub(crate) fn edge_label(state: &AppState, e: &EdgeRef) -> String {
     tr!(
         "plane-value-edge",
         name = feature_name(state, FeatureId(e.a.origin))
@@ -493,7 +519,7 @@ fn face_target_label(state: &AppState, t: &FaceTarget) -> String {
     }
 }
 
-fn curve_source_label(state: &AppState, c: &CurveSource) -> String {
+pub(crate) fn curve_source_label(state: &AppState, c: &CurveSource) -> String {
     match c {
         CurveSource::SketchCurve { sketch, .. } => sketch_curve_label(state, *sketch),
         CurveSource::Edge(e) => edge_label(state, e),
@@ -529,7 +555,7 @@ fn direction_label(state: &AppState, d: &DirectionSource) -> String {
 }
 
 /// Text eines Mehrfachfelds: „Auswählen“ oder die Zahl der gewählten Dinge.
-fn count_text(n: usize) -> String {
+pub(crate) fn count_text(n: usize) -> String {
     if n == 0 {
         tr!("surface-select")
     } else {
@@ -603,7 +629,7 @@ pub(crate) fn keys(ui: &egui::Ui, ready: bool) -> (bool, bool) {
 
 /// Fehlermeldung nach einem abgelehnten OK: die Meldung der Sitzung, sonst der Text. Sie steht
 /// danach nur im Dialog, nicht zusätzlich in der Skizzenpalette (Task H3).
-fn session_error(state: &mut AppState, text: String) -> Msg {
+pub(crate) fn session_error(state: &mut AppState, text: String) -> Msg {
     state
         .sketch_session
         .as_mut()
@@ -612,7 +638,7 @@ fn session_error(state: &mut AppState, text: String) -> Msg {
 }
 
 /// Abschluss eines Bilds: OK legt an (bei Erfolg zu), Abbrechen schließt ohne Spur.
-fn outcome(
+pub(crate) fn outcome(
     state: &mut AppState,
     ok: bool,
     cancel: bool,

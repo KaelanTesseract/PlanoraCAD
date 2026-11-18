@@ -1,0 +1,745 @@
+//! Skizzen 11b, Task 11: Parameter im Text. `{Name}` im Inhalt eines Skizzentextes wird durch den
+//! Wert des Parameters ersetzt (Länge in der Dokumenteinheit, ohne Einheitenzeichen); der Text
+//! hält den Rohinhalt, die Kurven entstehen aus dem gezeigten Inhalt (`TextData::shown`, nur zur
+//! Laufzeit). Ersetzt und neu gesetzt wird in [`Document::reshape_texts`]; die Neuberechnung
+//! prüft nur die Verweise und warnt.
+//!
+//! Gesetzt wird mit den mitgelieferten Schriften ([`FontLibrary::bundled_only`]).
+
+use planora_feature::text_refs::{apply_shown, param_refs, rename_refs, substitute};
+use planora_feature::*;
+use planora_i18n::{DisplayUnit, english, german, tr, with_lang, with_unit};
+use planora_math::{DVec2, Frame, Tolerance};
+use planora_sketch::model::Sketch;
+use planora_sketch::text::{HAlign, TextId, TextParams, VAlign};
+use planora_sketch::text_shape::{TextShaper, TextStyle};
+use planora_text::FontLibrary;
+use std::sync::Arc;
+
+fn style() -> TextStyle {
+    TextStyle {
+        font: "Montserrat".into(),
+        bold: false,
+        italic: false,
+        spacing: 0.0,
+    }
+}
+
+/// Text `content` (gesetzt, wie getippt) im Rahmen (0, 0)–(80, 10), Höhe 5.
+fn add_text(sk: &mut Sketch, content: &str, shaper: &dyn TextShaper) -> TextId {
+    let shape = shaper.shape(content, &style()).unwrap();
+    sk.add_text_box(
+        DVec2::new(0.0, 0.0),
+        DVec2::new(80.0, 10.0),
+        TextParams {
+            content: content.into(),
+            style: style(),
+            height: 5.0,
+            flip_h: false,
+            flip_v: false,
+        },
+        HAlign::Left,
+        VAlign::Bottom,
+        Arc::new(shape),
+    )
+    .unwrap()
+}
+
+fn sketch_kind(sketch: Sketch) -> FeatureKind {
+    FeatureKind::Sketch(SketchFeature {
+        sketch,
+        plane: SketchPlane::Standard(StandardPlane::XY),
+        copies: vec![],
+        formulas: Default::default(),
+        text_formulas: Default::default(),
+    })
+}
+
+fn sketch_def(d: &Document, s: FeatureId) -> &SketchFeature {
+    match &d.feature(s).unwrap().kind {
+        FeatureKind::Sketch(sf) => sf,
+        k => panic!("keine Skizze: {k:?}"),
+    }
+}
+
+fn length(d: &mut Document, name: &str, formula: &str) -> ParamId {
+    d.add_parameter(name, formula, ParamUnit::Length, "")
+        .unwrap()
+}
+
+/// Dokument mit Parameter `Breite` = `breite` und einer Skizze mit dem Text `content`.
+fn doc(breite: &str, content: &str, lib: &FontLibrary) -> (Document, ParamId, FeatureId, TextId) {
+    let mut d = Document::new();
+    let p = length(&mut d, "Breite", breite);
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let t = add_text(&mut sk, content, lib);
+    let s = d.add_feature("Skizze 1", sketch_kind(sk)).unwrap();
+    (d, p, s, t)
+}
+
+fn shown(d: &Document, s: FeatureId, t: TextId) -> Option<String> {
+    sketch_def(d, s).sketch.text(t).unwrap().shown.clone()
+}
+
+/// Lage aller Punkte des Textes in der Definition.
+fn text_points(sk: &Sketch, t: TextId) -> Vec<DVec2> {
+    sk.text(t)
+        .unwrap()
+        .points
+        .iter()
+        .map(|p| sk.point_xy(*p).unwrap())
+        .collect()
+}
+
+/// Die Punkte eines unmittelbar mit `content` gesetzten Textes der Höhe `height`.
+fn reference_points(content: &str, height: f64, lib: &FontLibrary) -> Vec<DVec2> {
+    let mut sk = Sketch::new(Frame::WORLD, "Vergleich", Tolerance::default());
+    let t = add_text(&mut sk, content, lib);
+    if height != 5.0 {
+        sk.set_text_height(t, height).unwrap();
+    }
+    text_points(&sk, t)
+}
+
+fn same_points(a: &[DVec2], b: &[DVec2]) {
+    assert_eq!(a.len(), b.len(), "gleich viele Punkte");
+    for (x, y) in a.iter().zip(b) {
+        assert!((*x - *y).length() < 1e-9, "{x:?} statt {y:?}");
+    }
+}
+
+#[test]
+fn param_refs_in_order() {
+    assert_eq!(
+        param_refs("{Breite} x {hoehe} {} {1a} {a b} {Breite}"),
+        vec!["Breite".to_string(), "hoehe".into(), "Breite".into()]
+    );
+    assert!(param_refs("ohne Klammern").is_empty());
+    assert_eq!(param_refs("{{Tiefe}}"), vec!["Tiefe".to_string()]);
+}
+
+#[test]
+fn breite_mm_text() {
+    let lib = FontLibrary::bundled_only();
+    for (lang, want) in [(german(), "20,00 mm"), (english(), "20.00 mm")] {
+        with_lang(&lang, || {
+            let (mut d, _, s, t) = doc("20", "{Breite} mm", &lib);
+            assert!(d.reshape_texts(&lib));
+            assert_eq!(shown(&d, s, t).as_deref(), Some(want));
+            let sk = &sketch_def(&d, s).sketch;
+            // Der Rohinhalt bleibt; die Kurven sind die des gezeigten Inhalts.
+            assert_eq!(sk.text(t).unwrap().content, "{Breite} mm");
+            same_points(&text_points(sk, t), &reference_points(want, 5.0, &lib));
+            assert_eq!(d.feature(s).unwrap().status, FeatureStatus::Ok);
+            assert!(d.feature(s).unwrap().warning().is_none());
+            // Ein zweites Neusetzen ändert nichts.
+            assert!(!d.reshape_texts(&lib));
+        });
+    }
+}
+
+#[test]
+fn inch_unit_shows_inch_value() {
+    with_lang(&german(), || {
+        with_unit(DisplayUnit::Zoll, || {
+            let mut d = Document::new();
+            length(&mut d, "Breite", "25.4");
+            let scope = d.param_scope();
+            assert_eq!(substitute("{Breite}", &scope), ("1,000".into(), vec![]));
+        });
+        // Winkel und Zahl mit zwei Nachkommastellen, ohne Einheitenzeichen.
+        let mut d = Document::new();
+        d.add_parameter("W", "45", ParamUnit::Angle, "").unwrap();
+        d.add_parameter("N", "3", ParamUnit::Number, "").unwrap();
+        let scope = d.param_scope();
+        assert_eq!(
+            substitute("{w}° / {N}", &scope),
+            ("45,00° / 3,00".into(), vec![])
+        );
+    });
+}
+
+#[test]
+fn unknown_name_stays_literal() {
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, _, s, t) = doc("20", "{Breite} {Tiefe} {Hoehe}", &lib);
+        let scope = d.param_scope();
+        assert_eq!(
+            substitute("{Breite} {Tiefe} {Hoehe} {tiefe}", &scope),
+            (
+                "20,00 {Tiefe} {Hoehe} {tiefe}".into(),
+                vec!["Tiefe".to_string(), "Hoehe".into(), "tiefe".into()]
+            )
+        );
+        d.reshape_texts(&lib);
+        assert_eq!(shown(&d, s, t).as_deref(), Some("20,00 {Tiefe} {Hoehe}"));
+        let f = d.feature(s).unwrap();
+        assert_eq!(f.status, FeatureStatus::Ok);
+        let want = tr!("feature-sketch-text-param-unknown", names = "Tiefe, Hoehe");
+        assert_eq!(f.warning(), Some(want.as_str()));
+    });
+}
+
+#[test]
+fn apply_shown_without_refs_is_none() {
+    let lib = FontLibrary::bundled_only();
+    let (mut d, _, s, t) = doc("20", "Ohne", &lib);
+    let scope = d.param_scope();
+    let mut sk = sketch_def(&d, s).sketch.clone();
+    assert!(!apply_shown(&mut sk, &scope));
+    assert_eq!(sk.text(t).unwrap().shown, None);
+    assert!(!d.reshape_texts(&lib), "gleiche Form, nichts ändert sich");
+}
+
+#[test]
+fn rename_updates_text() {
+    let lib = FontLibrary::bundled_only();
+    assert_eq!(
+        rename_refs("{breite} mm, {Breiten}, Breite, {BREITE}", "Breite", "Neu"),
+        "{Neu} mm, {Breiten}, Breite, {Neu}"
+    );
+    with_lang(&german(), || {
+        let (mut d, p, s, t) = doc("20", "{Breite} mm", &lib);
+        d.reshape_texts(&lib);
+        let before = text_points(&sketch_def(&d, s).sketch, t);
+        let edits = d.model_edit_count();
+        d.set_parameter(
+            p,
+            ParamEdit {
+                name: "Neu".into(),
+                formula: "20".into(),
+                unit: ParamUnit::Length,
+                comment: String::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(d.model_edit_count(), edits + 1, "ein Schritt");
+        let sk = &sketch_def(&d, s).sketch;
+        assert_eq!(sk.text(t).unwrap().content, "{Neu} mm");
+        // Die gespeicherten Daten tragen den neuen Rohinhalt.
+        assert_eq!(sk.to_data().texts[0].content, "{Neu} mm");
+        assert!(!d.reshape_texts(&lib), "gleicher Wert, gleiche Kurven");
+        assert_eq!(shown(&d, s, t).as_deref(), Some("20,00 mm"));
+        same_points(&text_points(&sketch_def(&d, s).sketch, t), &before);
+        assert!(d.feature(s).unwrap().warning().is_none());
+        // Das Dateiformat prüft `format22.rs` (`rename_keeps_old_format`).
+    });
+}
+
+#[test]
+fn deleted_parameter_leaves_literal_and_warning() {
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t) = doc("20", "{Breite} mm", &lib);
+        d.reshape_texts(&lib);
+        let sk = &sketch_def(&d, s).sketch;
+        let refs: Vec<_> = sk
+            .profiles()
+            .refs
+            .into_iter()
+            .filter(|r| sk.text_of_profile(r) == Some(t))
+            .collect();
+        assert!(!refs.is_empty());
+        let e = d
+            .add_feature(
+                "Extrusion 1",
+                FeatureKind::Extrude {
+                    sketch: s,
+                    profiles: ProfileSel::Refs(refs),
+                    height: 2.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+        // Text-Verweise sperren das Ersetzen nicht (sie sind keine Formeln).
+        d.replace_parameter_by_value(p).unwrap();
+        d.reshape_texts(&lib);
+        assert_eq!(shown(&d, s, t).as_deref(), Some("{Breite} mm"));
+        let f = d.feature(s).unwrap();
+        assert_eq!(f.status, FeatureStatus::Ok);
+        let want = tr!("feature-sketch-text-param-unknown", names = "Breite");
+        assert_eq!(f.warning(), Some(want.as_str()));
+        let e = d.feature(e).unwrap();
+        assert_eq!(e.status, FeatureStatus::Ok, "{:?}", e.status);
+        assert!(!d.visible_bodies().is_empty());
+    });
+}
+
+#[test]
+fn shown_never_written() {
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, _, s, t) = doc("20", "{Breite} mm", &lib);
+        d.reshape_texts(&lib);
+        assert_eq!(shown(&d, s, t).as_deref(), Some("20,00 mm"));
+        let snap = d.snapshot();
+        let FeatureKind::Sketch(sf) = &snap.features[0].kind else {
+            panic!("keine Skizze")
+        };
+        let data = sf.sketch.to_data();
+        assert_eq!(data.texts[0].content, "{Breite} mm");
+        assert!(!format!("{data:?}").contains("20,00"));
+        // Geladen ist der Text nicht gesetzt und zeigt noch nichts Ersetztes.
+        let back = Sketch::from_data(data).unwrap();
+        assert_eq!(back.text(t).unwrap().shown, None);
+        // Die Datei selbst prüft `format22.rs` (`shown_never_in_file`).
+    });
+}
+
+#[test]
+fn parameter_change_with_height_formula() {
+    // Texthöhe als Formel (Task 10) und Parameter im Inhalt zusammen: Die Formelrunde setzt die
+    // Höhe, `reshape_texts` den Inhalt; am Ende stimmen beide.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let mut d = Document::new();
+        let b = length(&mut d, "Breite", "20");
+        let h = length(&mut d, "H", "5");
+        let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+        let t = add_text(&mut sk, "{Breite} mm", &lib);
+        let FeatureKind::Sketch(mut sf) = sketch_kind(sk) else {
+            unreachable!()
+        };
+        sf.text_formulas.insert(t, "H".into());
+        let s = d.add_feature("Skizze 1", FeatureKind::Sketch(sf)).unwrap();
+        d.reshape_texts(&lib);
+        same_points(
+            &text_points(&sketch_def(&d, s).sketch, t),
+            &reference_points("20,00 mm", 5.0, &lib),
+        );
+        for (id, name, formula) in [(b, "Breite", "30"), (h, "H", "8")] {
+            d.set_parameter(
+                id,
+                ParamEdit {
+                    name: name.into(),
+                    formula: formula.into(),
+                    unit: ParamUnit::Length,
+                    comment: String::new(),
+                },
+            )
+            .unwrap();
+        }
+        assert!(d.reshape_texts(&lib));
+        let sk = &sketch_def(&d, s).sketch;
+        assert_eq!(sk.text(t).unwrap().height, 8.0);
+        assert_eq!(shown(&d, s, t).as_deref(), Some("30,00 mm"));
+        same_points(
+            &text_points(sk, t),
+            &reference_points("30,00 mm", 8.0, &lib),
+        );
+        // Nur die Höhe ändert sich: die Formelrunde allein legt den Text neu, der Inhalt bleibt.
+        d.set_parameter(
+            h,
+            ParamEdit {
+                name: "H".into(),
+                formula: "6".into(),
+                unit: ParamUnit::Length,
+                comment: String::new(),
+            },
+        )
+        .unwrap();
+        d.reshape_texts(&lib);
+        let sk = &sketch_def(&d, s).sketch;
+        assert_eq!(sk.text(t).unwrap().height, 6.0);
+        same_points(
+            &text_points(sk, t),
+            &reference_points("30,00 mm", 6.0, &lib),
+        );
+        assert_eq!(d.feature(s).unwrap().status, FeatureStatus::Ok);
+    });
+}
+
+// ---- Profile, die dem Text folgen (Korrekturrunde 1, I1) ------------------------------------
+
+fn edit_value(d: &mut Document, p: ParamId, name: &str, formula: &str) {
+    d.set_parameter(
+        p,
+        ParamEdit {
+            name: name.into(),
+            formula: formula.into(),
+            unit: ParamUnit::Length,
+            comment: String::new(),
+        },
+    )
+    .unwrap();
+}
+
+/// Die Verweise der Extrusion `e`.
+fn extrude_refs(d: &Document, e: FeatureId) -> Vec<planora_sketch::ProfileRef> {
+    match &d.feature(e).unwrap().kind {
+        FeatureKind::Extrude {
+            profiles: ProfileSel::Refs(r),
+            ..
+        } => r.clone(),
+        k => panic!("keine Extrusion mit Verweisen: {k:?}"),
+    }
+}
+
+/// Die Flächen der Skizze `s`: die des Textes `t` und die übrigen.
+fn faces(
+    d: &Document,
+    s: FeatureId,
+    t: TextId,
+) -> (
+    Vec<planora_sketch::ProfileRef>,
+    Vec<planora_sketch::ProfileRef>,
+) {
+    let sk = &sketch_def(d, s).sketch;
+    sk.profiles()
+        .refs
+        .into_iter()
+        .partition(|r| sk.text_of_profile(r) == Some(t))
+}
+
+/// Dokument mit `Breite` = `breite`, Text „{Breite}“ und einem Rechteck (100, 0)–(110, 10);
+/// eine Extrusion über die gewählten Flächen (`with_rect`: dazu das Rechteck; `letters`: nur so
+/// viele Flächen des Textes, sonst alle).
+fn extrude_doc(
+    breite: &str,
+    with_rect: bool,
+    letters: Option<usize>,
+    lib: &FontLibrary,
+) -> (
+    Document,
+    ParamId,
+    FeatureId,
+    TextId,
+    FeatureId,
+    planora_sketch::helpers::RectIds,
+) {
+    let mut d = Document::new();
+    let p = length(&mut d, "Breite", breite);
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let t = add_text(&mut sk, "{Breite}", lib);
+    let rect = sk
+        .add_rectangle(DVec2::new(100.0, 0.0), DVec2::new(110.0, 10.0))
+        .unwrap();
+    let s = d.add_feature("Skizze 1", sketch_kind(sk)).unwrap();
+    d.reshape_texts(lib);
+    let (text, other) = faces(&d, s, t);
+    let mut refs: Vec<_> = match letters {
+        Some(n) => text.into_iter().take(n).collect(),
+        None => text,
+    };
+    if with_rect {
+        refs.extend(other);
+    }
+    let e = d
+        .add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: s,
+                profiles: ProfileSel::Refs(refs),
+                height: 2.0,
+            },
+        )
+        .unwrap();
+    assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+    (d, p, s, t, e, rect)
+}
+
+fn assert_follows(d: &Document, s: FeatureId, t: TextId, e: FeatureId, with_rect: bool) {
+    let f = d.feature(e).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    let (text, other) = faces(d, s, t);
+    let mut want = text;
+    if with_rect {
+        want.extend(other);
+    }
+    let mut got = extrude_refs(d, e);
+    let key = |r: &planora_sketch::ProfileRef| format!("{r:?}");
+    got.sort_by_key(key);
+    want.sort_by_key(key);
+    assert_eq!(got, want, "die Auswahl ist der ganze Text von heute");
+}
+
+#[test]
+fn shorter_value_keeps_extrusion() {
+    // 100 → 5: Die hinteren Buchstaben verschwinden, ihre Kurven sind tot.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t, e, _) = extrude_doc("100", false, None, &lib);
+        edit_value(&mut d, p, "Breite", "5");
+        assert!(d.reshape_texts(&lib));
+        assert_eq!(shown(&d, s, t).as_deref(), Some("5,00"));
+        assert_follows(&d, s, t, e, false);
+    });
+}
+
+#[test]
+fn longer_value_keeps_extrusion() {
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t, e, _) = extrude_doc("5", false, None, &lib);
+        edit_value(&mut d, p, "Breite", "1000");
+        assert!(d.reshape_texts(&lib));
+        assert_eq!(shown(&d, s, t).as_deref(), Some("1000,00"));
+        assert_follows(&d, s, t, e, false);
+    });
+}
+
+#[test]
+fn mixed_selection_keeps_the_other_faces() {
+    // Text und Rechteck: Der Text folgt, das Rechteck bleibt gewählt.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t, e, _) = extrude_doc("100", true, None, &lib);
+        edit_value(&mut d, p, "Breite", "5");
+        d.reshape_texts(&lib);
+        assert_follows(&d, s, t, e, true);
+    });
+}
+
+#[test]
+fn some_letters_follow_the_whole_text() {
+    // Fusion: Ein Text ist als Ganzes ein Profil; nach einer Änderung gilt der ganze Text.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t, e, _) = extrude_doc("100", false, Some(1), &lib);
+        edit_value(&mut d, p, "Breite", "5");
+        d.reshape_texts(&lib);
+        assert_follows(&d, s, t, e, false);
+    });
+}
+
+#[test]
+fn unchanged_text_keeps_the_selection() {
+    // Gleicher Wert, gleiche Kurven: Die Auswahl (nur ein Buchstabe) bleibt, wie sie ist.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, _, _, e, _) = extrude_doc("100", false, Some(1), &lib);
+        let before = extrude_refs(&d, e);
+        let version = d.feature(e).unwrap().version();
+        edit_value(&mut d, p, "Breite", "100");
+        d.reshape_texts(&lib);
+        assert_eq!(extrude_refs(&d, e), before);
+        assert_eq!(d.feature(e).unwrap().version(), version);
+    });
+}
+
+#[test]
+fn lost_face_outside_text_stays_an_error() {
+    // Das Rechteck verschwindet: Das bleibt ein verlorenes Profil, auch wenn der Text folgt.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, _, e, rect) = extrude_doc("100", true, None, &lib);
+        d.update(s, |k| {
+            let FeatureKind::Sketch(sf) = k else {
+                unreachable!()
+            };
+            sf.sketch.remove_curve(rect.lines[0]).unwrap();
+        })
+        .unwrap();
+        edit_value(&mut d, p, "Breite", "5");
+        d.reshape_texts(&lib);
+        let f = d.feature(e).unwrap();
+        assert!(
+            matches!(&f.status, FeatureStatus::Error(m) if m.contains(&tr!("feature-profile-lost"))),
+            "{:?}",
+            f.status
+        );
+    });
+}
+
+#[test]
+fn followed_selection_survives_save_and_undo() {
+    // Die neue Auswahl steht in der Definition: Snapshot und Wiederherstellen tragen sie.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t, e, _) = extrude_doc("100", false, None, &lib);
+        let old = d.snapshot();
+        edit_value(&mut d, p, "Breite", "5");
+        d.reshape_texts(&lib);
+        let new = d.snapshot();
+        d.restore(old).unwrap();
+        d.reshape_texts(&lib);
+        assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+        d.restore(new).unwrap();
+        d.reshape_texts(&lib);
+        assert_follows(&d, s, t, e, false);
+    });
+}
+
+// ---- Korrekturrunde K2 (Handtest 2) ------------------------------------------------------------
+
+#[test]
+fn text_reference_counts_as_use() {
+    // K2a: Ein Verweis `{Name}` im Text zählt als Benutzung; mit einer Formel nennt die Meldung
+    // beide Stellen.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, _, _) = doc("20", "{Breite} mm", &lib);
+        assert_eq!(d.parameter_users(p), vec!["Skizze 1".to_string()]);
+        let err = d.remove_parameter(p).unwrap_err();
+        assert_eq!(err.to_string(), "Breite wird in Skizze 1 benutzt.");
+        assert!(d.parameter(p).is_some());
+        let mut formulas = Formulas::new();
+        formulas.insert(FieldKey::Breite, "Breite".into());
+        d.add_feature_with_formulas(
+            "Quader 1",
+            FeatureKind::Box {
+                size: planora_math::DVec3::ONE,
+                origin: planora_math::DVec3::ZERO,
+            },
+            formulas,
+        )
+        .unwrap();
+        assert_eq!(
+            d.parameter_users(p),
+            vec!["Skizze 1".to_string(), "Quader 1".to_string()]
+        );
+        // Ein Text ohne Verweis zählt nicht.
+        let (d2, p2, _, _) = doc("20", "Breite mm", &lib);
+        assert!(d2.parameter_users(p2).is_empty());
+    });
+}
+
+/// Text `content` im Rahmen (0, 0)–(b, 8), Höhe 5, links unten: `b` 1 mm breiter als „10,00 mm“.
+/// Mit `height_formula` steht die Höhe als Formel am Text (Parameter `H` = 5 gibt es immer).
+fn narrow_doc(
+    breite: &str,
+    content: &str,
+    lib: &FontLibrary,
+    height_formula: Option<&str>,
+) -> (Document, ParamId, FeatureId, TextId) {
+    let mut d = Document::new();
+    let p = length(&mut d, "Breite", breite);
+    length(&mut d, "H", "5");
+    let b = reference_points("10,00 mm", 5.0, lib)
+        .iter()
+        .map(|q| q.x)
+        .fold(0.0, f64::max)
+        + 1.0;
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let shape = lib.shape(content, &style()).unwrap();
+    let t = sk
+        .add_text_box(
+            DVec2::new(0.0, 0.0),
+            DVec2::new(b, 8.0),
+            TextParams {
+                content: content.into(),
+                style: style(),
+                height: 5.0,
+                flip_h: false,
+                flip_v: false,
+            },
+            HAlign::Left,
+            VAlign::Bottom,
+            Arc::new(shape),
+        )
+        .unwrap();
+    let FeatureKind::Sketch(mut sf) = sketch_kind(sk) else {
+        unreachable!()
+    };
+    if let Some(f) = height_formula {
+        sf.text_formulas.insert(t, f.into());
+    }
+    let s = d.add_feature("Skizze 1", FeatureKind::Sketch(sf)).unwrap();
+    (d, p, s, t)
+}
+
+fn corners_of(sk: &Sketch, t: TextId) -> [DVec2; 4] {
+    match sk.text(t).unwrap().placement {
+        planora_sketch::text::TextPlacement::Box { corners, .. } => {
+            corners.map(|p| sk.point_xy(p).unwrap())
+        }
+        _ => panic!("kein Rahmen"),
+    }
+}
+
+/// Alle Punkte der Glyphen im (achsparallelen) Rahmen, mit Toleranz.
+fn glyphs_in_frame(sk: &Sketch, t: TextId) -> bool {
+    let c = corners_of(sk, t);
+    let (lo, hi) = (c[0].min(c[2]), c[0].max(c[2]));
+    text_points(sk, t).iter().all(|q| {
+        q.x >= lo.x - 1e-6 && q.x <= hi.x + 1e-6 && q.y >= lo.y - 1e-6 && q.y <= hi.y + 1e-6
+    })
+}
+
+fn set_len(d: &mut Document, id: ParamId, name: &str, formula: &str) {
+    d.set_parameter(
+        id,
+        ParamEdit {
+            name: name.into(),
+            formula: formula.into(),
+            unit: ParamUnit::Length,
+            comment: String::new(),
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn frame_grows_with_parameter_value() {
+    // K2c: „{Breite} mm“, Breite 10 → 1234: Der Rahmen wächst mit, Ecke 0 bleibt; ein kürzerer
+    // Wert danach lässt ihn nicht schrumpfen. Eine Extrusion aus dem Text rechnet weiter.
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, p, s, t) = narrow_doc("10", "{Breite} mm", &lib, None);
+        d.reshape_texts(&lib);
+        let sk = &sketch_def(&d, s).sketch;
+        assert!(glyphs_in_frame(sk, t), "passt anfangs");
+        let before = corners_of(sk, t);
+        let refs: Vec<_> = sk
+            .profiles()
+            .refs
+            .into_iter()
+            .filter(|r| sk.text_of_profile(r) == Some(t))
+            .collect();
+        let e = d
+            .add_feature(
+                "Extrusion 1",
+                FeatureKind::Extrude {
+                    sketch: s,
+                    profiles: ProfileSel::Refs(refs),
+                    height: 2.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+        set_len(&mut d, p, "Breite", "1234");
+        assert!(d.reshape_texts(&lib));
+        let sk = &sketch_def(&d, s).sketch;
+        assert_eq!(shown(&d, s, t).as_deref(), Some("1234,00 mm"));
+        let grown = corners_of(sk, t);
+        assert!(glyphs_in_frame(sk, t), "Rahmen umschließt alle Glyphen");
+        assert!((grown[0] - before[0]).length() < 1e-9, "Ecke 0 bleibt");
+        assert!(grown[1].x > before[1].x + 1.0, "breiter: {grown:?}");
+        let ef = d.feature(e).unwrap();
+        assert_eq!(ef.status, FeatureStatus::Ok, "{:?}", ef.status);
+        assert!(!d.visible_bodies().is_empty());
+        // Kürzer: kein Schrumpfen.
+        set_len(&mut d, p, "Breite", "1");
+        d.reshape_texts(&lib);
+        let sk = &sketch_def(&d, s).sketch;
+        let after = corners_of(sk, t);
+        for (a, b) in after.iter().zip(grown) {
+            assert!(
+                (*a - b).length() < 1e-9,
+                "kein Schrumpfen: {a:?} statt {b:?}"
+            );
+        }
+        assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+    });
+}
+
+#[test]
+fn frame_grows_with_height_formula() {
+    let lib = FontLibrary::bundled_only();
+    with_lang(&german(), || {
+        let (mut d, _, s, t) = narrow_doc("10", "{Breite} mm", &lib, Some("H"));
+        let h = d.parameters().iter().find(|p| p.name == "H").unwrap().id;
+        d.reshape_texts(&lib);
+        let before = corners_of(&sketch_def(&d, s).sketch, t);
+        set_len(&mut d, h, "H", "12");
+        d.reshape_texts(&lib);
+        let sk = &sketch_def(&d, s).sketch;
+        assert_eq!(sk.text(t).unwrap().height, 12.0);
+        let after = corners_of(sk, t);
+        assert!(glyphs_in_frame(sk, t), "Rahmen umschließt alle Glyphen");
+        assert!((after[0] - before[0]).length() < 1e-9, "Ecke 0 bleibt");
+        assert!(after[3].y > 8.0, "höher: {after:?}");
+        assert_eq!(d.feature(s).unwrap().status, FeatureStatus::Ok);
+    });
+}

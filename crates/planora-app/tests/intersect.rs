@@ -195,6 +195,7 @@ fn intersect_freeform_reports_and_creates_nothing() {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -343,7 +344,8 @@ fn flyout_has_intersect_and_silhouette_without_keys() {
     assert_eq!(
         ToolKind::of(Tool::ProjectEdge),
         // Skizzen 10, Task 16: bewusst angepasst, „3D-Geometrie einbeziehen“ steht dahinter;
-        // Task 19 ebenso: „Auf Fläche projizieren“ und „Schnittkurve“.
+        // Task 19 ebenso: „Auf Fläche projizieren“ und „Schnittkurve“; Skizzen 11b „Drehprofil“
+        // und „Isoparametrische Kurve“.
         &[
             ToolKind::Project,
             ToolKind::Intersect,
@@ -351,6 +353,8 @@ fn flyout_has_intersect_and_silhouette_without_keys() {
             ToolKind::Include3d,
             ToolKind::ProjectToSurface,
             ToolKind::IntersectionCurve,
+            ToolKind::SpunProfile,
+            ToolKind::Isoparametric,
         ]
     );
     assert_eq!(STRIP_TOOLS, 20);

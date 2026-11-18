@@ -177,6 +177,7 @@ fn suppressing_an_unrelated_box_recomputes_only_readers_of_the_visible_bodies() 
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

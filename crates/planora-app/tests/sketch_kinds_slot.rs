@@ -32,6 +32,7 @@ fn delete_in_draft(se: &mut SketchSession, sk: &mut Sketch) {
         plane: planora_feature::SketchPlane::Standard(planora_app::state::StandardPlane::XY),
         copies: Vec::new(),
         formulas: Default::default(),
+        text_formulas: Default::default(),
     };
     se.delete_selection_in(&mut sf);
     *sk = sf.sketch;

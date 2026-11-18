@@ -37,6 +37,7 @@ fn document(sketch: Sketch) -> Document {
             plane: SketchPlane::Standard(StandardPlane::XY),
             copies: vec![],
             formulas: Default::default(),
+            text_formulas: Default::default(),
         }),
     )
     .unwrap();

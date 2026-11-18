@@ -30,7 +30,7 @@ use crate::params::ParamScope;
 use crate::planes::PlaneDef;
 use planora_i18n::tr;
 use planora_sketch::pattern::PatternSlot;
-use planora_sketch::{ConstraintId, ConstraintKind, Sketch, SketchError};
+use planora_sketch::{ConstraintId, ConstraintKind, Sketch, SketchError, TextId};
 use std::collections::{BTreeMap, HashSet};
 
 /// Ein formelfähiges Zahlenfeld eines Features.
@@ -403,7 +403,9 @@ pub(crate) fn evaluate(
 
 /// Hat das Feature Formeln (in Feldern oder, bei Skizzen, an Maßen)?
 pub(crate) fn has_formulas(kind: &FeatureKind, formulas: &Formulas) -> bool {
-    !formulas.is_empty() || matches!(kind, FeatureKind::Sketch(sf) if !sf.formulas.is_empty())
+    !formulas.is_empty()
+        || matches!(kind, FeatureKind::Sketch(sf)
+            if !sf.formulas.is_empty() || !sf.text_formulas.is_empty())
 }
 
 /// Einheit, die eine Formel an diesem Skizzenmaß ergeben muss: Winkel bei Winkelmaßen (auch
@@ -432,6 +434,11 @@ fn sketch_reason(e: &SketchError) -> String {
         }
         other => other.to_string(),
     }
+}
+
+/// Meldung zu einer Formel der Texthöhe („Formel der Texthöhe: …“).
+fn text_height_message(reason: &str) -> String {
+    tr!("feature-formula-in-text-height", msg = reason.to_string())
 }
 
 /// Ein ausgewerteter Maßwert, der noch in die Skizze muss.
@@ -530,6 +537,26 @@ fn evaluate_sketch(sf: &SketchFeature, scope: &ParamScope) -> (Sketch, Option<Fo
         }
         pending = rejected.into_iter().map(|(d, _)| d).collect();
     }
+    // Texthöhen (Skizzen 11b): vor dem Lösen, ein Fehler lässt dem Text seine letzte Höhe.
+    for (id, text) in &sf.text_formulas {
+        if sketch.text(*id).is_none() {
+            continue;
+        }
+        // Ein nicht auswertbarer Text ist ein Formelfehler, eine Ablehnung der Skizze (Höhe ≤ 0)
+        // ein Wertfehler.
+        match scope.eval(text, ParamUnit::Length) {
+            Err(m) => {
+                issue.get_or_insert(FormulaIssue::Broken(text_height_message(&m)));
+            }
+            Ok(v) => {
+                if let Err(e) = sketch.set_text_height(*id, v) {
+                    issue.get_or_insert(FormulaIssue::Value(text_height_message(&sketch_reason(
+                        &e,
+                    ))));
+                }
+            }
+        }
+    }
     (sketch, issue)
 }
 
@@ -550,6 +577,8 @@ pub(crate) fn same_values(a: &FeatureKind, b: &FeatureKind) -> bool {
 pub(crate) enum Slot {
     Field(FieldKey),
     Dim(ConstraintId),
+    /// Höhe eines Textes in der Skizze (Skizzen 11b).
+    TextHeight(TextId),
 }
 
 /// Alle Formeln eines Features mit Stelle und verlangter Einheit: erst die Felder in
@@ -572,6 +601,11 @@ pub(crate) fn formula_slots<'a>(
                 out.push((Slot::Dim(*id), text.as_str(), constraint_unit(&c.kind)));
             }
         }
+        for (id, text) in &sf.text_formulas {
+            if sf.sketch.text(*id).is_some() {
+                out.push((Slot::TextHeight(*id), text.as_str(), ParamUnit::Length));
+            }
+        }
     }
     out
 }
@@ -580,7 +614,8 @@ pub(crate) fn formula_slots<'a>(
 pub(crate) fn mentions(kind: &FeatureKind, formulas: &Formulas, name: &str) -> bool {
     formulas.values().any(|t| expr::references(t, name))
         || matches!(kind, FeatureKind::Sketch(sf)
-            if sf.formulas.values().any(|t| expr::references(t, name)))
+            if sf.formulas.values().any(|t| expr::references(t, name))
+                || sf.text_formulas.values().any(|t| expr::references(t, name)))
 }
 
 /// Schreibt alle Formeltexte des Features um (Felder und Skizzenmaße); `None` entfernt die
@@ -593,6 +628,7 @@ pub(crate) fn rewrite_formulas(
     let mut kind = kind.clone();
     if let FeatureKind::Sketch(sf) = &mut kind {
         sf.formulas = rewrite_map(&sf.formulas, &f);
+        sf.text_formulas = rewrite_map(&sf.text_formulas, &f);
     }
     (kind, rewrite_map(formulas, &f))
 }
@@ -627,6 +663,11 @@ pub(crate) fn drop_overwritten_dims(old: &FeatureKind, new: &mut FeatureKind) {
     let sketch = &n.sketch;
     n.formulas.retain(|id, text| {
         o.formulas.get(id) != Some(text) || value(&o.sketch, *id) == value(sketch, *id)
+    });
+    // Ebenso die Höhenformel eines Textes, dessen Höhe von Hand geändert wurde.
+    let height = |sk: &Sketch, id: TextId| sk.text(id).map(|t| t.height.to_bits());
+    n.text_formulas.retain(|id, text| {
+        o.text_formulas.get(id) != Some(text) || height(&o.sketch, *id) == height(sketch, *id)
     });
 }
 
@@ -694,6 +735,11 @@ impl Document {
                         "feature-formula-in-dim",
                         name = name.to_string(),
                         msg = m.to_string()
+                    ),
+                    Slot::TextHeight(_) => tr!(
+                        "feature-formula-in-dim",
+                        name = name.to_string(),
+                        msg = text_height_message(&m)
                     ),
                 }));
             }

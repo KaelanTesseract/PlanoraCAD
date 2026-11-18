@@ -8,14 +8,15 @@ use crate::formulas::{
     same_values,
 };
 use crate::model::{
-    CopySource, CopyTarget, Document, FeatureId, FeatureKind, FeatureStatus, SketchFeature,
-    SketchPlane,
+    CopySource, CopyTarget, Document, FeatureId, FeatureKind, FeatureStatus, ProfileSel,
+    SketchFeature, SketchPlane,
 };
 use crate::recompute::RecomputeReport;
 use planora_i18n::tr;
 use planora_kernel::Kernel;
-use planora_sketch::Sketch;
+use planora_sketch::text::TextId;
 use planora_sketch::text_shape::TextShaper;
+use planora_sketch::{ProfileRef, Sketch};
 
 impl Document {
     /// Ändert die Parameter eines Features und berechnet neu; liefert den Bericht des Laufs.
@@ -151,9 +152,15 @@ impl Document {
     /// Zähler gleich. Ändert sich dabei nur die Warnung zu fehlenden Schriften oder zu Texten, die
     /// sich nicht setzen lassen (Spec C10), bekommt die Skizze eine neue Version und wird neu
     /// berechnet, damit die Warnung erscheint.
+    ///
+    /// Vorher bekommt jeder Text seinen gezeigten Inhalt mit den aktuellen Parametern und der
+    /// Anzeigeeinheit (Skizzen 11b, [`crate::text_refs::apply_shown`]): Die App ruft das nach
+    /// jeder Änderung der Parametertabelle, nach Rückgängig/Wiederholen und nach einem Wechsel
+    /// der Längeneinheit.
     pub fn reshape_texts(&mut self, shaper: &dyn TextShaper) -> bool {
         let mut changed = false;
         let mut stale = false;
+        let scope = self.param_scope();
         for idx in 0..self.features.len() {
             let FeatureKind::Sketch(sf) = &mut self.features[idx].kind else {
                 continue;
@@ -162,8 +169,13 @@ impl Document {
                 continue;
             }
             let before = text_warning_lines(&sf.sketch);
+            let old = sf.sketch.clone();
+            crate::text_refs::apply_shown(&mut sf.sketch, &scope);
             let report = sf.sketch.reshape_texts(shaper);
             let warning_changed = text_warning_lines(&sf.sketch) != before;
+            if report.changed {
+                self.follow_text_profiles(idx, &old);
+            }
             if report.changed || warning_changed {
                 // Neuer Stand: Die Skizze und alles Abhängige rechnen neu.
                 let version = self.bump();
@@ -179,6 +191,78 @@ impl Document {
             self.recompute();
         }
         changed
+    }
+
+    /// Profile, die dem Text folgen (Skizzen 11b, Prüf-Schwerpunkt 4): Hat das Neusetzen die
+    /// Buchstaben der Skizze `idx` geändert (anderer Wert, gelöschter Parameter, andere Einheit),
+    /// finden Extrusionen und Rotationen ihre Glyphenflächen nicht mehr; bei einem kürzeren Wert
+    /// sind deren Kurven sogar tot. Wie in Fusion, wo ein Text als Ganzes ein Profil ist, wird
+    /// eine solche Auswahl in der Definition umgeschrieben: Jeder Verweis, der in `old` (der Skizze
+    /// vor dem Neusetzen) zu einem noch lebenden Text gehörte, wird durch alle heutigen Flächen
+    /// dieses Textes ersetzt; die übrigen Verweise bleiben, wie sie sind (ein verlorener bleibt
+    /// verloren). Eine Auswahl, die sich noch ganz auflösen lässt, bleibt unberührt. So stehen die
+    /// neuen Verweise in Datei und Verlauf (kein eigener Schritt, wie das Neusetzen).
+    fn follow_text_profiles(&mut self, idx: usize, old: &Sketch) {
+        let sid = self.features[idx].id;
+        let FeatureKind::Sketch(sf) = &self.features[idx].kind else {
+            return;
+        };
+        let new = &sf.sketch;
+        let mut extracted = None;
+        let mut updates: Vec<(usize, Vec<ProfileRef>)> = Vec::new();
+        for (j, f) in self.features.iter().enumerate() {
+            let (FeatureKind::Extrude {
+                sketch,
+                profiles: ProfileSel::Refs(refs),
+                ..
+            }
+            | FeatureKind::Revolve {
+                sketch,
+                profiles: ProfileSel::Refs(refs),
+                ..
+            }) = &f.kind
+            else {
+                continue;
+            };
+            if *sketch != sid {
+                continue;
+            }
+            let extracted = extracted.get_or_insert_with(|| new.profiles());
+            if extracted.resolve(refs).is_ok_and(|i| !i.is_empty()) {
+                continue;
+            }
+            let mut texts: Vec<TextId> = Vec::new();
+            let mut out: Vec<ProfileRef> = Vec::new();
+            for r in refs {
+                match old.text_of_profile(r).filter(|t| new.text(*t).is_some()) {
+                    Some(t) => {
+                        if !texts.contains(&t) {
+                            texts.push(t);
+                        }
+                    }
+                    None => out.push(r.clone()),
+                }
+            }
+            if texts.is_empty() {
+                continue;
+            }
+            for r in &extracted.refs {
+                if new.text_of_profile(r).is_some_and(|t| texts.contains(&t)) && !out.contains(r) {
+                    out.push(r.clone());
+                }
+            }
+            updates.push((j, out));
+        }
+        for (j, refs) in updates {
+            match &mut self.features[j].kind {
+                FeatureKind::Extrude { profiles, .. } | FeatureKind::Revolve { profiles, .. } => {
+                    *profiles = ProfileSel::Refs(refs);
+                }
+                _ => continue,
+            }
+            let version = self.bump();
+            self.features[j].version = version;
+        }
     }
 
     /// Die Definition der Skizze `sketch` mit der berechneten Skizze (letzte Lage der
@@ -368,6 +452,7 @@ impl Document {
         self.marker -= before_marker;
         // Doppelt abgesichert: `prune_rollbacks` in der Neuberechnung entfernt sie ebenfalls.
         self.rollbacks.retain(|r| !removed.contains(r));
+        self.sketch_groups.forget_sketches(&removed);
         self.prune_meshes();
         self.prune_step_shapes();
         self.prune_images();

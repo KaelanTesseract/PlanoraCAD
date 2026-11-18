@@ -53,6 +53,7 @@ fn plate(rows: usize, cols: usize) -> AppState {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

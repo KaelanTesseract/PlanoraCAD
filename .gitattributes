@@ -5,3 +5,4 @@ crates/planora-drawing/tests/fixtures/*.svg text eol=lf
 crates/planora-drawing/tests/fixtures/*.dxf -text
 crates/planora-drawing/tests/fixtures/*.pdf -text
 crates/planora-step/tests/data/*.step text eol=lf
+crates/planora-drawing/tests/data/*.dxf -text

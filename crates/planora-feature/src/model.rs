@@ -1,13 +1,15 @@
 //! Datenmodell des Feature-Baums: Features, ihre Arten und das Dokument.
 
+use crate::isoparametric::IsoDirection;
 use crate::refs::{EdgeRef, FaceRef};
+use crate::spun_profile::SpunSpec;
 use crate::step_bodies::{StepShape, StepShapeId};
 use crate::surface_project::{IntersectionSpec, SurfaceProjection};
 use planora_exchange::{ExchangeMesh, MeshTransform};
 use planora_i18n::tr;
 use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
 use planora_math::{DQuat, DVec3, Frame};
-use planora_sketch::{ConstraintId, CurveId, PointId, ProfileRef, Sketch};
+use planora_sketch::{ConstraintId, CurveId, PointId, ProfileRef, Sketch, TextId};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -109,6 +111,16 @@ pub enum CopySource {
     OnSurface(SurfaceProjection),
     /// Schnittkurve (Skizzen 10, Spec 7; Rechnung in [`crate::intersection_curve`]).
     Intersection(IntersectionSpec),
+    /// Drehprofil (Skizzen 11b, Spec 5, Format 22).
+    SpunProfile(SpunSpec),
+    /// Isoparametrische Kurve (Skizzen 11b, Spec 6, Format 22): die Kurve `u = const` oder
+    /// `v = const` auf `face`; `value` ist der Anteil 0–1 am Parameterbereich der Berandung
+    /// (Spec-Entscheidung 4).
+    Isoparametric {
+        face: FaceRef,
+        direction: IsoDirection,
+        value: f64,
+    },
 }
 
 /// Ecke eines Körpers: Anfang (`end == false`) oder Ende einer Kante (wie
@@ -226,6 +238,12 @@ impl CopySource {
                 p.origins(&mut out);
                 out
             }
+            CopySource::SpunProfile(p) => {
+                let mut out = Vec::new();
+                p.origins(&mut out);
+                out
+            }
+            CopySource::Isoparametric { face, .. } => vec![FeatureId(face.origin)],
         }
     }
 
@@ -233,20 +251,22 @@ impl CopySource {
     /// Skizze im Verlauf gelten ([`sketch_source_allowed`]); sonst ist der Bezug verloren.
     pub fn loose_origins(&self) -> Vec<FeatureId> {
         match self {
-            CopySource::Edge(_) | CopySource::Section { .. } | CopySource::Silhouette { .. } => {
-                Vec::new()
-            }
+            CopySource::Edge(_)
+            | CopySource::Section { .. }
+            | CopySource::Silhouette { .. }
+            | CopySource::Isoparametric { .. } => Vec::new(),
             CopySource::Include(r) => r.loose_origin().into_iter().collect(),
             CopySource::SketchCurve { sketch, .. } => vec![*sketch],
             CopySource::OnSurface(p) => p.loose_origins(),
             CopySource::Intersection(p) => p.loose_origins(),
+            CopySource::SpunProfile(p) => p.loose_origins(),
         }
     }
 
     /// Gleiche Familie für „Neu verknüpfen“ (Skizzen 11a, Fusion „Relink“): Kante ↔ Kante,
     /// Schnitt ↔ Schnitt, Silhouette ↔ Silhouette, Einbeziehen mit gleicher [`IncludeRef`]-Art,
     /// Skizzenkurve ↔ Skizzenkurve, „Auf Fläche projizieren“ ↔ dasselbe, Schnittkurve ↔
-    /// Schnittkurve.
+    /// Schnittkurve, Drehprofil ↔ Drehprofil, Isokurve ↔ Isokurve (Skizzen 11b).
     pub fn same_family(&self, other: &CopySource) -> bool {
         use std::mem::discriminant;
         match (self, other) {
@@ -255,7 +275,8 @@ impl CopySource {
         }
     }
 
-    /// Eine der Arten aus Skizzen 10 (Format 20)?
+    /// Eine der Arten aus Skizzen 10 (Format 20) oder Skizzen 11b (Drehprofil, Isokurve, Format
+    /// 22)? Sie werden als Gruppe mit Stückzahl gespeichert (wie „Auf Fläche projizieren“).
     pub fn is_3d_kind(&self) -> bool {
         !matches!(
             self,
@@ -337,6 +358,10 @@ impl EdgeCopy {
 /// Bogenmaß.
 pub type SketchFormulas = BTreeMap<ConstraintId, String>;
 
+/// Formeln der Texthöhen (Skizzen 11b, Spec-Entscheidung 2): Text → Formeltext. Der Text hält
+/// weiter den zuletzt berechneten Zahlenwert `height`.
+pub type TextFormulas = BTreeMap<TextId, String>;
+
 #[derive(Clone, Debug)]
 pub struct SketchFeature {
     pub sketch: Sketch,
@@ -345,20 +370,25 @@ pub struct SketchFeature {
     /// Formeln der bestimmenden Maße (nur lebende, nicht anzeigende Maß-Abhängigkeiten, siehe
     /// [`SketchFeature::prune_formulas`]).
     pub formulas: SketchFormulas,
+    /// Formeln der Texthöhen (nur lebende Texte, siehe [`SketchFeature::prune_formulas`]).
+    pub text_formulas: TextFormulas,
 }
 
 impl SketchFeature {
     /// Entfernt Formeln an fehlenden, nicht maßgebenden (`!is_dimension()`) oder anzeigenden
-    /// (`driven`) Abhängigkeiten; `true`, wenn sich etwas änderte.
+    /// (`driven`) Abhängigkeiten und Höhenformeln gelöschter Texte; `true`, wenn sich etwas
+    /// änderte.
     pub fn prune_formulas(&mut self) -> bool {
-        let before = self.formulas.len();
+        let before = (self.formulas.len(), self.text_formulas.len());
         let sketch = &self.sketch;
         self.formulas.retain(|id, _| {
             sketch
                 .constraint(*id)
                 .is_some_and(|c| c.kind.is_dimension() && !c.driven)
         });
-        self.formulas.len() != before
+        self.text_formulas
+            .retain(|id, _| sketch.text(*id).is_some());
+        (self.formulas.len(), self.text_formulas.len()) != before
     }
 
     /// Löst die Verknüpfung der projizierten Kurve `curve` mit ihrer Herkunft: Die Kurve folgt
@@ -389,7 +419,7 @@ impl SketchFeature {
 
 /// Gleich heißt: gleicher Stand der Skizze ([`Sketch::revision`]), gleicher Skizzenname (ändert
 /// den Stand nicht, wird aber gespeichert), gleiche Ebene, gleiche Kantenkopien, gleiche
-/// Formeltexte (eine Formel ändert den Stand der Skizze nicht). Zwei getrennt gebaute Skizzen
+/// Formeltexte samt Höhenformeln (eine Formel ändert den Stand der Skizze nicht). Zwei getrennt gebaute Skizzen
 /// mit gleichem Inhalt sind ungleich (vorsichtig: höchstens ein überflüssiger Schritt im Verlauf
 /// oder eine Neuberechnung mehr).
 impl PartialEq for SketchFeature {
@@ -399,6 +429,7 @@ impl PartialEq for SketchFeature {
             && self.plane == other.plane
             && self.copies == other.copies
             && self.formulas == other.formulas
+            && self.text_formulas == other.text_formulas
     }
 }
 
@@ -831,6 +862,8 @@ pub struct Document {
     pub(crate) parts_overrides: BTreeMap<planora_drawing::BodyKey, planora_drawing::RowOverride>,
     /// Was im Browser ausgeblendet ist (zählt nicht zum Modell).
     pub(crate) visibility: crate::visibility::Visibility,
+    /// Skizzengruppen im Browser (Skizzen 11b; zählt nicht zum Modell).
+    pub(crate) sketch_groups: crate::sketch_groups::SketchGroups,
     /// Parametertabelle (Tabellenreihenfolge); zählt zum Modell.
     pub(crate) parameters: Vec<crate::params::Parameter>,
     /// Berechnete Werte, je Zeile von `parameters` einer.
@@ -889,11 +922,17 @@ impl Document {
             project_info: None,
             parts_overrides: BTreeMap::new(),
             visibility: crate::visibility::Visibility::default(),
+            sketch_groups: crate::sketch_groups::SketchGroups::default(),
             parameters: Vec::new(),
             param_values: Vec::new(),
             next_param: 1,
             carried_sketches: std::collections::HashMap::new(),
         }
+    }
+
+    /// Die Skizzengruppen des Browsers (Skizzen 11b).
+    pub fn sketch_groups(&self) -> &crate::sketch_groups::SketchGroups {
+        &self.sketch_groups
     }
 
     pub fn kernel(&self) -> &AnalyticKernel {

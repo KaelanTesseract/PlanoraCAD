@@ -1094,6 +1094,7 @@ fn a_radius_gives_the_same_shape_through_the_dimension_and_through_a_parameter()
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas,
+                text_formulas: Default::default(),
             };
             let s = doc
                 .add_feature("Skizze 1", FeatureKind::Sketch(sf))

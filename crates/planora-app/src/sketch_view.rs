@@ -2,6 +2,7 @@
 //! über der Szene und Weiterleiten der Eingaben an [`SketchSession`]. Die Logik (Werkzeuge, Fang,
 //! Abhängigkeiten) liegt in `sketch_state`; hier wird nur gezeichnet und weitergereicht.
 
+use crate::keymap::Action;
 use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_grips::{self, Grip, GripLayout};
 use crate::sketch_handles::HandlePart;
@@ -1179,6 +1180,44 @@ pub fn insert_preview_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     out
 }
 
+/// Vorschau des offenen Dialogs „Isoparametrische Kurve“ (Skizzen 11b) als Linien in der
+/// Hervorhebungsfarbe über der Ansicht in `rect` (wie die Vorschau eines Einfügen-Fensters).
+/// Abschnitte mit einem Punkt hinter der Kamera fehlen.
+pub fn iso_preview_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    let Some(crate::surface_project_dialog::SurfaceDialog::Iso(d)) = &state.surface_dialog else {
+        return out;
+    };
+    if rect.width() < 2.0 || rect.height() < 2.0 {
+        return out;
+    }
+    let col = colors(state.dark);
+    let map = Mapper {
+        camera: state.camera,
+        frame: Frame::WORLD,
+        rect,
+    };
+    let stroke = Stroke::new(INSERT_PREVIEW_WIDTH, col.plane_edge_active);
+    for line in d.preview_lines() {
+        let mut run: Vec<Pos2> = Vec::new();
+        for p in line {
+            match map.to_screen3(*p) {
+                Some(q) => run.push(q),
+                None => {
+                    if run.len() >= 2 {
+                        out.push(Shape::line(std::mem::take(&mut run), stroke));
+                    }
+                    run.clear();
+                }
+            }
+        }
+        if run.len() >= 2 {
+            out.push(Shape::line(run, stroke));
+        }
+    }
+    out
+}
+
 /// Bildpunkte je Millimeter der Skizze in der Mitte der Ansicht (für die Mindestlänge der Zähne
 /// des Krümmungskamms); `None`, wenn die Ansicht sie dort nicht bestimmen kann.
 fn px_per_mm(map: &Mapper) -> Option<f64> {
@@ -1517,9 +1556,12 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
     response.hovered()
 }
 
-/// Rechtsklickmenü der gewählten Kurve (Skizzen 11a): „Krümmungsanzeige ein/aus“, gedämpft, wenn
-/// nur Linien gewählt sind. Ein Klick auf den Punkt führt ihn aus; ein Linksklick daneben schließt
-/// das Menü (Esc und ein neuer Rechtsklick über die Sitzung).
+/// Rechtsklickmenü der Skizze (Skizzen 11a, 11b): „Kopieren“, „Ausschneiden“ und „Einfügen“ mit
+/// ihren Tasten (Kopieren und Ausschneiden gedämpft ohne Auswahl, Einfügen gedämpft bei leerer
+/// Zwischenablage), dann „Krümmungsanzeige ein/aus“, gedämpft, wenn nur Linien gewählt sind. Ein
+/// Klick auf einen Punkt führt ihn aus (die Zwischenablage gehört dem Arbeitsbereich, der Eintrag
+/// geht über [`AppState::clip_request`]); ein Linksklick daneben schließt das Menü (Esc und ein
+/// neuer Rechtsklick über die Sitzung).
 fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
     let Some(at) = state.sketch_session.as_ref().and_then(|se| se.curve_menu) else {
         return;
@@ -1528,13 +1570,38 @@ fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
         .session_sketch()
         .zip(state.sketch_session.as_ref())
         .is_some_and(|(sk, se)| se.can_toggle_curvature(sk));
+    let has_selection = state.sketch_session.as_ref().is_some_and(|se| {
+        se.selection
+            .iter()
+            .any(|i| matches!(i, Item::Curve(_) | Item::Point(_)))
+    });
+    let has_clip = state
+        .sketch_session
+        .as_ref()
+        .is_some_and(|se| se.clip_filled);
+    let km = crate::keymap::mouse::current(ui.ctx());
     let mut run = false;
+    let mut clip = None;
     let response = theme::field_area(egui::Id::new("planora-sketch-curve-menu"), pos2(at.0, at.1))
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.scope(|ui| {
                     theme::menu_style(ui.style_mut());
+                    for (action, label, enabled) in [
+                        (Action::SketchCopy, tr!("action-sketch-copy"), has_selection),
+                        (Action::SketchCut, tr!("action-sketch-cut"), has_selection),
+                        (Action::SketchPaste, tr!("action-sketch-paste"), has_clip),
+                    ] {
+                        let button = egui::Button::new(label).shortcut_text(
+                            egui::RichText::new(crate::keymap::shortcut_hint(&km, action))
+                                .font(theme::kbd_font()),
+                        );
+                        if ui.add_enabled(enabled, button).clicked() {
+                            clip = Some(action);
+                        }
+                    }
+                    ui.separator();
                     let item = ui.add_enabled(
                         can,
                         egui::Button::new(tr!("action-sketch-toggle-curvature")),
@@ -1551,7 +1618,12 @@ fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
         && ui
             .input(|i| i.pointer.interact_pos())
             .is_some_and(|p| !response.response.rect.contains(p));
-    if run {
+    if let Some(action) = clip {
+        state.clip_request = Some(action);
+        if let Some(se) = state.sketch_session.as_mut() {
+            se.curve_menu = None;
+        }
+    } else if run {
         crate::curvature_dialog::toggle(state);
     } else if outside && let Some(se) = state.sketch_session.as_mut() {
         se.curve_menu = None;
@@ -2461,14 +2533,22 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Körper unter dem Zeiger (die Markierung zeigt, was der Zeiger trifft). Schneiden und
     // Silhouette wählen nur Flächen (Schneiden mit „Körper“ den ganzen Körper). Einbeziehen
     // (Skizzen 10) wählt dazu Ecken und Ebenen.
-    let faces_only = matches!(kind, ToolKind::Intersect | ToolKind::Silhouette);
+    // Die Isokurve (Skizzen 11b) wählt nur Flächen: keine Ebene davor verdeckt sie.
+    let faces_only = matches!(
+        kind,
+        ToolKind::Intersect | ToolKind::Silhouette | ToolKind::Isoparametric
+    );
     let pick_at = |state: &AppState, p: Pos2| {
-        if kind.picks_like_include() {
-            state.pick_with(map.local(p), map.viewport(), PickFilter::INCLUDE)
-        } else if faces_only {
+        if faces_only {
             state
                 .pick_face_under(map.local(p), map.viewport())
                 .map(Pick::Face)
+        } else if kind.picks_like_include() {
+            state.pick_with(
+                map.local(p),
+                map.viewport(),
+                crate::spun_profile_dialog::pick_filter(state),
+            )
         } else {
             state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY)
         }
@@ -2478,6 +2558,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let relink_filter = |family: &planora_feature::CopySource| {
         if crate::state::relink_picks_like_include(family) {
             PickFilter::INCLUDE
+        } else if matches!(family, planora_feature::CopySource::Isoparametric { .. }) {
+            // Die Isokurve wählt eine neue Fläche (Skizzen 11b).
+            PickFilter::FACES
         } else {
             PickFilter::GEOMETRY
         }
@@ -2518,8 +2601,40 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         let picked = pick_at(state, p);
         // „Auf Fläche projizieren“ und „Schnittkurve“ (Skizzen 10): Der Klick füllt das aktive
         // Feld des Dialogs; erst dessen OK legt an.
+        // „Isoparametrische Kurve“ (Skizzen 11b): Fläche oder Punkt darauf; ein Klick neben
+        // jede Fläche bekommt den Hinweis im Dialog.
+        if crate::isoparametric_dialog::is_open(state) {
+            match state.face_point_under(map.local(p), map.viewport()) {
+                Some((body, face, at)) => {
+                    crate::isoparametric_dialog::click(state, body, face, at);
+                }
+                None => crate::surface_project_dialog::refuse(state),
+            }
+            return;
+        }
         if kind.has_dialog() {
-            match include_pick(state, &map, p, picked) {
+            // „Drehprofil“: Wartet der Dialog auf die Achse, gilt zuerst eine Linie der offenen
+            // Skizze (Skizzen 11b).
+            if crate::spun_profile_dialog::wants_own_axis(state)
+                && let (Some(at), Some(id)) = (map.to_sketch(p), state.open_sketch_id())
+                && let Some(curve) = state.session_sketch().and_then(|sk| {
+                    sk.pick_curve(at, map.radius_at(p).unwrap_or(0.0))
+                        .filter(|c| crate::spun_profile_dialog::own_axis_of(sk, *c).is_some())
+                })
+            {
+                crate::surface_project_dialog::deliver(
+                    state,
+                    crate::state::IncludePick::SketchCurve { sketch: id, curve },
+                );
+                return;
+            }
+            // „Drehprofil“ mit Filter „Körper“: nur Körper zählen, auch nahe der Mittellinie.
+            let found = if crate::spun_profile_dialog::wants_body_only(state) {
+                crate::spun_profile_dialog::body_pick(picked)
+            } else {
+                include_pick(state, &map, p, picked)
+            };
+            match found {
                 Some(pick) => {
                     // Passt der Klick nicht, steht der Grund im Dialog.
                     crate::surface_project_dialog::deliver(state, pick);
@@ -2582,7 +2697,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 /// eines Körpers (`picked`), dann eine Kurve einer fertigen Skizze davor, der Ursprung und die
 /// Achsen des Ursprungs (über den Bildschirmabstand), dann Fläche oder Konstruktionsebene, zuletzt
 /// eine eingeblendete Grundebene.
-fn include_pick(
+pub fn include_pick(
     state: &AppState,
     map: &Mapper,
     p: Pos2,
@@ -2604,16 +2719,22 @@ fn include_pick(
     if world(DVec3::ZERO).is_some_and(|s| s.distance(p) <= PICK_RADIUS_PX) {
         return Some(IncludePick::Origin);
     }
-    // Die Achsen so lang, wie das Einbeziehen sie anlegt.
+    // Die Achsen überall, wo die Ansicht sie zeichnet (Korrektur K2b), mindestens aber so lang,
+    // wie das Einbeziehen sie anlegt.
     let h =
         planora_feature::plane_rect::plane_half_for_bounds(state.bodies.iter().map(|b| b.bounds));
+    let drawn = planora_render::axis_half_length(map.camera.target, map.camera.distance)
+        .map_or(0.0, f64::from);
     for (axis, dir) in [
         (AxisId::X, DVec3::X),
         (AxisId::Y, DVec3::Y),
         (AxisId::Z, DVec3::Z),
     ] {
-        if let (Some(a), Some(b)) = (world(-dir * h), world(dir * h))
-            && dist_to_segment(p, a, b) <= PICK_RADIUS_PX / 2.0
+        let (back, ahead) = axis_pick_span(axis, h, drawn);
+        if let (Some(a), Some(b)) = (
+            axis_end_on_screen(&world, -dir, back, h),
+            axis_end_on_screen(&world, dir, ahead, h),
+        ) && dist_to_segment(p, a, b) <= PICK_RADIUS_PX / 2.0
         {
             return Some(IncludePick::Axis(axis));
         }
@@ -2636,6 +2757,35 @@ fn include_pick(
         .filter_map(|(plane, rect)| planora_render::pick_plane(&ray, &rect).map(|t| (plane, t)))
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(plane, _)| IncludePick::Plane(PlaneId::Standard(plane)))
+}
+
+/// Wählbares Stück einer Ursprungsachse für [`include_pick`] (Korrektur K2b): wie weit hinter und
+/// vor dem Ursprung (mm). Die Ansicht zeichnet x und y beidseits bis `drawn`, z nur nach oben
+/// ([`planora_render::axis_lines`]); das angelegte Stück `±include_half` bleibt immer wählbar.
+fn axis_pick_span(axis: planora_feature::AxisId, include_half: f64, drawn: f64) -> (f64, f64) {
+    let ahead = include_half.max(drawn);
+    match axis {
+        planora_feature::AxisId::Z => (include_half, ahead),
+        _ => (ahead, ahead),
+    }
+}
+
+/// Bildschirmlage des Achsenendes `dir · len`. Liegt es hinter der Kamera (eine lange Achse bei
+/// naher Kamera), wird das Stück halbiert, bis das Ende im Bild liegt, höchstens bis `min_len`.
+fn axis_end_on_screen(
+    world: &impl Fn(DVec3) -> Option<Pos2>,
+    dir: DVec3,
+    len: f64,
+    min_len: f64,
+) -> Option<Pos2> {
+    let mut t = len;
+    while t > min_len {
+        if let Some(s) = world(dir * t) {
+            return Some(s);
+        }
+        t *= 0.5;
+    }
+    world(dir * min_len)
 }
 
 /// Die Kurve einer fertigen, eingeblendeten Skizze vor der offenen (Spec 10) unter dem Zeiger
@@ -3316,6 +3466,43 @@ fn draw_handle_grips(
                     Stroke::new(1.2, ink),
                 ));
             }
+        }
+    }
+    // Drehgriff am Text (Skizzen 11b): Der Maßstab hängt von der Stelle ab, also einmal verfeinern.
+    let per_px = |p: Pos2| {
+        map.radius_at(p)
+            .map(|r| r / f64::from(PICK_RADIUS_PX))
+            .unwrap_or(0.0)
+    };
+    let mut at_px = per_px(map.rect.center());
+    for _ in 0..2 {
+        if let Some(s) = se
+            .text_rotate_grips(sk, at_px)
+            .first()
+            .and_then(|&(_, q)| map.to_screen(q))
+        {
+            at_px = per_px(s);
+        }
+    }
+    for (t, q) in se.text_rotate_grips(sk, at_px) {
+        let top = match sk.text(t).map(|d| d.placement) {
+            Some(planora_sketch::text::TextPlacement::Box { corners, .. }) => {
+                match (sk.point_xy(corners[2]), sk.point_xy(corners[3])) {
+                    (Ok(a), Ok(b)) => (a + b) * 0.5,
+                    _ => continue,
+                }
+            }
+            _ => continue,
+        };
+        if let (Some(a), Some(g)) = (map.to_screen(top), map.to_screen(q)) {
+            let ink = if hot(g) {
+                lighter(col.selected)
+            } else {
+                col.selected
+            };
+            draw_path(painter, vec![a, g], Stroke::new(1.0, ink), true);
+            painter.circle_filled(g, HANDLE_GRIP_PX + 1.0, ink);
+            painter.circle_stroke(g, HANDLE_GRIP_PX + 3.5, Stroke::new(1.0, ink));
         }
     }
     for (_, at) in se.rho_grips(sk) {

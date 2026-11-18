@@ -523,6 +523,10 @@ fn surface_kinds_in_flyout_without_key() {
             ToolKind::Include3d,
             ToolKind::ProjectToSurface,
             ToolKind::IntersectionCurve,
+            // Skizzen 11b, Task 14: bewusst angepasst, „Drehprofil“ steht dahinter.
+            ToolKind::SpunProfile,
+            // Skizzen 11b, Task 16: bewusst angepasst, „Isoparametrische Kurve“ steht dahinter.
+            ToolKind::Isoparametric,
         ]
     );
     for (kind, action, de, en) in [

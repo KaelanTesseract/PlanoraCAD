@@ -6,6 +6,7 @@
 //! Alle Aktionen stehen in einer einzigen Tabelle in [`defaults`] (Variante, Id, Anzeigename,
 //! Bereich, Voreinstellung); eine neue Aktion braucht dort nur eine Zeile.
 
+pub mod clipboard_keys;
 pub mod defaults;
 pub mod dispatch;
 pub mod mouse;

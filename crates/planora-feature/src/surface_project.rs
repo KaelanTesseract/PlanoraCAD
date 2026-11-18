@@ -169,7 +169,7 @@ impl CurveSource {
 }
 
 /// Der Verweis mit dem Hinweispunkt der gefundenen Fläche (unverändert, wenn sie fehlt).
-fn face_hinted(solids: &[&Solid], r: &FaceRef, tol: &Tolerance) -> FaceRef {
+pub(crate) fn face_hinted(solids: &[&Solid], r: &FaceRef, tol: &Tolerance) -> FaceRef {
     resolve_face(solids, r, tol).map_or_else(
         |_| r.clone(),
         |f| FaceRef {
@@ -635,7 +635,7 @@ impl Extrusion {
 }
 
 /// Aufgelöste Quelle: ein Punkt oder ein Kurvenstück im Raum.
-enum Source {
+pub(crate) enum Source {
     Point(DVec3),
     Curve(Curve, f64, f64),
 }
@@ -687,7 +687,7 @@ fn vertex_bounds(solid: &Solid) -> Option<(DVec3, DVec3)> {
     Some(it.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p))))
 }
 
-fn resolve_source(
+pub(crate) fn resolve_source(
     view: &DocView<'_>,
     solids: &[&Solid],
     s: &CurveSource,
@@ -1415,7 +1415,7 @@ impl<'a> Near<'a> {
 }
 
 /// Annäherung mit der Schranke `lin` (nie gelockert).
-fn fit(pts: &[DVec3], lin: f64) -> Option<NurbsCurve> {
+pub(crate) fn fit(pts: &[DVec3], lin: f64) -> Option<NurbsCurve> {
     let delay = FIT_DELAY.with(Cell::get);
     if !delay.is_zero() {
         std::thread::sleep(delay);

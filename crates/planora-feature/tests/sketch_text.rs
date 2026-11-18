@@ -62,6 +62,7 @@ fn sketch_kind(sketch: Sketch) -> FeatureKind {
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: vec![],
         formulas: Default::default(),
+        text_formulas: Default::default(),
     })
 }
 
@@ -425,6 +426,7 @@ fn font_and_projection_warnings_both_show() {
                     source: CopySource::Edge(edge),
                 }],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();

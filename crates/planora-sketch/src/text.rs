@@ -147,6 +147,11 @@ pub struct TextData {
     /// und das Ende, außer beim letzten Stück (es endet am Anfang).
     pub points: Vec<PointId>,
     pub(crate) alive: bool,
+    /// Der gezeigte Inhalt (Skizzen 11b, Parameter im Text): der Inhalt mit ersetzten `{Name}`,
+    /// aus dem die Kurven entstehen; `None` heißt: wie `content`. Nur zur Laufzeit, nie in der
+    /// Datei ([`TextRecord`](crate::data::TextRecord) hat ihn nicht); gesetzt mit
+    /// [`Sketch::set_text_shown`] (die Feature-Seite ersetzt, `planora_feature::text_refs`).
+    pub shown: Option<String>,
     pub(crate) shaped: ShapedCache,
     pub(crate) walk: WalkCache,
 }
@@ -409,11 +414,13 @@ pub fn path_content(content: &str) -> String {
     content.replace("\r\n", "\n").replace(['\r', '\n'], " ")
 }
 
-/// Was für den Text `d` gesetzt wird: der Inhalt, auf einem Pfad mit verbundenen Zeilen.
+/// Was für den Text `d` gesetzt wird: der gezeigte Inhalt ([`TextData::shown`], sonst der
+/// Inhalt), auf einem Pfad mit verbundenen Zeilen.
 fn shaping_content(d: &TextData) -> Cow<'_, str> {
+    let content = d.shown.as_deref().unwrap_or(&d.content);
     match d.placement {
-        TextPlacement::Box { .. } => Cow::Borrowed(&d.content),
-        TextPlacement::Path { .. } => Cow::Owned(path_content(&d.content)),
+        TextPlacement::Box { .. } => Cow::Borrowed(content),
+        TextPlacement::Path { .. } => Cow::Owned(path_content(content)),
     }
 }
 
@@ -894,6 +901,7 @@ impl Sketch {
                 curves: Vec::new(),
                 points: Vec::new(),
                 alive: true,
+                shown: None,
                 shaped: ShapedCache::set(shape),
                 walk: WalkCache::default(),
             });
@@ -970,6 +978,7 @@ impl Sketch {
                 curves: Vec::new(),
                 points: Vec::new(),
                 alive: true,
+                shown: None,
                 shaped: ShapedCache::set(shape.clone()),
                 walk: WalkCache::default(),
             });
@@ -1031,6 +1040,7 @@ impl Sketch {
             curves: Vec::new(),
             points: Vec::new(),
             alive: true,
+            shown: None,
             shaped: ShapedCache::set(shape),
             walk: WalkCache::default(),
         });
@@ -1041,7 +1051,8 @@ impl Sketch {
 
     /// Ändert Werte und Ausrichtung eines Textes im Rahmen; `shape` ist der mit `params` gesetzte
     /// Text. Die Kurven werden der Reihe nach wiederverwendet (Spec B3): Ändern sich nur Höhe,
-    /// Abstand, Ausrichtung oder Umkehren, behalten alle Kurven ihre Ids. Der Rahmen bleibt. Bei
+    /// Abstand, Ausrichtung oder Umkehren, behalten alle Kurven ihre Ids. Der Rahmen bleibt, außer
+    /// der Text passt nicht mehr hinein: dann wächst er mit (Korrektur K2c, nie kleiner). Bei
     /// einem Fehler bleibt die Skizze unverändert.
     pub fn edit_text_box(
         &mut self,
@@ -1080,6 +1091,7 @@ impl Sketch {
             self.touch_structure();
         }
         self.sync_text(t, &placed);
+        self.grow_frame_to_fit(t);
         Ok(())
     }
 
@@ -1270,6 +1282,61 @@ impl Sketch {
         d.flip_v = params.flip_v;
         d.placement = placement;
         d.shaped = ShapedCache::set(shape);
+    }
+
+    /// Setzt die Höhe des Textes `t` auf `h` mm (Skizzen 11b, Texthöhe als Formel): wie die Höhe in
+    /// [`Sketch::edit_text_box`] und [`Sketch::edit_text`] werden die Kurven der Reihe nach
+    /// wiederverwendet; passt der Text nicht mehr in den Rahmen, wächst dieser mit (Korrektur
+    /// K2c, nie kleiner). Eine Höhe, die nicht endlich oder nicht größer als die Toleranz ist, lehnt die Skizze wie die Prüfung der Werte ab; ein gleicher Wert ändert nichts,
+    /// auch nicht den Stand. Ein Text, der noch nicht gesetzt ist (nach dem Laden), bekommt nur den
+    /// Wert; [`Sketch::reshape_texts`] setzt ihn danach. Bei einem Fehler bleibt die Skizze
+    /// unverändert.
+    pub fn set_text_height(&mut self, t: TextId, h: f64) -> Result<(), SketchError> {
+        let d = self.text(t).ok_or(SketchError::UnknownObject)?;
+        if !(h.is_finite() && h > self.tol.linear) {
+            return Err(SketchError::InvalidInput(tr!("sketch-text-height")));
+        }
+        if d.height == h {
+            return Ok(());
+        }
+        let before = d.clone();
+        let shape = before.shaped.shape.clone();
+        self.texts[t].height = h;
+        let Some(shape) = shape else {
+            self.touch_structure();
+            return Ok(());
+        };
+        let Some(placed) = self.placed_contours(t, &shape) else {
+            self.texts[t] = before;
+            return Err(out_of_range());
+        };
+        self.touch_structure();
+        self.sync_text(t, &placed);
+        self.grow_frame_to_fit(t);
+        Ok(())
+    }
+
+    /// Setzt den gezeigten Inhalt des Textes `t` ([`TextData::shown`], Skizzen 11b). Nur zur
+    /// Laufzeit: Stand und Kurven bleiben; [`Sketch::reshape_texts`] setzt danach neu. `true`,
+    /// wenn er sich geändert hat; ein unbekannter Text ändert nichts.
+    pub fn set_text_shown(&mut self, t: TextId, shown: Option<String>) -> bool {
+        if self.text(t).is_none_or(|d| d.shown == shown) {
+            return false;
+        }
+        self.texts[t].shown = shown;
+        true
+    }
+
+    /// Setzt nur den Rohinhalt des Textes `t` (Skizzen 11b: Umbenennen eines Parameters schreibt
+    /// `{alt}` → `{neu}`). Form, Kurven und gezeigter Inhalt bleiben; der Stand der Skizze ändert
+    /// sich (der Inhalt steht in der Datei). `true`, wenn er sich geändert hat.
+    pub fn set_text_content(&mut self, t: TextId, content: String) -> bool {
+        if self.text(t).is_none_or(|d| d.content == content) {
+            return false;
+        }
+        self.texts[t].content = content;
+        self.touch_structure();
+        true
     }
 
     /// Der Winkel eines Textes im Rahmen (Spec C5): die Richtung der Grundlinie von Ecke 0 nach
@@ -1628,13 +1695,125 @@ impl Sketch {
             if d.shaped.shape.as_deref() == Some(&shape) {
                 continue;
             }
+            // Nur ein schon gesetzter Text lässt den Rahmen wachsen (Korrektur K2c): Das erste
+            // Setzen nach dem Laden ändert die Datei nicht.
+            let had_shape = d.shaped.shape.is_some();
             let shape = Arc::new(shape);
             let placed = self.placed_contours(t, &shape);
             self.texts[t].shaped = ShapedCache::set(shape);
             if let Some(placed) = placed {
                 report.changed |= self.sync_text(t, &placed);
+                if had_shape {
+                    report.changed |= self.grow_frame_to_fit(t);
+                }
             }
         }
         report
+    }
+
+    /// Lässt den Rahmen des Textes `t` wachsen, bis er alle Punkte der Glyphen (samt
+    /// Kontrollpunkten) umschließt (Skizzen 11b, Korrektur K2c, **Annahme**: Fusion nicht
+    /// gegengeprüft). Er wächst nur, schrumpft nie. Die Ausrichtung (mit Umkehren) gibt die
+    /// Richtung: Die Seite, an der der Text steht, bleibt, bei „Mitte“ bleibt die Mitte. So bleibt
+    /// der Text, wo er ist; links/unten (die Vorgabe) bleibt Ecke 0 fest. Halten Abhängigkeiten
+    /// oder Maße den Rahmen fest, bleibt er, wie er ist (der Text ragt hinaus, kein Fehler).
+    /// Winkel, Ebene und die übrigen Seiten bleiben. `true`, wenn er gewachsen ist.
+    pub(crate) fn grow_frame_to_fit(&mut self, t: TextId) -> bool {
+        let Some(d) = self.text(t) else {
+            return false;
+        };
+        let TextPlacement::Box { corners, h, v, .. } = d.placement else {
+            return false;
+        };
+        if corners.iter().any(|&p| !self.points[p].alive) {
+            return false;
+        }
+        let tol = self.tol.linear;
+        // Basis des Rahmens: Ursprung Ecke 0, x entlang der Grundlinie, y links davon.
+        let lift = self.text_lift(t);
+        let c0 = self.pos3(corners[0]);
+        let (u, n) = match (lift, d.normal) {
+            (Some(l), _) => (l.u, l.v),
+            (None, Some(_)) => return false,
+            (None, None) => {
+                let base = self.pos(corners[1]) - self.pos(corners[0]);
+                let len = base.length();
+                if !(len.is_finite() && len > tol) {
+                    return false;
+                }
+                let u = base / len;
+                (u.extend(0.0), u.perp().extend(0.0))
+            }
+        };
+        let local = |q: DVec3| DVec2::new((q - c0).dot(u), (q - c0).dot(n));
+        let width = local(self.pos3(corners[1])).x;
+        let box_h = local(self.pos3(corners[3])).y;
+        if !(width > tol && box_h > tol) {
+            return false;
+        }
+        let mut ink = d.points.iter().map(|&p| local(self.pos3(p)));
+        let Some(first) = ink.next() else {
+            return false;
+        };
+        let (lo, hi) = ink.fold((first, first), |(lo, hi), q| (lo.min(q), hi.max(q)));
+        if !(lo.is_finite() && hi.is_finite()) {
+            return false;
+        }
+        // Woran der Text steht: Umkehren spiegelt an der Mitte des Rahmens (Spec B6).
+        let x_side = match (h, d.flip_h) {
+            (HAlign::Center, _) => 0,
+            (HAlign::Left, false) | (HAlign::Right, true) => -1,
+            _ => 1,
+        };
+        let y_side = match (v, d.flip_v) {
+            (VAlign::Middle, _) => 0,
+            (VAlign::Bottom, false) | (VAlign::Top, true) => -1,
+            _ => 1,
+        };
+        let (x0, x1) = grow_span(width, lo.x, hi.x, x_side, tol);
+        let (y0, y1) = grow_span(box_h, lo.y, hi.y, y_side, tol);
+        if x0 == 0.0 && x1 == width && y0 == 0.0 && y1 == box_h {
+            return false;
+        }
+        let at = |x: f64, y: f64| c0 + u * x + n * y;
+        let targets = [at(x0, y0), at(x1, y0), at(x1, y1), at(x0, y1)];
+        if !targets.iter().all(|&p| within_range3(p)) {
+            return false;
+        }
+        let mut trial = self.clone();
+        for (&p, q) in corners.iter().zip(targets) {
+            let moved = if lift.is_some() {
+                trial.set_point_xyz(p, q)
+            } else {
+                trial.set_point_xy(p, q.x, q.y)
+            };
+            if moved.is_err() {
+                return false;
+            }
+        }
+        if !trial.solve_holding_connected(&corners) {
+            return false;
+        }
+        trial.refresh_texts();
+        *self = trial;
+        true
+    }
+}
+
+/// Neue Spanne `[a, b]` einer Seite des Rahmens (bisher `[0, len]`) für Glyphen in `[lo, hi]`:
+/// `side` −1 hält den Anfang, 1 das Ende, 0 die Mitte. Nur wachsen; passt es schon (bis `tol`),
+/// bleibt sie genau.
+fn grow_span(len: f64, lo: f64, hi: f64, side: i8, tol: f64) -> (f64, f64) {
+    if lo >= -tol && hi <= len + tol {
+        return (0.0, len);
+    }
+    match side {
+        -1 => (0.0, len.max(hi)),
+        1 => (lo.min(0.0), len),
+        _ => {
+            let mid = 0.5 * len;
+            let half = (0.5 * len).max(mid - lo).max(hi - mid);
+            (mid - half, mid + half)
+        }
     }
 }

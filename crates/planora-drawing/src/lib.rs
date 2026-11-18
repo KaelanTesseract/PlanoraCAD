@@ -19,6 +19,7 @@ pub mod out2d;
 pub mod parts;
 pub mod pdf;
 pub mod pdf_font;
+pub mod plain_dxf;
 pub mod raycast;
 pub mod section;
 pub mod section_marks;
@@ -47,6 +48,9 @@ pub use model::{
 };
 pub use parts::{BodyKey, PartsCells, PartsRow, RowOverride};
 pub use pdf::{PdfMeta, pdf_bytes, write_pdf};
+pub use plain_dxf::{
+    DxfUnit, PlainDxf, PlainEntity, PlainLayer, plain_dxf_string, write_plain_dxf,
+};
 pub use section::{SectionData, SectionLines, compute_section};
 pub use sheet_frame::{
     CellLabel, PartsSpace, SheetLayout, SheetPen, TitleField, sheet_layout, sheet_layout_with,

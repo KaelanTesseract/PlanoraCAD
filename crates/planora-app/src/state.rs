@@ -216,6 +216,10 @@ pub struct AppState {
     /// Der Hinweis `info` beschreibt die Änderung, aus der der nächste Verlaufsschritt wird (etwa
     /// die Zusammenfassung von „STEP importieren“): dieser eine Schritt beendet ihn nicht.
     pub info_outlives_step: bool,
+    /// Ein Eintrag des Rechtsklickmenüs der Skizze (Kopieren, Ausschneiden, Einfügen) wurde
+    /// gewählt; der Verteiler der App führt ihn mit der Zwischenablage des Arbeitsbereichs aus
+    /// (Skizzen 11b).
+    pub clip_request: Option<crate::keymap::Action>,
     /// Laufende Nummer je Bezeichnung für neue Features („Quader 1“, „Quader 2“, …); zählt
     /// nur hoch, damit Namen auch nach dem Löschen eindeutig bleiben.
     name_counters: BTreeMap<String, u64>,
@@ -226,6 +230,13 @@ pub struct AppState {
     history_choice: Option<FeatureId>,
     /// Auf- und zugeklappte Ordner des Feature-Baums (je Tab).
     pub tree_folders: crate::browser::FolderState,
+    /// Aufgeklappte Skizzengruppen im Ordner „Skizzen“ (Skizzen 11b; Ansicht, nicht Dokument).
+    pub tree_groups_open: std::collections::BTreeSet<planora_feature::SketchGroupId>,
+    /// Per Strg-Klick im Ordner „Skizzen“ gewählte Skizzen (Skizzen 11b); gilt nur, solange
+    /// `selected_feature` darin steht (siehe [`AppState::browser_sketch_selection`]).
+    pub browser_sketches: Vec<FeatureId>,
+    /// Im Ordner „Skizzen“ gewählte Gruppe (Skizzen 11b); gilt nur ohne `selected_feature`.
+    pub browser_group: Option<planora_feature::SketchGroupId>,
     /// Grundebene unter dem Zeiger (hell gezeichnet; gilt nur für das laufende Bild).
     pub origin_hover: Option<StandardPlane>,
     /// Gewählte Grundebene; gelesen über [`AppState::selected_origin_plane`].
@@ -278,6 +289,8 @@ pub struct AppState {
     pub pending_delete: Option<crate::browser::DeletePlan>,
     /// Offenes Fenster „Umbenennen“: Feature und Entwurf des Namens.
     pub rename_draft: Option<(FeatureId, String)>,
+    /// Offenes Fenster „Umbenennen“ einer Skizzengruppe (Skizzen 11b): Gruppe und Entwurf.
+    pub group_rename_draft: Option<(planora_feature::SketchGroupId, String)>,
     /// Offene Rückfrage „Zeichnung oder Ansicht löschen“ aus dem Abschnitt „Zeichnungen“.
     pub pending_delete_drawing: Option<crate::drawing_browser::DrawingDeletePlan>,
     /// Offenes Fenster „Umbenennen“ einer Zeichnung: Zeichnung und Entwurf des Namens.
@@ -303,6 +316,9 @@ pub struct AppState {
     /// erkennt (etwa „Kalibrieren“, das sonst wie „Leinwand bearbeiten“ aussähe). Gilt nur für
     /// genau den nächsten Schritt.
     pub undo_label_hint: Option<fn() -> String>,
+    /// Die Parametertabelle hat sich geändert (Skizzen 11b, Parameter im Text): Der Tab setzt
+    /// seine Texte im nächsten Bild neu ([`crate::workspace::DocTab::apply_fonts`]).
+    pub(crate) texts_due: bool,
     /// Ist ein Fenster „DXF einfügen“ oder „SVG einfügen“ offen (Stand des letzten Bildes)? Dann
     /// gehört Esc dem Fenster: Die offene Skizze bricht damit nicht auch ihr Werkzeug ab
     /// (Gesamtprüfung M1).
@@ -348,6 +364,8 @@ pub struct AppState {
     /// Offener Dialog „Verlorene Projektionen verwalten“ (Skizzen 11a); bleibt über das Öffnen
     /// der Skizze für „Neu verknüpfen“ offen.
     pub lost_dialog: Option<crate::lost_projections_dialog::LostProjectionsDialog>,
+    /// Offener Dialog „Als DXF speichern“ einer Skizze (Skizzen 11b); ändert das Dokument nie.
+    pub sketch_dxf_dialog: Option<crate::sketch_dxf_dialog::SketchDxfDialog>,
     /// Hervorhebungsliste der Ansicht (Task H3): was die Felder des offenen Dialogs
     /// [`AppState::surface_dialog`] gewählt haben. Flächen sind getönt, Kanten, Ecken, Achsen,
     /// Ebenen und Kurven fertiger Skizzen stehen in der Auswahlfarbe. Setzen nur über
@@ -709,10 +727,14 @@ impl AppState {
             message: None,
             info: None,
             info_outlives_step: false,
+            clip_request: None,
             name_counters: BTreeMap::new(),
             selected_feature: None,
             history_choice: None,
             tree_folders: crate::browser::FolderState::default(),
+            tree_groups_open: std::collections::BTreeSet::new(),
+            browser_sketches: Vec::new(),
+            browser_group: None,
             origin_hover: None,
             selected_origin: None,
             sketch_session: None,
@@ -733,6 +755,7 @@ impl AppState {
             profile_pick: None,
             pending_delete: None,
             rename_draft: None,
+            group_rename_draft: None,
             pending_delete_drawing: None,
             rename_drawing_draft: None,
             edit_request: None,
@@ -743,6 +766,7 @@ impl AppState {
             pending_pick: None,
             calibrate: None,
             undo_label_hint: None,
+            texts_due: false,
             insert_dialog_open: false,
             insert_preview: None,
             insert_grips: None,
@@ -762,6 +786,7 @@ impl AppState {
             surface_dialog: None,
             curvature_dialog: None,
             lost_dialog: None,
+            sketch_dxf_dialog: None,
             dialog_marks: Vec::new(),
             pending_delete_dimension: None,
             document_name: tr!("state-unnamed"),
@@ -958,6 +983,10 @@ impl AppState {
     /// von `selected_body` (Index in der Körperliste für die Eigenschaften).
     pub fn select_body(&mut self, tip: Option<FeatureId>) {
         self.history_choice = tip;
+        // Eine andere Wahl verdrängt die Skizzengruppe (Skizzen 11b).
+        if tip.is_some() {
+            self.browser_group = None;
+        }
     }
 
     /// Körper der Verlaufsleiste als Spitze ([`Document::body_tips`]): der gewählte, solange er
@@ -1021,7 +1050,174 @@ impl AppState {
             Some(FeatureKind::Canvas(_)) => v.folders.canvases,
             _ => false,
         };
-        folder || v.features.contains(&id)
+        // Skizzen 11b: eine Skizze in einer ausgeblendeten Gruppe (ihr eigenes Auge bleibt).
+        let by_group = matches!(
+            self.document.feature(id).map(|f| &f.kind),
+            Some(FeatureKind::Sketch(_))
+        ) && self.document.sketch_hidden_by_group(id);
+        folder || v.features.contains(&id) || by_group
+    }
+
+    /// Die im Ordner „Skizzen“ gewählten Skizzen (Skizzen 11b): die Strg-Klick-Wahl, solange
+    /// `selected_feature` darin steht, sonst die gewählte Skizze allein; nur vorhandene Skizzen.
+    pub fn browser_sketch_selection(&self) -> Vec<FeatureId> {
+        let is_sketch = |id: &FeatureId| {
+            self.document
+                .feature(*id)
+                .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        };
+        let Some(sel) = self.selected_feature.filter(is_sketch) else {
+            return Vec::new();
+        };
+        if self.browser_sketches.contains(&sel) {
+            self.browser_sketches
+                .iter()
+                .copied()
+                .filter(is_sketch)
+                .collect()
+        } else {
+            vec![sel]
+        }
+    }
+
+    /// Die im Ordner „Skizzen“ gewählte Gruppe (Skizzen 11b): nur, solange nichts anderes gewählt
+    /// ist (Feature, Körper, Auswahl in der Ansicht, Zeichnung, Grundebene) und es sie gibt.
+    pub fn selected_sketch_group(&self) -> Option<planora_feature::SketchGroupId> {
+        self.browser_group.filter(|g| {
+            self.selected_feature.is_none()
+                && self.selected_body.is_none()
+                && self.selection.is_none()
+                && self.drawing_ui.selected_drawing.is_none()
+                && self.selected_origin.is_none()
+                && self.document.sketch_groups().group(*g).is_some()
+        })
+    }
+
+    /// Fenster und Wahl einer Skizzengruppe, die es nicht mehr gibt, entfallen (Skizzen 11b).
+    fn forget_gone_groups(&mut self) {
+        let groups = self.document.sketch_groups();
+        if self
+            .group_rename_draft
+            .as_ref()
+            .is_some_and(|(g, _)| groups.group(*g).is_none())
+        {
+            self.group_rename_draft = None;
+        }
+        if self
+            .browser_group
+            .is_some_and(|g| groups.group(g).is_none())
+        {
+            self.browser_group = None;
+        }
+    }
+
+    /// Strg-Klick auf die Skizzenzeile `id`: nimmt sie in die Wahl auf oder heraus.
+    pub fn toggle_browser_sketch(&mut self, id: FeatureId) {
+        let mut list = self.browser_sketch_selection();
+        if let Some(i) = list.iter().position(|s| *s == id) {
+            list.remove(i);
+        } else {
+            list.push(id);
+        }
+        self.selected_feature = list.last().copied();
+        self.browser_sketches = list;
+        self.browser_group = None;
+        self.selected_body = None;
+        self.drawing_ui.selected_drawing = None;
+        self.set_selection(None);
+    }
+
+    /// Fusion „Gruppe erstellen“ (Skizzen 11b): die gewählten Skizzen und `row` (die Zeile des
+    /// Menüs) kommen in eine neue Gruppe; sie wird aufgeklappt und gewählt. Ein Schritt.
+    pub fn create_sketch_group_from_browser(
+        &mut self,
+        row: Option<FeatureId>,
+    ) -> Result<planora_feature::SketchGroupId, String> {
+        let mut list = self.browser_sketch_selection();
+        if let Some(r) = row
+            && !list.contains(&r)
+        {
+            list.push(r);
+        }
+        let items: Vec<planora_feature::GroupItem> = list
+            .into_iter()
+            .map(planora_feature::GroupItem::Sketch)
+            .collect();
+        match self.document.create_sketch_group(&items) {
+            Ok(g) => {
+                self.tree_groups_open.insert(g);
+                self.message = None;
+                Ok(g)
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Fusion „Gruppe auflösen“ (auch „Löschen“ einer Gruppe): der Inhalt geht eine Ebene höher,
+    /// keine Skizze wird gelöscht. Ein Schritt.
+    pub fn ungroup_sketch_group(
+        &mut self,
+        id: planora_feature::SketchGroupId,
+    ) -> Result<(), String> {
+        let hidden = self
+            .document
+            .sketch_groups()
+            .group(id)
+            .is_some_and(|g| g.hidden);
+        match self.document.ungroup_sketch_group(id) {
+            Ok(()) => {
+                self.tree_groups_open.remove(&id);
+                if self.browser_group == Some(id) {
+                    self.browser_group = None;
+                }
+                if self.group_rename_draft.as_ref().is_some_and(|d| d.0 == id) {
+                    self.group_rename_draft = None;
+                }
+                if hidden {
+                    self.sync_visibility();
+                }
+                Ok(())
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Legt eine Skizze oder Gruppe in die Gruppe `target` (`None`: oben in den Ordner).
+    pub fn move_to_sketch_group(
+        &mut self,
+        item: planora_feature::GroupItem,
+        target: Option<planora_feature::SketchGroupId>,
+    ) -> Result<(), String> {
+        match self.document.move_to_group(item, target) {
+            Ok(()) => {
+                self.sync_visibility();
+                Ok(())
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Benennt die Skizzengruppe `id` um (leere Namen sind ungültig).
+    pub fn rename_sketch_group(
+        &mut self,
+        id: planora_feature::SketchGroupId,
+        name: &str,
+    ) -> Result<(), String> {
+        match self.document.rename_sketch_group(id, name) {
+            Ok(()) => Ok(()),
+            Err(e) => self.fail(e.to_string()),
+        }
+    }
+
+    /// Auge der Skizzengruppe `id`: blendet alle Skizzen darin aus oder ein (ihr eigenes Auge
+    /// bleibt).
+    pub fn set_sketch_group_hidden(&mut self, id: planora_feature::SketchGroupId, hidden: bool) {
+        let before = self.document.sketch_groups().group(id).map(|g| g.hidden);
+        if before.is_none() || before == Some(hidden) {
+            return;
+        }
+        self.document.set_sketch_group_hidden(id, hidden);
+        self.sync_visibility();
     }
 
     /// Steht das Auge der Skizze oder Konstruktionsebene `id` selbst auf „aus“?
@@ -1250,7 +1446,9 @@ impl AppState {
             .filter_map(|f| carried_body(&f.kind).map(|b| (f.id, b)))
             .collect();
         let visibility_before = self.document.visibility().clone();
+        let groups_before = self.document.sketch_groups().clone();
         let kind = self.document.restore(s).map_err(|e| e.to_string())?;
+        self.forget_gone_groups();
         self.rebuild_name_counters();
         // Eine offene Skizze verwerfen: Ihr Entwurf (samt Verlauf) gehört zum alten Dokument.
         self.sketch_draft = None;
@@ -1267,6 +1465,7 @@ impl AppState {
         self.pending_delete_drawing = None;
         self.pending_delete_dimension = None;
         self.rename_draft = None;
+        self.group_rename_draft = None;
         self.rename_drawing_draft = None;
         self.edit_request = None;
         self.sketch_request = None;
@@ -1275,6 +1474,7 @@ impl AppState {
         self.surface_dialog = None;
         self.curvature_dialog = None;
         self.lost_dialog = None;
+        self.sketch_dxf_dialog = None;
         self.dialog_marks.clear();
         self.dimension_tool = crate::dimension_tool::DimensionTool::default();
         self.balloon_tool = crate::balloon_tool::BalloonTool::default();
@@ -1303,7 +1503,9 @@ impl AppState {
             RestoreKind::Annotations if had_marks && !left_sketch => self.rebuild_scene(),
             RestoreKind::Annotations => {}
         }
-        if *self.document.visibility() != visibility_before {
+        if *self.document.visibility() != visibility_before
+            || *self.document.sketch_groups() != groups_before
+        {
             self.sync_visibility();
         }
         if left_sketch {
@@ -2104,6 +2306,9 @@ impl AppState {
 
     pub fn set_selection(&mut self, selection: Option<Pick>) {
         self.selected_origin = None;
+        // Jede Wahl in der Ansicht (auch ihr Aufheben) verdrängt die Skizzengruppe (Skizzen 11b);
+        // die Gruppenzeile setzt ihre Wahl erst danach.
+        self.browser_group = None;
         if self.selection != selection {
             self.selection = selection;
             // Eine Ebene wählt ihr Feature (wie ein Klick im Browser), alles andere den Körper.
@@ -2503,6 +2708,26 @@ impl AppState {
             })
     }
 
+    /// Wie [`AppState::pick_face_under`], dazu die getroffene Stelle in Weltkoordinaten (für den
+    /// Punkt der Isokurve, Skizzen 11b).
+    pub fn face_point_under(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+    ) -> Option<(usize, Id<Face>, DVec3)> {
+        if viewport.x < 1.0 || viewport.y < 1.0 {
+            return None;
+        }
+        let ndc = Vec2::new(
+            2.0 * cursor.x / viewport.x - 1.0,
+            1.0 - 2.0 * cursor.y / viewport.y,
+        );
+        let (origin, dir) = self.camera.ray(ndc);
+        let (body, hit) = self.nearest_face_hit(cursor, viewport)?;
+        let at = origin.as_dvec3() + dir.as_dvec3() * f64::from(hit.distance);
+        Some((body, hit.face, at))
+    }
+
     /// Die vorderste sichtbare Fläche unter dem Zeiger (Index des Körpers und Treffer).
     fn nearest_face_hit(
         &self,
@@ -2712,6 +2937,7 @@ impl AppState {
             plane,
             copies: Vec::new(),
             formulas: Default::default(),
+            text_formulas: Default::default(),
         });
         self.add_checked(&label, kind)
     }
@@ -2736,6 +2962,7 @@ impl AppState {
             plane,
             copies: Vec::new(),
             formulas: Default::default(),
+            text_formulas: Default::default(),
         });
         let id = self.add_checked_named(name, kind, Formulas::new())?;
         // Nur ein Name aus dem Zähler zählt ihn weiter (ein Layername nicht).
@@ -3008,6 +3235,9 @@ impl AppState {
         session.body_vertices = self.body_vertices(id, &frame);
         session.last_report = Some(draft.sketch.clone().solve());
         session.text_memory = self.text_memory.clone();
+        // Parameter im Text (Skizzen 11b): Der Entwurf zeigt den ersetzten Inhalt.
+        session.text_scope = self.document.param_scope();
+        planora_feature::text_refs::apply_shown(&mut draft.sketch, &session.text_scope);
         if !switching {
             self.saved_camera = Some(self.camera);
         }
@@ -3288,7 +3518,18 @@ impl AppState {
             self.sketch_history = None;
             return Ok(());
         }
+        // Parameter im Text (Skizzen 11b): Ein Text mit `{…}` aus der Sitzung (etwa ohne
+        // Schriftliste eingefügt) wird nach dem Schließen mit den Werten des Dokuments neu
+        // gesetzt; bei unveränderter Form ändert das nichts.
+        let param_texts = self.sketch_draft.as_ref().is_some_and(|d| {
+            d.sketch
+                .texts()
+                .any(|(_, t)| planora_feature::text_refs::has_param_ref(&t.content))
+        });
         self.commit_draft()?;
+        if param_texts {
+            self.texts_due = true;
+        }
         self.restore_camera();
         Ok(())
     }
@@ -3568,6 +3809,17 @@ impl AppState {
             (CopySource::Include(IncludeRef::FaceBoundary(_)), ProjectTarget::Face(b, f)) => {
                 CopySource::Include(IncludeRef::FaceBoundary(face(b, f)?))
             }
+            // Isokurve (Skizzen 11b): neue Fläche, Richtung und Anteil bleiben.
+            (
+                CopySource::Isoparametric {
+                    direction, value, ..
+                },
+                ProjectTarget::Face(b, f),
+            ) => CopySource::Isoparametric {
+                face: face(b, f)?,
+                direction: *direction,
+                value: *value,
+            },
             (CopySource::SketchCurve { .. }, ProjectTarget::SketchCurve(sketch, curve)) => {
                 self.check_source_sketch(sketch)?;
                 CopySource::SketchCurve { sketch, curve }
@@ -3737,6 +3989,7 @@ impl AppState {
             {
                 se.edit_label = None;
                 se.included_vertices.clear();
+                se.replace_step = false;
             }
             return;
         };
@@ -3745,6 +3998,25 @@ impl AppState {
         let Some((h, draft, _)) = self.sketch_open_change() else {
             return;
         };
+        // Bestätigtes Verschieben der eingefügten Kopie: kein zweiter Schritt, das Bild des
+        // Schritts „Einfügen“ wird ersetzt (Skizzen 11b, Spec-Entscheidung 5). Der Name bleibt.
+        let replace = self
+            .sketch_session
+            .as_ref()
+            .is_some_and(|se| se.replace_step)
+            && h.undo_len() > 0;
+        if replace {
+            let after = draft.clone();
+            let bytes = sketch_bytes(&after);
+            if let Some(h) = self.sketch_history.as_mut() {
+                h.replace_current(after, bytes);
+            }
+            if let Some(se) = self.sketch_session.as_mut() {
+                se.edit_label = None;
+                se.replace_step = false;
+            }
+            return;
+        }
         let label = self.sketch_label(h.current(), draft);
         crate::diag::step(&crate::diag::in_english(|| {
             self.sketch_label(h.current(), draft)
@@ -3757,6 +4029,185 @@ impl AppState {
         if let Some(se) = self.sketch_session.as_mut() {
             se.edit_label = None;
         }
+    }
+
+    // ---- Zwischenablage der Skizze (Skizzen 11b, Task 3) ----------------------------------
+
+    /// Die Auswahl der offenen Skizze als Zwischenablage. Ändert die Skizze nicht; die Meldung
+    /// sagt, wie viele Elemente es sind. Fehler: keine Skizze offen, nichts gewählt, Text auf
+    /// einem Pfad ohne seinen Pfad.
+    pub fn copy_sketch_selection(&mut self) -> Result<planora_feature::FeatureClip, Msg> {
+        let (Some(se), Some(sf)) = (self.sketch_session.as_mut(), self.sketch_draft.as_ref())
+        else {
+            return Err(crate::msg!("state-no-open-sketch"));
+        };
+        let set = clip_set_of(se, &sf.sketch);
+        let n = set.curves.len() + set.points.len();
+        if n == 0 {
+            let m = crate::msg!("sketch-nothing-selected");
+            se.message = Some(m.clone());
+            return Err(m);
+        }
+        let frame = *sf.sketch.frame();
+        match planora_feature::copy_selection(sf, &frame, &set) {
+            Ok(clip) => {
+                se.message = Some(crate::msg!("sketch-copy-done", n = n));
+                Ok(clip)
+            }
+            Err(e) => {
+                let m = crate::sketch_state::err(e);
+                se.message = Some(m.clone());
+                Err(m)
+            }
+        }
+    }
+
+    /// Ausschneiden: kopieren und die Auswahl wie mit Entf löschen (Löschregel der Skizze), ein
+    /// Schritt „Ausschneiden“. Scheitert das Kopieren, bleibt die Skizze, wie sie war.
+    pub fn cut_sketch_selection(&mut self) -> Result<planora_feature::FeatureClip, Msg> {
+        // Dieselben Sperren wie Entf (`sketch_view`): mitten in einem Zug, in der offenen Anordnung
+        // und im offenen Abschnitt „Text“ gehört die Auswahl dem Werkzeug; dann geschieht nichts
+        // (auch keine Zwischenablage, keine Meldung).
+        if self
+            .sketch_session
+            .as_ref()
+            .is_some_and(|se| se.in_gesture() || se.runs_pattern() || se.runs_text())
+        {
+            return Err(Msg::Join(Vec::new()));
+        }
+        // Was davor offen war, ist ein eigener Schritt.
+        self.observe_sketch(false);
+        let clip = self.copy_sketch_selection()?;
+        if let Some((se, sf)) = self.session_draft_mut() {
+            se.delete_selection_in(sf);
+            sf.prune_formulas();
+            se.edit_label = Some(crate::msg!("undo-sketch-cut"));
+        }
+        self.observe_sketch(false);
+        Ok(clip)
+    }
+
+    /// Einfügen: die Zwischenablage an die Lage der Quelle in die offene Skizze, ein Schritt
+    /// „Einfügen“. Danach sind alle eingefügten Elemente gewählt und Verschieben/Kopieren ist
+    /// damit offen (`TransformState::pasted`); ein bestätigtes Verschieben ersetzt das Bild dieses
+    /// Schritts, ein Abbruch lässt die Kopie an der Quelllage. Enthält die Kopie einen festen
+    /// Spline, bleibt sie gewählt, das Werkzeug geht nicht auf, und eine Meldung sagt es. Ein
+    /// Fehler (etwa „sketch-move-fixed“ beim Einfügen von 3D-Inhalt in eine andere Ebene) ändert
+    /// nichts.
+    pub fn paste_sketch_clip(
+        &mut self,
+        clip: &planora_feature::FeatureClip,
+    ) -> Result<planora_feature::PasteReport, Msg> {
+        use crate::sketch_state::{Item, Tool};
+        if self.sketch_session.is_none() || self.sketch_draft.is_none() {
+            return Err(crate::msg!("state-no-open-sketch"));
+        }
+        // Was davor offen war, ist ein eigener Schritt; ein laufendes Werkzeug endet.
+        self.observe_sketch(false);
+        let scope = self.document.param_scope();
+        let fonts = self.fonts.clone();
+        let Some((se, sf)) = self.session_draft_mut() else {
+            return Err(crate::msg!("state-no-open-sketch"));
+        };
+        se.set_tool(&mut sf.sketch, Tool::Select);
+        let frame = *sf.sketch.frame();
+        let before = sf.clone();
+        let report = match planora_feature::paste_clip(sf, &frame, clip, &scope) {
+            Ok(r) => r,
+            Err(e) => {
+                let m = crate::sketch_state::err(e);
+                se.message = Some(m.clone());
+                return Err(m);
+            }
+        };
+        // Parameter im Text (Skizzen 11b): Ein eingefügter Text zeigt den Wert dieses Dokuments
+        // (ein fehlender Parameter steht wörtlich da und warnt), im selben Schritt neu gesetzt.
+        // Ohne Schriftliste setzt das Schließen der Skizze neu (`try_close_sketch`).
+        planora_feature::text_refs::apply_shown(&mut sf.sketch, &scope);
+        if let Some(lib) = &fonts {
+            sf.sketch
+                .reshape_texts(&crate::fonts_library::Guarded(lib.as_ref()));
+        }
+        if let Err(m) = se.solve_checked(&mut sf.sketch, &before.sketch) {
+            *sf = before;
+            se.message = Some(m.clone());
+            return Err(m);
+        }
+        // Alle eingefügten Elemente sind gewählt: die Kurven und die freien Punkte. Ein neu
+        // gesetzter Text kann andere Kurven haben als die Quelle: nur lebende, dazu alle
+        // heutigen Kurven der eingefügten Texte.
+        let mut curves: Vec<CurveId> = report
+            .map
+            .curves
+            .values()
+            .copied()
+            .filter(|&c| sf.sketch.curve(c).is_some())
+            .collect();
+        for t in report.map.texts.values() {
+            if let Some(d) = sf.sketch.text(*t) {
+                for &c in &d.curves {
+                    if !curves.contains(&c) {
+                        curves.push(c);
+                    }
+                }
+            }
+        }
+        let grown = sf.sketch.transform_set(&curves, &[]);
+        let mut selection: Vec<Item> = curves.iter().map(|&c| Item::Curve(c)).collect();
+        selection.extend(
+            report
+                .map
+                .points
+                .values()
+                .filter(|p| !grown.points.contains(p) && sf.sketch.point_xy(**p).is_ok())
+                .map(|&p| Item::Point(p)),
+        );
+        let points: Vec<PointId> = report
+            .map
+            .points
+            .values()
+            .copied()
+            .filter(|&p| sf.sketch.point_xy(p).is_ok())
+            .collect();
+        se.selection = selection.clone();
+        se.drop_curve_picks();
+        se.edit_label = Some(crate::msg!("undo-sketch-paste"));
+        let mut notes = Vec::new();
+        if clip.made_free > 0 {
+            notes.push(crate::msg!("sketch-paste-made-free", n = clip.made_free));
+        }
+        if report.formulas_dropped > 0 {
+            notes.push(crate::msg!(
+                "sketch-paste-formulas-dropped",
+                n = report.formulas_dropped
+            ));
+        }
+        if report.constraints_dropped > 0 {
+            notes.push(crate::msg!(
+                "sketch-move-dropped",
+                n = report.constraints_dropped
+            ));
+        }
+        // Ein fester Spline in der Kopie: Sie lässt sich nicht verschieben.
+        let movable = !paste_is_fixed(&sf.sketch, &curves, &points);
+        if !movable {
+            notes.push(crate::msg!("sketch-paste-fixed-spline"));
+        }
+        se.message = match notes.len() {
+            0 => None,
+            1 => notes.pop(),
+            _ => Some(Msg::Join(notes)),
+        };
+        // Die Kopie ist ein Schritt, bevor sie bewegt wird.
+        self.observe_sketch(false);
+        if movable && let Some((se, sf)) = self.session_draft_mut() {
+            let message = se.message.take();
+            se.set_tool(&mut sf.sketch, Tool::MoveCopy);
+            se.transform.selection_before = selection;
+            se.transform.pasted = true;
+            se.message = message;
+        }
+        Ok(report)
     }
 
     /// Rückgängig in der offenen Skizze. Offene Änderungen werden vorher ein Schritt. Bleibt
@@ -3915,6 +4366,7 @@ impl AppState {
         {
             self.rename_draft = None;
         }
+        self.forget_gone_groups();
         if self
             .open_sketch_id()
             .is_some_and(|id| gone(&self.document, &id))
@@ -3981,7 +4433,7 @@ impl AppState {
 
     /// Der Körper `body` (Index in [`AppState::bodies`]), wie er vor der geöffneten Skizze
     /// sichtbar ist; nur diese Körper lassen sich in die Skizze bringen.
-    fn solid_before_sketch(&self, body: usize) -> Result<Solid, Msg> {
+    pub(crate) fn solid_before_sketch(&self, body: usize) -> Result<Solid, Msg> {
         let id = self
             .open_sketch_id()
             .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
@@ -4370,25 +4822,196 @@ impl AppState {
         source: CopySource,
         label: Msg,
     ) -> Result<usize, Msg> {
+        self.place_groups(vec![(pieces.to_vec(), source)], true, label)
+    }
+
+    /// Wie [`AppState::place_included`] für mehrere Gruppen auf einmal (je Gruppe Stücke und
+    /// Herkunft), alles in einem Schritt: Schlägt eine Gruppe fehl, bleibt die Skizze unverändert.
+    /// Mit `linked == false` entstehen freie Kurven ohne Fixierung und ohne Eintrag in `copies`.
+    fn place_groups(
+        &mut self,
+        groups: Vec<(Vec<Included>, CopySource)>,
+        linked: bool,
+        label: Msg,
+    ) -> Result<usize, Msg> {
         let (Some(se), Some(draft)) = (self.sketch_session.as_mut(), self.sketch_draft.as_mut())
         else {
             return Err(crate::msg!("state-no-open-sketch"));
         };
-        let targets = match se.include_pieces(&mut draft.sketch, pieces) {
+        let all: Vec<Included> = groups.iter().flat_map(|(p, _)| p.iter().cloned()).collect();
+        let targets = match se.include_pieces_as(&mut draft.sketch, &all, linked) {
             Ok(t) => t,
             Err(e) => return Err(se.message.clone().unwrap_or(Msg::Raw(e))),
         };
-        let of = u32::try_from(targets.len()).unwrap_or(u32::MAX);
-        for (k, target) in targets.iter().enumerate() {
-            draft.copies.push(EdgeCopy {
-                target: *target,
-                source: source.clone(),
-                piece: u32::try_from(k).unwrap_or(u32::MAX),
-                of,
-            });
+        if linked {
+            let mut from = 0;
+            for (pieces, source) in &groups {
+                let part = &targets[from..from + pieces.len()];
+                from += pieces.len();
+                let of = u32::try_from(part.len()).unwrap_or(u32::MAX);
+                for (k, target) in part.iter().enumerate() {
+                    draft.copies.push(EdgeCopy {
+                        target: *target,
+                        source: source.clone(),
+                        piece: u32::try_from(k).unwrap_or(u32::MAX),
+                        of,
+                    });
+                }
+            }
         }
         se.edit_label = Some(label);
         Ok(targets.len())
+    }
+
+    /// Fusion „Drehprofil“ (Skizzen 11b, Spec 5): rechnet mit
+    /// [`planora_feature::spun_profile`] (wie die Neuberechnung) und legt die Kurven in die
+    /// offene Skizze. Mit `linked` sind sie violett verknüpft (`CopySource::SpunProfile`, eine
+    /// Gruppe), sonst freie Kurven ohne Fixierung und ohne Eintrag in `copies`. Mit
+    /// `project_axis` kommt die Achse dazu: eine Kante als `Include(Edge)`, eine Ursprungsachse
+    /// als `Include(Axis)`, eine Linie einer früheren Skizze als `Include(SketchCurve)`; eine
+    /// Linie der eigenen Skizze liegt schon da. Ein Rückgängig-Schritt („Drehprofil“); bei einem
+    /// Fehler bleibt die Skizze unverändert, die Meldung steht auch in der Sitzung.
+    pub fn add_spun_profile(
+        &mut self,
+        spec: planora_feature::SpunSpec,
+        project_axis: bool,
+        linked: bool,
+    ) -> Result<usize, Msg> {
+        let r = self.try_spun_profile(spec, project_axis, linked);
+        if let Err(m) = &r
+            && let Some(se) = self.sketch_session.as_mut()
+        {
+            se.message = Some(m.clone());
+        }
+        r
+    }
+
+    fn try_spun_profile(
+        &mut self,
+        spec: planora_feature::SpunSpec,
+        project_axis: bool,
+        linked: bool,
+    ) -> Result<usize, Msg> {
+        let (idx, frame) = self.open_sketch_place()?;
+        let pieces = self.spun_pieces(&spec)?;
+        let mut groups = vec![(pieces, CopySource::SpunProfile(spec.clone()))];
+        if project_axis && let Some(r) = spun_axis_include(&spec.axis) {
+            let axis = planora_feature::included_pieces(&self.document, idx, &frame, &r)
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| crate::msg!("sketch-include-failed"))?;
+            groups.push((axis, CopySource::Include(r)));
+        }
+        self.place_groups(groups, linked, crate::msg!("undo-spun-profile"))
+    }
+
+    /// Die Kurvenstücke des Drehprofils `spec` in der offenen Skizze, gerechnet wie die
+    /// Neuberechnung; die Vorschau des Dialogs nutzt dieselbe Rechnung. Ein Fehler der Rechnung
+    /// ist die Meldung in der aktuellen Sprache.
+    pub fn spun_pieces(&self, spec: &planora_feature::SpunSpec) -> Result<Vec<Included>, Msg> {
+        use planora_feature::{DocView, SpunAxis, SpunError, spun_profile};
+        let (idx, frame) = self.open_sketch_place()?;
+        let own = match &spec.axis {
+            SpunAxis::Own(c) => Some(
+                self.session_sketch()
+                    .and_then(|sk| crate::spun_profile_dialog::own_axis_of(sk, *c))
+                    .ok_or_else(|| crate::msg!("sketch-spun-lost"))?,
+            ),
+            SpunAxis::Ref(_) => None,
+        };
+        let view = DocView::new(&self.document, idx, frame);
+        let tol = self.document.kernel().tolerance;
+        spun_profile(&view, spec, own, &tol).map_err(|e| match e {
+            SpunError::AxisNotInPlane => crate::msg!("sketch-spun-axis-off-plane"),
+            SpunError::NotRevolved => crate::msg!("sketch-spun-not-revolved"),
+            SpunError::Lost => crate::msg!("sketch-spun-lost"),
+            SpunError::Nothing => crate::msg!("sketch-spun-nothing"),
+        })
+    }
+
+    /// Fusion „Isoparametrische Kurve“ (Skizzen 11b, Spec 6): je Paar (Richtung, Anteil) aus
+    /// `pairs` die Kurven `u = const` bzw. `v = const` der Fläche `face`, gerechnet mit
+    /// [`planora_feature::isoparametric::iso_curves`] (wie die Neuberechnung). Mit `linked` ist
+    /// jedes Paar eine violette Gruppe (`CopySource::Isoparametric`), sonst freie Kurven (ohne
+    /// Fixierung, nur feste Splines behalten ihre Enden, ohne Eintrag in `copies`). Die Skizze
+    /// wird zur 3D-Skizze. Ein Rückgängig-Schritt („Isoparametrische Kurve“); ein Paar ohne Stück
+    /// fällt weg, ergibt keines ein Stück, ist es ein Fehler. Bei einem Fehler bleibt die Skizze
+    /// unverändert, die Meldung steht auch in der Sitzung.
+    pub fn add_isoparametric(
+        &mut self,
+        face: planora_feature::FaceRef,
+        pairs: &[(planora_feature::IsoDirection, f64)],
+        linked: bool,
+    ) -> Result<usize, Msg> {
+        let r = self.try_isoparametric(face, pairs, linked);
+        if let Err(m) = &r
+            && let Some(se) = self.sketch_session.as_mut()
+        {
+            se.message = Some(m.clone());
+        }
+        r
+    }
+
+    fn try_isoparametric(
+        &mut self,
+        face: planora_feature::FaceRef,
+        pairs: &[(planora_feature::IsoDirection, f64)],
+        linked: bool,
+    ) -> Result<usize, Msg> {
+        let mut groups = Vec::new();
+        for &(direction, value) in pairs {
+            let pieces = self.iso_pieces(&face, direction, value)?;
+            if !pieces.is_empty() {
+                let source = CopySource::Isoparametric {
+                    face: face.clone(),
+                    direction,
+                    value,
+                };
+                groups.push((pieces, source));
+            }
+        }
+        if groups.is_empty() {
+            return Err(crate::msg!("iso-no-hit"));
+        }
+        let n = self.place_groups(groups, linked, crate::msg!("undo-isoparametric"))?;
+        // Wie „Auf Fläche projizieren“ liegen die Kurven im Raum: Die Skizze wird zur
+        // 3D-Skizze, im selben Schritt.
+        if let Some(draft) = self.sketch_draft.as_mut() {
+            draft.sketch.set_three_d(true);
+        }
+        Ok(n)
+    }
+
+    /// Die Isokurven der Fläche `face` in der Richtung `dir` beim Anteil `value` in der offenen
+    /// Skizze, gerechnet wie die Neuberechnung; die Vorschau des Dialogs nutzt dieselbe Rechnung.
+    /// Trifft der Wert nichts, ist das Ergebnis leer; verlorene Fläche und Zeitgrenze sind
+    /// Fehler (Meldung in der aktuellen Sprache).
+    pub fn iso_pieces(
+        &self,
+        face: &planora_feature::FaceRef,
+        dir: planora_feature::IsoDirection,
+        value: f64,
+    ) -> Result<Vec<Included>, Msg> {
+        use planora_feature::surface_project::{ProjectError, surface_budget};
+        use planora_feature::{DocView, SURFACE_PROJECT_BUDGET};
+        let (idx, frame) = self.open_sketch_place()?;
+        let view = DocView::new(&self.document, idx, frame);
+        let tol = self.document.kernel().tolerance;
+        match planora_feature::isoparametric::iso_curves(
+            &view,
+            face,
+            dir,
+            value,
+            &tol,
+            surface_budget(),
+        ) {
+            Ok(p) => Ok(p),
+            Err(ProjectError::NoHit) => Ok(Vec::new()),
+            Err(ProjectError::Lost) => Err(crate::msg!("iso-lost")),
+            Err(ProjectError::TooSlow) => Err(crate::msg!(
+                "feature-surface-too-slow",
+                seconds = i64::try_from(SURFACE_PROJECT_BUDGET.as_secs()).unwrap_or(i64::MAX)
+            )),
+        }
     }
 
     /// Gemeinsamer Abschluss von Projizieren, Schneiden und Silhouette: legt die Kurvenstücke
@@ -4699,21 +5322,41 @@ pub fn mesh_locked_hint() -> String {
     tr!("state-mesh-locked")
 }
 
+/// Der Verweis, mit dem „Achse projizieren“ (Drehprofil) die Achse in die Skizze einzieht; `None`
+/// bei einer Linie der eigenen Skizze (sie liegt schon da).
+fn spun_axis_include(axis: &planora_feature::SpunAxis) -> Option<planora_feature::IncludeRef> {
+    use planora_feature::planes::AxisRef;
+    use planora_feature::{IncludeRef, SpunAxis};
+    match axis {
+        SpunAxis::Own(_) => None,
+        SpunAxis::Ref(AxisRef::Standard(a)) => Some(IncludeRef::Axis(*a)),
+        SpunAxis::Ref(AxisRef::Edge(e)) => Some(IncludeRef::Edge(e.clone())),
+        SpunAxis::Ref(AxisRef::SketchLine { sketch, curve }) => Some(IncludeRef::SketchCurve {
+            sketch: *sketch,
+            curve: *curve,
+        }),
+    }
+}
+
 /// Lässt sich die Herkunft `source` mit „Neu verknüpfen“ in der Ansicht neu wählen? Kante,
 /// Schnitt, Silhouette und Skizzenkurve über die Auswahl von „Projizieren“ (Ruling F9),
 /// eingezogene 3D-Geometrie (Kante, Flächenrand, Ecke, Ebene, Achse, Ursprung, Skizzenkurve)
 /// über die Auswahl von „3D-Geometrie einbeziehen“ (Ruling T18-1). Nicht: Konstruktionspunkte
-/// (gibt es noch nicht als Features), „Auf Fläche projizieren“ und die Schnittkurve (mehrteilige
-/// Eingaben ihres Dialogs; Abweichung in offene-punkte).
+/// (gibt es noch nicht als Features), „Auf Fläche projizieren“, die Schnittkurve und das
+/// Drehprofil (mehrteilige Eingaben ihres Dialogs; Abweichung in offene-punkte). Die Isokurve
+/// (Skizzen 11b) wählt ihre Fläche neu, Richtung und Anteil bleiben.
 pub fn relink_pickable(source: &CopySource) -> bool {
     use planora_feature::IncludeRef;
     match source {
         CopySource::Edge(_)
         | CopySource::Section { .. }
         | CopySource::Silhouette { .. }
-        | CopySource::SketchCurve { .. } => true,
+        | CopySource::SketchCurve { .. }
+        | CopySource::Isoparametric { .. } => true,
         CopySource::Include(r) => !matches!(r, IncludeRef::ConstructionPoint(_)),
-        CopySource::OnSurface(_) | CopySource::Intersection(_) => false,
+        CopySource::OnSurface(_) | CopySource::Intersection(_) | CopySource::SpunProfile(_) => {
+            false
+        }
     }
 }
 
@@ -5180,6 +5823,7 @@ impl AppState {
         if self.document.edit_count() == count {
             return Ok(out);
         }
+        self.texts_due = true;
         self.refresh();
         // Skizzen 5: Senkt eine Formel die Anzahl eines Musters, entfallen die Abhängigkeiten an
         // den wegfallenden Exemplaren; die Meldung nennt ihre Zahl wie im Werkzeug.
@@ -5227,4 +5871,41 @@ impl AppState {
             })
             .collect()
     }
+}
+
+/// Die Auswahl der Sitzung als Menge für die Zwischenablage: gewählte Kurven und Punkte (was nicht
+/// mehr lebt, fällt weg).
+fn clip_set_of(se: &SketchSession, sk: &Sketch) -> planora_sketch::clipboard::ClipSet {
+    use crate::sketch_state::Item;
+    let mut set = planora_sketch::clipboard::ClipSet::default();
+    for item in &se.selection {
+        match *item {
+            Item::Curve(c) if sk.curve(c).is_some() => set.curves.push(c),
+            Item::Point(p) if sk.point_xy(p).is_ok() => set.points.push(p),
+            _ => {}
+        }
+    }
+    set
+}
+
+/// Hält etwas in der eingefügten Menge fest (fester Spline: seine Enden bleiben `Fixed`)? Dann
+/// geht Verschieben/Kopieren dafür nicht.
+fn paste_is_fixed(sk: &Sketch, curves: &[CurveId], points: &[PointId]) -> bool {
+    use planora_sketch::transform::{Similarity, TransformBlock};
+    let set = sk.transform_set(curves, points);
+    let base = set
+        .points
+        .first()
+        .and_then(|&p| sk.point_xy(p).ok())
+        .unwrap_or(DVec2::ZERO);
+    let probe = Similarity {
+        base,
+        offset: DVec2::new(1.0, 0.0),
+        angle: 0.0,
+        factor: 1.0,
+    };
+    matches!(
+        sk.check_transform(&set, &probe),
+        Err(TransformBlock::FixedInSet(_) | TransformBlock::BoundToFixed(_))
+    )
 }

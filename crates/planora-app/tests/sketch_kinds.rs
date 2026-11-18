@@ -35,6 +35,7 @@ fn delete_in_draft(se: &mut SketchSession, sk: &mut Sketch) {
         plane: planora_feature::SketchPlane::Standard(planora_app::state::StandardPlane::XY),
         copies: Vec::new(),
         formulas: Default::default(),
+        text_formulas: Default::default(),
     };
     se.delete_selection_in(&mut sf);
     *sk = sf.sketch;
@@ -224,7 +225,9 @@ fn kinds_cover_their_tools_without_gaps() {
     // Skizzen 10, Task 16 bewusst angepasst: 3D-Geometrie einbeziehen (31 → 32). Task 19 bewusst
     // angepasst: Auf Fläche projizieren und Schnittkurve (32 → 34). Skizzen 11a, Task 8 bewusst
     // angepasst: Linie und Mittelpunktlinie als Arten des Linienwerkzeugs (34 → 36).
-    assert_eq!(ToolKind::ALL.len(), 36);
+    // Skizzen 11b, Task 14 bewusst angepasst: Drehprofil (36 → 37); Task 16 bewusst angepasst:
+    // Isoparametrische Kurve (37 → 38).
+    assert_eq!(ToolKind::ALL.len(), 38);
     let mut seen = Vec::new();
     for tool in [
         Tool::Rectangle,
@@ -245,7 +248,7 @@ fn kinds_cover_their_tools_without_gaps() {
             seen.push(k);
         }
     }
-    assert_eq!(seen.len(), 36);
+    assert_eq!(seen.len(), 38);
     for tool in [
         Tool::Select,
         Tool::Point,
@@ -455,7 +458,9 @@ fn default_keys_stay_and_twenty_actions_have_none() {
     // einbeziehen ebenso (27 → 28). Task 19 bewusst angepasst: Auf Fläche projizieren und
     // Schnittkurve ebenso (28 → 30). Skizzen 11a, Task 8 bewusst angepasst: die Mittelpunktlinie
     // ebenso (30 → 31); die Linie hat L.
-    assert_eq!(free, 31);
+    // Skizzen 11b, Task 14 bewusst angepasst: Drehprofil ebenso (31 → 32); Task 16 bewusst
+    // angepasst: Isoparametrische Kurve ebenso (32 → 33).
+    assert_eq!(free, 33);
     assert!(km.to_overrides().is_empty(), "Konfiguration bleibt leer");
 }
 
@@ -902,6 +907,7 @@ fn sides_field_is_a_whole_number_from_three_to_sixty_four() {
         plane: SketchPlane::Standard(StandardPlane::XY),
         copies: Vec::new(),
         formulas: Default::default(),
+        text_formulas: Default::default(),
     };
     assert_eq!(se.kind_stage(), 2);
     assert_eq!(se.input.sides, Some(8));

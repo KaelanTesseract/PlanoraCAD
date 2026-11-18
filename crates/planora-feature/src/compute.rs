@@ -895,7 +895,20 @@ fn compute_sketch(
         sketch.solve()
     };
     let locked = sketch.is_locked(&report);
-    let warning = sketch_warning(&followed.counts, &sketch);
+    let mut warning = sketch_warning(&followed.counts, &sketch);
+    // Parameter im Text (Skizzen 11b): Unbekannte Namen bleiben wörtlich stehen und warnen, der
+    // Status bleibt Ok. Ersetzt wird in `Document::reshape_texts`.
+    let unknown = crate::text_refs::unknown_names(&sketch, &doc.param_scope());
+    if !unknown.is_empty() {
+        let line = tr!(
+            "feature-sketch-text-param-unknown",
+            names = unknown.join(", ")
+        );
+        warning = Some(match warning {
+            Some(w) => format!("{w}\n{line}"),
+            None => line,
+        });
+    }
     Ok(Computed {
         locked,
         lost: followed.lost,
@@ -926,6 +939,9 @@ struct Followed {
     copies: Vec<EdgeCopy>,
     counts: CopyCounts,
     lost: Vec<crate::model::CopyTarget>,
+    /// Ziele, die nicht gefolgt sind, ohne verloren zu sein: andere Stückzahl der Quelle oder
+    /// Zeitgrenze (Skizzen 11b, Task 16: „Neu verknüpfen“ lehnt auch das ab).
+    unfollowed: Vec<crate::model::CopyTarget>,
 }
 
 /// Führt alle Kopien der Skizze nach. Die alten Arten (Kante, Schnitt, Silhouette) einzeln wie
@@ -948,6 +964,7 @@ fn follow_copies(
     let mut done = vec![false; n];
     // Kopien mit verlorenem Bezug; die Ziele folgen am Ende in der Reihenfolge der Kopien.
     let mut lost = vec![false; n];
+    let mut unfollowed = vec![false; n];
     let mut counts = CopyCounts::default();
     for i in 0..n {
         if done[i] {
@@ -993,7 +1010,7 @@ fn follow_copies(
             .map(|&j| (sf.copies[j].piece as usize + 1).max(sf.copies[j].of as usize))
             .max()
             .unwrap_or(0);
-        match crate::include::source_pieces(ctx, &c.source, points) {
+        match crate::include::source_pieces(ctx, &c.source, points, Some(&*sketch)) {
             Err(why) => {
                 for &j in &group {
                     restore_copy(sketch, &sf.copies[j], previous);
@@ -1005,7 +1022,12 @@ fn follow_copies(
                             lost[j] = true;
                         }
                     }
-                    crate::include::Unfollowed::TooSlow => counts.too_slow += group.len(),
+                    crate::include::Unfollowed::TooSlow => {
+                        counts.too_slow += group.len();
+                        for &j in &group {
+                            unfollowed[j] = true;
+                        }
+                    }
                 }
             }
             Ok((_, pieces)) if pieces.len() != expected => {
@@ -1013,6 +1035,9 @@ fn follow_copies(
                     restore_copy(sketch, &sf.copies[j], previous);
                 }
                 counts.mismatch += group.len();
+                for &j in &group {
+                    unfollowed[j] = true;
+                }
             }
             Ok((source, pieces)) => {
                 for &j in &group {
@@ -1042,10 +1067,18 @@ fn follow_copies(
         .filter(|(_, l)| **l)
         .map(|(c, _)| c.target)
         .collect();
+    let unfollowed = sf
+        .copies
+        .iter()
+        .zip(&unfollowed)
+        .filter(|(_, u)| **u)
+        .map(|(c, _)| c.target)
+        .collect();
     Followed {
         copies: out,
         counts,
         lost,
+        unfollowed,
     }
 }
 
@@ -1053,8 +1086,10 @@ impl Document {
     /// Führt in einem Entwurf `draft` der Skizze `sketch` (offene Skizze der App) die Kopien mit
     /// den Zielen `targets` nach, genau wie die Neuberechnung (Körper, die vor der Skizze
     /// sichtbar sind; Ebene des Entwurfs). Für „Neu verknüpfen“ in der offenen Skizze
-    /// (Skizzen 11a). Die übrigen Kopien bleiben unberührt. Liefert die Ziele, deren Bezug dabei
-    /// verloren ist (ihre Lage bleibt die des Entwurfs).
+    /// (Skizzen 11a). Die übrigen Kopien bleiben unberührt. Liefert die Ziele, die dabei nicht
+    /// gefolgt sind (ihre Lage bleibt die des Entwurfs): Bezug verloren, und seit Skizzen 11b
+    /// (Task 16) auch eine andere Stückzahl der Quelle (etwa eine Isokurve ohne Treffer auf der
+    /// neuen Fläche) oder die Zeitgrenze.
     pub fn follow_draft_copies(
         &self,
         sketch: FeatureId,
@@ -1089,7 +1124,9 @@ impl Document {
                 *c = updated;
             }
         }
-        Ok(followed.lost)
+        let mut out = followed.lost;
+        out.extend(followed.unfollowed);
+        Ok(out)
     }
 }
 

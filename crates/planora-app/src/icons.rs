@@ -1088,6 +1088,13 @@ pub enum HandIcon {
     /// Schnittkurve (Skizzen 10): zwei sich kreuzende Flächen als dünne Vierecke, ihr Schnitt
     /// kräftig mit den Enden als Punkte.
     SketchIntersectionCurve,
+    /// Drehprofil (Skizzen 11b): die Achse als dünne Strichlinie senkrecht in der Mitte, rechts
+    /// davon der Umriss einer Welle kräftig, links dünn sein Spiegelbild (er wird um die Achse
+    /// in die Ebene gedreht).
+    SketchSpunProfile,
+    /// Isoparametrische Kurve (Skizzen 11b): eine gewölbte Fläche als dünner Umriss, darauf eine
+    /// U- und eine V-Linie kräftig.
+    SketchIsoparametric,
     /// Spline mit Kontrollpunkten (Skizzen 7): die Kurve kräftig, ihr Kontrollpolygon dünn, die
     /// Kontrollpunkte als Punkte.
     SketchSplineControl,
@@ -1134,6 +1141,8 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::SketchInclude3d,
     HandIcon::SketchProjectToSurface,
     HandIcon::SketchIntersectionCurve,
+    HandIcon::SketchSpunProfile,
+    HandIcon::SketchIsoparametric,
     HandIcon::SketchSplineControl,
     HandIcon::SketchConic,
     HandIcon::Text,
@@ -1526,6 +1535,67 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             painter.circle_filled(a, 1.6, color);
             painter.circle_filled(b, 1.6, color);
         }
+        HandIcon::SketchSpunProfile => {
+            // Achse als Strichlinie in der Mitte; der Umriss einer gestuften Welle rechts
+            // kräftig, links als dünnes Spiegelbild.
+            let thin = Stroke::new(1.0, color);
+            for k in 0..3 {
+                let y = -r * 1.1 + k as f32 * r * 0.8;
+                seg(
+                    painter,
+                    [c + vec2(0.0, y), c + vec2(0.0, y + r * 0.5)],
+                    thin,
+                );
+            }
+            let outline = [
+                vec2(0.0, -r),
+                vec2(r * 0.9, -r),
+                vec2(r * 0.9, -r * 0.2),
+                vec2(r * 0.45, -r * 0.2),
+                vec2(r * 0.45, r),
+                vec2(0.0, r),
+            ];
+            for w in outline.windows(2) {
+                seg(painter, [c + w[0], c + w[1]], stroke);
+            }
+            let mirror = [
+                vec2(-r * 0.9, -r),
+                vec2(-r * 0.9, -r * 0.2),
+                vec2(-r * 0.45, -r * 0.2),
+            ];
+            seg(painter, [c + vec2(0.0, -r), c + mirror[0]], thin);
+            seg(painter, [c + mirror[0], c + mirror[1]], thin);
+            seg(painter, [c + mirror[1], c + mirror[2]], thin);
+            seg(painter, [c + mirror[2], c + vec2(-r * 0.45, r)], thin);
+            seg(painter, [c + vec2(-r * 0.45, r), c + vec2(0.0, r)], thin);
+        }
+        HandIcon::SketchIsoparametric => {
+            // Gewölbte Fläche: oben und unten nach oben gebogene Ränder (dünn), dazu eine
+            // U-Linie (senkrecht, leicht gebogen) und eine V-Linie (quer, gebogen) kräftig.
+            let thin = Stroke::new(1.0, color);
+            let bow = |x: f32| -0.3 * r * (1.0 - x * x);
+            let across = |y: f32| -> Vec<Pos2> {
+                (0..=12_i32)
+                    .map(|i| {
+                        let x = -1.0 + 2.0 * i as f32 / 12.0;
+                        c + vec2(x * r, y + bow(x))
+                    })
+                    .collect()
+            };
+            painter.add(egui::Shape::line(across(-r), thin));
+            painter.add(egui::Shape::line(across(r), thin));
+            seg(painter, [c + vec2(-r, -r), c + vec2(-r, r)], thin);
+            seg(painter, [c + vec2(r, -r), c + vec2(r, r)], thin);
+            painter.add(egui::Shape::line(across(0.0), stroke));
+            let x = 0.2;
+            let up: Vec<Pos2> = (0..=8_i32)
+                .map(|i| {
+                    let y = -r + 2.0 * r * i as f32 / 8.0;
+                    c + vec2(x * r + 0.08 * r * (y / r) * (y / r), y + bow(x))
+                })
+                .collect();
+            painter.add(egui::Shape::line(up, stroke));
+        }
         HandIcon::SketchSplineControl => {
             // Bézier-Stück über vier Kontrollpunkte, dünn verbunden.
             let thin = Stroke::new(1.0, color);
@@ -1751,6 +1821,8 @@ pub fn sketch_kind_icon(kind: crate::sketch_kinds::ToolKind) -> IconSource {
         K::Include3d => IconSource::Hand(HandIcon::SketchInclude3d),
         K::ProjectToSurface => IconSource::Hand(HandIcon::SketchProjectToSurface),
         K::IntersectionCurve => IconSource::Hand(HandIcon::SketchIntersectionCurve),
+        K::SpunProfile => IconSource::Hand(HandIcon::SketchSpunProfile),
+        K::Isoparametric => IconSource::Hand(HandIcon::SketchIsoparametric),
         K::SplineControl => IconSource::Hand(HandIcon::SketchSplineControl),
         K::Conic => IconSource::Hand(HandIcon::SketchConic),
         _ => sketch_tool_icon(kind.tool()),

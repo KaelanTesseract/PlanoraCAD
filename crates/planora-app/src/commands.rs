@@ -274,6 +274,8 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchInclude3d
         | Action::SketchProjectToSurface
         | Action::SketchIntersectionCurve
+        | Action::SketchSpunProfile
+        | Action::SketchIsoparametric
         | Action::SketchSplineFit
         | Action::SketchSplineControl
         // Skizzen 11a: Linie und Mittelpunktlinie sind die beiden Arten des Linienwerkzeugs.
@@ -372,6 +374,29 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 state.open_lost_projections(id);
             }
         }
+        Action::SketchSaveAsDxf => {
+            // Für die gewählte Skizze (Baum, Verlaufsleiste oder offene Skizze); ändert nichts.
+            let state = &mut ws.active_tab_mut().state;
+            if let Some(id) = state.open_sketch_id().or(state.selected_feature) {
+                state.open_sketch_dxf(id);
+            }
+        }
+        Action::SketchGroupCreate => {
+            // Aus den im Ordner „Skizzen“ gewählten Skizzen; Fehler stehen in der Meldung.
+            let _ = ws
+                .active_tab_mut()
+                .state
+                .create_sketch_group_from_browser(None);
+        }
+        Action::SketchGroupUngroup => {
+            let state = &mut ws.active_tab_mut().state;
+            match state.selected_sketch_group() {
+                Some(g) => {
+                    let _ = state.ungroup_sketch_group(g);
+                }
+                None => hint(state, &need_selection()),
+            }
+        }
         Action::SketchToggleCurvature => {
             crate::curvature_dialog::toggle(&mut ws.active_tab_mut().state);
         }
@@ -407,6 +432,9 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 let _ = se.constraint_button(sk, action);
             }
         }
+        Action::SketchCopy | Action::SketchCut | Action::SketchPaste => {
+            sketch_clipboard_action(ws, a);
+        }
         Action::SketchRepeatLast => {
             if let Some(last) = ws.last_command.sketch_tool() {
                 return run_action(ws, last);
@@ -419,6 +447,38 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         }
     }
     MenuRequest::None
+}
+
+/// Kopieren, Ausschneiden, Einfügen in der offenen Skizze (Skizzen 11b). Ohne offene Skizze (und
+/// in schreibgeschützten Ansichten) tut es nichts. Die Zwischenablage gehört dem Arbeitsbereich:
+/// Sie bleibt über Tabs und Dokumente, solange das Programm läuft. Die Meldung steht in der
+/// Sitzung der Skizze.
+fn sketch_clipboard_action(ws: &mut Workspace, a: Action) {
+    let stored = ws.sketch_clipboard.clone();
+    let tab = ws.active_tab_mut();
+    if tab.read_only || tab.state.sketch_session.is_none() {
+        return;
+    }
+    let state = &mut tab.state;
+    let mut made = None;
+    match a {
+        Action::SketchCopy => made = state.copy_sketch_selection().ok(),
+        Action::SketchCut => made = state.cut_sketch_selection().ok(),
+        _ => match stored {
+            Some(clip) => {
+                let _ = state.paste_sketch_clip(&clip);
+            }
+            None => {
+                if let Some(se) = state.sketch_session.as_mut() {
+                    se.message = Some(crate::msg!("sketch-paste-empty"));
+                }
+            }
+        },
+    }
+    if made.is_some() {
+        ws.sketch_clipboard = made;
+    }
+    ws.sync_sketch_clip_flag();
 }
 
 /// Wie [`run_action`], über eine Taste: „Skizze extrudieren“ braucht dann eine gewählte Skizze
@@ -459,6 +519,11 @@ fn toggle_visibility(state: &mut AppState) {
 /// (Baum, Verlaufsleiste), sonst der gewählte Körper (sein Ursprung, wie die Körperzeile im
 /// Baum). Zurückgesetzte Körper sind nicht gesperrt.
 fn delete_selection(state: &mut AppState) {
+    // Skizzen 11b: Eine gewählte Skizzengruppe wird aufgelöst (keine Skizze gelöscht).
+    if let Some(g) = state.selected_sketch_group() {
+        let _ = state.ungroup_sketch_group(g);
+        return;
+    }
     let target = state
         .selected_feature
         .filter(|id| state.document.feature(*id).is_some())

@@ -97,6 +97,14 @@ action_table! {
     /// Vorgabetaste wie in Fusion, belegbar.
     ManageLostProjections, "modell.verlorene_projektionen", "action-manage-lost-projections",
         Model, [];
+    /// Fusion „Als DXF speichern“ (Skizzen 11b) für die gewählte Skizze; ohne Vorbelegung, belegbar.
+    SketchSaveAsDxf, "modell.skizze_als_dxf", "action-sketch-save-as-dxf", Model, [];
+    /// Fusion „Gruppe erstellen“ (Skizzen 11b) aus den im Ordner „Skizzen“ gewählten Skizzen;
+    /// ohne Vorbelegung, belegbar.
+    SketchGroupCreate, "modell.gruppe_erstellen", "action-sketch-group-create", Model, [];
+    /// Fusion „Gruppe auflösen“ (Skizzen 11b) für die gewählte Skizzengruppe; ohne Vorbelegung,
+    /// belegbar.
+    SketchGroupUngroup, "modell.gruppe_aufloesen", "action-sketch-group-ungroup", Model, [];
     /// Öffnet das Fenster „Tastenkürzel“ mit aktivem Suchfeld (Fusion „Shortcuts“); wie
     /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
     ShowShortcuts, "ansicht.tastenkuerzel", "action-show-shortcuts", Model, [key(Key::S)];
@@ -172,6 +180,10 @@ action_table! {
         Sketch, [];
     /// Fusion „Schnittkurve“ (Skizzen 10): ohne Vorgabetaste wie in Fusion, belegbar.
     SketchIntersectionCurve, "skizze.schnittkurve", "action-sketch-intersection-curve", Sketch, [];
+    /// Fusion „Drehprofil“ (Skizzen 11b): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchSpunProfile, "skizze.drehprofil", "action-sketch-spun-profile", Sketch, [];
+    /// Fusion „Isoparametrische Kurve“ (Skizzen 11b): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchIsoparametric, "skizze.isokurve", "action-sketch-isoparametric", Sketch, [];
     // Skizzen 7: die Arten am Spline-Knopf, ohne Vorgabetaste wie in Fusion (Annahme), belegbar.
     /// Fusion „Spline durch Stützpunkte“.
     SketchSplineFit, "skizze.spline_stuetzpunkte", "action-sketch-spline-fit", Sketch, [];
@@ -265,6 +277,15 @@ action_table! {
     SketchCollinear, "skizze.kollinear", "action-sketch-collinear", Sketch, [];
     /// Fusion „Glatt“.
     SketchSmooth, "skizze.glatt", "action-sketch-smooth", Sketch, [];
+    // Skizzen 11b: Zwischenablage der Skizze. Die drei Tasten kommen von egui nicht als Tasten,
+    // sondern als `Event::Copy`/`Cut`/`Paste`; `keymap::clipboard_keys` macht sie vor dem
+    // Verteiler dazu, damit die Belegung (auch eine Umbelegung) gilt.
+    /// Fusion „Kopieren“ (Copy): die Auswahl der offenen Skizze in die Zwischenablage.
+    SketchCopy, "skizze.kopieren", "action-sketch-copy", Sketch, [ctrl(Key::C)];
+    /// Fusion „Ausschneiden“ (Cut): kopieren und löschen wie Entf, ein Schritt.
+    SketchCut, "skizze.ausschneiden", "action-sketch-cut", Sketch, [ctrl(Key::X)];
+    /// Fusion „Einfügen“ (Paste): die Zwischenablage an die Lage der Quelle, danach Verschieben.
+    SketchPaste, "skizze.einfuegen", "action-sketch-paste", Sketch, [ctrl(Key::V)];
     /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
     SketchShowShortcuts, "skizze.tastenkuerzel", "action-sketch-show-shortcuts", Sketch,
         [key(Key::S)];

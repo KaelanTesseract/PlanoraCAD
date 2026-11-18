@@ -1228,6 +1228,12 @@ impl PlanoraApp {
         // Skizzen 10: Alt allein und Pfeil hoch gehalten (die Triade der 3D-Skizze); der Verfolger
         // muss jedes Bild sehen, auch wenn sonst gesperrt ist.
         self.triad_keys(ctx);
+        // Strg+C/X/V gehören der Skizze nur, solange im aktiven Tab eine Skizze offen ist (auch
+        // für die abgedockten Fenster).
+        keymap::clipboard_keys::set_sketch_open(
+            ctx,
+            self.ws.active_tab().state.sketch_session.is_some(),
+        );
         if self.ws.prompt.is_some() {
             return;
         }
@@ -1650,6 +1656,7 @@ pub fn show_file_dialogs(ctx: &egui::Context, ws: &mut Workspace) {
     {
         tab.canvas_dialog = Some(dialog);
     }
+    crate::sketch_dxf_dialog::show_open(ctx, &mut tab.state, &mut exchange_dir, &mut places);
     tab.state.insert_dialog_open = tab.dxf_dialog.is_some() || tab.svg_dialog.is_some();
     ws.exchange_dir = exchange_dir;
     ws.save_places(places);
@@ -1664,6 +1671,7 @@ fn file_window_open(ws: &Workspace) -> bool {
         || tab.dxf_dialog.is_some()
         || tab.svg_dialog.is_some()
         || tab.canvas_dialog.is_some()
+        || tab.state.sketch_dxf_dialog.is_some()
 }
 
 /// P10: schließt die Dateifenster des aktiven Tabs für Projekte oder Einstellungen. Ein
@@ -1681,6 +1689,7 @@ fn close_file_windows(ws: &mut Workspace) -> bool {
         return false;
     }
     tab.export_dialog = None;
+    tab.state.sketch_dxf_dialog = None;
     tab.import_dialog = None;
     tab.step_import_dialog = None;
     if tab.dxf_dialog.take().is_some() {
@@ -2610,6 +2619,28 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         ui.close();
     }
     ui.separator();
+    // Kopieren, Ausschneiden, Einfügen der Skizze (Skizzen 11b): ohne offene Skizze gedämpft.
+    let tab = ws.active_tab();
+    let sketch_open = tab.state.sketch_session.is_some() && !tab.read_only;
+    for (action, label) in [
+        (Action::SketchCopy, tr!("action-sketch-copy")),
+        (Action::SketchCut, tr!("action-sketch-cut")),
+        (Action::SketchPaste, tr!("action-sketch-paste")),
+    ] {
+        let keys = keymap::shortcut_hint(&ws.keymap, action);
+        let mut button = egui::Button::new(label);
+        if !keys.is_empty() {
+            button = button.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()));
+        }
+        if entry(ui, sketch_open, button)
+            .on_disabled_hover_text(tr!("sketch-clip-needs-sketch"))
+            .clicked()
+        {
+            commands::run_action(ws, action);
+            ui.close();
+        }
+    }
+    ui.separator();
     // Parameter: gesperrt, solange eine Skizze offen ist (ihr Entwurf hängt an den alten Werten).
     let tab = ws.active_tab_mut();
     let sketch_open = tab.state.sketch_session.is_some();
@@ -3284,6 +3315,10 @@ impl eframe::App for PlanoraApp {
         // Maustaste mehr gedrückt ist und kein Eingabefeld die Tastatur hat, damit Ziehen und
         // Tippen je ein Schritt sind. Vor `remember_keyboard_focus` zählt dabei auch das vorige
         // Bild; das verschiebt den Schritt nach Enter nur um ein Bild (beides ein Schritt).
+        if self.ws.active_tab().state.clip_request.is_some() {
+            ctx.request_repaint();
+        }
+        self.ws.serve_sketch_clip();
         let gesture = ctx.input(|i| i.pointer.any_down())
             || viewport::typing_for_history(&ctx)
             || crate::history_bar::is_playing(&ctx);

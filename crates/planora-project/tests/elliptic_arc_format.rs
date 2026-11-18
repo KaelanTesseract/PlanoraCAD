@@ -31,6 +31,7 @@ fn document(with_arc: bool, remove_arc: bool) -> Document {
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![],
                 formulas: Default::default(),
+                text_formulas: Default::default(),
             }),
         )
         .unwrap();
@@ -97,10 +98,10 @@ fn without_an_elliptic_arc_the_file_keeps_its_format() {
     assert!(text.contains("\"format\": 1,"), "{text}");
 }
 
-// Skizzen 10: Format 20 ist jetzt gültig, zu neu ist erst 22.
+// Skizzen 10: Format 20 ist jetzt gültig, zu neu ist erst 23.
 #[test]
-fn format_21_is_too_new() {
+fn format_23_is_too_new() {
     let text = encode_version(&document(true, false).snapshot()).unwrap();
-    let e = load(&text.replacen("\"format\": 13", "\"format\": 22", 1)).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 22, .. }), "{e:?}");
+    let e = load(&text.replacen("\"format\": 13", "\"format\": 23", 1)).unwrap_err();
+    assert!(matches!(e, ProjectError::TooNew { found: 23, .. }), "{e:?}");
 }
