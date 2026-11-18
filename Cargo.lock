@@ -2948,6 +2948,7 @@ dependencies = [
  "planora-kernel",
  "planora-math",
  "planora-mesh",
+ "planora-sketch",
 ]
 
 [[package]]

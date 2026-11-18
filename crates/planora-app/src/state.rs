@@ -235,6 +235,9 @@ pub struct AppState {
     /// Per Strg-Klick im Ordner „Skizzen“ gewählte Skizzen (Skizzen 11b); gilt nur, solange
     /// `selected_feature` darin steht (siehe [`AppState::browser_sketch_selection`]).
     pub browser_sketches: Vec<FeatureId>,
+    /// Rechtsklickmenü auf einer fertigen Skizze in der 3D-Ansicht (Skizzen 12): Bildschirmort
+    /// des Menüs. Gilt für die gewählte Skizzenkurve oder den gewählten Skizzenpunkt.
+    pub sketch_pick_menu: Option<(f32, f32)>,
     /// Im Ordner „Skizzen“ gewählte Gruppe (Skizzen 11b); gilt nur ohne `selected_feature`.
     pub browser_group: Option<planora_feature::SketchGroupId>,
     /// Grundebene unter dem Zeiger (hell gezeichnet; gilt nur für das laufende Bild).
@@ -630,15 +633,19 @@ pub struct PickFilter {
     pub edges: bool,
     /// Flächen der Körper.
     pub faces: bool,
+    /// Kurven und Punkte fertiger, sichtbarer Skizzen (Skizzen 12); nur die normale Auswahl.
+    pub sketches: bool,
 }
 
 impl PickFilter {
-    /// Normale Auswahl in der 3D-Ansicht: Flächen, Kanten und Ebenen, keine Eckpunkte.
+    /// Normale Auswahl in der 3D-Ansicht: Flächen, Kanten, Ebenen und die fertigen Skizzen
+    /// (Skizzen 12), keine Eckpunkte.
     pub const SELECT: PickFilter = PickFilter {
         planes: true,
         vertices: false,
         edges: true,
         faces: true,
+        sketches: true,
     };
     /// Nur Flächen und Kanten (Projizieren und Schneiden im Skizzen-Modus).
     pub const GEOMETRY: PickFilter = PickFilter {
@@ -646,6 +653,7 @@ impl PickFilter {
         vertices: false,
         edges: true,
         faces: true,
+        sketches: false,
     };
     /// Punktwahl: Eckpunkte vor allem anderen, dann Kanten und Flächen. Ebenen zählen nicht
     /// und verdecken keine Ecken (die Punkte liegen oft hinter einer schon gezeichneten Ebene).
@@ -654,6 +662,7 @@ impl PickFilter {
         vertices: true,
         edges: true,
         faces: true,
+        sketches: false,
     };
     /// „3D-Geometrie einbeziehen“ (Skizzen 10): Ecken, Kanten, Flächen und Ebenen.
     pub const INCLUDE: PickFilter = PickFilter {
@@ -661,6 +670,7 @@ impl PickFilter {
         vertices: true,
         edges: true,
         faces: true,
+        sketches: false,
     };
     /// Bezug eines Ebenen-Fensters: Flächen und Ebenen, keine Kanten.
     pub const BASES: PickFilter = PickFilter {
@@ -668,6 +678,7 @@ impl PickFilter {
         vertices: false,
         edges: false,
         faces: true,
+        sketches: false,
     };
     /// Nur Flächen (Tangentialebene).
     pub const FACES: PickFilter = PickFilter {
@@ -675,6 +686,7 @@ impl PickFilter {
         vertices: false,
         edges: false,
         faces: true,
+        sketches: false,
     };
     /// Nur Kanten (Achse der Ebene unter Winkel).
     pub const EDGES: PickFilter = PickFilter {
@@ -682,6 +694,7 @@ impl PickFilter {
         vertices: false,
         edges: true,
         faces: false,
+        sketches: false,
     };
     /// Nur Eckpunkte („Ebene durch drei Punkte“).
     pub const VERTICES: PickFilter = PickFilter {
@@ -689,6 +702,7 @@ impl PickFilter {
         vertices: true,
         edges: false,
         faces: false,
+        sketches: false,
     };
 }
 const BODY_GAP_MM: f64 = 10.0;
@@ -745,6 +759,7 @@ impl AppState {
             tree_folders: crate::browser::FolderState::default(),
             tree_groups_open: std::collections::BTreeSet::new(),
             browser_sketches: Vec::new(),
+            sketch_pick_menu: None,
             browser_group: None,
             origin_hover: None,
             selected_origin: None,
@@ -986,6 +1001,17 @@ impl AppState {
             }
             // Eine Ebene hängt an keinem Körper; sie bleibt, solange sie gezeichnet wird.
             Pick::Plane(id) => self.plane_rect(id).map(|_| pick),
+            // Eine Skizzenkurve oder ein Skizzenpunkt bleibt, solange es sie gibt.
+            Pick::SketchCurve { sketch, curve } => self
+                .document
+                .sketch_of(sketch)
+                .and_then(|sk| sk.curve(curve))
+                .map(|_| pick),
+            Pick::SketchPoint { sketch, point } => self
+                .document
+                .sketch_of(sketch)
+                .and_then(|sk| sk.point_xyz(point).ok())
+                .map(|_| pick),
         }
     }
 
@@ -1258,6 +1284,35 @@ impl AppState {
         self.apply_visibility(v);
     }
 
+    /// Die Skizze der gewählten Skizzenkurve oder des gewählten Skizzenpunkts in der 3D-Ansicht
+    /// (Skizzen 12).
+    pub fn picked_sketch(&self) -> Option<FeatureId> {
+        match self.selection {
+            Some(Pick::SketchCurve { sketch, .. } | Pick::SketchPoint { sketch, .. }) => {
+                Some(sketch)
+            }
+            _ => None,
+        }
+    }
+
+    /// „Skizze bearbeiten“ im Rechtsklickmenü auf Skizzengeometrie: öffnet die Skizze der
+    /// Auswahl wie ein Doppelklick im Baum. Ohne gewählte Skizzengeometrie nichts.
+    pub fn edit_picked_sketch(&mut self) {
+        self.sketch_pick_menu = None;
+        if let Some(id) = self.picked_sketch() {
+            crate::browser::edit(self, id);
+        }
+    }
+
+    /// „Ausblenden“ im Rechtsklickmenü auf Skizzengeometrie: das Auge der Skizze geht aus
+    /// (wie im Baum; die Auswahl entfällt dabei). Ohne gewählte Skizzengeometrie nichts.
+    pub fn hide_picked_sketch(&mut self) {
+        self.sketch_pick_menu = None;
+        if let Some(id) = self.picked_sketch() {
+            self.set_feature_hidden(id, true);
+        }
+    }
+
     /// Ist die Grundebene `p` eingeblendet (Auge im Ordner „Ursprung“)?
     pub fn is_origin_plane_shown(&self, p: StandardPlane) -> bool {
         self.document.visibility().origin_shown(p)
@@ -1315,6 +1370,9 @@ impl AppState {
     fn sync_visibility(&mut self) {
         let hidden = |s: &Self, p: Option<Pick>| match p {
             Some(Pick::Plane(id)) => s.is_feature_hidden(id),
+            Some(Pick::SketchCurve { sketch, .. } | Pick::SketchPoint { sketch, .. }) => {
+                s.is_feature_hidden(sketch)
+            }
             Some(p) => pick_body(p).is_some_and(|j| s.is_body_hidden(j)),
             None => false,
         };
@@ -2522,6 +2580,26 @@ impl AppState {
                 edge: hit.edge,
             }));
         }
+        // Skizzenpunkt, dann Skizzenkurve einer fertigen, sichtbaren Skizze (Skizzen 12); was ein
+        // Körper verdeckt, zählt nicht.
+        if filter.sketches {
+            let map = crate::sketch_view::Mapper {
+                camera: self.camera,
+                frame: planora_math::Frame::WORLD,
+                rect: egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(viewport.x, viewport.y),
+                ),
+            };
+            if let Some(hit) = crate::sketch_view::finished_sketch_under(
+                self,
+                &map,
+                egui::pos2(cursor.x, cursor.y),
+                slice,
+            ) {
+                return Some(hit);
+            }
+        }
         match (nearest_face, nearest_plane) {
             (Some((_, f)), Some((id, p))) if p < f.distance as f64 => Some(Pick::Plane(id)),
             (None, Some((id, _))) => Some(Pick::Plane(id)),
@@ -2755,9 +2833,32 @@ impl AppState {
             1.0 - 2.0 * cursor.y / viewport.y,
         );
         let (origin, dir) = self.camera.ray(ndc);
+        self.nearest_face_along(origin, dir, self.active_slice())
+    }
+
+    /// Strahllänge bis zum ersten Körpertreffer des Strahls `origin` + t · `dir` (derselbe Treffer
+    /// wie beim Anklicken von Flächen, auch bei Slice: Was vor der Skizzenebene liegt, zählt
+    /// nicht; ausgeblendete Körper fehlen). `None`, wenn der Strahl keinen Körper trifft. Damit
+    /// prüfen fertige Skizzen, ob eine Stelle verdeckt ist: Der Treffer liegt dann vor ihr.
+    pub fn body_hit_distance(
+        &self,
+        origin: DVec3,
+        dir: DVec3,
+        slice: Option<[f32; 4]>,
+    ) -> Option<f64> {
+        self.nearest_face_along(to_vec3(origin), to_vec3(dir), slice)
+            .map(|(_, h)| f64::from(h.distance))
+    }
+
+    /// Die vorderste Fläche, die der Strahl trifft, mit dem Index ihres Körpers.
+    fn nearest_face_along(
+        &self,
+        origin: Vec3,
+        dir: Vec3,
+        slice: Option<[f32; 4]>,
+    ) -> Option<(usize, planora_render::FaceHit)> {
         // Slice: Was vor der Skizzenebene liegt, ist weggeschnitten; der Strahl beginnt dann erst
         // an der Ebene (knapp davor, so dass Flächen in der Ebene zählen).
-        let slice = self.active_slice();
         let skip = match slice {
             Some(plane) => slice_ray_start(plane, origin.as_dvec3(), dir.as_dvec3())?,
             None => 0.0,
@@ -2891,7 +2992,7 @@ fn pick_body(p: Pick) -> Option<usize> {
         Pick::Face(FaceRef { body, .. })
         | Pick::Edge(EdgeRef { body, .. })
         | Pick::Vertex { body, .. } => Some(body),
-        Pick::Plane(_) => None,
+        Pick::Plane(_) | Pick::SketchCurve { .. } | Pick::SketchPoint { .. } => None,
     }
 }
 

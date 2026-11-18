@@ -3859,3 +3859,5 @@ setup-cancel = Cancel
 setup-install = Install
 setup-finish = Finish
 setup-close = Close
+action-sketch-edit-picked = Edit Sketch
+action-sketch-hide-picked = Hide

@@ -1457,7 +1457,8 @@ fn curve_world_points(sk: &Sketch, c: CurveId) -> Option<Vec<DVec3>> {
 /// Kurven in der Auswahlfarbe, Kontrollpunktrahmen dünn und gestrichelt. Wählt ein Dialog
 /// Profile ([`AppState::profile_pick`]), liegen die Flächen dieser Skizze unter ihren Linien:
 /// gewählte kräftiger, die unter dem Mauszeiger heller. Die geöffnete Skizze zeichnet
-/// [`show_overlay`]; Skizzenkurven lassen sich in 3D nicht anklicken.
+/// [`show_overlay`]. Kurven fertiger Skizzen lassen sich anklicken ([`finished_sketch_under`]);
+/// die gewählte und die unter dem Mauszeiger färben sich.
 pub fn finished_sketch_strokes(state: &AppState, view: &StrokeView, out: &mut Vec<StrokeVertex>) {
     if !view_usable(view) {
         return;
@@ -1516,8 +1517,16 @@ pub fn finished_sketch_strokes(state: &AppState, view: &StrokeView, out: &mut Ve
                 sketch: id,
                 curve: c,
             });
-            let base = if marked {
+            // Angeklickt (Auswahl) oder unter dem Zeiger (Skizzen 12, Task 8).
+            let this = Pick::SketchCurve {
+                sketch: id,
+                curve: c,
+            };
+            let chosen = state.selection == Some(this);
+            let base = if marked || chosen {
                 col.selected
+            } else if state.hover == Some(this) {
+                col.preview
             } else if projected.contains(&c) {
                 col.projected
             } else if data.construction {
@@ -1527,7 +1536,7 @@ pub fn finished_sketch_strokes(state: &AppState, view: &StrokeView, out: &mut Ve
             };
             let color = lost_ink(
                 base,
-                marked,
+                marked || chosen,
                 lost.curves.contains(&c),
                 lost.dim_rest,
                 col.lost,
@@ -1572,6 +1581,25 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
         let handles_hidden = crate::sketch_handles::hidden_handles_of(sk, &[]);
         out.extend(comb_overlay(sk, &map, col.comb, &handles_hidden.curves));
     }
+    // Der angeklickte oder überfahrene Skizzenpunkt (Task 8): kleiner Kreis, die Punkte fertiger
+    // Skizzen werden sonst nicht gezeichnet.
+    let marker = |pick: Option<Pick>, color: Color32| -> Option<Shape> {
+        let Some(Pick::SketchPoint { sketch, point }) = pick else {
+            return None;
+        };
+        let sk = state.document.sketch_of(sketch)?;
+        let local = sk.point_xyz(point).ok()?;
+        let world = sk.frame().point(local.x, local.y, local.z);
+        let map = Mapper {
+            camera: state.camera,
+            frame: Frame::WORLD,
+            rect,
+        };
+        let at = map.to_screen3(world)?;
+        Some(Shape::circle_stroke(at, 4.5, Stroke::new(2.0, color)))
+    };
+    out.extend(marker(state.hover, col.preview));
+    out.extend(marker(state.selection, col.selected));
     out
 }
 
@@ -1920,6 +1948,62 @@ fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
         crate::curvature_dialog::toggle(state);
     } else if outside && let Some(se) = state.sketch_session.as_mut() {
         se.curve_menu = None;
+    }
+}
+
+/// Rechtsklickmenü auf fertiger Skizzengeometrie in der 3D-Ansicht (Skizzen 12, Task 8) am Ort
+/// [`AppState::sketch_pick_menu`]: „Skizze bearbeiten“ und „Ausblenden“ (Auge der Skizze) wie im
+/// Baum, beide belegbar ([`Action::SketchEditPicked`], [`Action::SketchHidePicked`]). Ein
+/// Linksklick daneben schließt das Menü, ebenso Esc.
+pub fn show_sketch_pick_menu(ui: &egui::Ui, state: &mut AppState) {
+    let Some(at) = state.sketch_pick_menu else {
+        return;
+    };
+    if state.picked_sketch().is_none() {
+        state.sketch_pick_menu = None;
+        return;
+    }
+    let km = crate::keymap::mouse::current(ui.ctx());
+    let mut chosen = None;
+    let response = theme::field_area(egui::Id::new("planora-sketch-pick-menu"), pos2(at.0, at.1))
+        .order(egui::Order::Foreground)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.scope(|ui| {
+                    theme::menu_style(ui.style_mut());
+                    let entry = |ui: &mut egui::Ui, action: Action, label: String| {
+                        let keys = crate::keymap::shortcut_hint(&km, action);
+                        let mut b = egui::Button::new(label);
+                        if !keys.is_empty() {
+                            b = b.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()));
+                        }
+                        ui.add(b).clicked().then_some(action)
+                    };
+                    chosen = chosen.or(entry(
+                        ui,
+                        Action::SketchEditPicked,
+                        tr!("action-sketch-edit-picked"),
+                    ));
+                    // Hier kommt in Task 9 der Haken „Maße anzeigen“
+                    // (`tree-sketch-show-dimension`), danach „Ausblenden“.
+                    chosen = chosen.or(entry(
+                        ui,
+                        Action::SketchHidePicked,
+                        tr!("action-sketch-hide-picked"),
+                    ));
+                });
+            });
+        });
+    let outside = ui.input(|i| i.pointer.primary_pressed())
+        && ui
+            .input(|i| i.pointer.interact_pos())
+            .is_some_and(|p| !response.response.rect.contains(p));
+    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    match chosen {
+        Some(Action::SketchEditPicked) => state.edit_picked_sketch(),
+        Some(Action::SketchHidePicked) => state.hide_picked_sketch(),
+        _ if outside || escape => state.sketch_pick_menu = None,
+        _ => {}
     }
 }
 
@@ -3089,6 +3173,136 @@ fn axis_end_on_screen(
     world(dir * min_len)
 }
 
+/// Abstand des Bildschirmpunkts `p` von der Strecke `a`–`b` mit dem Parameter des nächsten
+/// Punkts (0 bei `a`, 1 bei `b`).
+fn segment_distance_t(p: Pos2, a: Pos2, b: Pos2) -> (f32, f32) {
+    let ab = b - a;
+    let len2 = ab.length_sq();
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p.distance(a + ab * t), t)
+}
+
+/// Ist die Stelle `at` (Welt) für die Kamera von `map` durch einen Körper verdeckt? Der Strahl
+/// vom Auge durch die Stelle trifft vorher eine Fläche (Slice: nur hinter der Skizzenebene). Die
+/// Toleranz (0,1 % der Entfernung) lässt Linien auf einer Fläche sichtbar.
+fn covered_by_body(state: &AppState, map: &Mapper, at: DVec3, slice: Option<[f32; 4]>) -> bool {
+    let Some(screen) = map.to_screen3(map.frame.to_local(at)) else {
+        return true;
+    };
+    let local = map.local(screen);
+    let size = map.viewport();
+    let ndc = Vec2::new(2.0 * local.x / size.x - 1.0, 1.0 - 2.0 * local.y / size.y);
+    let (origin, dir) = map.camera.ray(ndc);
+    let (origin, dir) = (to_dvec3(origin), to_dvec3(dir));
+    let along = (at - origin).dot(dir);
+    state
+        .body_hit_distance(origin, dir, slice)
+        .is_some_and(|hit| hit < along - 1e-3 * along.abs().max(1.0))
+}
+
+/// Skizzenpunkt oder Skizzenkurve einer fertigen, sichtbaren Skizze unter dem Zeiger `p` in der
+/// Modellansicht (Skizzen 12, Spec 4): Punkte vor Kurven, jeweils der nächste im Fangkreis
+/// ([`PICK_RADIUS_PX`]). Nicht gezählt wird, was die Ansicht nicht zeigt (ausgeblendete Skizze,
+/// Gruppe oder Ordner, Konstruktion und Projektion mit ausgeschaltetem Schalter, Punkte mit
+/// „Punkte anzeigen“ aus, unsichtbare Griffe) und was ein Körper verdeckt
+/// ([`AppState::body_hit_distance`]; bei Slice zählt nur, was hinter der Skizzenebene liegt).
+/// Die Stelle wird je Kandidat geprüft: Ist der nächste verdeckt, gewinnt der nächste sichtbare.
+/// Körperkanten und -ecken gehen vor (siehe [`AppState::pick_with`]). `map` bildet Weltpunkte
+/// ab (`Frame::WORLD`).
+pub fn finished_sketch_under(
+    state: &AppState,
+    map: &Mapper,
+    p: Pos2,
+    slice: Option<[f32; 4]>,
+) -> Option<Pick> {
+    // Kandidaten: (Abstand, Treffer, Stelle in der Welt).
+    let mut points: Vec<(f32, Pick, DVec3)> = Vec::new();
+    let mut curves: Vec<(f32, Pick, DVec3)> = Vec::new();
+    for (id, sk) in finished_sketches(state) {
+        if state.is_feature_hidden(id) {
+            continue;
+        }
+        let display = match state.document.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Sketch(def)) => {
+                DisplayFilter::of(state.document.sketch_display(id), def)
+            }
+            _ => DisplayFilter::default(),
+        };
+        let gone = display.hidden(sk);
+        let handles = crate::sketch_handles::hidden_handles_of(sk, &[]);
+        let glyphs = sk.glyph_points();
+        let frame = *sk.frame();
+        for (pt, _) in sk.points() {
+            if gone.points.contains(&pt) || handles.points.contains(&pt) || glyphs.contains(&pt) {
+                continue;
+            }
+            let Ok(local) = sk.point_xyz(pt) else {
+                continue;
+            };
+            let world = frame.point(local.x, local.y, local.z);
+            if let Some(s) = map.to_screen3(map.frame.to_local(world))
+                && s.distance(p) <= PICK_RADIUS_PX
+            {
+                points.push((
+                    s.distance(p),
+                    Pick::SketchPoint {
+                        sketch: id,
+                        point: pt,
+                    },
+                    world,
+                ));
+            }
+        }
+        for (c, _) in sk.curves() {
+            if gone.curves.contains(&c) || handles.curves.contains(&c) {
+                continue;
+            }
+            let Some(world) = curve_world_points(sk, c) else {
+                continue;
+            };
+            let screen: Vec<Option<Pos2>> = world
+                .iter()
+                .map(|w| map.to_screen3(map.frame.to_local(*w)))
+                .collect();
+            let mut best: Option<(f32, DVec3)> = None;
+            for i in 1..world.len() {
+                let (Some(a), Some(b)) = (screen[i - 1], screen[i]) else {
+                    continue;
+                };
+                let (d, t) = segment_distance_t(p, a, b);
+                if d <= PICK_RADIUS_PX && best.is_none_or(|(e, _)| d < e) {
+                    best = Some((d, world[i - 1].lerp(world[i], f64::from(t))));
+                }
+            }
+            if let Some((d, at)) = best {
+                curves.push((
+                    d,
+                    Pick::SketchCurve {
+                        sketch: id,
+                        curve: c,
+                    },
+                    at,
+                ));
+            }
+        }
+    }
+    // Punkte vor Kurven, der nächste zuerst; verdeckte Stellen fallen weg.
+    for list in [&mut points, &mut curves] {
+        list.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, pick, _)) = list
+            .iter()
+            .find(|(_, _, at)| !covered_by_body(state, map, *at, slice))
+        {
+            return Some(*pick);
+        }
+    }
+    None
+}
+
 /// Die Kurve einer fertigen, eingeblendeten Skizze vor der offenen (Spec 10) unter dem Zeiger
 /// `p`, über den Bildschirmabstand zur Kurve in Raumlage; die nächste gewinnt.
 pub fn sketch_curve_under(state: &AppState, map: &Mapper, p: Pos2) -> Option<(FeatureId, CurveId)> {
@@ -3155,7 +3369,13 @@ pub fn project_target(pick: Pick, filter: ProjectFilter) -> Option<ProjectTarget
         }
         (ProjectFilter::Bodies, Pick::Edge(EdgeRef { body, .. }))
         | (ProjectFilter::Bodies, Pick::Face(FaceRef { body, .. })) => ProjectTarget::Body(body),
-        (_, Pick::Plane(_) | Pick::Vertex { .. }) => return None,
+        (
+            _,
+            Pick::Plane(_)
+            | Pick::Vertex { .. }
+            | Pick::SketchCurve { .. }
+            | Pick::SketchPoint { .. },
+        ) => return None,
     })
 }
 

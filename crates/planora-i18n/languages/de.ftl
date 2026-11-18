@@ -3842,3 +3842,5 @@ setup-cancel = Abbrechen
 setup-install = Installieren
 setup-finish = Fertig
 setup-close = Schließen
+action-sketch-edit-picked = Skizze bearbeiten
+action-sketch-hide-picked = Ausblenden

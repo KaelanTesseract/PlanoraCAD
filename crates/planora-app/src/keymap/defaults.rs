@@ -99,6 +99,13 @@ action_table! {
         Model, [];
     /// Fusion „Als DXF speichern“ (Skizzen 11b) für die gewählte Skizze; ohne Vorbelegung, belegbar.
     SketchSaveAsDxf, "modell.skizze_als_dxf", "action-sketch-save-as-dxf", Model, [];
+    /// „Skizze bearbeiten“ im Rechtsklickmenü auf Skizzengeometrie in der 3D-Ansicht
+    /// (Skizzen 12) für die gewählte Skizzenkurve oder den gewählten Skizzenpunkt; ohne
+    /// Vorbelegung, belegbar.
+    SketchEditPicked, "modell.skizze_bearbeiten", "action-sketch-edit-picked", Model, [];
+    /// „Ausblenden“ im Rechtsklickmenü auf Skizzengeometrie (Skizzen 12): das Auge der Skizze
+    /// der gewählten Skizzengeometrie; ohne Vorbelegung, belegbar.
+    SketchHidePicked, "modell.skizze_ausblenden", "action-sketch-hide-picked", Model, [];
     /// Fusion „Gruppe erstellen“ (Skizzen 11b) aus den im Ordner „Skizzen“ gewählten Skizzen;
     /// ohne Vorbelegung, belegbar.
     SketchGroupCreate, "modell.gruppe_erstellen", "action-sketch-group-create", Model, [];

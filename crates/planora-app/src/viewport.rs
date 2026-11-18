@@ -1002,6 +1002,20 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                         Some(PlaneClick::View(h)) => state.set_selection(Some(h)),
                         None => state.set_selection(None),
                     }
+                    state.sketch_pick_menu = None;
+                } else if response.secondary_clicked() {
+                    // Rechtsklick auf fertige Skizzengeometrie (Skizzen 12): wählen und Menü.
+                    use crate::plane_dialog::PlaneClick;
+                    match hit {
+                        Some(PlaneClick::View(
+                            h @ (Pick::SketchCurve { .. } | Pick::SketchPoint { .. }),
+                        )) => {
+                            state.set_selection(Some(h));
+                            state.sketch_pick_menu =
+                                response.interact_pointer_pos().map(|p| (p.x, p.y));
+                        }
+                        _ => state.sketch_pick_menu = None,
+                    }
                 }
             }
             None => hover_plane_click(state, None),
@@ -1010,6 +1024,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             state.set_selection(None);
             state.clear_edge_marks();
         }
+        sketch_view::show_sketch_pick_menu(ui, state);
     }
 
     // 3D-Szene mit den Leinwänden (je gezeichneter Leinwand ihr Bild, Vertrag mit der GPU).

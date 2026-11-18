@@ -411,6 +411,8 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 state.open_sketch_dxf(id);
             }
         }
+        Action::SketchEditPicked => ws.active_tab_mut().state.edit_picked_sketch(),
+        Action::SketchHidePicked => ws.active_tab_mut().state.hide_picked_sketch(),
         Action::SketchGroupCreate => {
             // Aus den im Ordner „Skizzen“ gewählten Skizzen; Fehler stehen in der Meldung.
             let _ = ws
@@ -549,6 +551,12 @@ fn toggle_visibility(state: &mut AppState) {
 /// (Baum, Verlaufsleiste), sonst der gewählte Körper (sein Ursprung, wie die Körperzeile im
 /// Baum). Zurückgesetzte Körper sind nicht gesperrt.
 fn delete_selection(state: &mut AppState) {
+    // Skizzen 12: Eine gewählte Skizzenkurve oder ein gewählter Skizzenpunkt der 3D-Ansicht
+    // löscht nichts (weder die Skizze noch einen Körper); ob Fusion hier Geometrie löscht, ist
+    // offen (offene-punkte.md).
+    if state.picked_sketch().is_some() {
+        return;
+    }
     // Skizzen 11b: Eine gewählte Skizzengruppe wird aufgelöst (keine Skizze gelöscht).
     if let Some(g) = state.selected_sketch_group() {
         let _ = state.ungroup_sketch_group(g);
