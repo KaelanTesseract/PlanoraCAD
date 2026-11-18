@@ -214,14 +214,22 @@ fn inch_snap_is_an_exact_multiple() {
 
 // ---- Raster in der Skizzenebene ---------------------------------------------------------------
 
-/// Die Linien des Rasters als Punktfolgen auf dem Bildschirm.
+/// Die Linien des Rasters als Punktfolgen auf dem Bildschirm (je Linie neun Punkte, ohne die
+/// hinter der Kamera).
 fn grid_paths(s: &AppState) -> Vec<Vec<Pos2>> {
-    sketch_view::sketch_grid_shapes(s, SCREEN)
+    let frame = frame_of(s);
+    sketch_view::sketch_grid_lines(s, SCREEN)
         .into_iter()
-        .map(|shape| match shape {
-            Shape::Path(p) => p.points,
-            other => panic!("{other:?}"),
+        .map(|line| {
+            (0..=8)
+                .filter_map(|i| {
+                    let p = line.from + (line.to - line.from) * (f64::from(i) / 8.0);
+                    let v = sketch_view::sketch_to_screen(&s.camera, &frame, VIEW, p)?;
+                    v.is_finite().then(|| pos2(v.x, v.y))
+                })
+                .collect::<Vec<_>>()
         })
+        .filter(|path| path.len() >= 2)
         .collect()
 }
 
@@ -289,7 +297,7 @@ fn the_line_count_stays_bounded_over_the_zoom_range() {
             let mut most = 0;
             while d < 1.0e6 {
                 s.camera.distance = d;
-                let n = sketch_view::sketch_grid_shapes(&s, SCREEN).len();
+                let n = sketch_view::sketch_grid_lines(&s, SCREEN).len();
                 assert!(n <= 300, "{plane:?}, Neigung {tilt}, Abstand {d}: {n}");
                 most = most.max(n);
                 d *= 1.01;
@@ -466,10 +474,14 @@ fn a_plane_off_the_world_origin_keeps_both_zero_lines() {
     assert!(zero_line(&s, false).is_some());
 }
 
+/// Handtest 1, Fund 1 (Skizzen 12): Raster und Achsenkreuz der offenen Skizze liegen in den
+/// GPU-Linien mit Tiefenprüfung (Körper verdecken sie wie in Fusion), nicht mehr im egui-Overlay.
+/// Haken „Skizzenraster“ aus: keine Rasterlinien, das Achsenkreuz bleibt.
 #[test]
-fn the_grid_is_gone_when_switched_off_and_drawn_by_the_overlay_when_on() {
+fn the_grid_is_drawn_as_depth_tested_strokes_and_gone_when_switched_off() {
     let ctx = context();
-    let paths = |s: &mut AppState| {
+    // Linien im Overlay (Pfade und Strecken).
+    let overlay_lines = |s: &mut AppState| {
         let mut n = 0;
         for _ in 0..2 {
             let out = ctx.run_ui(raw(vec![]), |ui| {
@@ -478,23 +490,39 @@ fn the_grid_is_gone_when_switched_off_and_drawn_by_the_overlay_when_on() {
             n = out
                 .shapes
                 .iter()
-                .filter(|c| matches!(c.shape, Shape::Path(_)))
+                .filter(|c| matches!(c.shape, Shape::Path(_) | Shape::LineSegment { .. }))
                 .count();
             out.drop_without_applying_deltas();
         }
         n
     };
+    let strokes = |s: &AppState| {
+        let view = planora_app::viewport::stroke_view(s, SCREEN, 1.0);
+        let mut out = Vec::new();
+        sketch_view::open_sketch_strokes(s, &view, &mut out);
+        out
+    };
     let mut s = sketching(StandardPlane::XZ, Tool::Select);
-    let on = paths(&mut s);
-    let lines = sketch_view::sketch_grid_shapes(&s, SCREEN).len();
-    assert!(lines > 10, "{lines}");
+    let overlay_on = overlay_lines(&mut s);
+    let on = strokes(&s);
     s.sketch_show_grid = false;
-    assert!(sketch_view::sketch_grid_shapes(&s, SCREEN).is_empty());
-    assert_eq!(paths(&mut s), on - lines);
+    let overlay_off = overlay_lines(&mut s);
+    let off = strokes(&s);
+    assert_eq!(overlay_on, 0, "Raster und Achsenkreuz nicht im Overlay");
+    assert_eq!(overlay_off, 0);
+    // Leere Skizze: Ohne Raster bleibt nur das Achsenkreuz (zwei Vierecke).
+    assert_eq!(off.len(), 12, "Achsenkreuz");
+    // Je Rasterlinie ein Viereck (sechs Eckpunkte), mehr als zehn Linien.
+    assert!(
+        on.len() >= off.len() + 6 * 10,
+        "{} / {}",
+        on.len(),
+        off.len()
+    );
     // „Fang“ allein schaltet das Raster nicht ab.
     s.sketch_show_grid = true;
     s.sketch_snap_grid = false;
-    assert_eq!(sketch_view::sketch_grid_shapes(&s, SCREEN).len(), lines);
+    assert_eq!(strokes(&s).len(), on.len());
 }
 
 // ---- Schalter und Konfiguration ---------------------------------------------------------------

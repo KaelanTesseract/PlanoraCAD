@@ -89,7 +89,7 @@ pub fn stroke_view(state: &AppState, rect: Rect, ppp: f32) -> planora_render::St
 }
 
 /// Linien der 3D-Szene: Bodenraster und Achsen; im Skizzenmodus nur die Achsen, das Raster zeichnet
-/// dort die Skizze in ihrer Ebene ([`sketch_view::sketch_grid_shapes`]). Eine Achse, die fast auf
+/// dort die Skizze in ihrer Ebene ([`sketch_view::sketch_grid_lines`]). Eine Achse, die fast auf
 /// den Betrachter zeigt, entfällt dort: Perspektivisch liefe sie sonst als lange Linie vom Ursprung
 /// quer durchs Bild und sähe aus wie Geometrie der Skizze.
 pub fn scene_lines(state: &AppState) -> Vec<LineVertex> {

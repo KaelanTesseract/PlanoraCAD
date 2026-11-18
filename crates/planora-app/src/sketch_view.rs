@@ -36,8 +36,10 @@ pub const PICK_RADIUS_PX: f32 = 8.0;
 const PARALLEL_COS: f64 = 1e-6;
 /// Abschnitte je Vollkreis für Kreise, Bögen und Ellipsen in der Darstellung.
 const STEPS_PER_TURN: usize = 96;
-/// Länge der Achsenkreuz-Striche im Skizzenursprung in Pixeln.
+/// Länge der Achsenkreuz-Striche im Skizzenursprung in logischen Punkten.
 const AXIS_PX: f32 = 28.0;
+/// Strichstärke des Achsenkreuzes in logischen Punkten.
+const AXIS_WIDTH: f32 = 1.5;
 /// Radius der Punktsymbole in Pixeln.
 const POINT_PX: f32 = 3.5;
 /// Strichstärke normaler Kurven in Pixeln.
@@ -57,9 +59,6 @@ const GRID_MAX_LINES: f64 = 300.0;
 const GRID_MAX_BLEND: f32 = 0.6;
 /// Jede wievielte Linie der feinen Stufe zur gröberen gehört.
 const GRID_DECADE: i64 = 10;
-/// Teilstücke einer Rasterlinie: Liegt ein Teil bei geneigter Ansicht hinter der Kamera, bleibt der
-/// Rest sichtbar.
-const GRID_SEGMENTS: usize = 8;
 /// Rasterlinien, die schwächer als dies erscheinen, werden weggelassen.
 const GRID_MIN_ALPHA: f32 = 0.01;
 /// Strichstärke der Rasterlinien in Pixeln.
@@ -1490,10 +1489,19 @@ fn zero_line_span(frame: &Frame, dir: DVec3, from: f64, to: f64, tol: f64) -> Op
     Some((from, to))
 }
 
-/// Skizzenraster in der Ebene der offenen Skizze als Formen (leer, wenn es ausgeschaltet ist): Stufe
-/// und Übergang wie das Bodenraster, jede Linie auf einem Vielfachen der feinen Stufe. Höchstens
-/// [`GRID_MAX_LINES`] Linien. Wo eine Achse der 3D-Szene liegt, läuft keine Rasterlinie.
-pub fn sketch_grid_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+/// Eine Linie des Skizzenrasters: Anfang und Ende in Skizzenkoordinaten, Farbe samt Abblendung.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridLine {
+    pub from: DVec2,
+    pub to: DVec2,
+    pub color: Color32,
+}
+
+/// Skizzenraster in der Ebene der offenen Skizze im Viewport `rect` (leer, wenn es ausgeschaltet
+/// ist): Stufe und Übergang wie das Bodenraster, jede Linie auf einem Vielfachen der feinen Stufe.
+/// Höchstens [`GRID_MAX_LINES`] Linien. Wo eine Achse der 3D-Szene liegt, läuft keine Rasterlinie.
+/// Gezeichnet von [`open_sketch_strokes`] auf der GPU mit Tiefenprüfung.
+pub fn sketch_grid_lines(state: &AppState, rect: Rect) -> Vec<GridLine> {
     let mut out = Vec::new();
     let Some(map) = mapper(rect, state).filter(|_| state.sketch_show_grid) else {
         return out;
@@ -1533,26 +1541,80 @@ pub fn sketch_grid_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 continue;
             }
             let at = k as f64 * fine;
-            let points: Vec<DVec2> = (0..=GRID_SEGMENTS)
-                .map(|i| {
-                    let v = from + (to - from) * i as f64 / GRID_SEGMENTS as f64;
-                    if along_x {
-                        DVec2::new(v, at)
-                    } else {
-                        DVec2::new(at, v)
-                    }
-                })
-                .collect();
+            let point = |v: f64| {
+                if along_x {
+                    DVec2::new(v, at)
+                } else {
+                    DVec2::new(at, v)
+                }
+            };
             let color = colors
                 .viewport_grid
                 .lerp_to_gamma(colors.viewport_grid_major, share)
                 .gamma_multiply(alpha);
-            for path in map.paths(&points) {
-                out.push(Shape::line(path, Stroke::new(GRID_WIDTH, color)));
-            }
+            out.push(GridLine {
+                from: point(from),
+                to: point(to),
+                color,
+            });
         }
     }
     out
+}
+
+/// Skizzenraster ([`sketch_grid_lines`]) und Achsenkreuz im Skizzenursprung als GPU-Linien mit
+/// Tiefenprüfung (Handtest 1, Fund 1): Körper verdecken sie wie in Fusion; Slice schneidet sie
+/// nicht. Farben, Abstände, Ausdünnung und Strichstärken wie vorher im Overlay. Teile hinter der
+/// Kamera schneidet [`push_stroke`] ab, darum reichen Anfang und Ende je Linie.
+fn grid_and_axis_strokes(
+    state: &AppState,
+    view: &StrokeView,
+    map: &Mapper,
+    out: &mut Vec<StrokeVertex>,
+) {
+    let ppp = view.pixels_per_point;
+    let frame = map.frame;
+    let world = |p: DVec2| frame.point(p.x, p.y, 0.0);
+    for line in sketch_grid_lines(state, map.rect) {
+        push_stroke(
+            out,
+            view,
+            &[world(line.from), world(line.to)],
+            GRID_WIDTH * ppp,
+            stroke_rgba(line.color),
+            None,
+        );
+    }
+    // Achsenkreuz: zwei Striche von `AXIS_PX` Punkten Länge auf dem Bildschirm.
+    let col = colors(state.dark);
+    let Some(o) = map.to_screen(DVec2::ZERO) else {
+        return;
+    };
+    for (dir, color) in [(DVec2::X, col.axis_x), (DVec2::Y, col.axis_y)] {
+        // Länge in der Skizze so, dass der Strich `AXIS_PX` lang erscheint; zweimal nachgemessen,
+        // weil die Perspektive nicht linear ist.
+        let mut t = 1.0_f64;
+        for _ in 0..3 {
+            let Some(e) = map.to_screen(dir * t) else {
+                break;
+            };
+            let len = f64::from((e - o).length());
+            if !(len.is_finite() && len > 1e-9) {
+                break;
+            }
+            t *= f64::from(AXIS_PX) / len;
+        }
+        if t.is_finite() && t > 0.0 {
+            push_stroke(
+                out,
+                view,
+                &[world(DVec2::ZERO), world(dir * t)],
+                AXIS_WIDTH * ppp,
+                stroke_rgba(color),
+                None,
+            );
+        }
+    }
 }
 
 /// Zeichnet die Skizze über die 3D-Ansicht in `rect` und verarbeitet die Eingaben des
@@ -3150,8 +3212,8 @@ fn open_hidden(se: &SketchSession, sk: &Sketch) -> (HashSet<CurveId>, HashSet<Po
 
 /// Die geöffnete Skizze als Linien und Flächen für die GPU mit Tiefenprüfung (Skizzen 12):
 /// Körper verdecken sie wie in Fusion (eine Skizze in einem Körper bleibt verborgen, bis die
-/// Schnittansicht an ist). Zuunterst die Profilflächen (nur mit [`SketchDisplay::profiles`] und
-/// nicht beim Ziehen), darüber die Kurven in den Farben von `curve_ink`/`lost_ink` (Auswahl,
+/// Schnittansicht an ist). Zuunterst Skizzenraster und Achsenkreuz, darauf die Profilflächen (nur
+/// mit [`SketchDisplay::profiles`] und nicht beim Ziehen), darüber die Kurven in den Farben von `curve_ink`/`lost_ink` (Auswahl,
 /// Zeiger heller, bestimmt/unbestimmt, Konstruktion, Mittellinie, Projektion; der Rahmen eines
 /// gewählten Textes in der Auswahlfarbe), die Hilfslinien der gewählten Kurve, die Vorschau des
 /// laufenden Werkzeugs, Stutzen/Dehnen und die Enden der Übergangskurve. Punkte, Zeichen, Maße,
@@ -3171,7 +3233,16 @@ pub fn open_sketch_strokes(state: &AppState, view: &StrokeView, out: &mut Vec<St
     let col = colors(state.dark);
     let projected = Projected::of_open(state, draft);
 
-    // Profile als helle Flächen unter allem anderen („Profil anzeigen“, wie Fusion). Beim Ziehen
+    // Zuunterst Skizzenraster und Achsenkreuz (Handtest 1, Fund 1).
+    let ppp = view.pixels_per_point;
+    let grid_map = Mapper {
+        camera: state.camera,
+        frame,
+        rect: Rect::from_min_size(Pos2::ZERO, vec2(view.size_px.x / ppp, view.size_px.y / ppp)),
+    };
+    grid_and_axis_strokes(state, view, &grid_map, out);
+
+    // Profile als helle Flächen über dem Raster („Profil anzeigen“, wie Fusion). Beim Ziehen
     // ändert sich die Skizze in jedem Frame; die Flächen kommen erst danach wieder (sonst würden
     // sie in jedem Frame neu bestimmt).
     if state.document.sketch_display(se.sketch).profiles && !se.is_dragging() {
@@ -3232,7 +3303,6 @@ pub fn open_sketch_strokes(state: &AppState, view: &StrokeView, out: &mut Vec<St
         ink.line3(&line, 1.0, col.preview, LineStyle::Construction);
     }
     // Die Karte braucht die Vorschau nur für Marken, die hier entfallen.
-    let ppp = view.pixels_per_point;
     let map = Mapper {
         camera: state.camera,
         frame,
@@ -3281,23 +3351,8 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     };
     let report = se.last_report.as_ref();
 
-    // Skizzenraster zuunterst.
-    painter.extend(sketch_grid_shapes(state, rect));
-
-    // Profilflächen, Kurven und die Linien der Vorschau zeichnet die GPU mit Tiefenprüfung
-    // ([`open_sketch_strokes`], Skizzen 12); hier bleibt, was obenauf liegt.
-
-    // Achsenkreuz im Skizzenursprung
-    if let Some(o) = map.to_screen(DVec2::ZERO) {
-        for (dir, color) in [(DVec2::X, col.axis_x), (DVec2::Y, col.axis_y)] {
-            if let Some(e) = map.to_screen(dir) {
-                let d = (e - o).normalized() * AXIS_PX;
-                if d.is_finite() {
-                    painter.line_segment([o, o + d], Stroke::new(1.5, color));
-                }
-            }
-        }
-    }
+    // Raster, Achsenkreuz, Profilflächen, Kurven und die Linien der Vorschau zeichnet die GPU mit
+    // Tiefenprüfung ([`open_sketch_strokes`], Skizzen 12); hier bleibt, was obenauf liegt.
 
     // Element unter dem Mauszeiger (in `show_overlay` bestimmt, siehe [`hovered_item`]).
     let hovered = se.draw_hover;
