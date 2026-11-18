@@ -21,6 +21,7 @@ pub use scene::{
 };
 pub use stroke::{
     FACE_SLOPE_SCALE, STROKE_DEPTH_BIAS, StrokeVertex, StrokeView, push_fill, push_stroke,
+    push_stroke_phased,
 };
 pub use viewcube::{
     CubePiece, CubeRegion, INSET, ISO_VIEW, ViewFace, all_regions, cube_pieces_visible,

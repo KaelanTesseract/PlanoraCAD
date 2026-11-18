@@ -17,7 +17,10 @@ use glam::{Vec2, Vec3};
 use planora_feature::{FeatureId, FeatureKind, SketchFeature};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
-use planora_render::{EdgeRef, FaceRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
+use planora_render::{
+    EdgeRef, FaceRef, OrbitCamera, Pick, StrokeVertex, StrokeView, exact_step, grid_radius,
+    line_weight, push_fill, push_stroke, push_stroke_phased,
+};
 use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
@@ -1003,21 +1006,52 @@ fn profile_fill_shape(
     (!mesh.is_empty()).then(|| Shape::mesh(mesh))
 }
 
-/// Strichstärke des Randes einer Konstruktionsebene in der 3D-Ansicht.
+/// Strichstärke des Randes einer Konstruktionsebene in der 3D-Ansicht (logische Punkte).
 const PLANE_EDGE_WIDTH: f32 = 1.5;
 
-/// Konstruktionsebenen (Skizzen 6) als halbdurchsichtige orange Rechtecke über der 3D-Ansicht
-/// in `rect` ([`AppState::plane_rects`]); gewählte (auch im Browser) und die unter dem Mauszeiger
-/// heller ([`AppState::plane_highlighted`]). Wie die
-/// fertigen Skizzen liegen sie immer über den Körpern (keine Verdeckung, Abweichung von Fusion).
-/// Eine Ebene, deren Ecke hinter der Kamera liegt, fehlt.
-pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
-    let mut out = Vec::new();
-    if rect.width() < 2.0 || rect.height() < 2.0 {
-        return out;
+/// Farbe für die Skizzenlinien der GPU (Skizzen 12): sRGB-Werte 0..1 wie die übrige Szene,
+/// Alpha nicht vormultipliziert. Die Pipeline mischt mit `ALPHA_BLENDING`, egui mit
+/// vormultiplizierten Farben; beides ergibt dasselbe Bild.
+pub fn stroke_rgba(c: Color32) -> [f32; 4] {
+    let f = |v: u8| f32::from(v) / 255.0;
+    let [r, g, b, a] = c.to_srgba_unmultiplied();
+    [f(r), f(g), f(b), f(a)]
+}
+
+/// Strich und Lücke der Konstruktionsgeometrie in logischen Punkten (wie [`path_shapes`]).
+const DASH_PT: [f32; 2] = [6.0, 4.0];
+
+/// Linienzug in Weltkoordinaten im Stil der Kurve für die GPU, Breite in logischen Punkten:
+/// durchgezogen, gestrichelt oder als Strichpunkt, mit denselben Mustern wie [`style_shapes`].
+fn push_styled(
+    out: &mut Vec<StrokeVertex>,
+    view: &StrokeView,
+    path: &[DVec3],
+    width: f32,
+    color: [f32; 4],
+    style: LineStyle,
+) {
+    let ppp = view.pixels_per_point;
+    let w = width * ppp;
+    match style {
+        LineStyle::Normal => push_stroke(out, view, path, w, color, None),
+        LineStyle::Construction => {
+            push_stroke(out, view, path, w, color, Some(DASH_PT.map(|v| v * ppp)));
+        }
+        LineStyle::Centerline => {
+            // 12 Strich, 3 Lücke, 2 Strich, 3 Lücke (Periode 20) als zwei versetzte Muster.
+            let long = Some([12.0 * ppp, 8.0 * ppp]);
+            let short = Some([2.0 * ppp, 18.0 * ppp]);
+            push_stroke_phased(out, view, path, w, color, long, 0.0);
+            push_stroke_phased(out, view, path, w, color, short, 5.0 * ppp);
+        }
     }
-    let col = colors(state.dark);
-    // Eingeblendete Grundebenen (Ordner „Ursprung“) zuerst, darüber die Konstruktionsebenen.
+}
+
+/// Konstruktionsebenen in der 3D-Ansicht mit der Angabe, ob sie hell (gewählt, unter dem
+/// Mauszeiger, vom Dialog markiert, Vorschau) gezeichnet werden: eingeblendete Grundebenen
+/// zuerst, dann die Konstruktionsebenen, zuletzt die Vorschau des offenen Ebenen-Fensters.
+fn shown_planes(state: &AppState) -> Vec<(planora_render::PlaneRect, bool)> {
     let origins = state.origin_plane_rects().into_iter().map(|(p, r)| {
         let lit = state.origin_hover == Some(p)
             || state.selected_origin_plane() == Some(p)
@@ -1030,52 +1064,43 @@ pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
         .plane_rects()
         .into_iter()
         .map(|(id, r)| (r, state.plane_highlighted(id)));
-    for (plane, lit) in origins.chain(features) {
-        let map = Mapper {
-            camera: state.camera,
-            frame: plane.frame,
-            rect,
-        };
-        let corners: Option<Vec<Pos2>> = plane
-            .corners()
-            .into_iter()
-            .map(|c| map.to_screen(plane.frame.to_local(c).truncate()))
-            .collect();
-        let Some(corners) = corners else {
-            continue;
-        };
+    // Vorschau des offenen Ebenen-Fensters in der Hervorhebungsfarbe (noch kein Feature).
+    let preview = state.plane_pick.and_then(|p| p.preview).map(|r| (r, true));
+    origins.chain(features).chain(preview).collect()
+}
+
+/// Konstruktionsebenen (Skizzen 6) als halbdurchsichtige orange Rechtecke mit Rand für die GPU
+/// ([`AppState::plane_rects`]); gewählte (auch im Browser) und die unter dem Mauszeiger heller
+/// ([`AppState::plane_highlighted`]). Mit Tiefenprüfung wie in Fusion: Körper verdecken sie
+/// (Skizzen 12). Teile hinter der Kamera werden abgeschnitten.
+pub fn plane_strokes(state: &AppState, view: &StrokeView, out: &mut Vec<StrokeVertex>) {
+    if !view_usable(view) {
+        return;
+    }
+    let col = colors(state.dark);
+    for (plane, lit) in shown_planes(state) {
         let (fill, edge) = if lit {
             (col.plane_fill_active, col.plane_edge_active)
         } else {
             (col.plane_fill, col.plane_edge)
         };
-        out.push(Shape::convex_polygon(
-            corners,
-            fill,
-            Stroke::new(PLANE_EDGE_WIDTH, edge),
-        ));
+        let [a, b, c, d] = plane.corners();
+        push_fill(out, view, &[[a, b, c], [a, c, d]], stroke_rgba(fill));
+        push_stroke(
+            out,
+            view,
+            &[a, b, c, d, a],
+            PLANE_EDGE_WIDTH * view.pixels_per_point,
+            stroke_rgba(edge),
+            None,
+        );
     }
-    // Vorschau des offenen Ebenen-Fensters in der Hervorhebungsfarbe (noch kein Feature).
-    if let Some(plane) = state.plane_pick.and_then(|p| p.preview) {
-        let map = Mapper {
-            camera: state.camera,
-            frame: plane.frame,
-            rect,
-        };
-        let corners: Option<Vec<Pos2>> = plane
-            .corners()
-            .into_iter()
-            .map(|c| map.to_screen(plane.frame.to_local(c).truncate()))
-            .collect();
-        if let Some(corners) = corners {
-            out.push(Shape::convex_polygon(
-                corners,
-                col.plane_fill_active,
-                Stroke::new(PLANE_EDGE_WIDTH, col.plane_edge_active),
-            ));
-        }
-    }
-    out
+}
+
+/// Ist die Ansicht groß genug zum Zeichnen (wie die 2 Punkte des egui-Overlays)?
+fn view_usable(view: &StrokeView) -> bool {
+    let min = 2.0 * view.pixels_per_point;
+    view.size_px.x >= min && view.size_px.y >= min
 }
 
 /// Halbmesser eines gewählten Eckpunkts in der Ansicht.
@@ -1249,50 +1274,78 @@ const FINISHED_WIDTH: f32 = 1.2;
 /// Strichstärke der Konstruktionsgeometrie fertiger Skizzen.
 const FINISHED_CONSTRUCTION_WIDTH: f32 = 1.0;
 
-/// Fertige (nicht geöffnete) Skizzen als dünne Linien über der 3D-Ansicht in `rect`;
-/// Konstruktionsgeometrie grau und gestrichelt. Die geöffnete Skizze zeichnet
-/// [`show_overlay`]. Skizzenkurven lassen sich in 3D nicht anklicken, und die Linien liegen
-/// immer über den Körpern (keine Verdeckung). Wählt ein Dialog Profile
-/// ([`AppState::profile_pick`]), liegen die Flächen dieser Skizze unter ihren Linien: gewählte
-/// kräftiger, die unter dem Mauszeiger heller.
-pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
-    let mut out = Vec::new();
-    if rect.width() < 2.0 || rect.height() < 2.0 {
-        return out;
-    }
+/// Die fertigen (nicht geöffneten) Skizzen, die die 3D-Ansicht zeigt: die berechneten Skizzen
+/// der übrigen Skizzen-Features (aufgelöste Ebene, nachgeführte Kantenkopien). Im Baum
+/// ausgeblendete fehlen, es sei denn, ein Dialog wählt gerade ihre Profile (dann braucht man
+/// sie). Die geöffnete zeichnet das Overlay aus dem Entwurf.
+fn finished_sketches(state: &AppState) -> Vec<(FeatureId, &Sketch)> {
     let open = state.open_sketch_id();
+    state
+        .sketch_features()
+        .into_iter()
+        .filter(|(id, _)| open != Some(*id))
+        .filter(|(id, _)| {
+            let picking = state.profile_pick.as_ref().is_some_and(|p| p.sketch == *id);
+            picking || !state.is_feature_hidden(*id)
+        })
+        .filter_map(|(id, _)| Some((id, state.document.sketch_of(id)?)))
+        .collect()
+}
+
+/// Weltpunkte der Kurve `c` mit derselben Abtastung wie [`curve_paths`]: 3D-Kurven über
+/// [`curve_points3`], alle anderen über [`Sketch::curve_polyline`]. `None`, wenn eine 2D-Kurve
+/// keinen Linienzug hat.
+fn curve_world_points(sk: &Sketch, c: CurveId) -> Option<Vec<DVec3>> {
+    let frame = sk.frame();
+    if sk.is_3d_curve(c) {
+        Some(
+            curve_points3(sk, c)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| frame.point(p.x, p.y, p.z))
+                .collect(),
+        )
+    } else {
+        Some(
+            sk.curve_polyline(c, STEPS_PER_TURN)?
+                .into_iter()
+                .map(|p| frame.point(p.x, p.y, 0.0))
+                .collect(),
+        )
+    }
+}
+
+/// Fertige (nicht geöffnete) Skizzen als dünne Linien für die GPU mit Tiefenprüfung
+/// (Skizzen 12): Körper verdecken sie wie in Fusion. Konstruktionsgeometrie grau und
+/// gestrichelt, Projektionen lila, verlorene Projektionen gelb, von einem Dialog gewählte
+/// Kurven in der Auswahlfarbe, Kontrollpunktrahmen dünn und gestrichelt. Wählt ein Dialog
+/// Profile ([`AppState::profile_pick`]), liegen die Flächen dieser Skizze unter ihren Linien:
+/// gewählte kräftiger, die unter dem Mauszeiger heller. Die geöffnete Skizze zeichnet
+/// [`show_overlay`]; Skizzenkurven lassen sich in 3D nicht anklicken.
+pub fn finished_sketch_strokes(state: &AppState, view: &StrokeView, out: &mut Vec<StrokeVertex>) {
+    if !view_usable(view) {
+        return;
+    }
     let col = colors(state.dark);
-    // Die berechneten Skizzen der übrigen Skizzen-Features (aufgelöste Ebene, nachgeführte
-    // Kantenkopien); die geöffnete zeichnet das Overlay aus dem Entwurf.
-    for (id, _) in state.sketch_features() {
-        if open == Some(id) {
-            continue;
-        }
-        // Im Baum ausgeblendet: nicht zeichnen, es sei denn, ein Dialog wählt gerade ihre
-        // Profile (dann braucht man sie).
-        let picking = state.profile_pick.as_ref().is_some_and(|p| p.sketch == id);
-        if state.is_feature_hidden(id) && !picking {
-            continue;
-        }
-        let Some(sk) = state.document.sketch_of(id) else {
-            continue;
-        };
-        let map = Mapper {
-            camera: state.camera,
-            frame: *sk.frame(),
-            rect,
-        };
+    for (id, sk) in finished_sketches(state) {
+        let frame = *sk.frame();
         if let Some(pick) = state.profile_pick.as_ref().filter(|p| p.sketch == id) {
             let extracted = state.profile_cache.get(sk);
-            out.extend(profile_fill_shape(&map, &extracted, |i| {
-                Some(if pick.hover.contains(&i) {
+            for i in 0..extracted.profiles.len() {
+                let fill = if pick.hover.contains(&i) {
                     col.profile_fill_hover
                 } else if pick.selected.contains(&i) {
                     col.profile_fill_selected
                 } else {
                     col.profile_fill
-                })
-            }));
+                };
+                let triangles: Vec<[DVec3; 3]> = extracted
+                    .fill(i)
+                    .iter()
+                    .map(|t| t.map(|p| frame.point(p.x, p.y, 0.0)))
+                    .collect();
+                push_fill(out, view, &triangles, stroke_rgba(fill));
+            }
         }
         // Projektionen lila wie in Fusion (Skizzen 6), Konstruktion weiter gestrichelt.
         let projected: HashSet<CurveId> = match state.document.feature(id).map(|f| &f.kind) {
@@ -1308,7 +1361,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             if handles_hidden.curves.contains(&c) {
                 continue;
             }
-            let Some(paths) = curve_paths(sk, c, &map) else {
+            let Some(points) = curve_world_points(sk, c) else {
                 continue;
             };
             let width = if data.construction {
@@ -1337,20 +1390,45 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 lost.dim_rest,
                 col.lost,
             );
-            let stroke = Stroke::new(width, color);
-            for path in paths {
-                out.extend(style_shapes(path, stroke, data.style()));
-            }
+            push_styled(out, view, &points, width, stroke_rgba(color), data.style());
         }
-        // Krümmungskamm (Skizzen 11a), auch außerhalb des Skizzen-Modus.
-        out.extend(comb_overlay(sk, &map, col.comb, &handles_hidden.curves));
         // Kontrollpunktrahmen (Skizzen 9) dünn und gestrichelt.
-        let frame_stroke = Stroke::new(FINISHED_CONSTRUCTION_WIDTH, col.construction);
+        let frame_color = stroke_rgba(col.construction);
         for line in frame_polygons3(sk) {
-            for path in map.paths3(&line) {
-                out.extend(path_shapes(path, frame_stroke, true));
-            }
+            let points: Vec<DVec3> = line.iter().map(|p| frame.point(p.x, p.y, p.z)).collect();
+            push_styled(
+                out,
+                view,
+                &points,
+                FINISHED_CONSTRUCTION_WIDTH,
+                frame_color,
+                LineStyle::Construction,
+            );
         }
+    }
+}
+
+/// Was von den fertigen Skizzen über der 3D-Ansicht in `rect` im egui-Overlay bleibt: der
+/// Krümmungskamm (Skizzen 11a), auch außerhalb des Skizzen-Modus. Die Linien und Profilflächen
+/// zeichnet die GPU ([`finished_sketch_strokes`]).
+pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    if rect.width() < 2.0 || rect.height() < 2.0 {
+        return out;
+    }
+    let col = colors(state.dark);
+    for (_, sk) in finished_sketches(state) {
+        // Ohne Kamm bleibt nichts zu tun (und die Griffe müssen nicht gesucht werden).
+        if !sk.curves().any(|(_, d)| d.comb.is_some()) {
+            continue;
+        }
+        let map = Mapper {
+            camera: state.camera,
+            frame: *sk.frame(),
+            rect,
+        };
+        let handles_hidden = crate::sketch_handles::hidden_handles_of(sk, &[]);
+        out.extend(comb_overlay(sk, &map, col.comb, &handles_hidden.curves));
     }
     out
 }

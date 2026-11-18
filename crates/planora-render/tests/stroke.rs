@@ -3,6 +3,7 @@
 use glam::{DVec3, Mat4, Vec2, Vec3};
 use planora_render::{
     FACE_SLOPE_SCALE, STROKE_DEPTH_BIAS, StrokeVertex, StrokeView, push_fill, push_stroke,
+    push_stroke_phased,
 };
 
 const SIZE: Vec2 = Vec2::new(1000.0, 500.0);
@@ -13,6 +14,7 @@ fn flat_view() -> StrokeView {
         view_proj: Mat4::IDENTITY,
         size_px: SIZE,
         depth_bias: 0.0,
+        pixels_per_point: 1.0,
     }
 }
 
@@ -88,12 +90,52 @@ fn dash_continues_across_vertices() {
     assert_eq!(out.len(), 4 * 6);
 }
 
+/// Strichpunkt (Mittellinie, Skizzen 12): zwei versetzte Muster ergeben 12 Strich, 3 Lücke,
+/// 2 Strich, 3 Lücke wie egui `dashed_line_with_offset(&[12, 2], &[3, 3])`.
+#[test]
+fn phased_dashes_build_a_centerline() {
+    let view = flat_view();
+    let mut out = Vec::new();
+    let path = [
+        DVec3::new(ndc_x(0.0), 0.0, 0.5),
+        DVec3::new(ndc_x(40.0), 0.0, 0.5),
+    ];
+    push_stroke_phased(
+        &mut out,
+        &view,
+        &path,
+        1.0,
+        [1.0; 4],
+        Some([12.0, 8.0]),
+        0.0,
+    );
+    push_stroke_phased(
+        &mut out,
+        &view,
+        &path,
+        1.0,
+        [1.0; 4],
+        Some([2.0, 18.0]),
+        5.0,
+    );
+    let dashes = merged_dashes(&out);
+    let want = [(0.0, 12.0), (15.0, 17.0), (20.0, 32.0), (35.0, 37.0)];
+    assert_eq!(dashes.len(), want.len(), "{dashes:?}");
+    for (d, w) in dashes.iter().zip(want) {
+        assert!(
+            (d.0 - w.0).abs() < 1e-3 && (d.1 - w.1).abs() < 1e-3,
+            "{dashes:?}"
+        );
+    }
+}
+
 fn behind_view() -> StrokeView {
     StrokeView {
         view_proj: glam::camera::rh::proj::directx::perspective(0.8, 2.0, 0.1, 1000.0)
             * glam::camera::rh::view::look_at_mat4(Vec3::new(0.0, 0.0, 10.0), Vec3::ZERO, Vec3::Y),
         size_px: SIZE,
         depth_bias: 0.0,
+        pixels_per_point: 1.0,
     }
 }
 
@@ -161,6 +203,7 @@ fn stroke_bias_covers_half_width_at_grazing_angles() {
                 view_proj,
                 size_px: SIZE,
                 depth_bias: STROKE_DEPTH_BIAS,
+                pixels_per_point: 1.0,
             };
             let d = f64::from(distance);
             let mut out = Vec::new();
@@ -216,6 +259,7 @@ fn stroke_bias_keeps_coplanar_line_in_front() {
             view_proj,
             size_px: SIZE,
             depth_bias: STROKE_DEPTH_BIAS,
+            pixels_per_point: 1.0,
         };
         let d = f64::from(distance);
         let mut out = Vec::new();
@@ -250,6 +294,7 @@ fn stroke_bias_does_not_reveal_hidden_lines() {
             view_proj,
             size_px: SIZE,
             depth_bias: STROKE_DEPTH_BIAS,
+            pixels_per_point: 1.0,
         };
         let face_z = depth_of(view_proj, Vec3::ZERO);
         let mut out = Vec::new();

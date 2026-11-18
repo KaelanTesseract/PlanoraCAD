@@ -49,6 +49,9 @@ pub struct StrokeView {
     /// Bruchteil des Abstands, um den die Linien zur Kamera hin geschoben werden
     /// (siehe [`STROKE_DEPTH_BIAS`]); 0 = kein Versatz.
     pub depth_bias: f32,
+    /// Physische Pixel je logischem Punkt (egui `pixels_per_point`). [`push_stroke`] rechnet
+    /// in Pixeln; Aufrufer mit Breiten und Mustern in Punkten multiplizieren damit.
+    pub pixels_per_point: f32,
 }
 
 impl StrokeView {
@@ -247,11 +250,29 @@ pub fn push_stroke(
     color: [f32; 4],
     dash_px: Option<[f32; 2]>,
 ) {
+    push_stroke_phased(out, view, path, width_px, color, dash_px, 0.0);
+}
+
+/// Wie [`push_stroke`], das Strichmuster beginnt aber `phase_px` Pixel weit in seiner Periode
+/// (0 = mit einem Strich). Zwei Aufrufe mit versetzten Mustern ergeben ein Muster aus
+/// verschieden langen Strichen (Strichpunkt der Mittellinie).
+pub fn push_stroke_phased(
+    out: &mut Vec<StrokeVertex>,
+    view: &StrokeView,
+    path: &[DVec3],
+    width_px: f32,
+    color: [f32; 4],
+    dash_px: Option<[f32; 2]>,
+    phase_px: f32,
+) {
     let half = width_px * 0.5;
     let pattern = dash_px.filter(|[d, g]| {
         *d > 0.0 && *g >= 0.0 && d.is_finite() && g.is_finite() && d + g >= MIN_DASH_PERIOD_PX
     });
-    let mut phase = 0.0_f32;
+    let mut phase = match pattern {
+        Some([d, g]) if phase_px.is_finite() => phase_px.rem_euclid(d + g),
+        _ => 0.0,
+    };
     let mut prev: Option<Seg> = None;
     for pair in path.windows(2) {
         let (a, b) = (view.clip(pair[0]), view.clip(pair[1]));

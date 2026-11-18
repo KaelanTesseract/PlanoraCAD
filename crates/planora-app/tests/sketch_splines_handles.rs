@@ -1656,7 +1656,7 @@ fn a_finished_sketch_shows_only_constrained_handles() {
         }
         s.observe_sketch(false);
         s.close_sketch();
-        planora_app::sketch_view::finished_sketch_shapes(&s, rect).len()
+        planora_app::testing::finished_strokes(&s, rect).len()
     };
     let plain = shapes(false, false);
     assert!(plain > 0);

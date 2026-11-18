@@ -158,6 +158,8 @@ fn texts(shapes: &[ClippedShape]) -> String {
 }
 
 /// Zahl der Dreiecke in Netzen mit der Farbe `color`.
+use planora_app::testing::fill_triangles;
+
 fn filled_triangles(shapes: &[Shape], color: egui::Color32) -> usize {
     shapes
         .iter()
@@ -248,24 +250,24 @@ fn the_profile_under_the_pointer_is_highlighted_and_picked_ones_are_stronger() {
         Some(vec![1])
     );
     let col = theme::sketch_colors(s.dark);
-    let shapes = sketch_view::finished_sketch_shapes(&s, SCREEN);
+    let strokes = planora_app::testing::finished_strokes(&s, SCREEN);
     assert!(
-        filled_triangles(&shapes, col.profile_fill_selected) > 0,
+        fill_triangles(&strokes, col.profile_fill_selected) > 0,
         "A gewählt"
     );
     assert!(
-        filled_triangles(&shapes, col.profile_fill_hover) > 0,
+        fill_triangles(&strokes, col.profile_fill_hover) > 0,
         "B überfahren"
     );
     // Ohne Profilwahl (kein Dialog) keine Flächen in 3D.
     s.profile_pick = None;
-    let shapes = sketch_view::finished_sketch_shapes(&s, SCREEN);
+    let strokes = planora_app::testing::finished_strokes(&s, SCREEN);
     for c in [
         col.profile_fill,
         col.profile_fill_selected,
         col.profile_fill_hover,
     ] {
-        assert_eq!(filled_triangles(&shapes, c), 0);
+        assert_eq!(fill_triangles(&strokes, c), 0);
     }
 }
 
