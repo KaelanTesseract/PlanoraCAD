@@ -610,6 +610,10 @@ pub struct SketchSession {
     /// Vorschau unter dem Mauszeiger (Stutzen und Brechen: das Stück, Dehnen: der Weg zum neuen
     /// Ende), je Bild neu bestimmt ([`update_hover`](Self::update_hover)).
     pub hover_preview: Option<Vec<DVec2>>,
+    /// Element, das die Anzeige unter dem Mauszeiger heller zeigt (Skizzen 12), je Bild von
+    /// [`crate::sketch_view::show_overlay`] bestimmt: Overlay und GPU-Linien sehen dasselbe.
+    /// Nur Anzeige, keine Eingabe.
+    pub draw_hover: Option<Item>,
     /// Name des nächsten Schritts für Rückgängig, wenn ein Werkzeug ihn besser kennt als der
     /// Vergleich der Stände (Stutzen, Dehnen, Brechen); der Verlauf nimmt und leert ihn.
     pub edit_label: Option<Msg>,
@@ -845,6 +849,7 @@ impl SketchSession {
             click_after_flyout: false,
             history_jumps: 0,
             hover_preview: None,
+            draw_hover: None,
             edit_label: None,
             replace_step: false,
             clip_filled: false,

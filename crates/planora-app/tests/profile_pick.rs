@@ -7,6 +7,7 @@ use egui::epaint::{ClippedShape, Shape};
 use planora_app::create_dialog::CreateDialog;
 use planora_app::feature_dialog::FeatureDialog;
 use planora_app::state::{AppState, ProfilePick, StandardPlane};
+use planora_app::testing::open_strokes;
 use planora_app::{fonts, sketch_panel, sketch_view, theme, viewport};
 use planora_feature::{FeatureId, FeatureKind, FeatureStatus, SketchPlane};
 use planora_math::DVec2;
@@ -157,27 +158,7 @@ fn texts(shapes: &[ClippedShape]) -> String {
     out
 }
 
-/// Zahl der Dreiecke in Netzen mit der Farbe `color`.
 use planora_app::testing::fill_triangles;
-
-fn filled_triangles(shapes: &[Shape], color: egui::Color32) -> usize {
-    shapes
-        .iter()
-        .map(|s| match s {
-            Shape::Mesh(m) => m
-                .indices
-                .chunks(3)
-                .filter(|t| m.vertices[t[0] as usize].color == color)
-                .count(),
-            Shape::Vec(v) => filled_triangles(v, color),
-            _ => 0,
-        })
-        .sum()
-}
-
-fn all_shapes(shapes: &[ClippedShape]) -> Vec<Shape> {
-    shapes.iter().map(|c| c.shape.clone()).collect()
-}
 
 // ---- Klick in die Ansicht -------------------------------------------------------------------
 
@@ -527,28 +508,21 @@ fn editing_takes_a_click_into_the_view() {
 
 #[test]
 fn show_profile_fills_the_profiles_in_the_sketch_and_can_be_switched_off() {
-    let ctx = context();
+    // Seit Skizzen 12 liegen die Flächen der geöffneten Skizze auf der GPU (Tiefenprüfung) und
+    // folgen `SketchDisplay::profiles` der Skizze.
     let (mut s, id) = two_rectangles();
-    assert!(s.show_sketch_profiles, "Vorgabe an");
+    assert!(s.document.sketch_display(id).profiles, "Vorgabe an");
     s.open_sketch(id).unwrap();
     let col = theme::sketch_colors(s.dark);
-    let overlay = |s: &mut AppState| {
-        let mut shapes = Vec::new();
-        for _ in 0..2 {
-            let out = ctx.run_ui(raw(vec![]), |ui| {
-                sketch_view::show_overlay(ui, SCREEN, s);
-            });
-            shapes = all_shapes(&out.shapes);
-            out.drop_without_applying_deltas();
-        }
-        filled_triangles(&shapes, col.profile_fill)
-    };
+    let fills = |s: &AppState| fill_triangles(&open_strokes(s, SCREEN), col.profile_fill);
     assert!(
-        overlay(&mut s) >= 4,
+        fills(&s) >= 4,
         "zwei Rechtecke, je mindestens zwei Dreiecke"
     );
-    s.show_sketch_profiles = false;
-    assert_eq!(overlay(&mut s), 0, "aus: keine Flächen");
+    let mut d = s.document.sketch_display(id);
+    d.profiles = false;
+    s.document.set_sketch_display(id, d);
+    assert_eq!(fills(&s), 0, "aus: keine Flächen");
 }
 
 #[test]
@@ -573,7 +547,7 @@ fn the_sketch_field_has_the_show_profile_switch_on_top() {
         ctx.run_ui(raw(events), |ui| sketch_panel::show(ui.ctx(), &mut s))
             .drop_without_applying_deltas();
     }
-    assert!(!s.show_sketch_profiles, "ausgeschaltet");
+    assert!(!s.document.sketch_display(id).profiles, "ausgeschaltet");
 }
 
 #[test]
@@ -675,9 +649,9 @@ fn show_profile_pauses_while_a_point_is_dragged() {
         let out = ctx.run_ui(raw(events), |ui| {
             sketch_view::show_overlay(ui, SCREEN, s);
         });
-        let shapes = all_shapes(&out.shapes);
         out.drop_without_applying_deltas();
-        filled_triangles(&shapes, col.profile_fill)
+        // Die Flächen liegen auf der GPU (Skizzen 12).
+        fill_triangles(&open_strokes(s, SCREEN), col.profile_fill)
     };
     run(&mut s, vec![]);
     assert!(run(&mut s, vec![]) >= 2, "vor dem Ziehen gefüllt");

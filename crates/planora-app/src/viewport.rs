@@ -1020,12 +1020,14 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             .request_repaint_after(std::time::Duration::from_millis(50));
     }
     let cam = state.camera;
-    // Fertige Skizzen, Profile eines Dialogs und Konstruktionsebenen mit Tiefenprüfung auf der
-    // GPU (Skizzen 12): Körper verdecken sie. Ebenen zuerst, darüber die Skizzen.
+    // Fertige Skizzen, Profile eines Dialogs, Konstruktionsebenen und die geöffnete Skizze mit
+    // Tiefenprüfung auf der GPU (Skizzen 12): Körper verdecken sie. Ebenen zuerst, darüber die
+    // fertigen Skizzen, zuletzt die geöffnete (Kurven, Vorschau, Profilflächen).
     let view = stroke_view(state, rect, ui.ctx().pixels_per_point());
     let mut strokes = Vec::new();
     sketch_view::plane_strokes(state, &view, &mut strokes);
     sketch_view::finished_sketch_strokes(state, &view, &mut strokes);
+    sketch_view::open_sketch_strokes(state, &view, &mut strokes);
     painter.set(
         scene_slot,
         eframe::egui_wgpu::Callback::new_paint_callback(

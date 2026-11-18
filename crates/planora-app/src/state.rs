@@ -265,9 +265,6 @@ pub struct AppState {
     pub sketch_request: Option<SketchRequest>,
     /// Zuletzt berechnete Profile (für die Dialoge, die jedes Bild neu zeichnen).
     pub profile_cache: ProfileCache,
-    /// Profile im Skizzen-Modus als helle Flächen zeigen (Skizzenfeld „Profil anzeigen“, wie
-    /// Fusions Skizzenpalette „Profil“); Vorgabe an.
-    pub show_sketch_profiles: bool,
     /// Skizzenraster zeigen (Skizzenfeld, wie Fusions Skizzenpalette); Vorgabe an. Ohne Raster
     /// kein Raster-Fang. Den Stand führt [`crate::workspace::Workspace::sync_sketch_grid`].
     pub sketch_show_grid: bool,
@@ -745,7 +742,6 @@ impl AppState {
             fit_pending: false,
             sketch_request: None,
             profile_cache: ProfileCache::default(),
-            show_sketch_profiles: true,
             sketch_show_grid: true,
             sketch_snap_grid: true,
             sketch_grid_changed: false,

@@ -639,7 +639,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     // Formeln der Maße nennen Parameter nur lesend (das Fenster „Parameter“ ist gesperrt).
     let scope = state.document.param_scope();
     let fonts = state.fonts().cloned();
-    let mut show_profiles = state.show_sketch_profiles;
+    // „Profil anzeigen“ gehört zur Skizze (Skizzen 12, `SketchDisplay::profiles`).
+    let mut display = state.document.sketch_display(index);
+    let mut show_profiles = display.profiles;
     let mut palette = SketchPalette {
         grid: state.sketch_show_grid,
         snap: state.sketch_snap_grid,
@@ -689,7 +691,10 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         se.set_three_d(&mut sf.sketch, palette.three_d);
     }
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
-    state.show_sketch_profiles = show_profiles;
+    if show_profiles != display.profiles {
+        display.profiles = show_profiles;
+        state.document.set_sketch_display(index, display);
+    }
     state.sketch_show_grid = palette.grid;
     state.sketch_snap_grid = palette.snap;
     state.sketch_grid_changed |= palette.changed;
@@ -967,7 +972,7 @@ struct SketchPalette {
 struct SideInput<'a> {
     panel: &'a mut PanelState,
     scope: &'a ParamScope,
-    /// Schalter „Profil anzeigen“ ([`AppState::show_sketch_profiles`]).
+    /// Schalter „Profil anzeigen“ (`SketchDisplay::profiles` der geöffneten Skizze).
     show_profiles: &'a mut bool,
     palette: &'a mut SketchPalette,
     /// Die Schriftliste für den Abschnitt „Text“; `None`, solange sie gelesen wird.

@@ -5,7 +5,15 @@
 //! Gemessen wird, was je Bild auf der CPU entsteht: die Linien fertiger Skizzen (seit Task 4
 //! [`sketch_view::finished_sketch_strokes`] für die GPU plus was im egui-Overlay bleibt).
 //! (a) eine fertige Skizze mit 2000 Kurven, (b) Drehen: 20 fertige Skizzen, 60 Kamerastellungen.
-//! Task 5 erweitert den Test um die geöffnete Skizze.
+//!
+//! (c) (Task 5) eine geöffnete Skizze mit 2000 Kurven (dasselbe Raster wie (a)), ohne Zeiger,
+//! Werkzeug Auswahl, Profilflächen an. Je Bild gemessen: ein egui-Durchlauf
+//! [`sketch_view::show_overlay`] in einem kopflosen `egui::Context` (1920×1080) samt
+//! `Context::tessellate` seiner Formen bei 1,5 Pixeln je Punkt, dazu die GPU-Linien der
+//! geöffneten Skizze ([`sketch_view::open_sketch_strokes`], seit Task 5). Vor Task 5 lagen alle
+//! Kurven, Vorschauen und Profilflächen als egui-Formen in `show_overlay` (Basis auf dem Stand
+//! 00b494ad); danach liegen dort nur noch Punkte, Zeichen, Maße und Marken. 5 Läufe zu je 30
+//! Bildern, je Lauf der Median; berichtet wird der Median der 5 Läufe.
 
 use planora_app::sketch_view;
 use planora_app::state::AppState;
@@ -83,6 +91,38 @@ fn frame(s: &AppState, strokes: &mut Vec<StrokeVertex>) -> usize {
     shapes.len() + strokes.len()
 }
 
+fn context() -> egui::Context {
+    let ctx = egui::Context::default();
+    ctx.set_fonts(planora_app::fonts::definitions());
+    ctx
+}
+
+/// Ein Bild der geöffneten Skizze (siehe Kopf, (c)); Rückgabe: Zahl der Dreiecke plus Eckpunkte.
+fn open_frame(ctx: &egui::Context, s: &mut AppState, strokes: &mut Vec<StrokeVertex>) -> usize {
+    strokes.clear();
+    let raw = egui::RawInput {
+        screen_rect: Some(SCREEN),
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(raw, |ui| {
+        sketch_view::show_overlay(ui, SCREEN, s);
+    });
+    let shapes = std::mem::take(&mut out.shapes);
+    out.drop_without_applying_deltas();
+    // Seit Task 5: Kurven, Vorschau und Profilflächen als GPU-Linien.
+    let view = stroke_view(s, SCREEN, PPP);
+    sketch_view::open_sketch_strokes(s, &view, strokes);
+    let prims = ctx.tessellate(shapes, PPP);
+    let tris: usize = prims
+        .iter()
+        .map(|p| match &p.primitive {
+            egui::epaint::Primitive::Mesh(m) => m.indices.len() / 3,
+            _ => 0,
+        })
+        .sum();
+    tris + strokes.len()
+}
+
 fn median(mut v: Vec<Duration>) -> Duration {
     v.sort();
     v[v.len() / 2]
@@ -124,5 +164,41 @@ fn finished_sketch_draw_timing() {
     println!(
         "(b) Drehen, 20 Skizzen, 60 Stellungen: Median {:.3} ms je Bild",
         median(per_frame).as_secs_f64() * 1e3
+    );
+}
+
+#[test]
+#[ignore = "Zeitmessung, nur im Release-Build von Hand"]
+fn open_sketch_draw_timing() {
+    let ctx = context();
+    let mut strokes = Vec::new();
+    // (c) Eine geöffnete Skizze mit 2000 Kurven.
+    let mut s = state(1, 2000);
+    let id = s.document.features().last().unwrap().id;
+    s.open_sketch(id).unwrap();
+    s.camera.set_viewport(SCREEN.width(), SCREEN.height());
+    for _ in 0..3 {
+        black_box(open_frame(&ctx, &mut s, &mut strokes));
+    }
+    let mut medians = Vec::new();
+    for run in 0..5 {
+        let times: Vec<Duration> = (0..30)
+            .map(|_| {
+                let t = Instant::now();
+                black_box(open_frame(&ctx, &mut s, &mut strokes));
+                t.elapsed()
+            })
+            .collect();
+        let m = median(times);
+        println!(
+            "(c) Lauf {}: Median {:.3} ms je Bild",
+            run + 1,
+            m.as_secs_f64() * 1e3
+        );
+        medians.push(m);
+    }
+    println!(
+        "(c) 2000 Kurven, geöffnete Skizze: Median {:.3} ms je Bild",
+        median(medians).as_secs_f64() * 1e3
     );
 }

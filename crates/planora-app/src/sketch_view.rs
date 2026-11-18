@@ -12,7 +12,7 @@ use crate::sketch_state::{Item, ProjectFilter, SketchSession, Snap, Tool};
 use crate::state::{AppState, PickFilter, ProjectTarget};
 use crate::theme::{self, lighten as lighter, sketch_colors as colors};
 use crate::viewport;
-use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
+use egui::{Color32, FontId, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
 use planora_feature::{FeatureId, FeatureKind, SketchFeature};
 use planora_i18n::tr;
@@ -21,7 +21,6 @@ use planora_render::{
     EdgeRef, FaceRef, OrbitCamera, Pick, StrokeVertex, StrokeView, exact_step, grid_radius,
     line_weight, push_fill, push_stroke, push_stroke_phased,
 };
-use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, LineStyle, MAX_COORD, PointId, Sketch};
@@ -957,16 +956,6 @@ pub fn style_shapes(path: Vec<Pos2>, stroke: Stroke, style: LineStyle) -> Vec<Sh
     }
 }
 
-/// Linienzüge der Kurve `c` auf dem Bildschirm: 3D-Kurven über [`curve_screen_paths`] mit z,
-/// alle anderen wie bisher über die Draufsicht. `None`, wenn eine 2D-Kurve keinen Linienzug hat.
-fn curve_paths(sk: &Sketch, c: CurveId, map: &Mapper) -> Option<Vec<Vec<Pos2>>> {
-    if sk.is_3d_curve(c) {
-        Some(curve_screen_paths(sk, c, map))
-    } else {
-        Some(map.paths(&sk.curve_polyline(c, STEPS_PER_TURN)?))
-    }
-}
-
 /// Bildschirmlage des Punkts `p`: ein 3D-Punkt mit z, alle anderen über die Draufsicht.
 fn point_screen(sk: &Sketch, p: PointId, map: &Mapper) -> Option<Pos2> {
     if sk.is_3d_point(p) {
@@ -974,36 +963,6 @@ fn point_screen(sk: &Sketch, p: PointId, map: &Mapper) -> Option<Pos2> {
     } else {
         map.to_screen(pos(sk, p)?)
     }
-}
-
-/// Flächen der Profile als ein Dreiecksnetz (Füllung aus [`ExtractedProfiles::fill`]), Farbe je
-/// Profil aus `color` (`None`: nicht zeichnen). Leer, wenn nichts zu zeichnen ist.
-fn profile_fill_shape(
-    map: &Mapper,
-    extracted: &ExtractedProfiles,
-    color: impl Fn(usize) -> Option<Color32>,
-) -> Option<Shape> {
-    let mut mesh = Mesh::default();
-    for i in 0..extracted.profiles.len() {
-        let Some(c) = color(i) else {
-            continue;
-        };
-        for t in extracted.fill(i) {
-            let (Some(a), Some(b), Some(d)) = (
-                map.to_screen(t[0]),
-                map.to_screen(t[1]),
-                map.to_screen(t[2]),
-            ) else {
-                continue;
-            };
-            let base = mesh.vertices.len() as u32;
-            for q in [a, b, d] {
-                mesh.colored_vertex(q, c);
-            }
-            mesh.add_triangle(base, base + 1, base + 2);
-        }
-    }
-    (!mesh.is_empty()).then(|| Shape::mesh(mesh))
 }
 
 /// Strichstärke des Randes einer Konstruktionsebene in der 3D-Ansicht (logische Punkte).
@@ -1292,7 +1251,7 @@ fn finished_sketches(state: &AppState) -> Vec<(FeatureId, &Sketch)> {
         .collect()
 }
 
-/// Weltpunkte der Kurve `c` mit derselben Abtastung wie [`curve_paths`]: 3D-Kurven über
+/// Weltpunkte der Kurve `c` mit derselben Abtastung wie das frühere egui-Overlay: 3D-Kurven über
 /// [`curve_points3`], alle anderen über [`Sketch::curve_polyline`]. `None`, wenn eine 2D-Kurve
 /// keinen Linienzug hat.
 fn curve_world_points(sk: &Sketch, c: CurveId) -> Option<Vec<DVec3>> {
@@ -1627,6 +1586,11 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
     let pointer = response.hover_pos().or(response.interact_pointer_pos());
     if crate::sketch_inline::show(ui, rect, state, pointer) {
         cursor_after_fields(rect, state, pointer);
+    }
+    // Was die Anzeige unter dem Zeiger heller zeigt, für Overlay und GPU-Linien gleich.
+    let hover = hovered_item(state, rect, response.hover_pos());
+    if let Some(se) = state.sketch_session.as_mut() {
+        se.draw_hover = hover;
     }
     draw(ui, rect, state, response.hover_pos());
     show_curve_menu(ui, state);
@@ -3140,6 +3104,167 @@ pub fn point_color(state: &AppState, p: PointId) -> Color32 {
     }
 }
 
+/// Element unter dem Mauszeiger, das die Anzeige heller zeigt: beim Zeichnen das Fangziel des
+/// aufgelösten Zeigers, beim Abhängigkeitsbefehl, was der Klick wählen würde, sonst der Treffer der
+/// Auswahl. Bestimmt je Bild [`show_overlay`] für Overlay und GPU-Linien.
+fn hovered_item(state: &AppState, rect: Rect, pointer: Option<Pos2>) -> Option<Item> {
+    let (se, sk, map) = (
+        state.sketch_session.as_ref()?,
+        state.session_sketch()?,
+        mapper(rect, state)?,
+    );
+    if se.is_drawing_tool() {
+        se.draw_cursor.as_ref().and_then(|cur| match cur.snap {
+            Snap::Point(p) | Snap::Center(p) => Some(Item::Point(p)),
+            Snap::Curve(c) | Snap::Midpoint(c) => Some(Item::Curve(c)),
+            _ => None,
+        })
+    } else if matches!(se.tool, Tool::Constraint(_)) {
+        // Abhängigkeitsbefehl: hervorgehoben ist, was der Klick wählen würde (passt der Punkt
+        // nicht, die Kurve darunter), und nichts, was er ablehnt.
+        pointer
+            .and_then(|p| Some((map.to_sketch(p)?, map.radius_at(p)?)))
+            .and_then(|(at, r)| se.constraint_hover(sk, at, r))
+    } else {
+        pointer
+            .filter(|_| !se.is_dragging())
+            .and_then(|p| select_hit(se, sk, &map, p))
+    }
+}
+
+/// Kurven und Punkte der geöffneten Skizze, die nicht erscheinen: Beim Bearbeiten eines Musters
+/// steht an der Stelle seiner Exemplare, beim Ändern eines Textes an der Stelle seiner
+/// Buchstaben und seines Rahmens die Vorschau; dazu Griffe ohne Abhängigkeit. Buchstaben haben
+/// keine sichtbaren Punkte (Spec B9, wie Fusion): Sie fangen nicht und lassen sich nicht einzeln
+/// wählen.
+fn open_hidden(se: &SketchSession, sk: &Sketch) -> (HashSet<CurveId>, HashSet<PointId>) {
+    let (mut hidden, mut hidden_points) = se.pattern_hidden(sk);
+    let handles_hidden = se.hidden_handles(sk);
+    hidden.extend(handles_hidden.curves);
+    hidden_points.extend(handles_hidden.points);
+    hidden.extend(se.text_hidden(sk));
+    hidden_points.extend(se.text_hidden_points(sk));
+    hidden_points.extend(sk.glyph_points());
+    (hidden, hidden_points)
+}
+
+/// Die geöffnete Skizze als Linien und Flächen für die GPU mit Tiefenprüfung (Skizzen 12):
+/// Körper verdecken sie wie in Fusion (eine Skizze in einem Körper bleibt verborgen, bis die
+/// Schnittansicht an ist). Zuunterst die Profilflächen (nur mit [`SketchDisplay::profiles`] und
+/// nicht beim Ziehen), darüber die Kurven in den Farben von `curve_ink`/`lost_ink` (Auswahl,
+/// Zeiger heller, bestimmt/unbestimmt, Konstruktion, Mittellinie, Projektion; der Rahmen eines
+/// gewählten Textes in der Auswahlfarbe), die Hilfslinien der gewählten Kurve, die Vorschau des
+/// laufenden Werkzeugs, Stutzen/Dehnen und die Enden der Übergangskurve. Punkte, Zeichen, Maße,
+/// Griffe und Marken zeichnet [`show_overlay`] obenauf.
+///
+/// [`SketchDisplay::profiles`]: planora_feature::SketchDisplay::profiles
+pub fn open_sketch_strokes(state: &AppState, view: &StrokeView, out: &mut Vec<StrokeVertex>) {
+    let (Some(se), Some(draft)) = (state.sketch_session.as_ref(), state.sketch_draft.as_ref())
+    else {
+        return;
+    };
+    if !view_usable(view) {
+        return;
+    }
+    let sk = &draft.sketch;
+    let frame = *sk.frame();
+    let col = colors(state.dark);
+    let projected = Projected::of_open(state, draft);
+
+    // Profile als helle Flächen unter allem anderen („Profil anzeigen“, wie Fusion). Beim Ziehen
+    // ändert sich die Skizze in jedem Frame; die Flächen kommen erst danach wieder (sonst würden
+    // sie in jedem Frame neu bestimmt).
+    if state.document.sketch_display(se.sketch).profiles && !se.is_dragging() {
+        let extracted = state.profile_cache.get(sk);
+        // Beim Ändern eines Textes ohne seine Buchstaben (Handtest B2): An ihrer Stelle steht
+        // nur die Vorschau. Ein Profil des Textes hat nur Buchstaben am äußeren Rand; die
+        // Buchstaben einmal je Bild als Menge statt einer Suche je Profil.
+        let glyphs: HashSet<CurveId> = se
+            .edited_text()
+            .and_then(|t| sk.text(t))
+            .map(|d| d.curves.iter().copied().collect())
+            .unwrap_or_default();
+        let fill = stroke_rgba(col.profile_fill);
+        for i in 0..extracted.profiles.len() {
+            let own = !glyphs.is_empty()
+                && extracted
+                    .refs
+                    .get(i)
+                    .is_some_and(|r| r.outer.first().is_some_and(|e| glyphs.contains(&e.curve)));
+            if own {
+                continue;
+            }
+            let triangles: Vec<[DVec3; 3]> = extracted
+                .fill(i)
+                .iter()
+                .map(|t| t.map(|p| frame.point(p.x, p.y, 0.0)))
+                .collect();
+            push_fill(out, view, &triangles, fill);
+        }
+    }
+
+    // Kurven (beim Bearbeiten eines Musters ohne seine Exemplare, siehe [`open_hidden`]).
+    let (hidden, _) = open_hidden(se, sk);
+    // Der Rahmen eines gewählten Textes erscheint hervorgehoben (Spec B9).
+    let frames = selected_frames(se, sk);
+    for (c, data) in sk.curves() {
+        if hidden.contains(&c) {
+            continue;
+        }
+        let Some(points) = curve_world_points(sk, c) else {
+            continue;
+        };
+        let mut color = if frames.contains(&c) {
+            col.selected
+        } else {
+            curve_ink(&col, se, sk, &projected, c)
+        };
+        if se.draw_hover == Some(Item::Curve(c)) {
+            color = lighter(color);
+        }
+        let width = if data.construction { 1.2 } else { CURVE_WIDTH };
+        push_styled(out, view, &points, width, stroke_rgba(color), data.style());
+    }
+
+    let mut ink = Ink::Lines { view, out, frame };
+    // Hilfslinien der gewählten Kurve (Kontrollpolygon, Kegelschnitt), gestrichelt.
+    for line in curve_guides3(se, sk) {
+        ink.line3(&line, 1.0, col.preview, LineStyle::Construction);
+    }
+    // Die Karte braucht die Vorschau nur für Marken, die hier entfallen.
+    let ppp = view.pixels_per_point;
+    let map = Mapper {
+        camera: state.camera,
+        frame,
+        rect: Rect::from_min_size(Pos2::ZERO, vec2(view.size_px.x / ppp, view.size_px.y / ppp)),
+    };
+    draw_preview(&mut ink, &map, sk, se, col.preview);
+
+    // Stutzen/Brechen: das Stück rot; Dehnen: der Weg zum neuen Ende rot gestrichelt.
+    if let Some(pl) = &se.hover_preview {
+        // Übergangskurve: die Vorschau der neuen Kurve in der Vorschaufarbe, nicht rot wie das
+        // Stück, das Stutzen entfernt.
+        let color = if se.tool == Tool::BlendCurve {
+            col.preview
+        } else {
+            col.trim_highlight
+        };
+        let dashed = matches!(se.tool, Tool::Extend | Tool::BlendCurve);
+        ink.line(pl, CURVE_WIDTH + 1.0, color, dash(dashed));
+    }
+    // Übergangskurve: gewähltes und überfahrenes Ende kräftig (die Ringe im Overlay).
+    if se.tool == Tool::BlendCurve {
+        for (end, color) in [
+            (se.blend.hover, col.preview),
+            (se.blend.first, col.selected),
+        ] {
+            if let Some(points) = end.and_then(|e| curve_points3(sk, e.curve)) {
+                ink.line3(&points, CURVE_WIDTH + 1.0, color, LineStyle::Normal);
+            }
+        }
+    }
+}
+
 fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     let (Some(se), Some(draft)) = (state.sketch_session.as_ref(), state.sketch_draft.as_ref())
     else {
@@ -3159,28 +3284,8 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     // Skizzenraster zuunterst.
     painter.extend(sketch_grid_shapes(state, rect));
 
-    // Profile als helle Flächen über dem Raster, unter allem anderen („Profil anzeigen“, wie Fusion). Beim
-    // Ziehen ändert sich die Skizze in jedem Frame; die Flächen kommen erst danach
-    // wieder (sonst würden sie in jedem Frame neu bestimmt).
-    if state.show_sketch_profiles && !se.is_dragging() {
-        let extracted = state.profile_cache.get(sk);
-        // Beim Ändern eines Textes ohne seine Buchstaben (Handtest B2): An ihrer Stelle steht
-        // nur die Vorschau. Ein Profil des Textes hat nur Buchstaben am äußeren Rand; die
-        // Buchstaben einmal je Bild als Menge statt einer Suche je Profil.
-        let glyphs: HashSet<CurveId> = se
-            .edited_text()
-            .and_then(|t| sk.text(t))
-            .map(|d| d.curves.iter().copied().collect())
-            .unwrap_or_default();
-        painter.extend(profile_fill_shape(&map, &extracted, |i| {
-            let own = !glyphs.is_empty()
-                && extracted
-                    .refs
-                    .get(i)
-                    .is_some_and(|r| r.outer.first().is_some_and(|e| glyphs.contains(&e.curve)));
-            (!own).then_some(col.profile_fill)
-        }));
-    }
+    // Profilflächen, Kurven und die Linien der Vorschau zeichnet die GPU mit Tiefenprüfung
+    // ([`open_sketch_strokes`], Skizzen 12); hier bleibt, was obenauf liegt.
 
     // Achsenkreuz im Skizzenursprung
     if let Some(o) = map.to_screen(DVec2::ZERO) {
@@ -3194,60 +3299,10 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
     }
 
-    // Element unter dem Mauszeiger: beim Zeichnen das Fangziel des aufgelösten Zeigers.
-    let hovered: Option<Item> = if se.is_drawing_tool() {
-        se.draw_cursor.as_ref().and_then(|cur| match cur.snap {
-            Snap::Point(p) | Snap::Center(p) => Some(Item::Point(p)),
-            Snap::Curve(c) | Snap::Midpoint(c) => Some(Item::Curve(c)),
-            _ => None,
-        })
-    } else if matches!(se.tool, Tool::Constraint(_)) {
-        // Abhängigkeitsbefehl: hervorgehoben ist, was der Klick wählen würde (passt der Punkt
-        // nicht, die Kurve darunter), und nichts, was er ablehnt.
-        pointer
-            .and_then(|p| Some((map.to_sketch(p)?, map.radius_at(p)?)))
-            .and_then(|(at, r)| se.constraint_hover(sk, at, r))
-    } else {
-        pointer
-            .filter(|_| !se.is_dragging())
-            .and_then(|p| select_hit(se, sk, &map, p))
-    };
+    // Element unter dem Mauszeiger (in `show_overlay` bestimmt, siehe [`hovered_item`]).
+    let hovered = se.draw_hover;
 
-    // Kurven (beim Bearbeiten eines Musters ohne seine Exemplare: An ihrer Stelle steht die
-    // Vorschau).
-    let (mut hidden, mut hidden_points) = se.pattern_hidden(sk);
-    let handles_hidden = se.hidden_handles(sk);
-    hidden.extend(handles_hidden.curves);
-    hidden_points.extend(handles_hidden.points);
-    // Beim Ändern eines Textes steht die Vorschau an der Stelle seiner Buchstaben und seines
-    // Rahmens.
-    hidden.extend(se.text_hidden(sk));
-    hidden_points.extend(se.text_hidden_points(sk));
-    // Buchstaben haben keine sichtbaren Punkte (Spec B9, wie Fusion): Sie fangen nicht und
-    // lassen sich nicht einzeln wählen.
-    hidden_points.extend(sk.glyph_points());
-    // Der Rahmen eines gewählten Textes erscheint hervorgehoben (Spec B9).
-    let frames = selected_frames(se, sk);
-    for (c, data) in sk.curves() {
-        if hidden.contains(&c) {
-            continue;
-        }
-        let Some(paths) = curve_paths(sk, c, &map) else {
-            continue;
-        };
-        let mut color = if frames.contains(&c) {
-            col.selected
-        } else {
-            curve_ink(&col, se, sk, &projected, c)
-        };
-        if hovered == Some(Item::Curve(c)) {
-            color = lighter(color);
-        }
-        let width = if data.construction { 1.2 } else { CURVE_WIDTH };
-        for path in paths {
-            painter.extend(style_shapes(path, Stroke::new(width, color), data.style()));
-        }
-    }
+    let (hidden, hidden_points) = open_hidden(se, sk);
 
     // Krümmungskamm (Skizzen 11a) und die Vorschau des offenen Dialogs „Krümmungsanzeige
     // einrichten“; die Vorschau ändert die Skizze nicht.
@@ -3260,13 +3315,6 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             scale,
             col.comb,
         ));
-    }
-
-    // Hilfslinien der gewählten Kurve (Kontrollpolygon, Kegelschnitt), gestrichelt unter den Punkten.
-    for line in curve_guides3(se, sk) {
-        for path in map.paths3(&line) {
-            draw_path(&painter, path, Stroke::new(1.0, col.preview), true);
-        }
     }
 
     // Punkte
@@ -3292,7 +3340,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     draw_handle_grips(&painter, &map, se, sk, &col, pointer);
-    draw_preview(&painter, &map, sk, se, col.preview);
+    draw_preview(&mut Ink::Marks(&painter), &map, sk, se, col.preview);
     let mut placed: Vec<Rect> = Vec::new();
     // Skizzenbemaßung: Hilfsstriche und der Wert am Anker (dem Zeiger bzw. der gesetzten Stelle).
     if let Some(plan) = se.dimension_preview(sk) {
@@ -3355,26 +3403,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         sketch_pattern::paint_pattern_grips(&painter, &l, hot, col.selected, lighter(col.selected));
     }
 
-    // Stutzen/Brechen: das Stück rot; Dehnen: der Weg zum neuen Ende rot gestrichelt.
-    if let Some(pl) = &se.hover_preview {
-        // Übergangskurve: die Vorschau der neuen Kurve in der Vorschaufarbe, nicht rot wie das
-        // Stück, das Stutzen entfernt.
-        let ink = if se.tool == Tool::BlendCurve {
-            col.preview
-        } else {
-            col.trim_highlight
-        };
-        let stroke = Stroke::new(CURVE_WIDTH + 1.0, ink);
-        for path in map.paths(pl) {
-            draw_path(
-                &painter,
-                path,
-                stroke,
-                matches!(se.tool, Tool::Extend | Tool::BlendCurve),
-            );
-        }
-    }
-    // Übergangskurve: gewähltes und überfahrenes Ende hervorgehoben (Kurve kräftig, Ende als Ring).
+    // Übergangskurve: gewähltes und überfahrenes Ende als Ring (die Kurve kräftig auf der GPU).
     if se.tool == Tool::BlendCurve {
         for (end, ink) in [
             (se.blend.hover, col.preview),
@@ -3383,9 +3412,6 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             let Some(end) = end else {
                 continue;
             };
-            for path in curve_screen_paths(sk, end.curve, &map) {
-                draw_path(&painter, path, Stroke::new(CURVE_WIDTH + 1.0, ink), false);
-            }
             if let Some(at) = point_screen(sk, end.point, &map) {
                 painter.circle_stroke(at, POINT_PX + 4.0, Stroke::new(2.0, ink));
             }
@@ -3849,14 +3875,58 @@ fn frame_polygon(sk: &Sketch, c: CurveId) -> Option<Vec<DVec3>> {
     ids.iter().map(|&p| pos3(sk, p)).collect()
 }
 
+/// Ausgabe der Linien der geöffneten Skizze (Skizzen 12): Linien gehen als GPU-Linien mit
+/// Tiefenprüfung in [`open_sketch_strokes`], Marken (Fangzeichen, Mitten, Zeigerpunkt) bleiben im
+/// egui-Overlay obenauf ([`draw`]). Beide Durchgänge laufen durch dieselbe Vorschau; jeder
+/// nimmt nur seinen Teil.
+enum Ink<'a> {
+    /// egui-Overlay: nur die Marken.
+    Marks(&'a egui::Painter),
+    /// GPU: nur die Linien, in Weltkoordinaten über die Lage der Skizzenebene `frame`.
+    Lines {
+        view: &'a StrokeView,
+        out: &'a mut Vec<StrokeVertex>,
+        frame: Frame,
+    },
+}
+
+impl Ink<'_> {
+    /// Linienzug in Skizzenkoordinaten (Ebene der Skizze), Breite in logischen Punkten.
+    fn line(&mut self, points: &[DVec2], width: f32, color: Color32, style: LineStyle) {
+        if let Ink::Lines { view, out, frame } = self {
+            let world: Vec<DVec3> = points.iter().map(|p| frame.point(p.x, p.y, 0.0)).collect();
+            push_styled(out, view, &world, width, stroke_rgba(color), style);
+        }
+    }
+
+    /// Wie [`line`](Self::line) für Punkte mit z (Skizzen 10).
+    fn line3(&mut self, points: &[DVec3], width: f32, color: Color32, style: LineStyle) {
+        if let Ink::Lines { view, out, frame } = self {
+            let world: Vec<DVec3> = points.iter().map(|p| frame.point(p.x, p.y, p.z)).collect();
+            push_styled(out, view, &world, width, stroke_rgba(color), style);
+        }
+    }
+
+    /// Der Maler für die Marken; `None` im GPU-Durchgang.
+    fn marks(&self) -> Option<&egui::Painter> {
+        match self {
+            Ink::Marks(p) => Some(p),
+            Ink::Lines { .. } => None,
+        }
+    }
+}
+
+/// Stil einer Vorschaulinie: gestrichelt wie Konstruktionsgeometrie (6/4) oder durchgezogen.
+fn dash(dashed: bool) -> LineStyle {
+    if dashed {
+        LineStyle::Construction
+    } else {
+        LineStyle::Normal
+    }
+}
+
 /// Vorschau des Werkzeugs „Text“ ([`crate::sketch_text`]): nichts davon steht in der Skizze.
-fn draw_text_preview(
-    painter: &egui::Painter,
-    map: &Mapper,
-    sk: &Sketch,
-    se: &SketchSession,
-    color: Color32,
-) {
+fn draw_text_preview(ink: &mut Ink, map: &Mapper, sk: &Sketch, se: &SketchSession, color: Color32) {
     use crate::sketch_text::TextToolKind;
     let Some(t) = se.text.as_ref() else {
         return;
@@ -3865,9 +3935,13 @@ fn draw_text_preview(
     // Ebene und werden in den Raum gelegt.
     // Auf dem Pfad (nur 2D) gilt sie nicht.
     let plane = t.plane3.filter(|_| t.kind == TextToolKind::Box);
-    let paths = |line: &[DVec2]| match plane {
-        Some(pl) => map.paths3(&line.iter().map(|&q| pl.to3(q)).collect::<Vec<_>>()),
-        None => map.paths(line),
+    let lift = |line: &[DVec2]| -> Vec<DVec3> {
+        line.iter()
+            .map(|&q| match plane {
+                Some(pl) => pl.to3(q),
+                None => DVec3::new(q.x, q.y, 0.0),
+            })
+            .collect()
     };
     let cursor = match plane {
         Some(pl) => se.cursor3.map(|c| pl.to2(c.at)),
@@ -3881,11 +3955,12 @@ fn draw_text_preview(
             }
             _ => None,
         };
-        for path in frame.iter().flat_map(|f| paths(f)) {
-            draw_path(painter, path, Stroke::new(1.5, color), true);
+        if let Some(f) = &frame {
+            ink.line3(&lift(f), 1.5, color, dash(true));
         }
         // Beim Aufziehen in 3D: der Zeiger in der Ebene der Triade.
         if se.draw3
+            && let Some(painter) = ink.marks()
             && let Some(at) = se.cursor3.and_then(|c| map.to_screen3(c.at))
         {
             painter.circle_filled(at, 2.5, color);
@@ -3894,30 +3969,19 @@ fn draw_text_preview(
     if t.kind == TextToolKind::Path
         && let Some(pl) = t.path.and_then(|p| sk.curve_polyline(p, STEPS_PER_TURN))
     {
-        for path in map.paths(&pl) {
-            draw_path(painter, path, Stroke::new(CURVE_WIDTH + 1.0, color), false);
-        }
+        ink.line(&pl, CURVE_WIDTH + 1.0, color, dash(false));
     }
-    let stroke = Stroke::new(CURVE_WIDTH, color);
     // Die gemerkte Lage: Gelegt wird nur nach einer Änderung (`update_text_preview`).
     let placed = se.placed_text_preview().unwrap_or_default();
     for line in crate::sketch_text::contour_polylines(&placed) {
-        for path in paths(&line) {
-            draw_path(painter, path, stroke, false);
-        }
+        ink.line3(&lift(&line), CURVE_WIDTH, color, dash(false));
     }
 }
 
 /// Vorschau beim Zeichnen in 3D: Linie vom Anfang, Linienzug durch die Punkte des Splines (bei
 /// Kontrollpunkten das Kontrollpolygon) bis zum Zeiger, gestrichelt; dazu ein Fangzeichen am
 /// gefangenen Punkt oder Ursprung.
-fn draw_preview3(
-    painter: &egui::Painter,
-    map: &Mapper,
-    sk: &Sketch,
-    se: &SketchSession,
-    color: Color32,
-) {
+fn draw_preview3(ink: &mut Ink, map: &Mapper, sk: &Sketch, se: &SketchSession, color: Color32) {
     let Some(cur) = se.cursor3 else {
         return;
     };
@@ -3928,16 +3992,14 @@ fn draw_preview3(
         .collect();
     // Tangentenkreise in 3D (Task H): gewählte Kurven und die Kurve unter dem Zeiger hervorgehoben.
     for &c in se.pending_curves.iter().chain(cur.curve.iter()) {
-        for path in curve_screen_paths(sk, c, map) {
-            draw_path(painter, path, Stroke::new(3.0, color), false);
+        if let Some(points) = curve_points3(sk, c) {
+            ink.line3(&points, 3.0, color, dash(false));
         }
     }
     // Ebene Formen (Task 12): die Form in ihrer Ebene, wie der Klick sie anlegte.
     if se.planar3().is_some() {
         for line in se.planar3_preview(sk, cur.at) {
-            for path in map.paths3(&line) {
-                draw_path(painter, path, Stroke::new(1.5, color), true);
-            }
+            ink.line3(&line, 1.5, color, dash(true));
         }
     }
     let shape: Vec<DVec3> = match (se.tool, pending.as_slice()) {
@@ -3946,10 +4008,10 @@ fn draw_preview3(
         (Tool::Spline, [_, ..]) => pending.iter().copied().chain([cur.at]).collect(),
         _ => Vec::new(),
     };
-    for path in map.paths3(&shape) {
-        draw_path(painter, path, Stroke::new(1.5, color), true);
-    }
-    if let Some(s) = map.to_screen3(cur.at) {
+    ink.line3(&shape, 1.5, color, dash(true));
+    if let Some(painter) = ink.marks()
+        && let Some(s) = map.to_screen3(cur.at)
+    {
         if cur.snap.is_some() || cur.origin {
             painter.circle_stroke(s, POINT_PX + 4.0, Stroke::new(1.5, color));
         } else if let Some(c) = cur.mid {
@@ -3962,49 +4024,34 @@ fn draw_preview3(
 }
 
 /// Vorschau des laufenden Werkzeugs vom zuletzt gesetzten Punkt zum Mauszeiger.
-fn draw_preview(
-    painter: &egui::Painter,
-    map: &Mapper,
-    sk: &Sketch,
-    se: &SketchSession,
-    color: Color32,
-) {
+fn draw_preview(ink: &mut Ink, map: &Mapper, sk: &Sketch, se: &SketchSession, color: Color32) {
     // Verschieben/Kopieren und Maßstab brauchen keinen Zeiger; mitgezogene Hilfsgeometrie erscheint
     // in ihrem Stil.
     if matches!(se.tool, Tool::MoveCopy | Tool::Scale) {
-        let stroke = Stroke::new(CURVE_WIDTH, color);
         // Mit „3D-Skizze“ im Raum (Skizzen 10).
         if se.tool == Tool::MoveCopy && sk.three_d {
             for (style, line) in se.transform_preview3_styled(sk).unwrap_or_default() {
-                for path in map.paths3(&line) {
-                    painter.extend(style_shapes(path, stroke, style));
-                }
+                ink.line3(&line, CURVE_WIDTH, color, style);
             }
             return;
         }
         for (style, line) in se.transform_preview_styled(sk).unwrap_or_default() {
-            for path in map.paths(&line) {
-                painter.extend(style_shapes(path, stroke, style));
-            }
+            ink.line(&line, CURVE_WIDTH, color, style);
         }
         return;
     }
     // Anordnung: die Exemplare, die Eingabe anlegt; abgewählte gestrichelt und dünn.
     if se.runs_pattern() {
         for (_, suppressed, lines) in se.pattern_preview_all(sk).unwrap_or_default() {
-            let stroke = if suppressed {
-                Stroke::new(1.0, color)
-            } else {
-                Stroke::new(CURVE_WIDTH, color)
-            };
+            let width = if suppressed { 1.0 } else { CURVE_WIDTH };
             for line in lines {
-                for path in map.paths(&line) {
-                    draw_path(painter, path, stroke, suppressed);
-                }
+                ink.line(&line, width, color, dash(suppressed));
             }
         }
         // Die Mitte des Kreismusters, die erst das Anlegen als Punkt setzt.
-        if let Some(at) = se.pattern.new_center.and_then(|hit| map.to_screen(hit.at)) {
+        if let Some(painter) = ink.marks()
+            && let Some(at) = se.pattern.new_center.and_then(|hit| map.to_screen(hit.at))
+        {
             painter.circle_filled(at, 3.0, color);
         }
         return;
@@ -4012,32 +4059,32 @@ fn draw_preview(
     // Text: Rahmen gestrichelt (beim Aufziehen bis zum Zeiger), der Pfad kräftig, der Text, wie
     // OK ihn anlegt.
     if se.runs_text() {
-        draw_text_preview(painter, map, sk, se, color);
+        draw_text_preview(ink, map, sk, se, color);
         return;
     }
     // Zeichnen in 3D (Skizzen 10): vom gesetzten Punkt zum Zeiger in der Ebene der Triade.
     if se.draw3 {
-        draw_preview3(painter, map, sk, se, color);
+        draw_preview3(ink, map, sk, se, color);
+        return;
+    }
+    // Die übrigen Vorschauen sind reine Linien: im Overlay-Durchgang nichts zu tun.
+    if ink.marks().is_some() {
         return;
     }
     // Ohne Zeiger über der Skizze bleibt die Vorschau an der letzten Stelle stehen.
     let Some(cursor) = se.draw_cursor.as_ref().map(|c| c.at).or(se.cursor) else {
         return;
     };
-    let stroke = Stroke::new(1.5, color);
+    const W: f32 = 1.5;
     if let Some(lines) = se.offset_preview(sk, cursor) {
         for line in lines {
-            for path in map.paths(&line) {
-                draw_path(painter, path, stroke, true);
-            }
+            ink.line(&line, W, color, dash(true));
         }
         return;
     }
     if se.line_arc.is_some() {
         for line in se.line_arc_preview(sk, cursor).unwrap_or_default() {
-            for path in map.paths(&line) {
-                draw_path(painter, path, stroke, true);
-            }
+            ink.line(&line, W, color, dash(true));
         }
         return;
     }
@@ -4048,19 +4095,13 @@ fn draw_preview(
             _ => cursor,
         };
         for line in se.kind_preview(sk, at).unwrap_or_default() {
-            for path in map.paths(&line) {
-                draw_path(painter, path, stroke, true);
-            }
+            ink.line(&line, W, color, dash(true));
         }
         return;
     }
     // Spline mit Kontrollpunkten: die Kurve durchgezogen, das Polygon gestrichelt (unten).
-    for path in se
-        .control_spline_preview(sk, cursor)
-        .iter()
-        .flat_map(|curve| map.paths(curve))
-    {
-        draw_path(painter, path, stroke, false);
+    if let Some(curve) = se.control_spline_preview(sk, cursor) {
+        ink.line(&curve, W, color, dash(false));
     }
     let pending: Vec<DVec2> = se.pending.iter().filter_map(|&p| pos(sk, p)).collect();
     let circle = |m: DVec2, r: f64| -> Vec<DVec2> {
@@ -4118,7 +4159,5 @@ fn draw_preview(
         (Tool::Spline, [_, ..], _) => pending.iter().copied().chain([cursor]).collect(),
         _ => return,
     };
-    for path in map.paths(&shape) {
-        draw_path(painter, path, stroke, true);
-    }
+    ink.line(&shape, W, color, dash(true));
 }

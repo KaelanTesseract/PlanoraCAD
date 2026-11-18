@@ -169,6 +169,36 @@ pub mod testing {
         out
     }
 
+    /// GPU-Linien und -Flächen der geöffneten Skizze im Viewport `rect` bei 1 Pixel je Punkt.
+    pub fn open_strokes(state: &crate::state::AppState, rect: egui::Rect) -> Vec<StrokeVertex> {
+        let mut out = Vec::new();
+        let view = crate::viewport::stroke_view(state, rect, 1.0);
+        crate::sketch_view::open_sketch_strokes(state, &view, &mut out);
+        out
+    }
+
+    /// Bildschirmlage (logische Punkte in `rect`) einer Ecke, wie die GPU sie zeichnet; zum
+    /// Vergleich mit Lagen auf dem egui-Bildschirm.
+    pub fn stroke_point(p: &StrokeVertex, rect: egui::Rect) -> egui::Pos2 {
+        egui::pos2(
+            rect.left() + (p.ndc[0] + 1.0) * 0.5 * rect.width(),
+            rect.top() + (1.0 - p.ndc[1]) * 0.5 * rect.height(),
+        )
+    }
+
+    /// Die Liniendreiecke als (Bildschirmecken, GPU-Farbe wie [`crate::sketch_view::stroke_rgba`]);
+    /// Flächen mit `fills`.
+    pub fn stroke_triangles(
+        v: &[StrokeVertex],
+        rect: egui::Rect,
+        fills: bool,
+    ) -> Vec<([egui::Pos2; 3], [f32; 4])> {
+        v.chunks(3)
+            .filter(|t| t.len() == 3 && (fills || !is_fill(t)))
+            .map(|t| ([0, 1, 2].map(|i| stroke_point(&t[i], rect)), t[0].color))
+            .collect()
+    }
+
     /// GPU-Linien und -Flächen der fertigen Skizzen im Viewport `rect` bei 1 Pixel je Punkt.
     pub fn finished_strokes(state: &crate::state::AppState, rect: egui::Rect) -> Vec<StrokeVertex> {
         let mut out = Vec::new();
