@@ -103,7 +103,7 @@ fn a_centerline_without_construction_in_the_file_is_rejected() {
     assert!(load(&broken).is_err());
 }
 
-// Skizzen 10: Format 20 ist jetzt gültig, zu neu ist erst 22.
+// Skizzen 10: Format 20 ist jetzt gültig, zu neu ist erst 23.
 #[test]
 fn format_23_is_too_new() {
     let text = encode_version(&document(2, false).snapshot()).unwrap();
