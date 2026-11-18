@@ -24,6 +24,30 @@ pub const STROKE_DEPTH_BIAS: f32 = 2e-3;
 /// verlassen sich bei streifendem Blick darauf (siehe Test).
 pub const FACE_SLOPE_SCALE: f32 = 2.0;
 
+/// Toleranz der Schnittebene von Slice in mm: Was höchstens so weit vor der Skizzenebene liegt,
+/// bleibt (die Fläche unter einer Skizze auf einer Körperfläche verschwindet nicht). 1e-3 statt
+/// 1e-4, weil der Shader `n·p + d` in f32 rechnet: Bei Koordinaten um 1 m liegt der Rundungsfehler
+/// schon nahe 1e-4. Muss zu `SLICE_EPS` in `shader.wgsl` passen (Test in `gpu.rs`).
+pub const SLICE_EPS: f32 = 1e-3;
+
+/// Schnittebene von Slice (Skizzen 12) als `[n.x, n.y, n.z, d]` mit `n·x + d = 0`, `n`
+/// normiert. Das Vorzeichen folgt der Kamera: Die Seite von `eye` ist positiv, dort schneidet der
+/// Shader weg (`n·p + d > SLICE_EPS`). Dreht man die Kamera hinter die Ebene, wechselt die Seite.
+pub fn slice_plane(origin: DVec3, normal: DVec3, eye: DVec3) -> [f32; 4] {
+    let mut n = normal.normalize_or_zero();
+    if n.dot(eye - origin) < 0.0 {
+        n = -n;
+    }
+    let d = -n.dot(origin);
+    [n.x as f32, n.y as f32, n.z as f32, d as f32]
+}
+
+/// Dieselbe Regel wie im Shader, auf der CPU (Anklicken): Wird `p` von `plane` weggeschnitten?
+pub fn slice_cuts(plane: [f32; 4], p: DVec3) -> bool {
+    let [nx, ny, nz, d] = plane.map(f64::from);
+    nx * p.x + ny * p.y + nz * p.z + d > f64::from(SLICE_EPS)
+}
+
 /// Kleinster erlaubter `w`-Wert; davor wird abgeschnitten.
 const W_EPSILON: f32 = 1e-4;
 

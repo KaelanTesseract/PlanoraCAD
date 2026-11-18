@@ -352,7 +352,7 @@ fn body_values_are_shown_in_full() {
 }
 
 /// Beide Schalter der Skizzenpalette stehen unter dem Namen ganz im Skizzenfeld (Breite 250),
-/// auch auf Englisch.
+/// „Slice“ rechts in der Statuszeile, auch auf Englisch.
 #[test]
 fn the_palette_switches_fit_the_sketch_field() {
     let size = vec2(1920.0, 1080.0);
@@ -398,7 +398,25 @@ fn the_palette_switches_fit_the_sketch_field() {
                 "eine Zeile"
             );
             assert!(g.rect.right() < n.rect.left(), "{g:?} {n:?}");
-            for t in [g, n] {
+            // Skizzen 12: „Slice“ steht unter den Schaltern rechts in der Statuszeile.
+            let slice = find("Slice");
+            assert!(
+                slice.rect.top() >= g.rect.bottom() - 0.5,
+                "unter den Schaltern"
+            );
+            let status = texts
+                .iter()
+                .find(|t| t.text.starts_with("Status") && right.contains(t.rect.center()))
+                .expect("Statuszeile");
+            assert!(
+                (slice.rect.center().y - status.rect.center().y).abs() < 2.0,
+                "Zeile des Status: {slice:?} {status:?}"
+            );
+            assert!(
+                status.rect.right() < slice.rect.left(),
+                "{status:?} {slice:?}"
+            );
+            for t in [g, n, slice] {
                 assert!(t.rect.right() <= right.right() + 0.5, "{t:?} in {right:?}");
                 assert!(t.clip.expand(0.5).contains_rect(t.rect), "{t:?}");
             }

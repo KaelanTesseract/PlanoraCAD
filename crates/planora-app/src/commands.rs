@@ -356,6 +356,15 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 state.sketch_grid_changed = true;
             }
         }
+        Action::SketchSlice => {
+            // Wie der Haken: schaltet `SketchDisplay::slice` der geöffneten Skizze um (ein Schritt).
+            let state = &mut ws.active_tab_mut().state;
+            if let Some(id) = state.open_sketch_id() {
+                let mut d = state.document.sketch_display(id);
+                d.slice = !d.slice;
+                state.document.set_sketch_display(id, d);
+            }
+        }
         Action::SketchConstruction => {
             if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
                 se.toggle_construction_if_possible(sk);

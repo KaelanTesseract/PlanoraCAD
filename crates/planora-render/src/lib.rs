@@ -20,8 +20,8 @@ pub use scene::{
     build_scene_marked,
 };
 pub use stroke::{
-    FACE_SLOPE_SCALE, STROKE_DEPTH_BIAS, StrokeVertex, StrokeView, push_fill, push_stroke,
-    push_stroke_phased,
+    FACE_SLOPE_SCALE, SLICE_EPS, STROKE_DEPTH_BIAS, StrokeVertex, StrokeView, push_fill,
+    push_stroke, push_stroke_phased, slice_cuts, slice_plane,
 };
 pub use viewcube::{
     CubePiece, CubeRegion, INSET, ISO_VIEW, ViewFace, all_regions, cube_pieces_visible,

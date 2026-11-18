@@ -249,6 +249,8 @@ action_table! {
     SketchToggleGrid, "skizze.raster", "action-sketch-toggle-grid", Sketch, [];
     /// Schalter „Fang“ der Skizzenpalette; ohne Vorgabetaste.
     SketchToggleSnap, "skizze.fang", "action-sketch-toggle-snap", Sketch, [];
+    /// Fusion „Slice“ (Skizzen 12): Haken im Skizzenfeld, gehört zur Skizze; ohne Vorgabetaste.
+    SketchSlice, "skizze.slice", "action-sketch-slice", Sketch, [];
     /// Wählt das zuletzt benutzte Skizzenwerkzeug wieder (eigenes Gedächtnis, siehe
     /// `commands::LastCommand`).
     SketchRepeatLast, "skizze.werkzeug_wiederholen", "action-sketch-repeat-last", Sketch,

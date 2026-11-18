@@ -1042,6 +1042,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 canvases,
                 canvas_textures,
                 strokes,
+                // Slice schneidet nur die Körper (Skizzen 12, Spec 3).
+                slice: state.active_slice(),
             },
         ),
     );

@@ -18,7 +18,7 @@ use planora_mesh::{
 };
 use planora_render::{
     EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, PlaneRect, Ray, SceneData,
-    build_scene_marked, pick_edge, pick_face, pick_plane, pick_vertex,
+    build_scene_marked, pick_edge, pick_face, pick_plane, pick_vertex, slice_cuts,
 };
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::helpers::Included;
@@ -570,6 +570,20 @@ fn link_vertices(state: &AppState, se: &mut SketchSession, draft: &mut SketchFea
 
 /// Länge des Geometrieschlüssels einer Kante (Anfangs- und Endpunkt, Parameterbereich).
 const EDGE_KEY_LEN: usize = 8;
+
+/// Slice beim Anklicken: Ab welcher Strahllänge zählt ein Treffer? 0, wenn der Strahl hinter der
+/// Ebene beginnt; sonst dort, wo er die Toleranz [`planora_render::SLICE_EPS`] vor der Ebene
+/// erreicht. `None`, wenn er die weggeschnittene Seite nie verlässt.
+fn slice_ray_start(plane: [f32; 4], origin: DVec3, dir: DVec3) -> Option<f32> {
+    let [nx, ny, nz, d] = plane.map(f64::from);
+    let n = DVec3::new(nx, ny, nz);
+    let side = n.dot(origin) + d - f64::from(planora_render::SLICE_EPS);
+    if side <= 0.0 {
+        return Some(0.0);
+    }
+    let towards = -n.dot(dir);
+    (towards > 1e-12).then(|| (side / towards) as f32)
+}
 
 /// Geometrieschlüssel einer Kante (Bitmuster von Endpunkten und Parameterbereich); gleich nur,
 /// wenn die Kante unverändert liegt. `None`, wenn es die Kante nicht gibt.
@@ -2446,12 +2460,16 @@ impl AppState {
     /// Ebene (eine ausgeschaltete Fläche ergibt nichts, verdeckt aber weiter). Ob eine Ebene
     /// Ecken und Kanten dahinter verdeckt, hängt vom Filter ab: bei `planes: true` verdeckt sie
     /// wie eine Fläche (liegt eine Fläche näher, gewinnt diese); mit `planes: false` (etwa
-    /// `PickFilter::VERTICES`) zählen Ebenen nicht und verdecken nichts.
+    /// `PickFilter::VERTICES`) zählen Ebenen nicht und verdecken nichts. Bei Slice
+    /// ([`AppState::active_slice`]) zählt von den Körpern nur, was hinter der Skizzenebene liegt.
     pub fn pick_with(&self, cursor: Vec2, viewport: Vec2, filter: PickFilter) -> Option<Pick> {
         if viewport.x < 1.0 || viewport.y < 1.0 {
             return None;
         }
         let nearest_face = self.nearest_face_hit(cursor, viewport);
+        // Slice: weggeschnittene Kanten und Ecken zählen nicht (die Flächen schon in
+        // `nearest_face_hit`).
+        let slice = self.active_slice();
         let nearest_plane = if filter.planes {
             self.nearest_plane_hit(cursor, viewport)
         } else {
@@ -2478,7 +2496,8 @@ impl AppState {
                 cursor,
                 PICK_VERTEX_PX,
                 occluder,
-            ) {
+            ) && !slice.is_some_and(|p| self.vertex_sliced(p, body, edge, end))
+            {
                 return Some(Pick::Vertex { body, edge, end });
             }
         }
@@ -2491,7 +2510,8 @@ impl AppState {
                 cursor,
                 PICK_EDGE_PX,
                 occluder,
-            ) && best_edge.is_none_or(|(_, h)| hit.pixel_distance < h.pixel_distance)
+            ) && !slice.is_some_and(|p| self.edge_sliced(p, body, hit.edge))
+                && best_edge.is_none_or(|(_, h)| hit.pixel_distance < h.pixel_distance)
             {
                 best_edge = Some((body, hit));
             }
@@ -2735,18 +2755,60 @@ impl AppState {
             1.0 - 2.0 * cursor.y / viewport.y,
         );
         let (origin, dir) = self.camera.ray(ndc);
+        // Slice: Was vor der Skizzenebene liegt, ist weggeschnitten; der Strahl beginnt dann erst
+        // an der Ebene (knapp davor, so dass Flächen in der Ebene zählen).
+        let slice = self.active_slice();
+        let skip = match slice {
+            Some(plane) => slice_ray_start(plane, origin.as_dvec3(), dir.as_dvec3())?,
+            None => 0.0,
+        };
+        let start = origin + dir * skip;
         let mut nearest_face: Option<(usize, planora_render::FaceHit)> = None;
         for (body, b) in self.bodies.iter().enumerate() {
             if self.is_body_hidden(body) {
                 continue;
             }
-            if let Some(hit) = pick_face(&b.mesh, origin, dir)
-                && nearest_face.is_none_or(|(_, h)| hit.distance < h.distance)
-            {
-                nearest_face = Some((body, hit));
+            if let Some(mut hit) = pick_face(&b.mesh, start, dir) {
+                hit.distance += skip;
+                let at = (origin + dir * hit.distance).as_dvec3();
+                if slice.is_some_and(|plane| slice_cuts(plane, at)) {
+                    continue;
+                }
+                if nearest_face.is_none_or(|(_, h)| hit.distance < h.distance) {
+                    nearest_face = Some((body, hit));
+                }
             }
         }
         nearest_face
+    }
+
+    /// Slice: Liegt die Kante `edge` des Körpers `body` ganz weggeschnitten vor der Ebene?
+    fn edge_sliced(&self, plane: [f32; 4], body: usize, edge: Id<Edge>) -> bool {
+        self.bodies.get(body).is_some_and(|b| {
+            b.mesh
+                .edge_lines
+                .iter()
+                .filter(|l| l.edge == edge)
+                .all(|l| l.points.iter().all(|p| slice_cuts(plane, *p)))
+        })
+    }
+
+    /// Slice: Ist der Endpunkt (`end`: letzter, sonst erster Punkt) der Kante weggeschnitten?
+    fn vertex_sliced(&self, plane: [f32; 4], body: usize, edge: Id<Edge>, end: bool) -> bool {
+        self.bodies.get(body).is_some_and(|b| {
+            b.mesh
+                .edge_lines
+                .iter()
+                .find(|l| l.edge == edge)
+                .and_then(|l| {
+                    if end {
+                        l.points.last()
+                    } else {
+                        l.points.first()
+                    }
+                })
+                .is_some_and(|p| slice_cuts(plane, *p))
+        })
     }
 }
 
@@ -2906,6 +2968,22 @@ impl AppState {
     /// Das geöffnete Skizzen-Feature.
     pub fn open_sketch_id(&self) -> Option<FeatureId> {
         self.sketch_session.as_ref().map(|s| s.sketch)
+    }
+
+    /// Schnittebene von Slice (Skizzen 12, [`planora_render::slice_plane`]): nur bei geöffneter
+    /// Skizze mit Haken `SketchDisplay::slice`. Die Ebene ist die Skizzenebene (`frame`, auch bei
+    /// 3D-Skizzen); die Seite folgt der Kamera dieses Augenblicks.
+    pub fn active_slice(&self) -> Option<[f32; 4]> {
+        let id = self.open_sketch_id()?;
+        if !self.document.sketch_display(id).slice {
+            return None;
+        }
+        let frame = *self.sketch_draft.as_ref()?.sketch.frame();
+        Some(planora_render::slice_plane(
+            frame.origin,
+            frame.z,
+            self.camera.eye().as_dvec3(),
+        ))
     }
 
     /// Legt ein leeres Skizzen-Feature „Skizze N“ auf der Ebene `plane` am Marker an. Bei

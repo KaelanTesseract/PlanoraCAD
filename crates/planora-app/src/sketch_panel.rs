@@ -642,6 +642,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     // „Profil anzeigen“ gehört zur Skizze (Skizzen 12, `SketchDisplay::profiles`).
     let mut display = state.document.sketch_display(index);
     let mut show_profiles = display.profiles;
+    let mut slice = display.slice;
     let mut palette = SketchPalette {
         grid: state.sketch_show_grid,
         snap: state.sketch_snap_grid,
@@ -676,6 +677,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         panel: &mut panel,
         scope: &scope,
         show_profiles: &mut show_profiles,
+        slice: &mut slice,
         palette: &mut palette,
         fonts: fonts.as_deref(),
     };
@@ -691,8 +693,10 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         se.set_three_d(&mut sf.sketch, palette.three_d);
     }
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
-    if show_profiles != display.profiles {
+    // Beide Haken zusammen: höchstens ein Schritt je Bild.
+    if show_profiles != display.profiles || slice != display.slice {
         display.profiles = show_profiles;
+        display.slice = slice;
         state.document.set_sketch_display(index, display);
     }
     state.sketch_show_grid = palette.grid;
@@ -974,6 +978,8 @@ struct SideInput<'a> {
     scope: &'a ParamScope,
     /// Schalter „Profil anzeigen“ (`SketchDisplay::profiles` der geöffneten Skizze).
     show_profiles: &'a mut bool,
+    /// Schalter „Slice“ (`SketchDisplay::slice` der geöffneten Skizze).
+    slice: &'a mut bool,
     palette: &'a mut SketchPalette,
     /// Die Schriftliste für den Abschnitt „Text“; `None`, solange sie gelesen wird.
     fonts: Option<&'a planora_text::FontLibrary>,
@@ -1004,6 +1010,7 @@ fn side_field(
         panel,
         scope,
         show_profiles,
+        slice,
         palette,
         fonts,
     } = side;
@@ -1018,6 +1025,7 @@ fn side_field(
             panel: &mut *panel,
             scope,
             show_profiles: &mut *show_profiles,
+            slice: &mut *slice,
             palette: &mut *palette,
             fonts,
         };
@@ -1507,6 +1515,7 @@ fn side_contents(
         panel,
         scope,
         show_profiles,
+        slice,
         palette,
         fonts,
     } = side;
@@ -1516,7 +1525,9 @@ fn side_contents(
     // Zeile. Der Name nimmt den Rest und kürzt sich erst bei sehr langen Namen (Tasks H1, H3; der
     // volle Name steht dann im Hinweis). Darunter die Anzeigeschalter „Skizzenraster“, „Fang“ und
     // „Profil anzeigen“ (wie Fusions Skizzenpalette „Profil“: geschlossene Flächen hell
-    // eingefärbt); drei Haken passen in die schmale Spalte nur eng und mit kleiner Schrift.
+    // eingefärbt); drei Haken passen in die schmale Spalte nur eng und mit kleiner Schrift. Der
+    // Haken „Slice“ (Skizzen 12) steht rechts in der Statuszeile darunter: Eine eigene Zeile ließe
+    // die Liste bei 1080 Pixeln aus dem Feld rutschen, in den Zeilen darüber fehlt der Platz.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.spacing_mut().icon_spacing = 2.0;
@@ -1570,7 +1581,7 @@ fn side_contents(
         ui.checkbox(show_profiles, small(tr!("sketch-show-profile")));
     });
     // Skizzenstatus oben im Feld (Skizzen 11a, A4); die Freiheitsgrade stehen weiter im Fußfeld.
-    status_row(ui, se, &sf.sketch);
+    status_row(ui, se, &sf.sketch, slice);
     under_section(ui, se, sf, palette);
     tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);
@@ -1930,7 +1941,7 @@ pub fn under_row_height(ui: &egui::Ui) -> f32 {
 }
 
 /// Die Statuszeile als Zeile der Palette.
-fn status_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &Sketch) {
+fn status_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &Sketch, slice: &mut bool) {
     let report = se.status_report(sk);
     let (text, tone) = status_line(sk, &report);
     let p = theme::palette(ui.visuals().dark_mode);
@@ -1939,7 +1950,31 @@ fn status_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &Sketch) {
         StatusTone::Error => p.error,
         StatusTone::Warning => p.warning,
     };
-    ui.label(RichText::new(text).size(SWITCH_TEXT_PX + 1.0).color(color));
+    // Rechts der Haken „Slice“, links der Status; ein langer Status kürzt sich (ganz im Hinweis
+    // beim Überfahren und im Fußfeld). Die Zeile bleibt so hoch wie der Text allein (das Feld
+    // reicht bei 1080 Pixeln Höhe sonst nicht mehr): keine Mindesthöhe, kleines Kästchen.
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = 0.0;
+        ui.spacing_mut().icon_width = SWITCH_TEXT_PX + 2.0;
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().icon_spacing = 2.0;
+        ui.horizontal(|ui| status_and_slice(ui, text, color, slice));
+    });
+}
+
+/// Inhalt der Statuszeile: Status links (gekürzt), Haken „Slice“ rechts.
+fn status_and_slice(ui: &mut egui::Ui, text: String, color: egui::Color32, slice: &mut bool) {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.checkbox(
+            slice,
+            RichText::new(tr!("sketch-palette-slice")).size(SWITCH_TEXT_PX),
+        )
+        .on_hover_text(tr!("sketch-palette-slice-hint"));
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            let status = RichText::new(text).size(SWITCH_TEXT_PX + 1.0).color(color);
+            ui.add(egui::Label::new(status).truncate());
+        });
+    });
 }
 
 /// Fußfeld: rechts „Skizze beenden“, davor der Zustand der Skizze (Farbe nach Schweregrad und
