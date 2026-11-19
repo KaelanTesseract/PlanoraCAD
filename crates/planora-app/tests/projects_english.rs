@@ -969,7 +969,7 @@ fn feature_tree_speaks_english() {
                 "Drawings",
                 "Origin",
                 "No bodies yet. Use \"Create\" in the menu to add a body or a sketch.",
-                "No sketch yet. Use \"Create\", then \"Sketch\" to add one.",
+                "No sketch yet. Use \"Create Sketch\" (toolbar at the bottom or \"Create\") to add one.",
             ],
         );
         assert_english("leer", &seen, &[], &DRAWINGS_LATER);

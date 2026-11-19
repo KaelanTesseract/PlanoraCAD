@@ -3357,10 +3357,6 @@ impl AppState {
     /// in `message`) und es gibt keinen Wahlmodus.
     pub fn start_create_sketch(&mut self) -> Result<Option<FeatureId>, String> {
         self.try_close_sketch()?;
-        self.plane_pick = None;
-        self.edge_picking = false;
-        self.clear_edge_marks();
-        self.cancel_pending_pick();
         self.message = None;
         let origin = self.selected_origin_plane();
         let plane = self.selected_plane();
@@ -3376,6 +3372,7 @@ impl AppState {
             if let Some(why) = self.sketch_on_face_blocked() {
                 return self.fail(why);
             }
+            self.end_pick_modes();
             let made = match (origin, plane, face) {
                 (Some(p), _, _) => self.add_sketch(SketchPlane::Standard(p)),
                 (None, Some(id), _) => self.new_sketch_on_plane(id),
@@ -3385,12 +3382,23 @@ impl AppState {
             self.open_sketch(made)?;
             return Ok(Some(made));
         }
+        self.end_pick_modes();
         self.selected_feature = None;
         self.selected_body = None;
         self.selected_origin = None;
         self.set_selection(None);
         self.pending_pick = Some(PendingPick::NewSketch);
         Ok(None)
+    }
+
+    /// Beendet die Klickmodi der Ansicht (Ebenen-Fenster, Kanten markieren, Wahlmodus), bevor
+    /// „Skizze erstellen“ wirkt. Erst nach den Prüfungen, damit ein abgelehnter Aufruf nichts
+    /// ändert.
+    fn end_pick_modes(&mut self) {
+        self.plane_pick = None;
+        self.edge_picking = false;
+        self.clear_edge_marks();
+        self.cancel_pending_pick();
     }
 
     /// Ein Klick im Wahlmodus „Skizze erstellen“: Grundebene, Konstruktionsebene oder ebene

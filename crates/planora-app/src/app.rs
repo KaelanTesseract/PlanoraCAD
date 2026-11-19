@@ -1937,6 +1937,7 @@ fn open_import(ws: &mut Workspace) {
     if tab.read_only || tab.state.try_close_sketch().is_err() {
         return;
     }
+    tab.state.cancel_pending_pick();
     // Die beiden Import-Fenster schließen einander aus (sie lägen sonst übereinander).
     tab.step_import_dialog = None;
     tab.import_dialog = Some(ImportDialog::new(dir));
@@ -1950,6 +1951,7 @@ fn open_step_import(ws: &mut Workspace) {
     if tab.read_only || tab.state.try_close_sketch().is_err() {
         return;
     }
+    tab.state.cancel_pending_pick();
     tab.import_dialog = None;
     tab.step_import_dialog = Some(StepImportDialog::new(dir));
 }
@@ -2430,6 +2432,9 @@ pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
         }
     };
     if tab.state.try_close_sketch().is_ok() {
+        // Ein anderer Befehl beendet einen Wahlmodus („Skizze erstellen“, „Skizzenebene neu
+        // festlegen“) ohne Rest.
+        tab.state.cancel_pending_pick();
         tab.dialog = Some(dialog);
     }
 }
@@ -2451,6 +2456,7 @@ fn open_boolean_inner(ws: &mut Workspace, op: BoolOp) {
         return;
     }
     if tab.state.try_close_sketch().is_ok() {
+        tab.state.cancel_pending_pick();
         tab.boolean_dialog = Some(BooleanDialog::with_op(&tab.state, op));
     }
 }

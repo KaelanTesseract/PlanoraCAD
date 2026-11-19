@@ -458,3 +458,61 @@ fn redefine_sketch_plane_shows_hidden_origin_planes() {
     s.start_redefine_sketch_plane(sketch).unwrap();
     assert_eq!(s.origin_plane_rects().len(), 3);
 }
+
+// ---- Abschlussprüfung ---------------------------------------------------------------------------
+
+#[test]
+fn other_commands_end_the_create_sketch_pick() {
+    use planora_app::app::{self, CreateKind};
+    use planora_app::workspace::Workspace;
+    use planora_kernel::BoolOp;
+    use planora_project::config::Config;
+    let mut w = Workspace::new(None, Config::default());
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(10.0))
+        .unwrap();
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(4.0))
+        .unwrap();
+    for kind in [
+        CreateKind::Box,
+        CreateKind::Cylinder,
+        CreateKind::Sphere,
+        CreateKind::Cone,
+    ] {
+        let s = &mut w.active_tab_mut().state;
+        s.set_selection(None);
+        s.selected_body = None;
+        s.start_create_sketch().unwrap();
+        app::do_create(&mut w, kind);
+        assert_eq!(w.active_tab().state.pending_pick, None, "{kind:?}");
+        w.active_tab_mut().dialog = None;
+    }
+    let s = &mut w.active_tab_mut().state;
+    s.start_create_sketch().unwrap();
+    app::open_boolean(&mut w, BoolOp::Union);
+    assert_eq!(w.active_tab().state.pending_pick, None, "Vereinigen");
+}
+
+#[test]
+fn blocked_preselection_keeps_other_pick_state() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    s.move_body(0, DVec3::X).unwrap();
+    let m = s.document.features().last().unwrap().id;
+    history_bar::move_marker(&mut s, m, 1).unwrap();
+    let face = top_face(&s, 0);
+    s.set_selection(Some(Pick::Face(FaceRef { body: 0, face })));
+    s.edge_picking = true;
+    assert!(s.start_create_sketch().is_err());
+    assert!(s.edge_picking, "gesperrt: nichts weiter geändert");
+}
+
+#[test]
+fn tree_hint_names_create_sketch() {
+    assert!(planora_i18n::t("tree-plane-hint").contains("Skizze erstellen"));
+    assert!(planora_i18n::t("tree-no-sketches").contains("Skizze erstellen"));
+    assert!(!planora_i18n::t("tree-plane-new-sketch-hint").is_empty());
+}

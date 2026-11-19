@@ -1835,13 +1835,17 @@ fn origin(ui: &mut egui::Ui, state: &AppState, read_only: bool, action: &mut Opt
             None,
             |p, rect, c| paint_source(p, rect, IconSource::Font(Icon::SketchOnPlane), c),
         )
-        .on_hover_text(if redefining {
-            tr!("tree-plane-redefine-hint")
-        } else if picking {
-            tr!("tree-plane-pick-hint")
-        } else {
-            tr!("tree-plane-hint")
-        });
+        .on_hover_text(
+            if state.pending_pick == Some(crate::state::PendingPick::NewSketch) {
+                tr!("tree-plane-new-sketch-hint")
+            } else if redefining {
+                tr!("tree-plane-redefine-hint")
+            } else if picking {
+                tr!("tree-plane-pick-hint")
+            } else {
+                tr!("tree-plane-hint")
+            },
+        );
         let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
         let full = resp.rect;
         let key = ("eye-origin", format!("{std:?}"));
