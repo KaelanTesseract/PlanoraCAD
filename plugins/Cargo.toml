@@ -1,0 +1,14 @@
+# Die Beispiel-Plug-ins. Eigener Arbeitsbereich: gehört nicht zum Programm und wird nur für
+# wasm32-wasip2 gebaut (tools/build-plugins.ps1 bzw. .sh).
+[workspace]
+resolver = "3"
+members = ["beispiel-hallo", "test-faelle"]
+
+[workspace.dependencies]
+wit-bindgen = { version = "0.63", default-features = false, features = ["macros", "realloc"] }
+
+[profile.release]
+opt-level = "s"
+strip = true
+lto = true
+codegen-units = 1

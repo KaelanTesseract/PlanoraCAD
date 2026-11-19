@@ -1,4 +1,7 @@
-//! Plug-in-Schnittstelle (WebAssembly): Paketformat, Manifest und Rechte.
+//! Plug-in-Schnittstelle (WebAssembly): Paketformat, Manifest, Rechte und Laufzeit.
 
+mod bindings;
 pub mod manifest;
 pub mod package;
+pub mod runtime;
+pub mod texts;

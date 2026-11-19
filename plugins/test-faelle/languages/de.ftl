@@ -1,0 +1,9 @@
+endlos-befehl = Endlosschleife
+speicher-befehl = Speicher füllen
+panik-befehl = Absturz
+fehler-befehl = Fehler melden
+netz-befehl = Netz abfragen
+recht-befehl = Recht anfragen
+langsam-dialog-befehl = Langsamer Dialog
+umgebung-befehl = Umgebung zeigen
+langsam-titel = Langsam

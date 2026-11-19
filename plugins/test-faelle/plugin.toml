@@ -1,0 +1,9 @@
+id = "planora.test-faelle"
+name = "Test-Fälle"
+version = "0.1.0"
+api = "0.1"
+author = "Dennis Guse"
+license = "GPL-3.0-only"
+description = "Prüf-Plug-in für die Laufzeit: Endlosschleife, Speicherhunger, Absturz und weitere Grenzfälle."
+rights = ["net"]
+net-hosts = ["example.org"]

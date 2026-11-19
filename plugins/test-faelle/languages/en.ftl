@@ -1,0 +1,9 @@
+endlos-befehl = endlos-befehl
+speicher-befehl = speicher-befehl
+panik-befehl = panik-befehl
+fehler-befehl = fehler-befehl
+netz-befehl = netz-befehl
+recht-befehl = recht-befehl
+langsam-dialog-befehl = langsam-dialog-befehl
+umgebung-befehl = umgebung-befehl
+langsam-titel = langsam-titel

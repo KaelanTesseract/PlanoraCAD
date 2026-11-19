@@ -1,0 +1,37 @@
+package planora:plugin@0.1.0;
+
+interface types {
+  type request-id = u64;
+  enum level { info, warning, error }
+  enum right { net, fs-folder, model-read, model-write }
+  record command { id: string, label-key: string, icon: option<string>, shortcut: option<string> }
+  record registration { commands: list<command> }
+  record host-info { api-version: string, program-version: string, language: string }
+  variant field-kind { label, text(string), number(f64), toggle(bool) }
+  record field { id: string, label-key: string, kind: field-kind }
+  record dialog { id: string, title-key: string, fields: list<field> }
+  variant field-value { text(string), number(f64), toggle(bool) }
+  variant dialog-event { changed(tuple<string, field-value>), ok(list<tuple<string, field-value>>), cancel }
+  record http-response { status: u16, body: list<u8> }
+  variant request-result { granted, denied, http(http-response), failed(string) }
+}
+interface log { use types.{level}; write: func(level: level, text: string); }
+interface i18n { text: func(key: string, args: list<tuple<string, string>>) -> string; }
+interface ui {
+  use types.{level, dialog};
+  message: func(level: level, text: string);
+  open-dialog: func(d: dialog) -> result<_, string>;
+  close-dialog: func(id: string);
+}
+interface rights { use types.{right, request-id}; request: func(r: right) -> request-id; granted: func(r: right) -> bool; }
+interface net { use types.{request-id}; get: func(url: string) -> result<request-id, string>; }
+
+world plugin {
+  import log; import i18n; import ui; import rights; import net;
+  use types.{host-info, registration, dialog-event, request-id, request-result};
+  export init: func(info: host-info) -> result<registration, string>;
+  export run-command: func(id: string) -> result<_, string>;
+  export handle-dialog: func(id: string, event: dialog-event) -> result<_, string>;
+  export on-result: func(id: request-id, %result: request-result);
+  export shutdown: func();
+}
