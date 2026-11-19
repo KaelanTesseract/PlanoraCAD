@@ -264,6 +264,8 @@ action_table! {
     /// Öffnet und schließt das Aufklappfeld „Anzeigeoptionen“ im Skizzenfeld (Skizzen 12); ohne
     /// Vorgabetaste.
     SketchDisplayMenu, "skizze.anzeige_menue", "action-sketch-display-menu", Sketch, [];
+    /// Fusion „Profil anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.
+    SketchShowProfile, "skizze.profil_anzeigen", "action-sketch-show-profile", Sketch, [];
     /// Fusion „Punkte anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.
     SketchShowPoints, "skizze.punkte_anzeigen", "action-sketch-show-points", Sketch, [];
     /// Fusion „Maße anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.

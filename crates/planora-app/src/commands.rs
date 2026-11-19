@@ -372,7 +372,8 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 state.sketch_display_menu_open = !state.sketch_display_menu_open;
             }
         }
-        Action::SketchShowPoints
+        Action::SketchShowProfile
+        | Action::SketchShowPoints
         | Action::SketchShowDimensions
         | Action::SketchShowConstraints
         | Action::SketchShowConstruction
@@ -382,6 +383,7 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             if let Some(id) = state.open_sketch_id() {
                 let mut d = state.document.sketch_display(id);
                 let flag = match a {
+                    Action::SketchShowProfile => &mut d.profiles,
                     Action::SketchShowPoints => &mut d.points,
                     Action::SketchShowDimensions => &mut d.dimensions,
                     Action::SketchShowConstraints => &mut d.constraints,

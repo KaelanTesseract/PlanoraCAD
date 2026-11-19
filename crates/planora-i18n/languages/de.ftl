@@ -113,6 +113,7 @@ action-sketch-toggle-grid = Skizzenraster ein/aus
 action-sketch-toggle-snap = Fang ein/aus
 action-sketch-slice = Slice ein/aus
 action-sketch-display-menu = Anzeigeoptionen öffnen
+action-sketch-show-profile = Profil anzeigen ein/aus
 action-sketch-show-points = Punkte anzeigen ein/aus
 action-sketch-show-dimensions = Maße anzeigen ein/aus
 action-sketch-show-constraints = Abhängigkeiten anzeigen ein/aus

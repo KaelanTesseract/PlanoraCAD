@@ -836,6 +836,40 @@ fn undocked_display_menu_open_eats_the_click_into_the_drawing() {
     assert!(!planora_app::sketch_panel::display_menu_open(&ctx), "zu");
 }
 
+#[test]
+fn undocked_display_menu_closes_with_escape_in_main_without_ending_the_tool() {
+    let mut rig = detached_sketch_rig();
+    {
+        let (se, sk) = rig.state().session_sketch_mut().unwrap();
+        se.set_tool(sk, planora_app::sketch_state::Tool::Line);
+    }
+    let ctx = rig.screen.ctx.clone();
+    planora_app::commands::run_action(
+        rig.app.ws_mut(),
+        planora_app::keymap::Action::SketchDisplayMenu,
+    );
+    rig.settle(3);
+    assert!(planora_app::sketch_panel::display_menu_open(&ctx));
+    let esc = || Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    };
+    rig.frame(vec![esc()]);
+    rig.settle(2);
+    assert!(
+        !planora_app::sketch_panel::display_menu_open(&ctx),
+        "Esc im Hauptfenster schließt das Feld"
+    );
+    assert_eq!(
+        rig.state().sketch_session.as_ref().unwrap().tool,
+        planora_app::sketch_state::Tool::Line,
+        "das Werkzeug bleibt"
+    );
+}
+
 // ---- Kopfzeile abgedockter Felder: Knöpfe klickbar, Rest zieht das Fenster -------------------
 
 #[test]

@@ -113,6 +113,7 @@ action-sketch-toggle-grid = Sketch Grid on/off
 action-sketch-toggle-snap = Snap on/off
 action-sketch-slice = Slice on/off
 action-sketch-display-menu = Open Display Options
+action-sketch-show-profile = Show Profile on/off
 action-sketch-show-points = Show Points on/off
 action-sketch-show-dimensions = Show Dimensions on/off
 action-sketch-show-constraints = Show Constraints on/off

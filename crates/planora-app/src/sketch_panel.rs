@@ -684,6 +684,13 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     if menu_open && undocked && ctx.input(|i| i.pointer.any_pressed()) {
         menu_open = false;
     }
+    // Ebenso Esc im Hauptfenster: Es schließt nur das Feld und bricht das Werkzeug nicht ab.
+    if menu_open
+        && undocked
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        menu_open = false;
+    }
     ctx.data_mut(|d| d.insert_temp(display_menu_id(), menu_open));
     let rects = sketch_rects(ctx);
     let Some(strip) = rects.strip else {

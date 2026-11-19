@@ -454,6 +454,7 @@ fn switch_does_not_end_sketch() {
     };
     w.observe_history(false);
     let flag = |d: SketchDisplay, a: Action| match a {
+        Action::SketchShowProfile => d.profiles,
         Action::SketchShowPoints => d.points,
         Action::SketchShowDimensions => d.dimensions,
         Action::SketchShowConstraints => d.constraints,
@@ -462,6 +463,7 @@ fn switch_does_not_end_sketch() {
         _ => unreachable!(),
     };
     for a in [
+        Action::SketchShowProfile,
         Action::SketchShowPoints,
         Action::SketchShowDimensions,
         Action::SketchShowConstraints,
@@ -492,6 +494,38 @@ fn switch_does_not_end_sketch() {
     w.observe_history(false);
     assert!(w.active_tab().state.document.sketch_display(id).points);
     assert_eq!(w.active_tab().history().undo_len(), len);
+}
+
+/// Schlussprüfung: Bei offener Skizze nimmt Strg+Z nur die Zeichenschritte zurück; ein Haken steht
+/// im Dokumentverlauf und kommt erst nach dem Beenden der Skizze zurück.
+#[test]
+fn undo_with_open_sketch_leaves_the_switch_until_the_sketch_ends() {
+    let mut w = Workspace::new(None, Config::default());
+    let id = {
+        let s = &mut w.active_tab_mut().state;
+        let id = s
+            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
+        s.open_sketch(id).unwrap();
+        id
+    };
+    w.observe_history(false);
+    commands::run_action(&mut w, Action::SketchShowPoints);
+    w.observe_history(false);
+    assert!(!w.active_tab().state.document.sketch_display(id).points);
+    let _ = w.active_tab_mut().undo();
+    w.observe_history(false);
+    assert!(
+        !w.active_tab().state.document.sketch_display(id).points,
+        "Strg+Z bei offener Skizze lässt den Haken stehen"
+    );
+    w.active_tab_mut().state.close_sketch();
+    w.observe_history(false);
+    w.active_tab_mut().undo().unwrap();
+    assert!(
+        w.active_tab().state.document.sketch_display(id).points,
+        "nach dem Beenden nimmt Rückgängig den Haken zurück"
+    );
 }
 
 /// Fix-Runde 1: Mit „Punkte anzeigen“ aus fängt ein 2D-Zeichenwerkzeug in einer 3D-Skizze weiter
