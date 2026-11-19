@@ -41,8 +41,8 @@ use crate::{
 use planora_i18n::tr;
 use planora_kernel::BoolOp;
 use planora_project::config::WindowState;
-use planora_render::gpu::GpuScene;
 use planora_render::ViewFace;
+use planora_render::gpu::GpuScene;
 use planora_update::Update;
 use planora_update::check::{CheckOutcome, HttpSource, NetError, ReleaseSource, due};
 use planora_update::install::{
