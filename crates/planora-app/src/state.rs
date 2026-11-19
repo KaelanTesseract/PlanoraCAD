@@ -268,6 +268,9 @@ pub struct AppState {
     pub sketch_request: Option<SketchRequest>,
     /// Zuletzt berechnete Profile (für die Dialoge, die jedes Bild neu zeichnen).
     pub profile_cache: ProfileCache,
+    /// Abgetastete Kurven und feste Mengen der fertigen Skizzen je Stand (Skizzen 12, Task 12b),
+    /// damit nicht jedes Bild jede Kurve neu abtastet.
+    pub finished_cache: crate::finished_cache::FinishedSketchCache,
     /// Skizzenraster zeigen (Skizzenfeld, wie Fusions Skizzenpalette); Vorgabe an. Ohne Raster
     /// kein Raster-Fang. Den Stand führt [`crate::workspace::Workspace::sync_sketch_grid`].
     pub sketch_show_grid: bool,
@@ -785,6 +788,7 @@ impl AppState {
             fit_pending: false,
             sketch_request: None,
             profile_cache: ProfileCache::default(),
+            finished_cache: Default::default(),
             sketch_show_grid: true,
             sketch_snap_grid: true,
             sketch_grid_changed: false,

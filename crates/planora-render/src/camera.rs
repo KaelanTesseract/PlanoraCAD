@@ -144,7 +144,14 @@ impl OrbitCamera {
 
     /// Bildschirmposition in Pixeln (Ursprung oben links) oder `None` hinter der Kamera.
     pub fn project(&self, p: Vec3, viewport: Vec2) -> Option<Vec2> {
-        let clip = self.view_proj() * p.extend(1.0);
+        Self::project_with(&self.view_proj(), p, viewport)
+    }
+
+    /// Wie [`OrbitCamera::project`] mit der vorab berechneten Matrix `view_proj`
+    /// ([`OrbitCamera::view_proj`]): für viele Punkte je Bild, denn die Matrix neu aufzubauen
+    /// kostet mehr als das Abbilden selbst (Skizzen 12, Task 12b).
+    pub fn project_with(view_proj: &Mat4, p: Vec3, viewport: Vec2) -> Option<Vec2> {
+        let clip = *view_proj * p.extend(1.0);
         if clip.w <= 1e-6 {
             return None;
         }

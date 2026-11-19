@@ -33,6 +33,7 @@ pub mod feedback;
 pub mod feedback_dialog;
 pub mod feedback_shot;
 pub mod file_chooser;
+pub mod finished_cache;
 pub mod fonts;
 pub mod fonts_library;
 pub mod formula_field;

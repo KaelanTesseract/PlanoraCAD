@@ -1072,6 +1072,22 @@ impl Mapper {
             .then(|| pos2(self.rect.left() + v.x, self.rect.top() + v.y))
     }
 
+    /// Wie [`Mapper::to_screen3`] für viele Punkte: Die Matrix der Kamera entsteht einmal, nicht
+    /// je Punkt (Anklicken fertiger Skizzen, Task 12b). Gleiches Ergebnis wie `to_screen3`.
+    pub fn screen3_fn(&self) -> impl Fn(DVec3) -> Option<Pos2> + '_ {
+        let view_proj = self.camera.view_proj();
+        let viewport = self.viewport();
+        move |p| {
+            let v = planora_render::OrbitCamera::project_with(
+                &view_proj,
+                to_vec3(self.frame.point(p.x, p.y, p.z)),
+                viewport,
+            )?;
+            v.is_finite()
+                .then(|| pos2(self.rect.left() + v.x, self.rect.top() + v.y))
+        }
+    }
+
     /// Blickrichtung in Skizzenkoordinaten (normiert): die Normale der Ebene parallel zum
     /// Bildschirm (Ziehen ohne Triade, Spec 10). `None` bei entarteter Kamera.
     pub fn view_normal(&self) -> Option<DVec3> {
@@ -1479,7 +1495,7 @@ fn finished_sketches(state: &AppState) -> Vec<(FeatureId, &Sketch)> {
 /// Weltpunkte der Kurve `c` mit derselben Abtastung wie das frühere egui-Overlay: 3D-Kurven über
 /// [`curve_points3`], alle anderen über [`Sketch::curve_polyline`]. `None`, wenn eine 2D-Kurve
 /// keinen Linienzug hat.
-fn curve_world_points(sk: &Sketch, c: CurveId) -> Option<Vec<DVec3>> {
+pub(crate) fn curve_world_points(sk: &Sketch, c: CurveId) -> Option<Vec<DVec3>> {
     let frame = sk.frame();
     if sk.is_3d_curve(c) {
         Some(
@@ -1499,6 +1515,24 @@ fn curve_world_points(sk: &Sketch, c: CurveId) -> Option<Vec<DVec3>> {
     }
 }
 
+/// Die Anzeigeschalter der fertigen Skizze `id` mit den Projektionen ihres Entwurfs.
+fn finished_filter(state: &AppState, id: FeatureId) -> DisplayFilter {
+    match state.document.feature(id).map(|f| &f.kind) {
+        Some(FeatureKind::Sketch(def)) => DisplayFilter::of(state.document.sketch_display(id), def),
+        _ => DisplayFilter::default(),
+    }
+}
+
+/// Abgetastete Kurven und feste Mengen der fertigen Skizze `sk` des Features `id` aus dem
+/// Zwischenspeicher ([`crate::finished_cache`], Task 12b).
+fn finished_data(
+    state: &AppState,
+    id: FeatureId,
+    sk: &Sketch,
+) -> std::sync::Arc<crate::finished_cache::FinishedSketch> {
+    state.finished_cache.get(id, sk, finished_filter(state, id))
+}
+
 /// Fertige (nicht geöffnete) Skizzen als dünne Linien für die GPU mit Tiefenprüfung
 /// (Skizzen 12): Körper verdecken sie wie in Fusion. Konstruktionsgeometrie grau und
 /// gestrichelt, Projektionen lila, verlorene Projektionen gelb, von einem Dialog gewählte
@@ -1512,7 +1546,12 @@ pub fn finished_sketch_strokes(state: &AppState, view: &StrokeView, out: &mut Ve
         return;
     }
     let col = colors(state.dark);
-    for (id, sk) in finished_sketches(state) {
+    let shown = finished_sketches(state);
+    // Was gerade nicht gezeigt wird, fliegt aus dem Zwischenspeicher.
+    state
+        .finished_cache
+        .retain(|f| shown.iter().any(|(id, _)| *id == f));
+    for (id, sk) in shown {
         let frame = *sk.frame();
         if let Some(pick) = state.profile_pick.as_ref().filter(|p| p.sketch == id) {
             let extracted = state.profile_cache.get(sk);
@@ -1534,25 +1573,18 @@ pub fn finished_sketch_strokes(state: &AppState, view: &StrokeView, out: &mut Ve
         }
         // Projektionen lila wie in Fusion (Skizzen 6), Konstruktion weiter gestrichelt.
         // „Konstruktionsgeometrie anzeigen“ und „Projizierte Geometrie anzeigen“ der Skizze
-        // gelten auch fertig (Skizzen 12, Spec 1, **Annahme**).
-        let display = match state.document.feature(id).map(|f| &f.kind) {
-            Some(FeatureKind::Sketch(def)) => {
-                DisplayFilter::of(state.document.sketch_display(id), def)
-            }
-            _ => DisplayFilter::default(),
-        };
+        // gelten auch fertig (Skizzen 12, Spec 1, **Annahme**). Der Zwischenspeicher hält die
+        // Linienzüge ohne die ausgeblendeten Kurven und ohne Griffe ohne Abhängigkeit (eine
+        // fertige Skizze hat keine Auswahl, B6).
+        let display = finished_filter(state, id);
         let projected = &display.projected;
-        let gone = display.hidden(sk).curves;
+        let cached = state.finished_cache.get(id, sk, display.clone());
         // Verlorene Projektionen gelb, mit „Übrige Geometrie abblenden“ alles andere gedämpft
         // (Skizzen 11a).
         let lost = crate::lost_projections_dialog::marks(state, id);
-        // Eine fertige Skizze hat keine Auswahl: Griffe ohne Abhängigkeit sind nicht zu sehen (B6).
-        let handles_hidden = crate::sketch_handles::hidden_handles_of(sk, &[]);
-        for (c, data) in sk.curves() {
-            if handles_hidden.curves.contains(&c) || gone.contains(&c) {
-                continue;
-            }
-            let Some(points) = curve_world_points(sk, c) else {
+        for (c, points) in &cached.curves {
+            let c = *c;
+            let Some(data) = sk.curve(c) else {
                 continue;
             };
             let width = if data.construction {
@@ -1589,16 +1621,15 @@ pub fn finished_sketch_strokes(state: &AppState, view: &StrokeView, out: &mut Ve
                 lost.dim_rest,
                 col.lost,
             );
-            push_styled(out, view, &points, width, stroke_rgba(color), data.style());
+            push_styled(out, view, points, width, stroke_rgba(color), data.style());
         }
         // Kontrollpunktrahmen (Skizzen 9) dünn und gestrichelt.
         let frame_color = stroke_rgba(col.construction);
-        for line in frame_polygons3(sk) {
-            let points: Vec<DVec3> = line.iter().map(|p| frame.point(p.x, p.y, p.z)).collect();
+        for points in &cached.frames {
             push_styled(
                 out,
                 view,
-                &points,
+                points,
                 FINISHED_CONSTRUCTION_WIDTH,
                 frame_color,
                 LineStyle::Construction,
@@ -1616,7 +1647,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
         return out;
     }
     let col = colors(state.dark);
-    for (_, sk) in finished_sketches(state) {
+    for (id, sk) in finished_sketches(state) {
         // Ohne Kamm bleibt nichts zu tun (und die Griffe müssen nicht gesucht werden).
         if !sk.curves().any(|(_, d)| d.comb.is_some()) {
             continue;
@@ -1626,8 +1657,8 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             frame: *sk.frame(),
             rect,
         };
-        let handles_hidden = crate::sketch_handles::hidden_handles_of(sk, &[]);
-        out.extend(comb_overlay(sk, &map, col.comb, &handles_hidden.curves));
+        let cached = finished_data(state, id, sk);
+        out.extend(comb_overlay(sk, &map, col.comb, &cached.handles.curves));
     }
     // Der angeklickte oder überfahrene Skizzenpunkt (Task 8): kleiner Kreis, die Punkte fertiger
     // Skizzen werden sonst nicht gezeichnet.
@@ -1672,12 +1703,7 @@ pub fn finished_dimension_shapes(ctx: &egui::Context, state: &AppState, rect: Re
         if !state.document.sketch_display(id).dimensions_finished {
             continue;
         }
-        let display = match state.document.feature(id).map(|f| &f.kind) {
-            Some(FeatureKind::Sketch(def)) => {
-                DisplayFilter::of(state.document.sketch_display(id), def)
-            }
-            _ => DisplayFilter::default(),
-        };
+        let display = finished_filter(state, id);
         let map = Mapper {
             camera: state.camera,
             frame: *sk.frame(),
@@ -3355,29 +3381,28 @@ pub fn finished_sketch_under(
     // Kandidaten: (Abstand, Treffer, Stelle in der Welt).
     let mut points: Vec<(f32, Pick, DVec3)> = Vec::new();
     let mut curves: Vec<(f32, Pick, DVec3)> = Vec::new();
+    // Die Kameramatrix einmal je Zeigerstellung statt je Punkt (Task 12b).
+    let to_screen = map.screen3_fn();
     for (id, sk) in finished_sketches(state) {
         if state.is_feature_hidden(id) {
             continue;
         }
-        let display = match state.document.feature(id).map(|f| &f.kind) {
-            Some(FeatureKind::Sketch(def)) => {
-                DisplayFilter::of(state.document.sketch_display(id), def)
-            }
-            _ => DisplayFilter::default(),
-        };
-        let gone = display.hidden(sk);
-        let handles = crate::sketch_handles::hidden_handles_of(sk, &[]);
-        let glyphs = sk.glyph_points();
+        // Mengen und Linienzüge aus dem Zwischenspeicher (Task 12b): je Zeigerstellung bleibt
+        // nur das Abbilden auf den Bildschirm.
+        let cached = finished_data(state, id, sk);
         let frame = *sk.frame();
         for (pt, _) in sk.points().filter(|_| with_points) {
-            if gone.points.contains(&pt) || handles.points.contains(&pt) || glyphs.contains(&pt) {
+            if cached.hidden.points.contains(&pt)
+                || cached.handles.points.contains(&pt)
+                || cached.glyphs.contains(&pt)
+            {
                 continue;
             }
             let Ok(local) = sk.point_xyz(pt) else {
                 continue;
             };
             let world = frame.point(local.x, local.y, local.z);
-            if let Some(s) = map.to_screen3(map.frame.to_local(world))
+            if let Some(s) = to_screen(map.frame.to_local(world))
                 && s.distance(p) <= PICK_RADIUS_PX
             {
                 points.push((
@@ -3390,16 +3415,11 @@ pub fn finished_sketch_under(
                 ));
             }
         }
-        for (c, _) in sk.curves().filter(|_| with_curves) {
-            if gone.curves.contains(&c) || handles.curves.contains(&c) {
-                continue;
-            }
-            let Some(world) = curve_world_points(sk, c) else {
-                continue;
-            };
+        for (c, world) in cached.curves.iter().filter(|_| with_curves) {
+            let c = *c;
             let screen: Vec<Option<Pos2>> = world
                 .iter()
-                .map(|w| map.to_screen3(map.frame.to_local(*w)))
+                .map(|w| to_screen(map.frame.to_local(*w)))
                 .collect();
             let mut best: Option<(f32, DVec3)> = None;
             for i in 1..world.len() {
