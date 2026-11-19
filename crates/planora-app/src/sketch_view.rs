@@ -4202,26 +4202,21 @@ fn draw_handle_grips(
             .map(|r| r / f64::from(PICK_RADIUS_PX))
             .unwrap_or(0.0)
     };
+    // Der gewählte Text wird einmal je Bild gesucht (Skizzen 12, Task 12).
+    let rotate = se.text_rotate_base(sk);
     let mut at_px = per_px(map.rect.center());
-    for _ in 0..2 {
-        if let Some(s) = se
-            .text_rotate_grips(sk, at_px)
-            .first()
-            .and_then(|&(_, q)| map.to_screen(q))
-        {
-            at_px = per_px(s);
+    if let Some(b) = rotate {
+        for _ in 0..2 {
+            if at_px.is_finite()
+                && at_px > 0.0
+                && let Some(s) = map.to_screen(b.at(at_px))
+            {
+                at_px = per_px(s);
+            }
         }
     }
-    for (t, q) in se.text_rotate_grips(sk, at_px) {
-        let top = match sk.text(t).map(|d| d.placement) {
-            Some(planora_sketch::text::TextPlacement::Box { corners, .. }) => {
-                match (sk.point_xy(corners[2]), sk.point_xy(corners[3])) {
-                    (Ok(a), Ok(b)) => (a + b) * 0.5,
-                    _ => continue,
-                }
-            }
-            _ => continue,
-        };
+    if let Some(b) = rotate.filter(|_| at_px.is_finite() && at_px > 0.0) {
+        let (top, q) = (b.top, b.at(at_px));
         if let (Some(a), Some(g)) = (map.to_screen(top), map.to_screen(q)) {
             let ink = if hot(g) {
                 lighter(col.selected)

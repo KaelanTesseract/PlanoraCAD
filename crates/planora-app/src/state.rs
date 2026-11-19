@@ -1095,18 +1095,16 @@ impl AppState {
     /// Ordner)?
     pub fn is_feature_hidden(&self, id: FeatureId) -> bool {
         let v = self.document.visibility();
-        let folder = match self.document.feature(id).map(|f| &f.kind) {
-            Some(FeatureKind::Sketch(_)) => v.folders.sketches,
-            Some(FeatureKind::Plane(_)) => v.folders.planes,
-            Some(FeatureKind::Canvas(_)) => v.folders.canvases,
-            _ => false,
+        // Je Bild für jede Skizze gerufen: das Feature nur einmal suchen, die Gruppen aus dem
+        // Zwischenspeicher des Dokuments (Skizzen 12, Task 12).
+        let (folder, sketch) = match self.document.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Sketch(_)) => (v.folders.sketches, true),
+            Some(FeatureKind::Plane(_)) => (v.folders.planes, false),
+            Some(FeatureKind::Canvas(_)) => (v.folders.canvases, false),
+            _ => (false, false),
         };
         // Skizzen 11b: eine Skizze in einer ausgeblendeten Gruppe (ihr eigenes Auge bleibt).
-        let by_group = matches!(
-            self.document.feature(id).map(|f| &f.kind),
-            Some(FeatureKind::Sketch(_))
-        ) && self.document.sketch_hidden_by_group(id);
-        folder || v.features.contains(&id) || by_group
+        folder || v.features.contains(&id) || (sketch && self.document.sketch_hidden_by_group(id))
     }
 
     /// Die im Ordner „Skizzen“ gewählten Skizzen (Skizzen 11b): die Strg-Klick-Wahl, solange

@@ -99,6 +99,44 @@ fn nested_hidden_parent_hides_child_group() {
     assert!(!d.sketch_hidden_by_group(ids[2]));
 }
 
+/// Skizzen 12, Task 12: `sketch_hidden_by_group` hält einen Zwischenspeicher je Dokumentstand.
+/// Er folgt jeder Änderung: Auge, Verschieben, Auflösen, Rückgängig und Wiederholen, Kopie.
+#[test]
+fn hidden_by_group_follows_every_change() {
+    let (mut d, ids) = doc_with(3);
+    let inner = d.create_sketch_group(&items(&ids[..2])).unwrap();
+    let outer = d.create_sketch_group(&[GroupItem::Group(inner)]).unwrap();
+    let visible = d.snapshot();
+    assert!(!d.sketch_hidden_by_group(ids[0]));
+    d.set_sketch_group_hidden(outer, true);
+    assert!(d.sketch_hidden_by_group(ids[0]));
+    assert!(!d.sketch_hidden_by_group(ids[2]));
+    let hidden = d.snapshot();
+    // Eine Kopie rechnet selbst, die Änderung am Original erreicht sie nicht.
+    let copy = d.clone();
+    // Rückgängig und Wiederholen (nur Anzeige, kurzer Weg im Zurückladen).
+    d.restore(visible.clone()).unwrap();
+    assert!(!d.sketch_hidden_by_group(ids[0]));
+    d.restore(hidden).unwrap();
+    assert!(d.sketch_hidden_by_group(ids[1]));
+    assert!(copy.sketch_hidden_by_group(ids[1]));
+    // Verschieben aus der Gruppe und wieder hinein.
+    d.move_to_group(GroupItem::Sketch(ids[0]), None).unwrap();
+    assert!(!d.sketch_hidden_by_group(ids[0]));
+    assert!(d.sketch_hidden_by_group(ids[1]));
+    d.move_to_group(GroupItem::Sketch(ids[2]), Some(inner))
+        .unwrap();
+    assert!(d.sketch_hidden_by_group(ids[2]));
+    // Auflösen der äußeren Gruppe: Ihr Auge fällt weg.
+    d.ungroup_sketch_group(outer).unwrap();
+    assert!(!d.sketch_hidden_by_group(ids[1]));
+    assert!(!d.sketch_hidden_by_group(ids[2]));
+    // Rückgängig bis zum sichtbaren Bild.
+    d.restore(visible).unwrap();
+    assert!(ids.iter().all(|i| !d.sketch_hidden_by_group(*i)));
+    assert!(copy.sketch_hidden_by_group(ids[0]));
+}
+
 #[test]
 fn ungroup_moves_content_one_level_up() {
     let (mut d, ids) = doc_with(3);

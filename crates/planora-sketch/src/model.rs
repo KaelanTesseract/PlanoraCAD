@@ -332,6 +332,12 @@ impl Sketch {
         self.revision = next_revision();
     }
 
+    /// Setzt den Stand auf `r` zurück, nachdem eine gescheiterte Änderung alle Werte wieder
+    /// hergestellt hat (gleicher Inhalt, gleicher Stand; siehe `grow_frame_to_fit`).
+    pub(crate) fn restore_revision(&mut self, r: u64) {
+        self.revision = r;
+    }
+
     pub fn frame(&self) -> &Frame {
         &self.frame
     }

@@ -14,9 +14,11 @@ use crate::model::{
 use crate::recompute::RecomputeReport;
 use planora_i18n::tr;
 use planora_kernel::Kernel;
+use planora_sketch::model::CurveId;
 use planora_sketch::text::TextId;
 use planora_sketch::text_shape::TextShaper;
 use planora_sketch::{ProfileRef, Sketch};
+use std::collections::HashSet;
 
 impl Document {
     /// Ändert die Parameter eines Features und berechnet neu; liefert den Bericht des Laufs.
@@ -162,19 +164,31 @@ impl Document {
         let mut stale = false;
         let scope = self.param_scope();
         for idx in 0..self.features.len() {
-            let FeatureKind::Sketch(sf) = &mut self.features[idx].kind else {
+            let FeatureKind::Sketch(sf) = &self.features[idx].kind else {
                 continue;
             };
             if sf.sketch.texts().next().is_none() {
                 continue;
             }
             let before = text_warning_lines(&sf.sketch);
-            let old = sf.sketch.clone();
+            // Für `follow_text_profiles` genügt die alte Zuordnung Text → Kurven, kein Klon der
+            // ganzen Skizze (Skizzen 12, Task 12); und die nur, wenn ein Profil der Skizze folgt.
+            let sid = self.features[idx].id;
+            let old = self
+                .features
+                .iter()
+                .any(|f| selects_profiles_of(&f.kind, sid))
+                .then(|| OldTexts::of(&sf.sketch));
+            let FeatureKind::Sketch(sf) = &mut self.features[idx].kind else {
+                continue;
+            };
             crate::text_refs::apply_shown(&mut sf.sketch, &scope);
             let report = sf.sketch.reshape_texts(shaper);
             let warning_changed = text_warning_lines(&sf.sketch) != before;
-            if report.changed {
-                self.follow_text_profiles(idx, &old);
+            if report.changed
+                && let Some(old) = &old
+            {
+                self.follow_text_profiles(idx, old);
             }
             if report.changed || warning_changed {
                 // Neuer Stand: Die Skizze und alles Abhängige rechnen neu.
@@ -197,12 +211,12 @@ impl Document {
     /// Buchstaben der Skizze `idx` geändert (anderer Wert, gelöschter Parameter, andere Einheit),
     /// finden Extrusionen und Rotationen ihre Glyphenflächen nicht mehr; bei einem kürzeren Wert
     /// sind deren Kurven sogar tot. Wie in Fusion, wo ein Text als Ganzes ein Profil ist, wird
-    /// eine solche Auswahl in der Definition umgeschrieben: Jeder Verweis, der in `old` (der Skizze
-    /// vor dem Neusetzen) zu einem noch lebenden Text gehörte, wird durch alle heutigen Flächen
-    /// dieses Textes ersetzt; die übrigen Verweise bleiben, wie sie sind (ein verlorener bleibt
-    /// verloren). Eine Auswahl, die sich noch ganz auflösen lässt, bleibt unberührt. So stehen die
-    /// neuen Verweise in Datei und Verlauf (kein eigener Schritt, wie das Neusetzen).
-    fn follow_text_profiles(&mut self, idx: usize, old: &Sketch) {
+    /// eine solche Auswahl in der Definition umgeschrieben: Jeder Verweis, der in `old` (die Texte
+    /// der Skizze vor dem Neusetzen) zu einem noch lebenden Text gehörte, wird durch alle heutigen
+    /// Flächen dieses Textes ersetzt; die übrigen Verweise bleiben, wie sie sind (ein verlorener
+    /// bleibt verloren). Eine Auswahl, die sich noch ganz auflösen lässt, bleibt unberührt. So
+    /// stehen die neuen Verweise in Datei und Verlauf (kein eigener Schritt, wie das Neusetzen).
+    fn follow_text_profiles(&mut self, idx: usize, old: &OldTexts) {
         let sid = self.features[idx].id;
         let FeatureKind::Sketch(sf) = &self.features[idx].kind else {
             return;
@@ -759,6 +773,39 @@ fn delete_target(sk: &mut Sketch, target: CopyTarget) -> Result<(), planora_sket
             Ok(())
         }
         CopyTarget::Point(p) => sk.remove_point(p),
+    }
+}
+
+/// Wählt `kind` (Extrusion oder Rotation) Profile der Skizze `sketch` über Verweise? Nur solche
+/// Auswahlen schreibt [`Document::follow_text_profiles`] um.
+fn selects_profiles_of(kind: &FeatureKind, sketch: FeatureId) -> bool {
+    matches!(
+        kind,
+        FeatureKind::Extrude { sketch: s, profiles: ProfileSel::Refs(_), .. }
+        | FeatureKind::Revolve { sketch: s, profiles: ProfileSel::Refs(_), .. } if *s == sketch
+    )
+}
+
+/// Die lebenden Texte einer Skizze mit ihren erzeugten Kurven, vor dem Neusetzen gemerkt (statt
+/// eines Klons der ganzen Skizze, Skizzen 12, Task 12).
+struct OldTexts(Vec<(TextId, HashSet<CurveId>)>);
+
+impl OldTexts {
+    fn of(sk: &Sketch) -> OldTexts {
+        OldTexts(
+            sk.texts()
+                .map(|(t, d)| (t, d.curves.iter().copied().collect()))
+                .collect(),
+        )
+    }
+
+    /// Wie [`Sketch::text_of_profile`] auf dem gemerkten Stand: `Some`, wenn alle Kanten des
+    /// äußeren Rands und der Löcher erzeugte Kurven desselben Textes sind.
+    fn text_of_profile(&self, p: &ProfileRef) -> Option<TextId> {
+        let mut edges = p.outer.iter().chain(&p.holes).map(|r| r.curve);
+        let first = edges.next()?;
+        let (t, curves) = self.0.iter().find(|(_, c)| c.contains(&first))?;
+        edges.all(|c| curves.contains(&c)).then_some(*t)
     }
 }
 
