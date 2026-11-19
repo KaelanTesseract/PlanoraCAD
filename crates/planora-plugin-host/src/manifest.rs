@@ -29,7 +29,8 @@ impl Right {
         }
     }
 
-    fn from_id(id: &str) -> Option<Right> {
+    /// Das Recht zu einer Kennung aus dem Manifest oder der Konfiguration.
+    pub fn from_id(id: &str) -> Option<Right> {
         [
             Right::Net,
             Right::FsFolder,

@@ -19,8 +19,10 @@ use std::task::{Context, Poll};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
+/// Eine übersetzte Plug-in-Komponente (aus `places::load_component`).
+pub use wasmtime::component::Component;
 use wasmtime::component::Resource;
-use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
+use wasmtime::component::{HasSelf, Linker, ResourceTable};
 use wasmtime::{ResourceLimiter, Store, StoreContextMut, Trap, format_err};
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 use wasmtime_wasi::clocks::{HostMonotonicClock, HostWallClock};
@@ -457,6 +459,24 @@ impl Engine {
         Ok(Engine { inner, ticker })
     }
 
+    /// Die wasmtime-Engine (für den Zwischenspeicher in `places`).
+    pub(crate) fn wasmtime(&self) -> &wasmtime::Engine {
+        &self.inner
+    }
+
+    /// Prüft die Schnittstellenversion des Manifests (die einzige Stelle dafür).
+    pub(crate) fn check_api(manifest: &Manifest) -> Result<(), PluginError> {
+        if manifest.api != planora_plugin_api::API_VERSION {
+            return Err(PluginError::Load(format!(
+                "Das Plug-in „{}“ braucht PlanoraCAD-Schnittstelle {}, dieses Programm spricht {}.",
+                manifest.name,
+                manifest.api,
+                planora_plugin_api::API_VERSION
+            )));
+        }
+        Ok(())
+    }
+
     /// Übersetzt `wasm` und legt eine Instanz an. `languages` sind die Sprachdateien des Pakets
     /// (`Package::languages`), `host` nimmt die Aufrufe des Plug-ins entgegen.
     pub fn instantiate(
@@ -466,21 +486,31 @@ impl Engine {
         languages: &BTreeMap<String, String>,
         host: Box<dyn HostCalls>,
     ) -> Result<Instance, PluginError> {
-        if manifest.api != planora_plugin_api::API_VERSION {
-            return Err(PluginError::Load(format!(
-                "Das Plug-in „{}“ braucht PlanoraCAD-Schnittstelle {}, dieses Programm spricht {}.",
-                manifest.name,
-                manifest.api,
-                planora_plugin_api::API_VERSION
-            )));
-        }
+        Self::check_api(manifest)?;
+        let component = Component::new(&self.inner, wasm).map_err(|e| {
+            PluginError::Load(format!(
+                "Das Plug-in „{}“ ließ sich nicht laden: {e:#}",
+                manifest.name
+            ))
+        })?;
+        self.instantiate_component(manifest, &component, languages, host)
+    }
+
+    /// Legt eine Instanz aus einer schon übersetzten Komponente an (siehe `places::load_component`).
+    pub fn instantiate_component(
+        &self,
+        manifest: &Manifest,
+        component: &Component,
+        languages: &BTreeMap<String, String>,
+        host: Box<dyn HostCalls>,
+    ) -> Result<Instance, PluginError> {
+        Self::check_api(manifest)?;
         let load = |what: &str, e: wasmtime::Error| {
             PluginError::Load(format!(
                 "Das Plug-in „{}“ ließ sich nicht {what}: {e:#}",
                 manifest.name
             ))
         };
-        let component = Component::new(&self.inner, wasm).map_err(|e| load("laden", e))?;
         let mut linker = Linker::<State>::new(&self.inner);
         linker.allow_shadowing(true);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|e| load("einrichten", e))?;
@@ -513,7 +543,7 @@ impl Engine {
         store.limiter(|s| &mut s.limits);
         // Auch das Einrichten der Instanz hat eine Frist (ein Start-Abschnitt könnte endlos laufen).
         store.set_epoch_deadline(CallKind::Command.ticks());
-        let plugin = match Plugin::instantiate(&mut store, &component, &linker) {
+        let plugin = match Plugin::instantiate(&mut store, component, &linker) {
             Ok(p) => p,
             Err(e) => {
                 return Err(match classify(&e, store.data().limits.oom) {
@@ -554,6 +584,15 @@ pub struct Instance {
     stderr: Ausgabe,
     _ticker: Arc<Ticker>,
 }
+
+// Eine Instanz entsteht im Hintergrund (Übersetzen und `init`) und wird dann auf den
+// Oberflächen-Thread gereicht: sie muss `Send` sein, die Engine zusätzlich `Sync`.
+const _: () = {
+    const fn send<T: Send>() {}
+    const fn send_sync<T: Send + Sync>() {}
+    send::<Instance>();
+    send_sync::<Engine>();
+};
 
 impl Instance {
     /// Führt einen Aufruf mit Frist aus und ordnet den Ausgang ein.

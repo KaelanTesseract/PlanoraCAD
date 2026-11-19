@@ -82,8 +82,9 @@ semver = { version = "1", features = ["serde"] }
 
 # Plug-in-Laufzeit (planora-plugin-host, Plug-ins Etappe 1 Task 2). Am 2026-11-19 geprüft: wasmtime und
 # wasmtime-wasi Apache-2.0 WITH LLVM-exception (neueste stabile Version 50.0.3); nur die Funktionen
-# cranelift, component-model, runtime und parallel-compilation. sha2 MIT OR Apache-2.0 (nur in Tests
-# und im Paket-Werkzeug, prüft die Quell-Hashes der mitgelieferten Beispiel-Plug-ins).
+# cranelift, component-model, runtime und parallel-compilation. sha2 MIT OR Apache-2.0 (prüft die
+# Quell-Hashes der Beispiel-Plug-ins und bildet ab Task 4 den Schlüssel des Zwischenspeichers für
+# übersetzte Plug-ins).
 wasmtime = { version = "=50.0.3", default-features = false, features = ["cranelift", "component-model", "runtime", "parallel-compilation"] }
 wasmtime-wasi = { version = "=50.0.3", default-features = false, features = ["p2"] }
 # Für die Ausgabe-Umleitung der Plug-ins (alle schon über wasmtime-wasi im Baum, MIT bzw. MIT OR Apache-2.0):

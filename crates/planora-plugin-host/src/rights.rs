@@ -69,6 +69,11 @@ impl Rights {
         self.once.remove(&r);
     }
 
+    /// Die dauerhaft beantworteten Rechte (zum Speichern; „Nur dieses Mal“ gehört nicht dazu).
+    pub fn saved(&self) -> impl Iterator<Item = (Right, Grant)> + '_ {
+        self.saved.iter().map(|(r, g)| (*r, *g))
+    }
+
     /// Alle "Einmal"-Erlaubnisse verfallen lassen.
     pub fn reset_once(&mut self) {
         self.once.clear();

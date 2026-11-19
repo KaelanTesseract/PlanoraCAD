@@ -175,6 +175,35 @@ pub struct Config {
         deserialize_with = "lenient_detached"
     )]
     pub detached: BTreeMap<String, DetachedWindow>,
+    /// Plug-ins: Kennung → an/aus und gespeicherte Rechte. Ein falscher Typ des ganzen Felds
+    /// ergibt „leer“, kaputte Einträge fallen einzeln weg (siehe [`lenient_plugins`]). Ohne
+    /// Einträge wird nichts geschrieben.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "lenient_plugins"
+    )]
+    pub plugins: BTreeMap<String, PluginConfig>,
+}
+
+/// Der gespeicherte Zustand eines Plug-ins: eingeschaltet oder nicht und die dauerhaft
+/// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`). „Nur dieses Mal“
+/// wird nie gespeichert.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rights: BTreeMap<String, String>,
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        PluginConfig {
+            enabled: true,
+            rights: BTreeMap::new(),
+        }
+    }
 }
 
 /// Lage und Größe eines abgedockten Fensters in physischen Pixeln. `x` und `y` dürfen negativ
@@ -300,6 +329,7 @@ impl Default for Config {
             show_triad_planes: true,
             show_triad_handles: true,
             detached: BTreeMap::new(),
+            plugins: BTreeMap::new(),
         }
     }
 }
@@ -475,6 +505,26 @@ fn lenient_favorites<'de, D: Deserializer<'de>>(
         })
         .unwrap_or_default();
     Ok(clean_favorites(list))
+}
+
+/// Liest `plugins` nachsichtig: ein falscher Typ ergibt „leer“, Einträge, die sich nicht als
+/// [`PluginConfig`] lesen lassen (etwa `"enabled": "ja"`), werden übergangen; Rechte mit einem
+/// anderen Wert als `"allowed"`/`"denied"` fallen einzeln weg.
+fn lenient_plugins<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<BTreeMap<String, PluginConfig>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let Some(map) = value.as_object() else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(map
+        .iter()
+        .filter_map(|(id, v)| {
+            let mut c: PluginConfig = serde_json::from_value(v.clone()).ok()?;
+            c.rights.retain(|_, g| g == "allowed" || g == "denied");
+            Some((id.clone(), c))
+        })
+        .collect())
 }
 
 /// Liest `detached` nachsichtig: ein falscher Typ ergibt „leer“, einzelne Einträge ohne vier
