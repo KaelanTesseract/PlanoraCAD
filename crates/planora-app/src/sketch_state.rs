@@ -610,6 +610,14 @@ pub struct SketchSession {
     /// Vorschau unter dem Mauszeiger (Stutzen und Brechen: das Stück, Dehnen: der Weg zum neuen
     /// Ende), je Bild neu bestimmt ([`update_hover`](Self::update_hover)).
     pub hover_preview: Option<Vec<DVec2>>,
+    /// Element, das die Anzeige unter dem Mauszeiger heller zeigt (Skizzen 12), je Bild von
+    /// [`crate::sketch_view::show_overlay`] bestimmt: Overlay und GPU-Linien sehen dasselbe.
+    /// Nur Anzeige, keine Eingabe.
+    pub draw_hover: Option<Item>,
+    /// Anzeigeschalter der Skizze mit ihrer projizierten Geometrie (Skizzen 12), je Bild von
+    /// [`crate::state::AppState::sync_sketch_display`] aus Dokument und Entwurf übernommen: Wählen,
+    /// Rahmenauswahl und Fang lassen aus, was die Schalter ausblenden.
+    pub display: crate::sketch_view::DisplayFilter,
     /// Name des nächsten Schritts für Rückgängig, wenn ein Werkzeug ihn besser kennt als der
     /// Vergleich der Stände (Stutzen, Dehnen, Brechen); der Verlauf nimmt und leert ihn.
     pub edit_label: Option<Msg>,
@@ -845,6 +853,8 @@ impl SketchSession {
             click_after_flyout: false,
             history_jumps: 0,
             hover_preview: None,
+            draw_hover: None,
+            display: Default::default(),
             edit_label: None,
             replace_step: false,
             clip_filled: false,
@@ -885,15 +895,16 @@ impl SketchSession {
     }
 
     /// Wechselt das Werkzeug; ein laufendes Werkzeug wird abgebrochen, ein laufendes Ziehen
-    /// wie mit [`end_drag`](Self::end_drag) beendet, auch ein Griffzug. Nur der erste Zug, der einen
-    /// Griff erst einschaltet, geht ganz zurück: Er bleibt nie halb stehen.
+    /// wie mit [`end_drag`](Self::end_drag) beendet, auch ein Griffzug. Ganz zurück, ohne Schritt,
+    /// geht der erste Zug, der einen Griff erst einschaltet, der Zug am Drehgriff eines Textes und
+    /// der Zug am Rho-Griff: Sie bleiben nie halb stehen.
     pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
-        // Auch der Zug am Drehgriff eines Textes geht ganz zurück: Ein Werkzeugwechsel hinterlässt
-        // nichts. (Der Rho-Griff bleibt ein gewöhnlicher Zug, siehe `a_tool_change_takes_over_the_rho_drag`.)
+        // Auch der Zug am Drehgriff eines Textes und am Rho-Griff geht ganz zurück: Ein Werkzeugwechsel
+        // hinterlässt nichts (beide gleich, Skizzen 12 Task 11; Fusion-Verhalten prüft Handtest 3).
         if self
             .curve_drag
             .as_ref()
-            .is_some_and(|d| d.activates || d.text_rot.is_some())
+            .is_some_and(|d| d.activates || d.text_rot.is_some() || d.rho.is_some())
         {
             self.abort_handle_drag(sk);
         }
@@ -1120,8 +1131,14 @@ impl SketchSession {
     /// Fang für die Auswahl an der Stelle `at`: Punkte vor Kurven (nur [`Snap::Point`],
     /// [`Snap::Curve`] und [`Snap::None`]; beim Zeichnen gilt
     /// [`resolve_cursor`](Self::resolve_cursor)).
+    /// Mit „Punkte anzeigen“ aus (Skizzen 12) trifft die Auswahl keinen Punkt.
     pub fn snap(&self, sk: &Sketch, at: DVec2, radius: f64) -> Snap {
-        if let Some(p) = self.shown_point(sk, at, radius) {
+        let point = if self.display.display.points {
+            self.shown_point(sk, at, radius)
+        } else {
+            None
+        };
+        if let Some(p) = point {
             Snap::Point(p)
         } else if let Some(c) = self.shown_curve(sk, at, radius) {
             Snap::Curve(c)
@@ -2305,7 +2322,12 @@ impl SketchSession {
         let on_screen = |p: DVec3| project(p).filter(|q| q.is_finite());
         let mut found = Vec::new();
         let hidden = self.hidden_handles(sk);
-        for (c, _) in sk.curves().filter(|(c, _)| !hidden.curves.contains(c)) {
+        // Was die Anzeigeschalter ausblenden, nimmt der Rahmen nicht (Skizzen 12).
+        let gone = self.display.hidden(sk);
+        for (c, _) in sk
+            .curves()
+            .filter(|(c, _)| !hidden.curves.contains(c) && !gone.curves.contains(c))
+        {
             let line = if sk.is_3d_curve(c) {
                 crate::sketch_view::curve_points3(sk, c)
             } else {
@@ -2329,7 +2351,10 @@ impl SketchSession {
             }
         }
         let on_curves: BTreeSet<PointId> = sk.curves().flat_map(|(_, c)| c.kind.points()).collect();
-        for (p, _) in sk.points().filter(|(p, _)| !on_curves.contains(p)) {
+        for (p, _) in sk
+            .points()
+            .filter(|(p, _)| !on_curves.contains(p) && !gone.points.contains(p))
+        {
             if sk
                 .point_xyz(p)
                 .ok()

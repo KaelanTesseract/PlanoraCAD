@@ -898,7 +898,12 @@ fn compute_sketch(
     let mut warning = sketch_warning(&followed.counts, &sketch);
     // Parameter im Text (Skizzen 11b): Unbekannte Namen bleiben wörtlich stehen und warnen, der
     // Status bleibt Ok. Ersetzt wird in `Document::reshape_texts`.
-    let unknown = crate::text_refs::unknown_names(&sketch, &doc.param_scope());
+    // Den `ParamScope` nur für Skizzen mit Text bauen (Skizzen 12, Task 12).
+    let unknown = if sketch.texts().next().is_some() {
+        crate::text_refs::unknown_names(&sketch, &doc.param_scope())
+    } else {
+        Vec::new()
+    };
     if !unknown.is_empty() {
         let line = tr!(
             "feature-sketch-text-param-unknown",

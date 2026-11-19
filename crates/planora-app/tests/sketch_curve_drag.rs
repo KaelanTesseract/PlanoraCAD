@@ -973,46 +973,35 @@ fn a_drag_on_a_curve_starts_a_curve_drag_and_no_box() {
     assert!(!se(&s).is_dragging());
 }
 
-/// Dreiecke in der Füllfarbe der Profile.
-fn profile_triangles(shapes: &[egui::Shape], color: egui::Color32) -> usize {
-    shapes
-        .iter()
-        .map(|s| match s {
-            egui::Shape::Mesh(m) => m
-                .indices
-                .chunks(3)
-                .filter(|t| m.vertices[t[0] as usize].color == color)
-                .count(),
-            egui::Shape::Vec(v) => profile_triangles(v, color),
-            _ => 0,
-        })
-        .sum()
+/// Dreiecke in der Füllfarbe der Profile; seit Skizzen 12 auf der GPU.
+fn profile_triangles(s: &AppState, color: egui::Color32) -> usize {
+    planora_app::testing::fill_triangles(&planora_app::testing::open_strokes(s, SCREEN), color)
 }
 
 #[test]
 fn profile_fills_are_gone_during_a_curve_drag() {
     let ctx = context();
     let mut s = rectangle();
-    assert!(s.show_sketch_profiles);
+    assert!(
+        s.document
+            .sketch_display(s.open_sketch_id().unwrap())
+            .profiles
+    );
     let fill = theme::sketch_colors(s.dark).profile_fill;
     frame(&ctx, &mut s, vec![]);
-    let shapes = frame(&ctx, &mut s, vec![]);
-    assert!(profile_triangles(&shapes, fill) > 0, "vor dem Zug gefüllt");
+    frame(&ctx, &mut s, vec![]);
+    assert!(profile_triangles(&s, fill) > 0, "vor dem Zug gefüllt");
     let (from, to) = (screen(&s, (20.0, 0.0)), screen(&s, (24.0, 5.0)));
     frame(&ctx, &mut s, vec![moved(from)]);
     frame(&ctx, &mut s, vec![button(from, true)]);
     frame(&ctx, &mut s, vec![moved(from.lerp(to, 0.5))]);
-    let shapes = frame(&ctx, &mut s, vec![moved(to)]);
+    frame(&ctx, &mut s, vec![moved(to)]);
     assert!(se(&s).curve_drag.is_some());
-    assert_eq!(
-        profile_triangles(&shapes, fill),
-        0,
-        "beim Ziehen keine Flächen"
-    );
+    assert_eq!(profile_triangles(&s, fill), 0, "beim Ziehen keine Flächen");
     frame(&ctx, &mut s, vec![button(to, false)]);
-    let shapes = frame(&ctx, &mut s, vec![]);
+    frame(&ctx, &mut s, vec![]);
     assert!(
-        profile_triangles(&shapes, fill) > 0,
+        profile_triangles(&s, fill) > 0,
         "nach dem Zug wieder gefüllt"
     );
 }

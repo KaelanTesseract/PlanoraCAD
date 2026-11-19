@@ -192,6 +192,8 @@ pub enum Icon {
     Undock,
     /// Phosphor `lock` (`lock-simple` gehört schon zu Fixed): das rote Schloss einer voll bestimmten Skizze.
     Lock,
+    /// Phosphor `sliders-horizontal`: Anzeigeoptionen im Skizzenfeld (Skizzen 12).
+    Display,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -286,6 +288,7 @@ pub const ALL: &[Icon] = &[
     Icon::Dock,
     Icon::Undock,
     Icon::Lock,
+    Icon::Display,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -380,6 +383,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Dock, '\u{e5dc}', "arrow-square-in"),
     (Icon::Undock, '\u{e5de}', "arrow-square-out"),
     (Icon::Lock, '\u{e2fa}', "lock"),
+    (Icon::Display, '\u{e434}', "sliders-horizontal"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {

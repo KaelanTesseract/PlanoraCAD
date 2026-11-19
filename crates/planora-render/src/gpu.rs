@@ -1,5 +1,6 @@
 use crate::canvas::{CanvasDraw, CanvasGpu, CanvasTexture};
 use crate::scene::{FaceVertex, LineVertex, SceneData};
+use crate::stroke::StrokeVertex;
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu::util::DeviceExt as _;
 use egui_wgpu::{self, wgpu};
@@ -14,6 +15,11 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 struct Uniforms {
     view_proj: [[f32; 4]; 4],
     light_dir: [f32; 4],
+    /// Schnittebene von Slice (siehe [`crate::slice_plane`]).
+    slice: [f32; 4],
+    /// 1,0 = Slice an; der Rest füllt auf 16 Byte auf (WGSL-Ausrichtung).
+    slice_on: f32,
+    _pad: [f32; 3],
 }
 
 /// GPU-Ressourcen des Viewports. Liegen in `egui_wgpu::CallbackResources`.
@@ -21,6 +27,7 @@ pub struct GpuScene {
     face_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     grid_pipeline: wgpu::RenderPipeline,
+    stroke_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     face_vertex_buffer: Option<wgpu::Buffer>,
@@ -32,6 +39,12 @@ pub struct GpuScene {
     grid_vertex_buffer: Option<wgpu::Buffer>,
     grid_capacity: u32,
     grid_vertex_count: u32,
+    /// Skizzenlinien und -flächen (Skizzen 12): fertig projizierte Dreiecke, je Bild beschrieben.
+    stroke_vertex_buffer: Option<wgpu::Buffer>,
+    stroke_capacity: u32,
+    /// Die Warnung „zu viele Skizzenlinien“ kam schon (nur einmal melden).
+    stroke_limit_warned: bool,
+    stroke_vertex_count: u32,
     uploaded_version: Option<u64>,
     /// Leinwände (Skizzen 9): vierte Pipeline samt Texturen.
     canvases: CanvasGpu,
@@ -75,6 +88,9 @@ impl GpuScene {
             contents: bytemuck::bytes_of(&Uniforms {
                 view_proj: [[0.0; 4]; 4],
                 light_dir: [0.0, 0.0, 1.0, 0.0],
+                slice: [0.0; 4],
+                slice_on: 0.0,
+                _pad: [0.0; 3],
             }),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
         });
@@ -131,7 +147,7 @@ impl GpuScene {
                 // Flächen leicht nach hinten schieben, damit Kanten darüber sauber erscheinen.
                 bias: wgpu::DepthBiasState {
                     constant: 2,
-                    slope_scale: 2.0,
+                    slope_scale: crate::stroke::FACE_SLOPE_SCALE,
                     clamp: 0.0,
                 },
             }),
@@ -140,55 +156,108 @@ impl GpuScene {
             cache: None,
         });
 
-        // Kantenlinien der Körper (deckend) und Raster (mit Alphamischung, blendet aus).
-        let make_line_pipeline = |label: &'static str, blend: Option<wgpu::BlendState>| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_line"),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<LineVertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_line"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::LineList,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample,
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let line_pipeline = make_line_pipeline("planora-lines", None);
-        let grid_pipeline =
-            make_line_pipeline("planora-grid", Some(wgpu::BlendState::ALPHA_BLENDING));
+        // Kantenlinien der Körper (deckend, Slice schneidet sie) und Raster (mit Alphamischung,
+        // blendet aus, ohne Slice).
+        let make_line_pipeline =
+            |label: &'static str, fragment: &'static str, blend: Option<wgpu::BlendState>| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_line"),
+                        buffers: &[Some(wgpu::VertexBufferLayout {
+                            array_stride: std::mem::size_of::<LineVertex>() as u64,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
+                        })],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some(fragment),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: target_format,
+                            blend,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::LineList,
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample,
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+        let line_pipeline = make_line_pipeline("planora-lines", "fs_line", None);
+        let grid_pipeline = make_line_pipeline(
+            "planora-grid",
+            "fs_grid",
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
+
+        // Skizzenlinien: Dreiecke, Tiefe LessEqual ohne Schreiben, Alphamischung.
+        let stroke_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("planora-strokes"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("stroke.wgsl").into()),
+        });
+        let stroke_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("planora-strokes"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &stroke_shader,
+                entry_point: Some("vs_stroke"),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<StrokeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3, 1 => Float32x4, 2 => Float32
+                    ],
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &stroke_shader,
+                entry_point: Some("fs_stroke"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample,
+            multiview_mask: None,
+            cache: None,
+        });
 
         Self {
             face_pipeline,
             line_pipeline,
             grid_pipeline,
+            stroke_pipeline,
             uniform_buffer,
             bind_group,
             face_vertex_buffer: None,
@@ -199,6 +268,10 @@ impl GpuScene {
             grid_vertex_buffer: None,
             grid_capacity: 0,
             grid_vertex_count: 0,
+            stroke_vertex_buffer: None,
+            stroke_capacity: 0,
+            stroke_limit_warned: false,
+            stroke_vertex_count: 0,
             uploaded_version: None,
             canvases,
         }
@@ -278,6 +351,9 @@ impl GpuScene {
         let uniforms = Uniforms {
             view_proj: cb.view_proj,
             light_dir: [cb.light_dir[0], cb.light_dir[1], cb.light_dir[2], 0.0],
+            slice: cb.slice.unwrap_or([0.0; 4]),
+            slice_on: if cb.slice.is_some() { 1.0 } else { 0.0 },
+            _pad: [0.0; 3],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
         if self.uploaded_version != Some(cb.scene_version) {
@@ -285,6 +361,7 @@ impl GpuScene {
             self.uploaded_version = Some(cb.scene_version);
         }
         self.upload_grid(device, queue, &cb.grid);
+        self.upload_strokes(device, queue, &cb.strokes);
         self.canvases
             .update(device, queue, &cb.canvases, &cb.canvas_textures);
     }
@@ -318,6 +395,49 @@ impl GpuScene {
         }
     }
 
+    /// Schreibt die Skizzendreiecke dieses Bildes; wie beim Raster wächst der Puffer bei Bedarf.
+    fn upload_strokes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        strokes: &[StrokeVertex],
+    ) {
+        self.stroke_vertex_count = 0;
+        // Passt nicht alles in einen Puffer, wird auf das Größtmögliche (ganze Dreiecke) begrenzt:
+        // Es wird teilweise gezeichnet statt gar nicht.
+        let vertex_bytes = std::mem::size_of::<StrokeVertex>() as u64;
+        let max_count =
+            u32::try_from(device.limits().max_buffer_size / vertex_bytes).unwrap_or(u32::MAX) / 3
+                * 3;
+        let wanted = u32::try_from(strokes.len()).unwrap_or(u32::MAX);
+        let count = wanted.min(max_count);
+        if count < wanted && !self.stroke_limit_warned {
+            self.stroke_limit_warned = true;
+            eprintln!(
+                "Warning: too many sketch lines for the graphics card, only the first {count} of {wanted} vertices are drawn"
+            );
+        }
+        if count == 0 {
+            return;
+        }
+        let strokes = &strokes[..count as usize];
+        if self.stroke_vertex_buffer.is_none() || count > self.stroke_capacity {
+            let capacity = count.next_power_of_two().max(1024).min(max_count);
+            let bytes = u64::from(capacity) * vertex_bytes;
+            self.stroke_vertex_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("planora-stroke-vertices"),
+                size: bytes,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.stroke_capacity = capacity;
+        }
+        if let Some(buffer) = &self.stroke_vertex_buffer {
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(strokes));
+            self.stroke_vertex_count = count;
+        }
+    }
+
     fn paint(&self, render_pass: &mut wgpu::RenderPass<'_>) {
         render_pass.set_bind_group(0, &self.bind_group, &[]);
         if let (Some(vb), Some(ib)) = (&self.face_vertex_buffer, &self.face_index_buffer) {
@@ -339,6 +459,12 @@ impl GpuScene {
         }
         // Leinwände nach Flächen und Linien; die Skizzen zeichnet egui ohnehin darüber.
         self.canvases.paint(render_pass);
+        // Skizzenlinien zuletzt: sie mischen sich über Flächen, Kanten und Leinwände.
+        if let (Some(svb), true) = (&self.stroke_vertex_buffer, self.stroke_vertex_count > 0) {
+            render_pass.set_pipeline(&self.stroke_pipeline);
+            render_pass.set_vertex_buffer(0, svb.slice(..));
+            render_pass.draw(0..self.stroke_vertex_count, 0..1);
+        }
     }
 }
 
@@ -362,6 +488,11 @@ pub struct ViewportCallback {
     /// Texturen für noch unbekannte `key` an und behält genau die, deren `key` in `canvases`
     /// dieses Bildes vorkommt. So schadet auch ein verworfener egui-Durchlauf nicht.
     pub canvas_textures: Vec<CanvasTexture>,
+    /// Skizzenlinien und -flächen dieses Bildes (Skizzen 12), fertig projiziert, mit Tiefenprüfung.
+    pub strokes: Vec<StrokeVertex>,
+    /// Schnittebene von Slice (Skizzen 12, [`crate::slice_plane`]); `None` = kein Schnitt. Wirkt
+    /// nur auf Flächen und Kanten der Körper, nicht auf Raster, Leinwände und Skizzenlinien.
+    pub slice: Option<[f32; 4]>,
 }
 
 impl egui_wgpu::CallbackTrait for ViewportCallback {
@@ -417,7 +548,40 @@ mod tests {
             .iter()
             .map(|e| e.name.as_str())
             .collect();
-        for name in ["vs_face", "fs_face", "vs_line", "fs_line"] {
+        for name in ["vs_face", "fs_face", "vs_line", "fs_line", "fs_grid"] {
+            assert!(entries.contains(&name), "Einstiegspunkt {name} fehlt");
+        }
+    }
+
+    #[test]
+    fn shader_slice_eps_matches_cpu() {
+        // Shader und Anklicken müssen dieselbe Toleranz nehmen.
+        let line = format!("const SLICE_EPS: f32 = {};", crate::SLICE_EPS);
+        assert!(
+            include_str!("shader.wgsl").contains(&line),
+            "shader.wgsl braucht `{line}`"
+        );
+    }
+
+    #[test]
+    fn uniforms_match_the_wgsl_layout() {
+        // mat4 (64) + vec4 (16) + vec4 (16) + f32, aufgerundet auf 16: 112 Byte.
+        assert_eq!(std::mem::size_of::<super::Uniforms>(), 112);
+    }
+
+    #[test]
+    fn stroke_shader_is_valid_wgsl() {
+        let module = naga::front::wgsl::parse_str(include_str!("stroke.wgsl"))
+            .expect("WGSL muss sich parsen lassen");
+        Validator::new(ValidationFlags::all(), Capabilities::empty())
+            .validate(&module)
+            .expect("WGSL muss die Validierung bestehen");
+        let entries: Vec<_> = module
+            .entry_points
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        for name in ["vs_stroke", "fs_stroke"] {
             assert!(entries.contains(&name), "Einstiegspunkt {name} fehlt");
         }
     }

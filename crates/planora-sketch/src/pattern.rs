@@ -17,6 +17,8 @@ use planora_i18n::tr;
 use planora_kernel::Id;
 use planora_math::{DVec2, TAU};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, TryLockError};
 
 pub type PatternId = Id<PatternData>;
 
@@ -30,6 +32,30 @@ pub const PATTERN_MAX_CURVES: usize = 3600;
 /// So oft löst der Löser höchstens nach, wenn Gruppen Exemplare lesen, deren Lage sich im Lauf
 /// geändert hat (Entscheidung 5).
 pub(crate) const PATTERN_ROUNDS: usize = 3;
+
+/// Arbeitskopie der Mustervorschau: Die Vorschau legt die Exemplare auf einer Kopie der Skizze an.
+/// Die Kopie entsteht nur, wenn sich der Stand ([`Sketch::revision`]) geändert hat; nach jeder
+/// Vorschau werden die angehängten Objekte wieder abgeschnitten (Härtung nach Skizzen 5).
+#[derive(Default)]
+pub(crate) struct PreviewScratch {
+    /// Stand der Skizze, von dem die Kopie stammt, und die Kopie.
+    copy: Mutex<Option<(u64, Box<Sketch>)>>,
+    /// Zahl der Kopien bisher (für Tests).
+    clones: AtomicUsize,
+}
+
+impl Clone for PreviewScratch {
+    /// Eine Kopie der Skizze beginnt ohne Arbeitskopie.
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for PreviewScratch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PreviewScratch")
+    }
+}
 
 /// Ergebnis von [`Sketch::refresh_patterns`].
 #[derive(Clone, Copy, Debug)]
@@ -185,8 +211,10 @@ pub enum PatternProblem {
     TooMany,
     /// Abstand oder Winkel null, nicht endlich oder zu groß; Schritt null.
     ZeroStep,
-    /// Richtungslinie oder Mitte fehlt oder ist entartet, oder beide Richtungen sind parallel.
+    /// Richtungslinie oder Mitte fehlt oder ist entartet.
     BadDirection,
+    /// Beide Richtungen eines Rechteckmusters sind parallel: Das Gitter hat keine Fläche.
+    ParallelDirections,
     /// Ein Exemplar soll Vorlage, Richtungslinie oder Mitte sein.
     InstanceAsSource,
     /// Eine Abhängigkeit verbindet Vorlage, Richtung oder Mitte mit einem eigenen Exemplar.
@@ -214,6 +242,7 @@ impl PatternProblem {
             ),
             PatternProblem::ZeroStep => tr!("sketch-pattern-zero-step"),
             PatternProblem::BadDirection => tr!("sketch-pattern-direction"),
+            PatternProblem::ParallelDirections => tr!("sketch-pattern-grid-parallel"),
             PatternProblem::InstanceAsSource => tr!("sketch-pattern-instance-source"),
             PatternProblem::Cycle => tr!("sketch-pattern-cycle"),
             PatternProblem::InstanceOnly => tr!("sketch-pattern-instance-only"),
@@ -226,9 +255,9 @@ impl PatternProblem {
     /// Der Fehler, mit dem [`Sketch::add_pattern`] und [`Sketch::add_constraint`] ablehnen.
     pub fn error(self) -> SketchError {
         match self {
-            PatternProblem::ZeroStep | PatternProblem::BadDirection => {
-                SketchError::Degenerate(self.message())
-            }
+            PatternProblem::ZeroStep
+            | PatternProblem::BadDirection
+            | PatternProblem::ParallelDirections => SketchError::Degenerate(self.message()),
             _ => SketchError::InvalidInput(self.message()),
         }
     }
@@ -342,11 +371,53 @@ impl Sketch {
         let transforms = self
             .pattern_transforms(plan)
             .map_err(PatternProblem::error)?;
-        let mut s = self.clone();
-        let source_points = points_of(&s, &plan.sources);
+        // Die Arbeitskopie gilt, solange sich der Stand nicht ändert; sonst neu kopieren. Ist sie
+        // gerade in Gebrauch (eine zweite Vorschau aus einem anderen Faden), eine eigene Kopie.
+        let mut slot = match self.preview_scratch.copy.try_lock() {
+            Ok(slot) => slot,
+            // Brach eine Vorschau ab, ist die Kopie womöglich nicht zurückgeschnitten: verwerfen.
+            Err(TryLockError::Poisoned(e)) => {
+                let mut slot = e.into_inner();
+                *slot = None;
+                slot
+            }
+            Err(TryLockError::WouldBlock) => {
+                self.preview_scratch.clones.fetch_add(1, Ordering::Relaxed);
+                return self.preview_on(&mut self.clone(), plan, &transforms, steps_per_turn);
+            }
+        };
+        let s = match &mut *slot {
+            Some((revision, s)) if *revision == self.revision() => s,
+            _ => {
+                self.preview_scratch.clones.fetch_add(1, Ordering::Relaxed);
+                &mut slot.insert((self.revision(), Box::new(self.clone()))).1
+            }
+        };
+        // Name und Haken „3D-Skizze“ sind offene Felder und ändern den Stand nicht.
+        s.name.clone_from(&self.name);
+        s.three_d = self.three_d;
+        let mark = s.append_mark();
+        let out = self.preview_on(s, plan, &transforms, steps_per_turn);
+        s.cut_back(mark);
+        debug_assert!(
+            s.to_data() == self.to_data(),
+            "preview scratch differs from the sketch after cutting back"
+        );
+        out
+    }
+
+    /// Legt die Exemplare auf der Kopie `s` an und liefert ihre Linienzüge.
+    fn preview_on(
+        &self,
+        s: &mut Sketch,
+        plan: &PatternPlan,
+        transforms: &[([i32; 2], Similarity)],
+        steps_per_turn: usize,
+    ) -> Result<PatternPreview, SketchError> {
+        let source_points = points_of(s, &plan.sources);
         let parts = self.handle_curves();
         let mut out = Vec::with_capacity(transforms.len());
-        for (at, t) in &transforms {
+        for (at, t) in transforms {
             let inst = s.add_instance(&plan.sources, &source_points, *at, t)?;
             // Griffe gehören zum Exemplar, aber nicht in die Vorschau.
             let lines = inst
@@ -394,6 +465,12 @@ impl Sketch {
             s.solve();
             Ok(id)
         })
+    }
+
+    /// Wie oft [`Sketch::pattern_preview`] die Skizze bisher kopiert hat (nur für Tests).
+    #[doc(hidden)]
+    pub fn preview_clones(&self) -> usize {
+        self.preview_scratch.clones.load(Ordering::Relaxed)
     }
 
     /// Der Plan mit den Griffen der Vorlagen als weiteren Vorlagen (und dem Spline eines gewählten
@@ -798,7 +875,7 @@ impl Sketch {
                 }
                 if hi[0] > lo[0] && hi[1] > lo[1] && unit[0].perp_dot(unit[1]).abs() <= tol.angular
                 {
-                    return Err(PatternProblem::BadDirection);
+                    return Err(PatternProblem::ParallelDirections);
                 }
                 for j in lo[1]..=hi[1] {
                     for i in lo[0]..=hi[0] {

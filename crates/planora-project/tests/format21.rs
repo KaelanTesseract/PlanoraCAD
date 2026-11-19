@@ -118,7 +118,7 @@ fn with_format(text: String, from: u32, to: u32) -> String {
 
 #[test]
 fn format_version_is_22() {
-    assert_eq!(FORMAT_VERSION, 22);
+    assert_eq!(FORMAT_VERSION, 23);
 }
 
 /// Jede vorhandene Testdatei lädt und wird bytegleich wieder geschrieben, ohne eines der neuen
@@ -344,12 +344,12 @@ fn format_20_with_supplement_or_end_tangent_rejected() {
 }
 
 #[test]
-fn format_23_is_too_new() {
+fn format_24_is_too_new() {
     let (mut s, arc) = arc_sketch();
     s.set_comb(arc, Some(CombSettings::default())).unwrap();
-    let text = with_format(encode_version(&document(s).snapshot()).unwrap(), 21, 23);
+    let text = with_format(encode_version(&document(s).snapshot()).unwrap(), 21, 24);
     let e = decode_version(&text, "x.json").unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 23, .. }), "{e:?}");
+    assert!(matches!(e, ProjectError::TooNew { found: 24, .. }), "{e:?}");
 }
 
 /// Ein Kamm an einer Linie ist ein Lesefehler.

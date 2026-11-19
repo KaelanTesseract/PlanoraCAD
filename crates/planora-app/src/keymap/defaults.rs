@@ -99,6 +99,16 @@ action_table! {
         Model, [];
     /// Fusion „Als DXF speichern“ (Skizzen 11b) für die gewählte Skizze; ohne Vorbelegung, belegbar.
     SketchSaveAsDxf, "modell.skizze_als_dxf", "action-sketch-save-as-dxf", Model, [];
+    /// „Skizze bearbeiten“ im Rechtsklickmenü auf Skizzengeometrie in der 3D-Ansicht
+    /// (Skizzen 12) für die gewählte Skizzenkurve oder den gewählten Skizzenpunkt; ohne
+    /// Vorbelegung, belegbar.
+    SketchEditPicked, "modell.skizze_bearbeiten", "action-sketch-edit-picked", Model, [];
+    /// „Ausblenden“ im Rechtsklickmenü auf Skizzengeometrie (Skizzen 12): das Auge der Skizze
+    /// der gewählten Skizzengeometrie; ohne Vorbelegung, belegbar.
+    SketchHidePicked, "modell.skizze_ausblenden", "action-sketch-hide-picked", Model, [];
+    /// „Maße anzeigen“ (Haken im Rechtsklickmenü, Skizzen 12) für die fertige Skizze der Auswahl
+    /// (3D-Ansicht oder Baum); ohne Vorbelegung, belegbar.
+    SketchShowDimensionFinished, "modell.skizze_masse_fertig", "action-sketch-show-dimension-finished", Model, [];
     /// Fusion „Gruppe erstellen“ (Skizzen 11b) aus den im Ordner „Skizzen“ gewählten Skizzen;
     /// ohne Vorbelegung, belegbar.
     SketchGroupCreate, "modell.gruppe_erstellen", "action-sketch-group-create", Model, [];
@@ -249,6 +259,27 @@ action_table! {
     SketchToggleGrid, "skizze.raster", "action-sketch-toggle-grid", Sketch, [];
     /// Schalter „Fang“ der Skizzenpalette; ohne Vorgabetaste.
     SketchToggleSnap, "skizze.fang", "action-sketch-toggle-snap", Sketch, [];
+    /// Fusion „Slice“ (Skizzen 12): Haken im Skizzenfeld, gehört zur Skizze; ohne Vorgabetaste.
+    SketchSlice, "skizze.slice", "action-sketch-slice", Sketch, [];
+    /// Öffnet und schließt das Aufklappfeld „Anzeigeoptionen“ im Skizzenfeld (Skizzen 12); ohne
+    /// Vorgabetaste.
+    SketchDisplayMenu, "skizze.anzeige_menue", "action-sketch-display-menu", Sketch, [];
+    /// Fusion „Profil anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.
+    SketchShowProfile, "skizze.profil_anzeigen", "action-sketch-show-profile", Sketch, [];
+    /// Fusion „Punkte anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.
+    SketchShowPoints, "skizze.punkte_anzeigen", "action-sketch-show-points", Sketch, [];
+    /// Fusion „Maße anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.
+    SketchShowDimensions, "skizze.masse_anzeigen", "action-sketch-show-dimensions", Sketch, [];
+    /// Fusion „Abhängigkeiten anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.
+    SketchShowConstraints, "skizze.abhaengigkeiten_anzeigen", "action-sketch-show-constraints",
+        Sketch, [];
+    /// Fusion „Konstruktionsgeometrie anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne
+    /// Vorgabetaste.
+    SketchShowConstruction, "skizze.konstruktion_anzeigen", "action-sketch-show-construction",
+        Sketch, [];
+    /// Fusion „Projizierte Geometrie anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne
+    /// Vorgabetaste.
+    SketchShowProjected, "skizze.projiziert_anzeigen", "action-sketch-show-projected", Sketch, [];
     /// Wählt das zuletzt benutzte Skizzenwerkzeug wieder (eigenes Gedächtnis, siehe
     /// `commands::LastCommand`).
     SketchRepeatLast, "skizze.werkzeug_wiederholen", "action-sketch-repeat-last", Sketch,

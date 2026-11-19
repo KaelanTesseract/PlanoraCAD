@@ -356,6 +356,45 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 state.sketch_grid_changed = true;
             }
         }
+        Action::SketchSlice => {
+            // Wie der Haken: schaltet `SketchDisplay::slice` der geöffneten Skizze um (ein Schritt).
+            let state = &mut ws.active_tab_mut().state;
+            if let Some(id) = state.open_sketch_id() {
+                let mut d = state.document.sketch_display(id);
+                d.slice = !d.slice;
+                state.document.set_sketch_display(id, d);
+            }
+        }
+        Action::SketchDisplayMenu => {
+            // Öffnet oder schließt das Aufklappfeld des Skizzenfelds (auch im eigenen Fenster).
+            let state = &mut ws.active_tab_mut().state;
+            if state.open_sketch_id().is_some() {
+                state.sketch_display_menu_open = !state.sketch_display_menu_open;
+            }
+        }
+        Action::SketchShowProfile
+        | Action::SketchShowPoints
+        | Action::SketchShowDimensions
+        | Action::SketchShowConstraints
+        | Action::SketchShowConstruction
+        | Action::SketchShowProjected => {
+            // Wie die Haken im Skizzenfeld (Skizzen 12): ein Schritt, die Skizze bleibt offen.
+            let state = &mut ws.active_tab_mut().state;
+            if let Some(id) = state.open_sketch_id() {
+                let mut d = state.document.sketch_display(id);
+                let flag = match a {
+                    Action::SketchShowProfile => &mut d.profiles,
+                    Action::SketchShowPoints => &mut d.points,
+                    Action::SketchShowDimensions => &mut d.dimensions,
+                    Action::SketchShowConstraints => &mut d.constraints,
+                    Action::SketchShowConstruction => &mut d.construction,
+                    _ => &mut d.projected,
+                };
+                *flag = !*flag;
+                state.document.set_sketch_display(id, d);
+                state.sync_sketch_display();
+            }
+        }
         Action::SketchConstruction => {
             if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
                 se.toggle_construction_if_possible(sk);
@@ -379,6 +418,16 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             let state = &mut ws.active_tab_mut().state;
             if let Some(id) = state.open_sketch_id().or(state.selected_feature) {
                 state.open_sketch_dxf(id);
+            }
+        }
+        Action::SketchEditPicked => ws.active_tab_mut().state.edit_picked_sketch(),
+        Action::SketchHidePicked => ws.active_tab_mut().state.hide_picked_sketch(),
+        Action::SketchShowDimensionFinished => {
+            // Ein Schritt; die Skizze der Auswahl, nicht die geöffnete.
+            let state = &mut ws.active_tab_mut().state;
+            state.sketch_pick_menu = None;
+            if let Some(id) = state.sketch_for_dimension_menu() {
+                state.toggle_finished_dimensions(id);
             }
         }
         Action::SketchGroupCreate => {
@@ -519,6 +568,12 @@ fn toggle_visibility(state: &mut AppState) {
 /// (Baum, Verlaufsleiste), sonst der gewählte Körper (sein Ursprung, wie die Körperzeile im
 /// Baum). Zurückgesetzte Körper sind nicht gesperrt.
 fn delete_selection(state: &mut AppState) {
+    // Skizzen 12: Eine gewählte Skizzenkurve oder ein gewählter Skizzenpunkt der 3D-Ansicht
+    // löscht nichts (weder die Skizze noch einen Körper); ob Fusion hier Geometrie löscht, ist
+    // offen (offene-punkte.md).
+    if state.picked_sketch().is_some() {
+        return;
+    }
     // Skizzen 11b: Eine gewählte Skizzengruppe wird aufgelöst (keine Skizze gelöscht).
     if let Some(g) = state.selected_sketch_group() {
         let _ = state.ungroup_sketch_group(g);

@@ -27,6 +27,9 @@ pub fn describe_change(before: &Snapshot, after: &Snapshot) -> String {
             (before.parts_overrides != after.parts_overrides).then_some(tr!("undo-parts-text"))
         })
         .or_else(|| (before.visibility != after.visibility).then_some(tr!("undo-visibility")))
+        .or_else(|| {
+            (before.sketch_display != after.sketch_display).then_some(tr!("undo-sketch-display"))
+        })
         .unwrap_or_else(fallback)
 }
 

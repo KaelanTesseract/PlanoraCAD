@@ -34,11 +34,11 @@ use planora_feature::{
     Visibility, field_keys, image_hash, step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
 use planora_feature::{
-    IsoDirection, SketchGroup, SketchGroupId, SketchGroups, SpunAxis, SpunSelection, SpunSpec,
-    TextFormulas,
+    IsoDirection, SketchDisplay, SketchGroup, SketchGroupId, SketchGroups, SpunAxis, SpunSelection,
+    SpunSpec, TextFormulas,
 };
 use planora_i18n::{DisplayUnit, tr};
-use planora_kernel::BoolOp;
+use planora_kernel::{BoolOp, Id};
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DQuat, DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::comb::CombSettings;
@@ -47,14 +47,14 @@ use planora_sketch::text::{HAlign, TextId, TextPlacement, VAlign};
 use planora_sketch::text_shape::TextStyle;
 use planora_sketch::{
     ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord,
-    HandleCurvature, LegacyMigration, LineOrPoints, PatternId, PatternRecord, PatternSlot,
-    PieceRef, PointId, PointRecord, ProfileRef, Sketch, SketchData, SplineHandle, TextRecord,
+    HandleCurvature, LegacyMigration, LineOrPoints, PatternRecord, PatternSlot, PieceRef, PointId,
+    PointRecord, ProfileRef, Sketch, SketchData, SplineHandle, TextRecord,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 22;
+pub const FORMAT_VERSION: u32 = 23;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
@@ -92,7 +92,7 @@ const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
 /// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
-/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8, 9, 10, 11a und 11b).
+/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8, 9, 10, 11a, 11b und 12).
 pub fn required_format(s: &Snapshot) -> u32 {
     format_with(s, &profile_fields(s))
 }
@@ -102,7 +102,9 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
     // Der Ordner „Leinwände“ kann nur mit einer Leinwand ausgeblendet sein (das Dokument räumt
     // ihn mit der letzten Leinwand weg); er braucht darum keine eigene Regel.
-    if has(needs_format_22) || !s.sketch_groups.is_empty() || s.sketch_groups.next != 0 {
+    if !s.sketch_display.is_empty() {
+        23
+    } else if has(needs_format_22) || !s.sketch_groups.is_empty() || s.sketch_groups.next != 0 {
         22
     } else if has(needs_format_21) || has_lost_source(&s.features) {
         21
@@ -404,13 +406,21 @@ fn lop_to(l: &LineOrPoints) -> LineOrPointsDto {
     }
 }
 
-fn lop_from(d: &LineOrPointsDto) -> LineOrPoints {
-    match d {
-        LineOrPointsDto::Linie { kurve } => LineOrPoints::Line(CurveId::from_index(*kurve)),
+fn lop_from(d: &LineOrPointsDto) -> std::result::Result<LineOrPoints, String> {
+    let wrong = || tr!("sketch-err-data-constraint-object");
+    Ok(match d {
+        LineOrPointsDto::Linie { kurve } => LineOrPoints::Line(file_id(*kurve, wrong)?),
         LineOrPointsDto::Punkte { a, b } => {
-            LineOrPoints::Points(PointId::from_index(*a), PointId::from_index(*b))
+            LineOrPoints::Points(file_id(*a, wrong)?, file_id(*b, wrong)?)
         }
-    }
+    })
+}
+
+/// Typisierte Id aus einem Index der Datei. Passt er nicht in 32 Bit, ist die Datei beschädigt
+/// (`wrong` nennt den Grund); `from_index` träfe sonst kein oder ein falsches Objekt. Ob das
+/// Objekt da ist, prüft danach `Sketch::from_data`.
+fn file_id<T>(i: usize, wrong: impl Fn() -> String) -> std::result::Result<Id<T>, String> {
+    Id::try_from_index(i).ok_or_else(wrong)
 }
 
 fn curve_to(k: &CurveKind) -> CurveKindDto {
@@ -516,12 +526,14 @@ fn griff_dto(h: &SplineHandle) -> GriffDto {
     }
 }
 
-fn griff_from(d: &GriffDto) -> SplineHandle {
-    let p = PointId::from_index;
-    SplineHandle {
-        at: p(d.an),
-        line: CurveId::from_index(d.linie),
-        tip: p(d.spitze),
+fn griff_from(d: &GriffDto) -> std::result::Result<SplineHandle, String> {
+    let wrong = || tr!("sketch-err-data-handle");
+    let p = |i: usize| -> std::result::Result<PointId, String> { file_id(i, wrong) };
+    let c = |i: usize| -> std::result::Result<CurveId, String> { file_id(i, wrong) };
+    Ok(SplineHandle {
+        at: p(d.an)?,
+        line: c(d.linie)?,
+        tip: p(d.spitze)?,
         curvature: match d.kruemmung {
             GriffKruemmungDto::Form => HandleCurvature::Form,
             GriffKruemmungDto::Gerade => HandleCurvature::Straight,
@@ -530,26 +542,31 @@ fn griff_from(d: &GriffDto) -> SplineHandle {
                 mitte,
                 anderes,
             } => HandleCurvature::Arc {
-                arc: CurveId::from_index(bogen),
-                center: p(mitte),
-                other: p(anderes),
+                arc: c(bogen)?,
+                center: p(mitte)?,
+                other: p(anderes)?,
             },
         },
-    }
+    })
 }
 
 fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
-    let p = PointId::from_index;
+    let p = |i: usize| -> std::result::Result<PointId, String> {
+        file_id(i, || tr!("sketch-err-data-curve-point"))
+    };
     Ok(match d {
-        CurveKindDto::Linie { a, b } => CurveKind::Line { a: p(*a), b: p(*b) },
+        CurveKindDto::Linie { a, b } => CurveKind::Line {
+            a: p(*a)?,
+            b: p(*b)?,
+        },
         CurveKindDto::Kreis { mitte, radius } => CurveKind::Circle {
-            center: p(*mitte),
+            center: p(*mitte)?,
             radius: *radius,
         },
         CurveKindDto::Bogen { mitte, start, ende } => CurveKind::Arc {
-            center: p(*mitte),
-            start: p(*start),
-            end: p(*ende),
+            center: p(*mitte)?,
+            start: p(*start)?,
+            end: p(*ende)?,
         },
         CurveKindDto::Ellipse {
             mitte,
@@ -558,15 +575,21 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             az,
             klein,
         } => CurveKind::Ellipse {
-            center: p(*mitte),
+            center: p(*mitte)?,
             ax: *ax,
             ay: *ay,
             az: *az,
             minor: *klein,
         },
         CurveKindDto::Spline { punkte, griffe } => CurveKind::Spline {
-            points: punkte.iter().map(|i| p(*i)).collect(),
-            handles: griffe.iter().map(griff_from).collect(),
+            points: punkte
+                .iter()
+                .map(|i| p(*i))
+                .collect::<std::result::Result<_, _>>()?,
+            handles: griffe
+                .iter()
+                .map(griff_from)
+                .collect::<std::result::Result<_, _>>()?,
         },
         CurveKindDto::Ellipsenbogen {
             mitte,
@@ -577,20 +600,23 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             start,
             ende,
         } => CurveKind::EllipticArc {
-            center: p(*mitte),
+            center: p(*mitte)?,
             ax: *ax,
             ay: *ay,
             az: *az,
             minor: *klein,
-            start: p(*start),
-            end: p(*ende),
+            start: p(*start)?,
+            end: p(*ende)?,
         },
         CurveKindDto::KontrollSpline {
             punkte,
             grad,
             knoten,
         } => CurveKind::ControlSpline {
-            points: punkte.iter().map(|i| p(*i)).collect(),
+            points: punkte
+                .iter()
+                .map(|i| p(*i))
+                .collect::<std::result::Result<_, _>>()?,
             degree: *grad,
             knots: knoten.clone(),
         },
@@ -600,9 +626,9 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             scheitel,
             rho,
         } => CurveKind::Conic {
-            start: p(*start),
-            end: p(*ende),
-            apex: p(*scheitel),
+            start: p(*start)?,
+            end: p(*ende)?,
+            apex: p(*scheitel)?,
             rho: *rho,
         },
         CurveKindDto::FesterSpline {
@@ -620,8 +646,8 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             }
             let z = |i: usize| hoehen.get(i).copied().unwrap_or(0.0);
             CurveKind::FixedSpline {
-                start: p(*start),
-                end: p(*ende),
+                start: p(*start)?,
+                end: p(*ende)?,
                 curve: Arc::new(
                     NurbsCurve::new(
                         *grad,
@@ -778,56 +804,60 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
     }
 }
 
-fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
+fn constraint_from(d: &ConstraintKindDto) -> std::result::Result<ConstraintKind, String> {
     use ConstraintKind as K;
     use ConstraintKindDto as D;
-    let (p, c) = (PointId::from_index, CurveId::from_index);
-    match d {
-        D::Deckungsgleich { a, b } => K::Coincident(p(*a), p(*b)),
-        D::PunktAufKurve { punkt, kurve } => K::PointOnCurve(p(*punkt), c(*kurve)),
-        D::Waagerecht { ziel } => K::Horizontal(lop_from(ziel)),
-        D::Senkrecht { ziel } => K::Vertical(lop_from(ziel)),
-        D::Parallel { a, b } => K::Parallel(c(*a), c(*b)),
-        D::Rechtwinklig { a, b } => K::Perpendicular(c(*a), c(*b)),
-        D::Tangential { a, b } => K::Tangent(c(*a), c(*b)),
-        D::Gleich { a, b } => K::Equal(c(*a), c(*b)),
-        D::Fest { punkt, x, y } => K::Fixed(p(*punkt), *x, *y),
-        D::Symmetrisch { a, b, achse } => K::Symmetric(p(*a), p(*b), c(*achse)),
-        D::Mittelpunkt { punkt, kurve } => K::Midpoint(p(*punkt), c(*kurve)),
-        D::Abstand { a, b, wert } => K::Distance(p(*a), p(*b), *wert),
+    let wrong = || tr!("sketch-err-data-constraint-object");
+    let p = |i: usize| -> std::result::Result<PointId, String> { file_id(i, wrong) };
+    let c = |i: usize| -> std::result::Result<CurveId, String> { file_id(i, wrong) };
+    Ok(match d {
+        D::Deckungsgleich { a, b } => K::Coincident(p(*a)?, p(*b)?),
+        D::PunktAufKurve { punkt, kurve } => K::PointOnCurve(p(*punkt)?, c(*kurve)?),
+        D::Waagerecht { ziel } => K::Horizontal(lop_from(ziel)?),
+        D::Senkrecht { ziel } => K::Vertical(lop_from(ziel)?),
+        D::Parallel { a, b } => K::Parallel(c(*a)?, c(*b)?),
+        D::Rechtwinklig { a, b } => K::Perpendicular(c(*a)?, c(*b)?),
+        D::Tangential { a, b } => K::Tangent(c(*a)?, c(*b)?),
+        D::Gleich { a, b } => K::Equal(c(*a)?, c(*b)?),
+        D::Fest { punkt, x, y } => K::Fixed(p(*punkt)?, *x, *y),
+        D::Symmetrisch { a, b, achse } => K::Symmetric(p(*a)?, p(*b)?, c(*achse)?),
+        D::Mittelpunkt { punkt, kurve } => K::Midpoint(p(*punkt)?, c(*kurve)?),
+        D::Abstand { a, b, wert } => K::Distance(p(*a)?, p(*b)?, *wert),
         D::AbstandPunktLinie { punkt, kurve, wert } => {
-            K::DistancePointLine(p(*punkt), c(*kurve), *wert)
+            K::DistancePointLine(p(*punkt)?, c(*kurve)?, *wert)
         }
-        D::Radius { kurve, wert } => K::Radius(c(*kurve), *wert),
-        D::Durchmesser { kurve, wert } => K::Diameter(c(*kurve), *wert),
-        D::Winkel { a, b, wert } => K::Angle(c(*a), c(*b), *wert),
-        D::BogenRadius { kurve } => K::ArcRadius(c(*kurve)),
-        D::KruemmungsGriff { kurve, punkt } => K::SplineCurvatureHandle(c(*kurve), p(*punkt)),
-        D::EllipsenbogenEnden { kurve } => K::EllipticArcEnds(c(*kurve)),
-        D::EllipseGross { kurve, wert } => K::EllipseMajor(c(*kurve), *wert),
-        D::EllipseKlein { kurve, wert } => K::EllipseMinor(c(*kurve), *wert),
-        D::EllipseWinkel { kurve, wert } => K::EllipseAngle(c(*kurve), *wert),
-        D::Kollinear { a, b } => K::Collinear(c(*a), c(*b)),
+        D::Radius { kurve, wert } => K::Radius(c(*kurve)?, *wert),
+        D::Durchmesser { kurve, wert } => K::Diameter(c(*kurve)?, *wert),
+        D::Winkel { a, b, wert } => K::Angle(c(*a)?, c(*b)?, *wert),
+        D::BogenRadius { kurve } => K::ArcRadius(c(*kurve)?),
+        D::KruemmungsGriff { kurve, punkt } => K::SplineCurvatureHandle(c(*kurve)?, p(*punkt)?),
+        D::EllipsenbogenEnden { kurve } => K::EllipticArcEnds(c(*kurve)?),
+        D::EllipseGross { kurve, wert } => K::EllipseMajor(c(*kurve)?, *wert),
+        D::EllipseKlein { kurve, wert } => K::EllipseMinor(c(*kurve)?, *wert),
+        D::EllipseWinkel { kurve, wert } => K::EllipseAngle(c(*kurve)?, *wert),
+        D::Kollinear { a, b } => K::Collinear(c(*a)?, c(*b)?),
         D::Glatt {
             a,
             punkt_a,
             b,
             punkt_b,
-        } => K::Smooth(c(*a), p(*punkt_a), c(*b), p(*punkt_b)),
+        } => K::Smooth(c(*a)?, p(*punkt_a)?, c(*b)?, p(*punkt_b)?),
         D::TangenteEnde {
             a,
             punkt_a,
             b,
             punkt_b,
-        } => K::EndTangent(c(*a), p(*punkt_a), c(*b), p(*punkt_b)),
-        D::AbstandWaagerecht { a, b, wert } => K::DistanceX(p(*a), p(*b), *wert),
-        D::AbstandSenkrecht { a, b, wert } => K::DistanceY(p(*a), p(*b), *wert),
+        } => K::EndTangent(c(*a)?, p(*punkt_a)?, c(*b)?, p(*punkt_b)?),
+        D::AbstandWaagerecht { a, b, wert } => K::DistanceX(p(*a)?, p(*b)?, *wert),
+        D::AbstandSenkrecht { a, b, wert } => K::DistanceY(p(*a)?, p(*b)?, *wert),
         D::DurchmesserZurAchse { punkt, kurve, wert } => {
-            K::CenterlineDiameter(p(*punkt), c(*kurve), *wert)
+            K::CenterlineDiameter(p(*punkt)?, c(*kurve)?, *wert)
         }
-        D::LanglochGesamt { a, b, kappe, wert } => K::SlotOverall(p(*a), p(*b), c(*kappe), *wert),
+        D::LanglochGesamt { a, b, kappe, wert } => {
+            K::SlotOverall(p(*a)?, p(*b)?, c(*kappe)?, *wert)
+        }
         D::MusterWert { muster, feld, wert } => K::PatternValue(
-            PatternId::from_index(*muster),
+            file_id(*muster, wrong)?,
             match feld {
                 MusterFeldDto::Anzahl1 => PatternSlot::Count1,
                 MusterFeldDto::Abstand1 => PatternSlot::Spacing1,
@@ -838,17 +868,17 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
             },
             *wert,
         ),
-        D::EntlangZ { ziel } => K::AlongZ(lop_from(ziel)),
-        D::Fest3 { punkt, x, y, z } => K::Fixed3(p(*punkt), *x, *y, *z),
-        D::InEbene { kurve } => K::InPlane(c(*kurve)),
+        D::EntlangZ { ziel } => K::AlongZ(lop_from(ziel)?),
+        D::Fest3 { punkt, x, y, z } => K::Fixed3(p(*punkt)?, *x, *y, *z),
+        D::InEbene { kurve } => K::InPlane(c(*kurve)?),
         D::Ellipsenachsen3 {
             kurve,
             x,
             y,
             z,
             klein,
-        } => K::EllipseAxes3(c(*kurve), *x, *y, *z, *klein),
-    }
+        } => K::EllipseAxes3(c(*kurve)?, *x, *y, *z, *klein),
+    })
 }
 
 fn pattern_to(m: &PatternRecord) -> PatternDto {
@@ -1298,17 +1328,19 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
         constraints: d
             .abhaengigkeiten
             .iter()
-            .map(|c| ConstraintRecord {
-                kind: constraint_from(&c.art),
-                branch: c.zweig,
-                supplement: c.gegenwinkel,
-                driven: c.gesteuert,
-                enabled: c.aktiv,
-                internal: c.intern,
-                extra: c.extra,
-                alive: c.lebt,
+            .map(|c| {
+                Ok(ConstraintRecord {
+                    kind: constraint_from(&c.art).map_err(ctx)?,
+                    branch: c.zweig,
+                    supplement: c.gegenwinkel,
+                    driven: c.gesteuert,
+                    enabled: c.aktiv,
+                    internal: c.intern,
+                    extra: c.extra,
+                    alive: c.lebt,
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
         patterns: patterns_from(origin, feature, d)?,
         texts: texts_from(origin, feature, d)?,
         three_d: d.drei_d,
@@ -1445,7 +1477,9 @@ fn profile_sel_from(
             && u0 < u1
             // Dateien vor der Nachbesserung schrieben einen vollen Umlauf mitunter ein ulp zu lang
             && u1 <= u0 + 1.0 + 1e-9
-            && len >= 0.0;
+            && len >= 0.0
+            // Größer als jede erlaubte Liste: `from_index` träfe sonst keine Kurve.
+            && curve < MAX_LIST;
         if !ok {
             return Err(err(tr!("proj-profile-piece-invalid")));
         }
@@ -2327,8 +2361,8 @@ fn copy_from(origin: &str, name: &str, d: &EdgeCopyDto) -> Result<EdgeCopy> {
         return Err(corrupt());
     };
     let target = match (d.kurve, d.punkt) {
-        (Some(k), None) => CopyTarget::Curve(CurveId::from_index(k)),
-        (None, Some(p)) => CopyTarget::Point(PointId::from_index(p)),
+        (Some(k), None) => CopyTarget::Curve(CurveId::from_index(sketch_index(origin, name, k)?)),
+        (None, Some(p)) => CopyTarget::Point(PointId::from_index(sketch_index(origin, name, p)?)),
         _ => return Err(corrupt()),
     };
     Ok(EdgeCopy {
@@ -2577,7 +2611,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto, dissolved: &mut usize) -> Re
         } => FeatureKind::Revolve {
             sketch: FeatureId(*skizze),
             profiles: profile_sel_from(origin, name, *profil, profile.as_deref())?,
-            axis: CurveId::from_index(*achse),
+            axis: CurveId::from_index(sketch_index(origin, name, *achse)?),
         },
         KindDto::Boolesch {
             ziel,
@@ -2834,6 +2868,75 @@ fn sketch_groups_from(origin: &str, file: &VersionFile) -> Result<SketchGroups> 
         n => n,
     };
     Ok(out)
+}
+
+/// Liest die Anzeigeschalter der Skizzen (ab Format 23): jede Kennung ist eine Skizze der Datei,
+/// kommt nur einmal vor und der Eintrag weicht in mindestens einem Feld von der Vorgabe ab.
+fn sketch_display_from(
+    origin: &str,
+    file: &VersionFile,
+) -> Result<BTreeMap<FeatureId, SketchDisplay>> {
+    let bad = |m: String| ProjectError::corrupt(origin, m);
+    let sketches: HashSet<u64> = file
+        .features
+        .iter()
+        .filter(|f| matches!(f.art, KindDto::Skizze(_)))
+        .map(|f| f.id)
+        .collect();
+    let def = SketchDisplay::default();
+    let mut out = BTreeMap::new();
+    for e in &file.skizzenanzeige {
+        if !sketches.contains(&e.skizze) {
+            return Err(bad(tr!(
+                "proj-sketch-display-unknown",
+                feature = e.skizze.to_string()
+            )));
+        }
+        let d = SketchDisplay {
+            slice: e.slice.unwrap_or(def.slice),
+            profiles: e.profil.unwrap_or(def.profiles),
+            points: e.punkte.unwrap_or(def.points),
+            dimensions: e.masse.unwrap_or(def.dimensions),
+            constraints: e.abhaengigkeiten.unwrap_or(def.constraints),
+            construction: e.konstruktion.unwrap_or(def.construction),
+            projected: e.projiziert.unwrap_or(def.projected),
+            dimensions_finished: e.masse_fertig.unwrap_or(def.dimensions_finished),
+        };
+        if d.is_default() {
+            return Err(bad(tr!(
+                "proj-sketch-display-default",
+                feature = e.skizze.to_string()
+            )));
+        }
+        if out.insert(FeatureId(e.skizze), d).is_some() {
+            return Err(bad(tr!(
+                "proj-sketch-display-twice",
+                feature = e.skizze.to_string()
+            )));
+        }
+    }
+    Ok(out)
+}
+
+/// Anzeigeschalter für die Datei, aufsteigend nach Skizze; nur Abweichungen von der Vorgabe,
+/// und jedes Feld nur, wenn es abweicht.
+fn sketch_display_to(m: &BTreeMap<FeatureId, SketchDisplay>) -> Vec<SkizzenanzeigeDto> {
+    let def = SketchDisplay::default();
+    let diff = |v: bool, d: bool| (v != d).then_some(v);
+    m.iter()
+        .filter(|(_, d)| !d.is_default())
+        .map(|(id, d)| SkizzenanzeigeDto {
+            skizze: id.0,
+            slice: diff(d.slice, def.slice),
+            profil: diff(d.profiles, def.profiles),
+            punkte: diff(d.points, def.points),
+            masse: diff(d.dimensions, def.dimensions),
+            abhaengigkeiten: diff(d.constraints, def.constraints),
+            konstruktion: diff(d.construction, def.construction),
+            projiziert: diff(d.projected, def.projected),
+            masse_fertig: diff(d.dimensions_finished, def.dimensions_finished),
+        })
+        .collect()
 }
 
 /// Skizzengruppen für die Datei, in Browser-Reihenfolge; die Skizzen je Gruppe aufsteigend.
@@ -4087,6 +4190,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         projektangaben: s.project_info.as_ref().map(project_to),
         skizzengruppen: sketch_groups_to(&s.sketch_groups),
         naechste_gruppe: s.sketch_groups.next,
+        skizzenanzeige: sketch_display_to(&s.sketch_display),
         stueckliste: overrides_to(&s.parts_overrides),
         parameter: s.parameters.iter().map(parameter_to).collect(),
         // Der Zähler steht nur mit Parametern in der Datei (ohne fehlt er, alte Dateien bleiben
@@ -4455,7 +4559,18 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             ),
         ));
     }
+    if file.format < 23 && !file.skizzenanzeige.is_empty() {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-sketch-display"),
+                format = "23"
+            ),
+        ));
+    }
     let visibility = visibility_from(file.sichtbarkeit.as_ref());
+    let sketch_display = sketch_display_from(origin, &file)?;
     let sketch_groups = sketch_groups_from(origin, &file)?;
     let rollbacks = rollbacks_from(origin, &file)?;
     let (parameters, next_param) = parameters_from(origin, &file)?;
@@ -4550,6 +4665,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         project_info,
         parts_overrides,
         visibility,
+        sketch_display,
         parameters,
         next_param,
         rollbacks,

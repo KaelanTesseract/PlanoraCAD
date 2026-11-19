@@ -862,8 +862,13 @@ pub struct Document {
     pub(crate) parts_overrides: BTreeMap<planora_drawing::BodyKey, planora_drawing::RowOverride>,
     /// Was im Browser ausgeblendet ist (zählt nicht zum Modell).
     pub(crate) visibility: crate::visibility::Visibility,
+    /// Anzeigeschalter je Skizze (Skizzen 12); nur Abweichungen von der Vorgabe.
+    pub(crate) sketch_display:
+        std::collections::BTreeMap<FeatureId, crate::sketch_display::SketchDisplay>,
     /// Skizzengruppen im Browser (Skizzen 11b; zählt nicht zum Modell).
     pub(crate) sketch_groups: crate::sketch_groups::SketchGroups,
+    /// Zwischenspeicher der durch Gruppen ausgeblendeten Skizzen (Skizzen 12, Task 12).
+    pub(crate) hidden_by_group: crate::sketch_groups::HiddenByGroup,
     /// Parametertabelle (Tabellenreihenfolge); zählt zum Modell.
     pub(crate) parameters: Vec<crate::params::Parameter>,
     /// Berechnete Werte, je Zeile von `parameters` einer.
@@ -922,7 +927,9 @@ impl Document {
             project_info: None,
             parts_overrides: BTreeMap::new(),
             visibility: crate::visibility::Visibility::default(),
+            sketch_display: Default::default(),
             sketch_groups: crate::sketch_groups::SketchGroups::default(),
+            hidden_by_group: Default::default(),
             parameters: Vec::new(),
             param_values: Vec::new(),
             next_param: 1,

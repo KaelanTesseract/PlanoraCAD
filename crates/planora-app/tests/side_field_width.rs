@@ -351,14 +351,38 @@ fn body_values_are_shown_in_full() {
     }
 }
 
-/// Beide Schalter der Skizzenpalette stehen unter dem Namen ganz im Skizzenfeld (Breite 250),
-/// auch auf Englisch.
+/// Die Schalter der Skizzenpalette stehen im Aufklappfeld hinter dem Symbol „Anzeigeoptionen“
+/// (Skizzen 12): neun Haken untereinander in Fusions Reihenfolge, ganz im Bild und nicht
+/// abgeschnitten, auch auf Englisch; das Symbol sitzt in der Namenszeile im Skizzenfeld (Breite
+/// 250), und der Name bleibt ungekürzt.
 #[test]
 fn the_palette_switches_fit_the_sketch_field() {
     let size = vec2(1920.0, 1080.0);
-    for (lang, grid, snap) in [
-        (planora_i18n::german(), "Skizzenraster", "Fang"),
-        (planora_i18n::english(), "Sketch Grid", "Snap"),
+    let german = [
+        "Skizzenraster",
+        "Fang",
+        "Slice",
+        "Profil anzeigen",
+        "Punkte anzeigen",
+        "Maße anzeigen",
+        "Abhängigkeiten anzeigen",
+        "Konstruktionsgeometrie anzeigen",
+        "Projizierte Geometrie anzeigen",
+    ];
+    let english = [
+        "Sketch Grid",
+        "Snap",
+        "Slice",
+        "Show Profile",
+        "Show Points",
+        "Show Dimensions",
+        "Show Constraints",
+        "Show Construction Geometries",
+        "Show Projected Geometries",
+    ];
+    for (lang, switches) in [
+        (planora_i18n::german(), german),
+        (planora_i18n::english(), english),
     ] {
         planora_i18n::with_lang(&lang, || {
             let mut app = PlanoraApp::for_tests(library_ws());
@@ -369,39 +393,65 @@ fn the_palette_switches_fit_the_sketch_field() {
                 ))
                 .unwrap();
             s.open_sketch(id).unwrap();
-            let name = s.session_sketch().unwrap().name.clone();
             let c = context(true);
             let mut texts = Vec::new();
-            for _ in 0..4 {
-                let out = c.run_ui(input(size), |ui| {
-                    shell_panels::show_fields(ui.ctx(), &mut app);
-                    planora_app::sketch_panel::show(
-                        ui.ctx(),
-                        &mut app.ws_mut().active_tab_mut().state,
-                    );
-                });
-                texts = texts_of(&out.shapes);
-                out.drop_without_applying_deltas();
-            }
+            let mut frames = |events: Vec<egui::Event>, app: &mut PlanoraApp| {
+                let mut first = Some(events);
+                for _ in 0..4 {
+                    let mut raw = input(size);
+                    raw.events = first.take().unwrap_or_default();
+                    let out = c.run_ui(raw, |ui| {
+                        shell_panels::show_fields(ui.ctx(), app);
+                        planora_app::sketch_panel::show(
+                            ui.ctx(),
+                            &mut app.ws_mut().active_tab_mut().state,
+                        );
+                    });
+                    texts = texts_of(&out.shapes);
+                    out.drop_without_applying_deltas();
+                }
+            };
+            frames(vec![], &mut app);
             let right = shell_panels::last_layout(&c).unwrap().right;
             assert!(right.width() <= theme::PANEL_WIDTH + 0.5, "{right:?}");
-            let find = |what: &str| {
-                texts
-                    .iter()
-                    .find(|t| t.text == what && right.contains(t.rect.center()))
-                    .unwrap_or_else(|| panic!("„{what}“ fehlt im Skizzenfeld"))
+            let icon = planora_app::sketch_panel::display_menu_button(&c).expect("Symbol");
+            assert!(right.contains(icon.center()), "{icon:?} in {right:?}");
+            assert!(icon.right() <= right.right() + 0.5, "{icon:?} in {right:?}");
+            // Öffnen: Maus hin, drücken, loslassen.
+            let at = icon.center();
+            let b = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
             };
-            let (top, g, n) = (find(&name), find(grid), find(snap));
-            assert!(g.rect.top() >= top.rect.bottom() - 0.5, "unter dem Namen");
-            assert!(
-                (g.rect.center().y - n.rect.center().y).abs() < 1.0,
-                "eine Zeile"
-            );
-            assert!(g.rect.right() < n.rect.left(), "{g:?} {n:?}");
-            for t in [g, n] {
-                assert!(t.rect.right() <= right.right() + 0.5, "{t:?} in {right:?}");
-                assert!(t.clip.expand(0.5).contains_rect(t.rect), "{t:?}");
+            frames(vec![egui::Event::PointerMoved(at)], &mut app);
+            frames(vec![b(true)], &mut app);
+            frames(vec![b(false)], &mut app);
+            assert!(planora_app::sketch_panel::display_menu_open(&c), "offen");
+            let entries = planora_app::sketch_panel::display_menu_entries(&c);
+            let names: Vec<&str> = entries.iter().map(|(l, _)| l.as_str()).collect();
+            assert_eq!(names, switches.to_vec(), "Reihenfolge");
+            let screen = Rect::from_min_size(Pos2::ZERO, size);
+            let mut prev = icon.bottom() - 1.0;
+            for (label, r) in &entries {
+                assert!(screen.contains_rect(*r), "„{label}“ ganz im Bild: {r:?}");
+                assert!(r.top() >= prev - 0.5, "„{label}“ untereinander: {r:?}");
+                prev = r.top();
+                let seen = texts
+                    .iter()
+                    .find(|t| &t.text == label && r.contains(t.rect.center()))
+                    .unwrap_or_else(|| panic!("„{label}“ nicht gezeichnet"));
+                assert!(
+                    seen.clip.expand(0.5).contains_rect(seen.rect),
+                    "„{label}“ abgeschnitten: {:?} außerhalb {:?}",
+                    seen.rect,
+                    seen.clip
+                );
             }
+            // Der Name steht ungekürzt in der Namenszeile.
+            let (cut, _) = planora_app::sketch_panel::sketch_name_label(&c).expect("Name");
+            assert!(!cut, "Name gekürzt");
         });
     }
 }

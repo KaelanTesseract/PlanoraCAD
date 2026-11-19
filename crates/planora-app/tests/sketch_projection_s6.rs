@@ -6,6 +6,7 @@ use planora_app::history_bar::{self, StepState};
 use planora_app::keymap::Action;
 use planora_app::sketch_state::Item;
 use planora_app::state::{AppState, StandardPlane};
+use planora_app::testing::{finished_strokes, line_colors};
 use planora_app::workspace::Workspace;
 use planora_app::{browser, commands, sketch_view, theme};
 use planora_feature::{FeatureId, FeatureKind, SketchFeature, SketchPlane};
@@ -76,24 +77,6 @@ fn undo_len(s: &AppState) -> usize {
     s.sketch_history().unwrap().undo_len()
 }
 
-/// Farben der Linien unter den Formen (durchgezogen oder Strichstücke).
-fn stroke_colors(shapes: &[egui::Shape]) -> Vec<egui::Color32> {
-    let mut out = Vec::new();
-    for shape in shapes {
-        match shape {
-            egui::Shape::Path(p) => {
-                if let egui::epaint::ColorMode::Solid(c) = p.stroke.color {
-                    out.push(c);
-                }
-            }
-            egui::Shape::LineSegment { stroke, .. } => out.push(stroke.color),
-            egui::Shape::Vec(v) => out.extend(stroke_colors(v)),
-            _ => {}
-        }
-    }
-    out
-}
-
 #[test]
 fn projected_curve_uses_projected_color() {
     let (mut s, id, c) = projected();
@@ -133,9 +116,15 @@ fn projected_curve_uses_projected_color() {
     s.close_sketch();
     assert!(s.open_sketch_id().is_none());
     assert_eq!(def(&s, id).copies.len(), 1);
-    let colors = stroke_colors(&sketch_view::finished_sketch_shapes(&s, SCREEN));
-    assert!(colors.contains(&col.projected), "{colors:?}");
-    assert!(colors.contains(&col.finished), "{colors:?}");
+    let colors = line_colors(&finished_strokes(&s, SCREEN));
+    assert!(
+        colors.contains(&sketch_view::stroke_rgba(col.projected)),
+        "{colors:?}"
+    );
+    assert!(
+        colors.contains(&sketch_view::stroke_rgba(col.finished)),
+        "{colors:?}"
+    );
 }
 
 /// Knopf und Aktion „Verknüpfung aufheben“ laufen beide über

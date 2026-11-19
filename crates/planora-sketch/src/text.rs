@@ -1780,22 +1780,39 @@ impl Sketch {
         if !targets.iter().all(|&p| within_range3(p)) {
             return false;
         }
-        let mut trial = self.clone();
+        // Kein Klon der ganzen Skizze (Skizzen 12, Task 12): Die Ecken werden in der Skizze selbst
+        // gesetzt; scheitert das Setzen oder das Lösen (es ändert dann nichts), springen ihre
+        // Werte und der Stand der Skizze zurück.
+        let revision = self.revision();
+        let saved: Vec<(usize, f64)> = corners
+            .iter()
+            .flat_map(|&p| {
+                let d = &self.points[p];
+                [Some(d.x), Some(d.y), d.z]
+            })
+            .flatten()
+            .map(|v| (v, self.vars[v]))
+            .collect();
+        let mut ok = true;
         for (&p, q) in corners.iter().zip(targets) {
             let moved = if lift.is_some() {
-                trial.set_point_xyz(p, q)
+                self.set_point_xyz(p, q)
             } else {
-                trial.set_point_xy(p, q.x, q.y)
+                self.set_point_xy(p, q.x, q.y)
             };
             if moved.is_err() {
-                return false;
+                ok = false;
+                break;
             }
         }
-        if !trial.solve_holding_connected(&corners) {
+        if !(ok && self.solve_holding_connected(&corners)) {
+            for (v, x) in saved {
+                self.vars[v] = x;
+            }
+            self.restore_revision(revision);
             return false;
         }
-        trial.refresh_texts();
-        *self = trial;
+        self.refresh_texts();
         true
     }
 }

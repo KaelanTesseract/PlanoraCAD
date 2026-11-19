@@ -237,9 +237,9 @@ fn a_head_newer_than_the_known_format_is_too_new() {
     let (s, _) = all_kinds();
     let text = encode_version(&document(s).snapshot()).unwrap();
     assert!(load(&text).is_ok());
-    let newer = text.replacen("\"format\": 15", "\"format\": 23", 1);
+    let newer = text.replacen("\"format\": 15", "\"format\": 24", 1);
     let e = load(&newer).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 23, .. }), "{e:?}");
+    assert!(matches!(e, ProjectError::TooNew { found: 24, .. }), "{e:?}");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -897,4 +897,61 @@ fn a_user_loop_is_dissolved_on_load_too() {
     let (loaded, dissolved) = Sketch::from_data_counted(d).unwrap();
     assert_eq!(dissolved, 1);
     assert_loaded_without_the_loop(loaded, a, b, "Benutzer");
+}
+
+/// Änderung an der Skizze im JSON einer Datei.
+type JsonEdit = Box<dyn Fn(&mut serde_json::Value)>;
+
+/// Härtung nach Skizzen 5 (Skizzen 12, Task 13): Ein Index über 32 Bit in einer Abhängigkeit,
+/// Kurve oder einem Musterwert ist eine beschädigte Datei. Früher schnitt `from_index` ihn still
+/// ab, und aus 2³² wurde das Muster (oder der Punkt) 0.
+#[test]
+fn huge_indices_in_the_file_are_corrupt() {
+    let (s, _) = pattern_sketch();
+    let text = encode_version(&document(s).snapshot()).unwrap();
+    let big = u32::MAX as u64 + 1;
+    let edited = |f: &dyn Fn(&mut serde_json::Value)| {
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        f(&mut v["features"][0]["art"]["skizze"]);
+        serde_json::to_string_pretty(&v).unwrap()
+    };
+    // Unverändert lädt die Datei.
+    assert!(load(&edited(&|_| {})).is_ok());
+    let cases: Vec<(&str, JsonEdit)> = vec![
+        (
+            "Musterwert",
+            Box::new(move |sk| {
+                for k in sk["abhaengigkeiten"].as_array_mut().unwrap() {
+                    if k["art"]["typ"] == "muster_wert" {
+                        let m = k["art"]["muster"].as_u64().unwrap();
+                        k["art"]["muster"] = (big + m).into();
+                    }
+                }
+            }),
+        ),
+        (
+            "Abstand",
+            Box::new(move |sk| {
+                for k in sk["abhaengigkeiten"].as_array_mut().unwrap() {
+                    if k["art"]["typ"] == "abstand" {
+                        k["art"]["a"] = (big + k["art"]["a"].as_u64().unwrap()).into();
+                    }
+                }
+            }),
+        ),
+        (
+            "Linie",
+            Box::new(move |sk| {
+                let a = &mut sk["kurven"][0]["art"]["a"];
+                *a = (big + a.as_u64().unwrap()).into();
+            }),
+        ),
+    ];
+    for (what, f) in cases {
+        let e = load(&edited(&*f)).err();
+        assert!(
+            matches!(e, Some(ProjectError::Corrupt { .. })),
+            "{what}: {e:?}"
+        );
+    }
 }

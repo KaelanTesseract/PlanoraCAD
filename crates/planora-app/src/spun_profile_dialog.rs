@@ -149,7 +149,7 @@ pub fn body_pick(picked: Option<planora_render::Pick>) -> Option<IncludePick> {
         Pick::Face(FaceRef { body, face }) => Some(IncludePick::Face(body, face)),
         Pick::Edge(EdgeRef { body, edge }) => Some(IncludePick::Edge(body, edge)),
         Pick::Vertex { body, edge, end } => Some(IncludePick::Vertex { body, edge, end }),
-        Pick::Plane(_) => None,
+        Pick::Plane(_) | Pick::SketchCurve { .. } | Pick::SketchPoint { .. } => None,
     }
 }
 

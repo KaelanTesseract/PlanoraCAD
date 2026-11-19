@@ -819,14 +819,22 @@ fn window_contents<R>(
                     let area = ui.max_rect();
                     let r = ui.add_enabled_ui(!locked, |ui| add_contents(ui)).inner;
                     // Nach dem Inhalt angelegt, damit der Streifen über ihm liegt: Ziehen im Kopf
-                    // des Inhalts zieht das Fenster (statt den Inhalt zu rollen); Klicks behalten
-                    // die Knöpfe darunter, weil der Streifen nur Ziehen annimmt.
+                    // des Inhalts zieht das Fenster (statt den Inhalt zu rollen). Über den Knöpfen
+                    // des Kopfs bleibt er offen: egui gibt einen Klick unter einem obenliegenden
+                    // Nur-Ziehen-Feld niemandem (hit_test), die Knöpfe wären sonst tot.
                     let strip = egui::Rect::from_min_size(area.min, egui::vec2(area.width(), band));
-                    let drag = ui.interact(
-                        strip,
-                        ui.id().with("detach_kopfstreifen"),
-                        egui::Sense::drag(),
-                    );
+                    let base = ui.id().with("detach_kopfstreifen");
+                    let mut drag: Option<egui::Response> = None;
+                    for (i, piece) in strip_pieces(ui, strip).into_iter().enumerate() {
+                        let r = ui.interact(piece, base.with(i), egui::Sense::drag());
+                        drag = Some(match drag {
+                            Some(d) => d | r,
+                            None => r,
+                        });
+                    }
+                    let drag = drag.unwrap_or_else(|| {
+                        ui.interact(egui::Rect::NOTHING, base, egui::Sense::hover())
+                    });
                     let dock = ui
                         .add_enabled_ui(!locked, |ui| {
                             crate::dialog::corner_dock_icon(
@@ -997,6 +1005,47 @@ pub fn take_child_keys(ctx: &egui::Context) -> Vec<ChildKeys> {
         .unwrap_or_default();
     list.retain(|k| k.frame == frame);
     list
+}
+
+/// Teile des Ziehstreifens `strip` ohne die Knöpfe, die der Inhalt in diesem Bild darin angelegt
+/// hat: Felder, die nur Klicks annehmen (Knopf, Haken, Umschalter) und eingeschaltet sind. Was
+/// auch Ziehen annimmt (Text zum Auswählen, Rollfläche) und Hintergründe über die ganze Breite
+/// bleiben unter dem Streifen, dort zieht weiter das Fenster.
+fn strip_pieces(ui: &egui::Ui, strip: egui::Rect) -> Vec<egui::Rect> {
+    let layer = ui.layer_id();
+    let holes: Vec<egui::Rect> = ui.ctx().viewport(|vp| {
+        vp.this_pass
+            .widgets
+            .get_layer(layer)
+            .filter(|w| w.enabled && w.sense.senses_click() && !w.sense.senses_drag())
+            .map(|w| w.interact_rect.intersect(strip))
+            .filter(|r| r.is_positive())
+            .filter(|r| r.min.x > strip.min.x + 1.0 || r.max.x < strip.max.x - 1.0)
+            .collect()
+    });
+    let mut pieces = vec![strip];
+    for hole in holes {
+        pieces = pieces.into_iter().flat_map(|p| cut_out(p, hole)).collect();
+    }
+    pieces
+}
+
+/// `piece` ohne `hole`: bis zu vier Rechtecke (links, rechts, darüber, darunter).
+fn cut_out(piece: egui::Rect, hole: egui::Rect) -> Vec<egui::Rect> {
+    let h = piece.intersect(hole);
+    if !h.is_positive() {
+        return vec![piece];
+    }
+    let (p, pos2) = (piece, egui::pos2);
+    [
+        egui::Rect::from_min_max(p.min, pos2(h.min.x, p.max.y)),
+        egui::Rect::from_min_max(pos2(h.max.x, p.min.y), p.max),
+        egui::Rect::from_min_max(pos2(h.min.x, p.min.y), pos2(h.max.x, h.min.y)),
+        egui::Rect::from_min_max(pos2(h.min.x, h.max.y), pos2(h.max.x, p.max.y)),
+    ]
+    .into_iter()
+    .filter(|r| r.is_positive())
+    .collect()
 }
 
 /// Randstreifen ([`RESIZE_EDGE`]) zum Ändern der Größe über das Betriebssystem. Nach dem
@@ -1225,5 +1274,21 @@ mod tests {
         let c = Config::load_from(&good);
         assert_eq!(DetachState::from_config(&c).get(Place::Tree), Some(win()));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cut_out_leaves_the_rest_of_the_strip() {
+        let strip = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 24.0));
+        let knob = egui::Rect::from_min_max(egui::pos2(40.0, 2.0), egui::pos2(60.0, 22.0));
+        let pieces = cut_out(strip, knob);
+        let area: f32 = pieces.iter().map(|r| r.area()).sum();
+        assert!(
+            (area - (strip.area() - knob.area())).abs() < 1e-3,
+            "{pieces:?}"
+        );
+        assert!(pieces.iter().all(|r| !r.intersects(knob.shrink(0.5))));
+        // Ohne Überschneidung bleibt der Streifen ganz.
+        let off = knob.translate(egui::vec2(200.0, 0.0));
+        assert_eq!(cut_out(strip, off), vec![strip]);
     }
 }

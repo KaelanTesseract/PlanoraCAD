@@ -10,6 +10,7 @@ use planora_app::keymap::Action;
 use planora_app::lost_projections_dialog::{LostAction, LostProjectionsDialog};
 use planora_app::state::{AppState, IncludePick, ProjectTarget, StandardPlane};
 use planora_app::surface_project_dialog::DialogOutcome;
+use planora_app::testing::{finished_strokes, line_colors};
 use planora_app::workspace::Workspace;
 use planora_app::{browser, fonts, history_bar, sketch_view, theme};
 use planora_feature::{CopySource, CopyTarget, FeatureId, FeatureKind, SketchFeature, SketchPlane};
@@ -211,24 +212,6 @@ fn tree_menu(
     let pos = pos.unwrap_or_else(|| panic!("Zeile {row}:\n{texts}"));
     tree_frame(c, s, click(pos, PointerButton::Secondary), "");
     tree_frame(c, s, vec![], entry)
-}
-
-/// Farben der Linien unter den Formen (durchgezogen oder Strichstücke).
-fn stroke_colors(shapes: &[egui::Shape]) -> Vec<egui::Color32> {
-    let mut out = Vec::new();
-    for shape in shapes {
-        match shape {
-            egui::Shape::Path(p) => {
-                if let egui::epaint::ColorMode::Solid(c) = p.stroke.color {
-                    out.push(c);
-                }
-            }
-            egui::Shape::LineSegment { stroke, .. } => out.push(stroke.color),
-            egui::Shape::Vec(v) => out.extend(stroke_colors(v)),
-            _ => {}
-        }
-    }
-    out
 }
 
 /// Der Dialog zeigt ein Bild; liefert alle Texte.
@@ -446,16 +429,28 @@ fn dim_rest_dims_other_curves() {
     let col = theme::sketch_colors(r.s().dark);
     r.s().open_lost_projections(sketch);
     // Ohne Haken: die eigene Linie in voller Farbe.
-    let colors = stroke_colors(&sketch_view::finished_sketch_shapes(r.s(), SCREEN));
-    assert!(colors.contains(&col.lost), "{colors:?}");
-    assert!(colors.contains(&col.finished), "{colors:?}");
+    let colors = line_colors(&finished_strokes(r.s(), SCREEN));
+    assert!(
+        colors.contains(&sketch_view::stroke_rgba(col.lost)),
+        "{colors:?}"
+    );
+    assert!(
+        colors.contains(&sketch_view::stroke_rgba(col.finished)),
+        "{colors:?}"
+    );
     // Haken an: alles außer der verlorenen Kurve gedämpft.
     r.s().lost_dialog.as_mut().unwrap().dim_rest = true;
-    let colors = stroke_colors(&sketch_view::finished_sketch_shapes(r.s(), SCREEN));
-    assert!(colors.contains(&col.lost), "{colors:?}");
-    assert!(!colors.contains(&col.finished), "{colors:?}");
+    let colors = line_colors(&finished_strokes(r.s(), SCREEN));
     assert!(
-        colors.contains(&col.finished.gamma_multiply(0.2)),
+        colors.contains(&sketch_view::stroke_rgba(col.lost)),
+        "{colors:?}"
+    );
+    assert!(
+        !colors.contains(&sketch_view::stroke_rgba(col.finished)),
+        "{colors:?}"
+    );
+    assert!(
+        colors.contains(&sketch_view::stroke_rgba(col.finished.gamma_multiply(0.2))),
         "{colors:?}"
     );
     // In der offenen Skizze ebenso.
@@ -613,15 +608,27 @@ fn lost_curve_drawn_yellow() {
     let col = theme::sketch_colors(r.s().dark);
     let sketch = r.sketch;
     // Verknüpft: lila, nicht gelb.
-    let colors = stroke_colors(&sketch_view::finished_sketch_shapes(r.s(), SCREEN));
-    assert!(colors.contains(&col.projected), "{colors:?}");
-    assert!(!colors.contains(&col.lost), "{colors:?}");
+    let colors = line_colors(&finished_strokes(r.s(), SCREEN));
+    assert!(
+        colors.contains(&sketch_view::stroke_rgba(col.projected)),
+        "{colors:?}"
+    );
+    assert!(
+        !colors.contains(&sketch_view::stroke_rgba(col.lost)),
+        "{colors:?}"
+    );
     r.lose();
     // Verloren: gelb wie die Warnung, in der 3D-Ansicht und in der offenen Skizze.
     assert_eq!(col.lost, theme::palette(r.s().dark).warning);
-    let colors = stroke_colors(&sketch_view::finished_sketch_shapes(r.s(), SCREEN));
-    assert!(colors.contains(&col.lost), "{colors:?}");
-    assert!(!colors.contains(&col.projected), "{colors:?}");
+    let colors = line_colors(&finished_strokes(r.s(), SCREEN));
+    assert!(
+        colors.contains(&sketch_view::stroke_rgba(col.lost)),
+        "{colors:?}"
+    );
+    assert!(
+        !colors.contains(&sketch_view::stroke_rgba(col.projected)),
+        "{colors:?}"
+    );
     let c = r.curves[0];
     r.s().open_sketch(sketch).unwrap();
     assert_eq!(sketch_view::curve_color(r.s(), c), col.lost);

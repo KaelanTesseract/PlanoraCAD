@@ -351,20 +351,25 @@ impl SketchSession {
         hidden_handles_of(sk, &self.selection)
     }
 
-    /// Der nächste Punkt im Radius, ohne unsichtbare Griffe. 3D-Punkte (Skizzen 10) stehen nicht
-    /// in der Draufsicht: Sie trifft die Ansicht über den Bildschirmabstand
-    /// ([`crate::sketch_view`]), hier nie.
+    /// Der nächste Punkt im Radius, ohne unsichtbare Griffe und ohne die Punkte, die die
+    /// Anzeigeschalter mit Konstruktion oder Projektion ausblenden (Skizzen 12; „Punkte
+    /// anzeigen“ prüft erst [`snap`](Self::snap), der Fang beim Zeichnen bleibt). 3D-Punkte
+    /// (Skizzen 10) stehen nicht in der Draufsicht: Sie trifft die Ansicht über den
+    /// Bildschirmabstand ([`crate::sketch_view`]), hier nie.
     pub(crate) fn shown_point(&self, sk: &Sketch, at: DVec2, radius: f64) -> Option<PointId> {
         let mut skip = self.hidden_handles(sk).points;
         skip.extend(sk.points().map(|(p, _)| p).filter(|&p| sk.is_3d_point(p)));
+        skip.extend(self.display.hidden(sk).unsnapped);
         sk.pick_point_skipping(at, radius, &skip)
     }
 
-    /// Die nächste Kurve im Radius, ohne unsichtbare Griffe. 3D-Kurven (Skizzen 10) trifft wie
-    /// 3D-Punkte nur die Ansicht über den Bildschirmabstand.
+    /// Die nächste Kurve im Radius, ohne unsichtbare Griffe und ohne die Kurven, die die
+    /// Anzeigeschalter ausblenden (Skizzen 12). 3D-Kurven (Skizzen 10) trifft wie 3D-Punkte nur
+    /// die Ansicht über den Bildschirmabstand.
     pub(crate) fn shown_curve(&self, sk: &Sketch, at: DVec2, radius: f64) -> Option<CurveId> {
         let mut skip = self.hidden_handles(sk).curves;
         skip.extend(sk.curves().map(|(c, _)| c).filter(|&c| sk.is_3d_curve(c)));
+        skip.extend(self.display.hidden(sk).curves);
         sk.pick_curve_skipping(at, radius, &skip)
     }
 
@@ -404,31 +409,38 @@ impl SketchSession {
     /// der Maßstab der Ansicht in Skizzeneinheiten je Bildpunkt. Kein Griff an Text auf einem Pfad
     /// und an 3D-Text (Annahme, `offene-punkte.md`).
     pub fn text_rotate_grips(&self, sk: &Sketch, units_per_px: f64) -> Vec<(TextId, DVec2)> {
-        if self.tool != Tool::Select || !(units_per_px.is_finite() && units_per_px > 0.0) {
+        if !(units_per_px.is_finite() && units_per_px > 0.0) {
             return Vec::new();
         }
-        let Some(t) = self.only_selected_text(sk) else {
-            return Vec::new();
-        };
-        if text_rot_origin(sk, t).is_none() {
-            return Vec::new();
+        self.text_rotate_base(sk)
+            .map(|b| vec![(b.text, b.at(units_per_px))])
+            .unwrap_or_default()
+    }
+
+    /// Lage des Drehgriffs ohne Maßstab ([`Self::text_rotate_grips`]): Die Suche nach dem
+    /// gewählten Text kostet, darum rechnet das Zeichnen sie einmal je Bild und setzt den Maßstab
+    /// danach ein (Skizzen 12, Task 12).
+    pub(crate) fn text_rotate_base(&self, sk: &Sketch) -> Option<TextRotateBase> {
+        if self.tool != Tool::Select {
+            return None;
         }
+        let t = self.only_selected_text(sk)?;
+        text_rot_origin(sk, t)?;
         let Some(TextPlacement::Box { corners, .. }) = sk.text(t).map(|d| d.placement) else {
-            return Vec::new();
+            return None;
         };
         let at = |i: usize| sk.point_xy(corners[i]).ok();
-        let (Some(c0), Some(c1), Some(c2), Some(c3)) = (at(0), at(1), at(2), at(3)) else {
-            return Vec::new();
-        };
+        let (c0, c1, c2, c3) = (at(0)?, at(1)?, at(2)?, at(3)?);
         let (bottom, top) = ((c0 + c1) * 0.5, (c2 + c3) * 0.5);
         let out = top - bottom;
         if !(out.is_finite() && out.length() > sk.tolerance().linear) {
-            return Vec::new();
+            return None;
         }
-        vec![(
-            t,
-            top + out.normalize() * (TEXT_ROTATE_GRIP_PX * units_per_px),
-        )]
+        Some(TextRotateBase {
+            text: t,
+            top,
+            out: out.normalize(),
+        })
     }
 
     /// Der gedämpfte Griff, Rho-Griff oder Drehgriff bei `at`, wenn ihn kein Punkt verdeckt: Der
@@ -881,5 +893,21 @@ impl SketchSession {
         }
         self.edit_label = Some(crate::msg!("undo-control-point-insert"));
         Ok(())
+    }
+}
+
+/// Drehgriff am Text ohne Maßstab: Mitte der oberen Rahmenlinie und Richtung nach außen
+/// (Einheitsvektor).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TextRotateBase {
+    pub(crate) text: TextId,
+    pub(crate) top: DVec2,
+    pub(crate) out: DVec2,
+}
+
+impl TextRotateBase {
+    /// Der Griff bei `units_per_px` Skizzeneinheiten je Bildpunkt.
+    pub(crate) fn at(&self, units_per_px: f64) -> DVec2 {
+        self.top + self.out * (TEXT_ROTATE_GRIP_PX * units_per_px)
     }
 }

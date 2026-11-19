@@ -4,6 +4,7 @@ use planora_app::create_dialog::CreateDialog;
 use planora_app::fonts;
 use planora_app::sketch_view;
 use planora_app::state::{AppState, BodyKind, StandardPlane};
+use planora_app::testing::finished_strokes;
 use planora_feature::{FeatureId, SketchPlane};
 use planora_math::DVec2;
 use planora_sketch::model::Sketch;
@@ -175,15 +176,19 @@ fn prepared(mut s: AppState) -> AppState {
 fn finished_sketches_are_drawn_as_lines_in_3d() {
     let empty = prepared(AppState::new());
     assert!(
-        sketch_view::finished_sketch_shapes(&empty, SCREEN).is_empty(),
+        finished_strokes(&empty, SCREEN).is_empty(),
         "ohne Skizzen wird nichts gezeichnet"
     );
 
     let s = prepared(state_with_sketch().0);
-    let shapes = sketch_view::finished_sketch_shapes(&s, SCREEN);
+    let strokes = finished_strokes(&s, SCREEN);
     assert!(
-        !shapes.is_empty(),
+        !strokes.is_empty(),
         "eine fertige Skizze erscheint als Linien"
+    );
+    assert!(
+        sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty(),
+        "die Linien zeichnet die GPU, nicht egui"
     );
 }
 
@@ -193,11 +198,11 @@ fn the_sketch_in_edit_is_not_drawn_twice() {
     let mut s = prepared(s);
     s.open_sketch(id).unwrap();
     assert!(
-        sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty(),
+        finished_strokes(&s, SCREEN).is_empty(),
         "die geöffnete Skizze zeichnet das Skizzen-Overlay"
     );
     s.close_sketch();
-    assert!(!sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty());
+    assert!(!finished_strokes(&s, SCREEN).is_empty());
 }
 
 #[test]
@@ -209,11 +214,11 @@ fn construction_geometry_of_finished_sketches_is_dashed() {
         let b = sk.add_point(20.0, 0.0).unwrap();
         sk.add_line(a, b).unwrap()
     });
-    let solid = sketch_view::finished_sketch_shapes(&s, SCREEN).len();
+    let solid = finished_strokes(&s, SCREEN).len();
     edit_sketch(&mut s, i, |sk| sk.set_construction(line, true).unwrap());
-    let dashed = sketch_view::finished_sketch_shapes(&s, SCREEN).len();
-    assert_eq!(solid, 1, "eine Linie ist ein Linienzug");
-    assert!(dashed > 1, "gestrichelt zerfällt sie in Stücke ({dashed})");
+    let dashed = finished_strokes(&s, SCREEN).len();
+    assert_eq!(solid, 6, "eine Linie ist ein Viereck");
+    assert!(dashed > 6, "gestrichelt zerfällt sie in Stücke ({dashed})");
 }
 
 #[test]

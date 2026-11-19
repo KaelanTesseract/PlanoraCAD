@@ -224,9 +224,26 @@ pub struct Sketch {
     /// Weg des Lösers (dicht, dünn oder je Gruppengröße), siehe [`crate::sparse::SolverPath`].
     /// Gehört nicht zur Datei und nicht zum Vergleich von Ständen.
     pub(crate) solver_path: crate::sparse::SolverPath,
+    /// Arbeitskopie der Mustervorschau (siehe [`Sketch::pattern_preview`]); eine Kopie der Skizze
+    /// beginnt ohne. Gehört nicht zur Datei und nicht zum Vergleich von Ständen.
+    pub(crate) preview_scratch: crate::pattern::PreviewScratch,
+    /// Gruppen der Schleifenprüfung der Muster zu einem Stand (siehe `pattern_cycles.rs`);
+    /// `add_constraint` führt sie fort. Gehört nicht zur Datei und nicht zum Vergleich von Ständen.
+    pub(crate) cycle_groups: Option<Arc<crate::pattern_cycles::CycleGroups>>,
     /// Haken „3D-Skizze“ (Skizzen 10): schaltet die 3D-Werkzeuge frei. Bereits gezeichnete
     /// 3D-Geometrie bleibt, wenn der Haken fällt.
     pub three_d: bool,
+}
+
+/// Längen der Listen einer Skizze, siehe [`Sketch::append_mark`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AppendMark {
+    vars: usize,
+    points: usize,
+    curves: usize,
+    constraints: usize,
+    patterns: usize,
+    texts: usize,
 }
 
 /// Quelle eindeutiger Stände: Jede Änderung irgendeiner Skizze bekommt eine neue Nummer, so
@@ -293,6 +310,8 @@ impl Sketch {
             revision: next_revision(),
             solve_cache: SolveCache::default(),
             solver_path: crate::sparse::SolverPath::from_env(),
+            preview_scratch: Default::default(),
+            cycle_groups: None,
             three_d: false,
         }
     }
@@ -330,6 +349,37 @@ impl Sketch {
     /// Nur Werte im Variablenvektor haben sich geändert: neuer Stand.
     pub(crate) fn touch_values(&mut self) {
         self.revision = next_revision();
+    }
+
+    /// Längen aller Listen, um später angehängte Objekte mit [`Sketch::cut_back`] wieder
+    /// abzuschneiden (Arbeitskopie der Mustervorschau).
+    pub(crate) fn append_mark(&self) -> AppendMark {
+        AppendMark {
+            vars: self.vars.len(),
+            points: self.points.len(),
+            curves: self.curves.len(),
+            constraints: self.constraints.len(),
+            patterns: self.patterns.len(),
+            texts: self.texts.len(),
+        }
+    }
+
+    /// Schneidet alles ab, was seit `mark` angehängt wurde. Gilt nur, wenn dazwischen nichts
+    /// Vorhandenes geändert wurde (Anlegen von Punkten und Kurven ohne Lösen).
+    pub(crate) fn cut_back(&mut self, mark: AppendMark) {
+        self.vars.truncate(mark.vars);
+        self.points.truncate(mark.points);
+        self.curves.truncate(mark.curves);
+        self.constraints.truncate(mark.constraints);
+        self.patterns.truncate(mark.patterns);
+        self.texts.truncate(mark.texts);
+        self.touch_structure();
+    }
+
+    /// Setzt den Stand auf `r` zurück, nachdem eine gescheiterte Änderung alle Werte wieder
+    /// hergestellt hat (gleicher Inhalt, gleicher Stand; siehe `grow_frame_to_fit`).
+    pub(crate) fn restore_revision(&mut self, r: u64) {
+        self.revision = r;
     }
 
     pub fn frame(&self) -> &Frame {

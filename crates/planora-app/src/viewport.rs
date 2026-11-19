@@ -77,8 +77,19 @@ pub fn render_palette(dark: bool) -> Palette {
     }
 }
 
+/// Ansicht für die Skizzenlinien der GPU ([`planora_render::push_stroke`]) im Viewport `rect`
+/// (logische Punkte) bei `ppp` Pixeln je Punkt, mit der Kamera von `state`.
+pub fn stroke_view(state: &AppState, rect: Rect, ppp: f32) -> planora_render::StrokeView {
+    planora_render::StrokeView {
+        view_proj: state.camera.view_proj(),
+        size_px: Vec2::new(rect.width() * ppp, rect.height() * ppp),
+        depth_bias: planora_render::STROKE_DEPTH_BIAS,
+        pixels_per_point: ppp,
+    }
+}
+
 /// Linien der 3D-Szene: Bodenraster und Achsen; im Skizzenmodus nur die Achsen, das Raster zeichnet
-/// dort die Skizze in ihrer Ebene ([`sketch_view::sketch_grid_shapes`]). Eine Achse, die fast auf
+/// dort die Skizze in ihrer Ebene ([`sketch_view::sketch_grid_lines`]). Eine Achse, die fast auf
 /// den Betrachter zeigt, entfällt dort: Perspektivisch liefe sie sonst als lange Linie vom Ursprung
 /// quer durchs Bild und sähe aus wie Geometrie der Skizze.
 pub fn scene_lines(state: &AppState) -> Vec<LineVertex> {
@@ -991,6 +1002,20 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                         Some(PlaneClick::View(h)) => state.set_selection(Some(h)),
                         None => state.set_selection(None),
                     }
+                    state.sketch_pick_menu = None;
+                } else if response.secondary_clicked() {
+                    // Rechtsklick auf fertige Skizzengeometrie (Skizzen 12): wählen und Menü.
+                    use crate::plane_dialog::PlaneClick;
+                    match hit {
+                        Some(PlaneClick::View(
+                            h @ (Pick::SketchCurve { .. } | Pick::SketchPoint { .. }),
+                        )) => {
+                            state.set_selection(Some(h));
+                            state.sketch_pick_menu =
+                                response.interact_pointer_pos().map(|p| (p.x, p.y));
+                        }
+                        _ => state.sketch_pick_menu = None,
+                    }
                 }
             }
             None => hover_plane_click(state, None),
@@ -999,6 +1024,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             state.set_selection(None);
             state.clear_edge_marks();
         }
+        sketch_view::show_sketch_pick_menu(ui, state);
     }
 
     // 3D-Szene mit den Leinwänden (je gezeichneter Leinwand ihr Bild, Vertrag mit der GPU).
@@ -1009,6 +1035,14 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             .request_repaint_after(std::time::Duration::from_millis(50));
     }
     let cam = state.camera;
+    // Fertige Skizzen, Profile eines Dialogs, Konstruktionsebenen und die geöffnete Skizze mit
+    // Tiefenprüfung auf der GPU (Skizzen 12): Körper verdecken sie. Ebenen zuerst, darüber die
+    // fertigen Skizzen, zuletzt die geöffnete (Kurven, Vorschau, Profilflächen).
+    let view = stroke_view(state, rect, ui.ctx().pixels_per_point());
+    let mut strokes = Vec::new();
+    sketch_view::plane_strokes(state, &view, &mut strokes);
+    sketch_view::finished_sketch_strokes(state, &view, &mut strokes);
+    sketch_view::open_sketch_strokes(state, &view, &mut strokes);
     painter.set(
         scene_slot,
         eframe::egui_wgpu::Callback::new_paint_callback(
@@ -1022,14 +1056,22 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 grid: scene_lines(state),
                 canvases,
                 canvas_textures,
+                strokes,
+                // Slice schneidet nur die Körper (Skizzen 12, Spec 3).
+                slice: state.active_slice(),
             },
         ),
     );
-    // Konstruktionsebenen (Skizzen 6) unter den Linien der Skizzen.
-    let mut overlay = sketch_view::plane_shapes(state, rect);
     // Rahmen der gewählten Leinwand (Hervorhebung wie die Zeile im Baum).
-    overlay.extend(crate::canvas::canvas_outlines(state, rect));
+    let mut overlay = crate::canvas::canvas_outlines(state, rect);
+    // Was von den fertigen Skizzen obenauf bleibt (Krümmungskamm).
     overlay.extend(sketch_view::finished_sketch_shapes(state, rect));
+    // Maße fertiger Skizzen mit „Maße anzeigen“ (Skizzen 12, Task 9): nur zur Ansicht.
+    overlay.extend(sketch_view::finished_dimension_shapes(
+        painter.ctx(),
+        state,
+        rect,
+    ));
     overlay.extend(sketch_view::insert_preview_shapes(state, rect));
     // Vorschau der Isokurven (Skizzen 11b).
     overlay.extend(sketch_view::iso_preview_shapes(state, rect));

@@ -1,4 +1,5 @@
 use crate::camera::OrbitCamera;
+use crate::stroke::{SLICE_EPS, slice_cuts};
 use glam::{Vec2, Vec3};
 use planora_kernel::{Edge, Face, Id};
 use planora_math::{DVec2, DVec3, Frame};
@@ -85,6 +86,27 @@ fn closest_on_segment(p: Vec2, a: Vec2, b: Vec2) -> (Vec2, f32) {
     (a + ab * s, s)
 }
 
+/// Der Teil der Strecke `a..b`, den Slice stehen lässt (`n·p + d <= SLICE_EPS`); ohne Ebene die
+/// ganze Strecke, `None`, wenn sie ganz weggeschnitten ist.
+fn keep_segment(slice: Option<[f32; 4]>, a: DVec3, b: DVec3) -> Option<(DVec3, DVec3)> {
+    let Some(plane) = slice else {
+        return Some((a, b));
+    };
+    let [nx, ny, nz, d] = plane.map(f64::from);
+    let n = DVec3::new(nx, ny, nz);
+    let eps = f64::from(SLICE_EPS);
+    let (va, vb) = (n.dot(a) + d - eps, n.dot(b) + d - eps);
+    match (va > 0.0, vb > 0.0) {
+        (false, false) => Some((a, b)),
+        (true, true) => None,
+        // Genau eine Seite ist weggeschnitten: an der Grenze kürzen.
+        _ => {
+            let at = a + (b - a) * (va / (va - vb));
+            Some(if va > 0.0 { (at, b) } else { (a, at) })
+        }
+    }
+}
+
 /// Punkt der Strecke `a..b`, der dem Strahl am nächsten liegt (Parameter auf 0..1 begrenzt).
 /// `None` bei entarteter oder fast paralleler Strecke.
 fn ray_segment_closest(origin: Vec3, dir: Vec3, a: Vec3, b: Vec3) -> Option<Vec3> {
@@ -112,6 +134,21 @@ pub fn pick_edge(
     max_px: f32,
     occluder: Option<f32>,
 ) -> Option<EdgeHit> {
+    pick_edge_sliced(mesh, camera, viewport, cursor, max_px, occluder, None)
+}
+
+/// Wie [`pick_edge`], mit der Schnittebene von Slice ([`crate::slice_plane`]): Jede Strecke wird
+/// vorher an der Ebene gekürzt, ganz weggeschnittene zählen nicht. So verdrängt keine
+/// weggeschnittene Kante eine sichtbare, und der weggeschnittene Teil einer Kante trifft nicht.
+pub fn pick_edge_sliced(
+    mesh: &Mesh,
+    camera: &OrbitCamera,
+    viewport: Vec2,
+    cursor: Vec2,
+    max_px: f32,
+    occluder: Option<f32>,
+    slice: Option<[f32; 4]>,
+) -> Option<EdgeHit> {
     if !(viewport.x >= 1.0 && viewport.y >= 1.0 && viewport.is_finite() && cursor.is_finite()) {
         return None;
     }
@@ -124,7 +161,10 @@ pub fn pick_edge(
     let mut best: Option<EdgeHit> = None;
     for line in &mesh.edge_lines {
         for seg in line.points.windows(2) {
-            let (wa, wb) = (to_vec3(seg[0]), to_vec3(seg[1]));
+            let Some((da, db)) = keep_segment(slice, seg[0], seg[1]) else {
+                continue;
+            };
+            let (wa, wb) = (to_vec3(da), to_vec3(db));
             let (Some(a), Some(b)) = (camera.project(wa, viewport), camera.project(wb, viewport))
             else {
                 continue;
@@ -215,6 +255,20 @@ pub fn pick_vertex(
     max_px: f32,
     occluder: Option<f32>,
 ) -> Option<(usize, Id<Edge>, bool)> {
+    pick_vertex_sliced(meshes, camera, viewport, cursor, max_px, occluder, None)
+}
+
+/// Wie [`pick_vertex`], mit der Schnittebene von Slice: weggeschnittene Ecken zählen nicht und
+/// verdrängen keine sichtbaren.
+pub fn pick_vertex_sliced(
+    meshes: &[(usize, &Mesh)],
+    camera: &OrbitCamera,
+    viewport: Vec2,
+    cursor: Vec2,
+    max_px: f32,
+    occluder: Option<f32>,
+    slice: Option<[f32; 4]>,
+) -> Option<(usize, Id<Edge>, bool)> {
     if !(viewport.x >= 1.0 && viewport.y >= 1.0 && viewport.is_finite() && cursor.is_finite()) {
         return None;
     }
@@ -231,6 +285,9 @@ pub fn pick_vertex(
                 continue;
             };
             for (end, p) in [(false, *first), (true, *last)] {
+                if slice.is_some_and(|plane| slice_cuts(plane, p)) {
+                    continue;
+                }
                 let world = to_vec3(p);
                 let Some(at) = camera.project(world, viewport) else {
                     continue;

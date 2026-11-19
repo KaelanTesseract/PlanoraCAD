@@ -60,7 +60,10 @@ fn pointer(p: Pos2, b: PointerButton, pressed: bool) -> Event {
 #[derive(Default)]
 struct Shot {
     texts: Vec<(String, Rect)>,
+    /// Linienstücke: egui-Strecken und die Vierecke der GPU-Linien der geöffneten Skizze.
     segments: usize,
+    /// Rechteck der 3D-Ansicht (aus dem Malaufruf der GPU).
+    view: Option<Rect>,
 }
 
 fn walk(shape: &Shape, s: &mut Shot) {
@@ -71,6 +74,7 @@ fn walk(shape: &Shape, s: &mut Shot) {
             Rect::from_min_size(t.pos, t.galley.size()),
         )),
         Shape::LineSegment { .. } => s.segments += 1,
+        Shape::Callback(cb) => s.view = Some(cb.rect),
         _ => {}
     }
 }
@@ -157,6 +161,12 @@ impl Rig {
             walk(&c.shape, &mut shot);
         }
         out.drop_without_applying_deltas();
+        // Kurven und Vorschau der geöffneten Skizze zeichnet die GPU (Skizzen 12): je Strich ein
+        // Viereck aus zwei Dreiecken.
+        if let Some(view) = shot.view {
+            let v = planora_app::testing::open_strokes(self.st(), view);
+            shot.segments += planora_app::testing::stroke_triangles(&v, view, false).len() / 2;
+        }
         shot
     }
 

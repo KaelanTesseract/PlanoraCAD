@@ -564,17 +564,8 @@ fn face_tinted(s: &AppState) -> bool {
 fn curve_lit(s: &AppState) -> bool {
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(W, H));
     let selected = planora_app::theme::sketch_colors(s.dark).selected;
-    fn lit(shape: &egui::Shape, c: egui::Color32) -> bool {
-        match shape {
-            egui::Shape::Vec(v) => v.iter().any(|s| lit(s, c)),
-            egui::Shape::Path(p) => p.stroke.color == egui::epaint::ColorMode::Solid(c),
-            egui::Shape::LineSegment { stroke, .. } => stroke.color == c,
-            _ => false,
-        }
-    }
-    planora_app::sketch_view::finished_sketch_shapes(s, rect)
-        .iter()
-        .any(|shape| lit(shape, selected))
+    planora_app::testing::line_triangles(&planora_app::testing::finished_strokes(s, rect), selected)
+        > 0
 }
 
 #[test]

@@ -266,6 +266,8 @@ impl Document {
         (self.next_id, self.next_step_shape, self.edits, self.marker) = saved;
         self.recompute();
         (self.drawings, self.next_drawing, self.drawing_edits) = saved_drawings;
+        // Die Zähler stehen wieder auf einem früheren Stand: Zwischenspeicher daran verwerfen.
+        self.hidden_by_group.clear();
         Err(e)
     }
 
