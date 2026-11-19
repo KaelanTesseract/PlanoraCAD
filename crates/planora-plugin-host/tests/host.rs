@@ -7,8 +7,7 @@ use planora_plugin_host::package::Package;
 use planora_plugin_host::places::{self, Places};
 use planora_plugin_host::rights::Answer;
 use planora_plugin_host::runtime::{HttpResponse, RequestResult};
-use planora_plugin_host::{EntryState, HostEvent, PluginHost};
-use planora_project::config::PluginConfig;
+use planora_plugin_host::{EntryState, HostEvent, PluginHost, PluginState};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -104,7 +103,7 @@ fn disabled_not_started() {
     let mut h = PluginHost::new(p.clone());
     let config = BTreeMap::from([(
         HALLO.to_string(),
-        PluginConfig {
+        PluginState {
             enabled: false,
             rights: BTreeMap::new(),
         },
@@ -115,10 +114,7 @@ fn disabled_not_started() {
     assert!(h.poll().is_empty());
     assert_eq!(state(&h, HALLO), EntryState::Off);
     assert!(h.commands().is_empty());
-    assert_eq!(
-        h.plugin_configs().get(HALLO).map(|c| c.enabled),
-        Some(false)
-    );
+    assert_eq!(h.plugin_states().get(HALLO).map(|c| c.enabled), Some(false));
 
     // Einschalten startet es und meldet die Änderung zum Speichern.
     h.set_enabled(HALLO, true);
@@ -126,7 +122,7 @@ fn disabled_not_started() {
     assert!(events.iter().any(|e| matches!(e, HostEvent::Changed)));
     assert_eq!(state(&h, HALLO), EntryState::Running);
     assert!(
-        !h.plugin_configs().contains_key(HALLO),
+        !h.plugin_states().contains_key(HALLO),
         "Voreinstellung wird nicht geschrieben"
     );
     h.set_enabled(HALLO, false);
@@ -264,11 +260,11 @@ fn restart_resets_instance() {
     // Eine Antwort an die alte Generation wird still verworfen.
     h.answer(FAELLE, g1, req2, Answer::Allow);
     assert!(h.poll().is_empty());
-    assert!(!h.plugin_configs().contains_key(FAELLE));
+    assert!(!h.plugin_states().contains_key(FAELLE));
     h.answer(FAELLE, g2, req2, Answer::Allow);
     assert!(h.poll().iter().any(|e| matches!(e, HostEvent::Changed)));
     assert_eq!(
-        h.plugin_configs()[FAELLE]
+        h.plugin_states()[FAELLE]
             .rights
             .get("net")
             .map(String::as_str),
@@ -336,7 +332,7 @@ fn saved_rights_from_config() {
     let mut h = PluginHost::new(p.clone());
     let config = BTreeMap::from([(
         FAELLE.to_string(),
-        PluginConfig {
+        PluginState {
             enabled: true,
             rights: BTreeMap::from([("net".to_string(), "denied".to_string())]),
         },
@@ -350,6 +346,102 @@ fn saved_rights_from_config() {
     assert!(asks(&events).is_empty(), "{events:?}");
     assert!(nets(&events).is_empty());
     assert_eq!(state(&h, FAELLE), EntryState::Running);
-    assert_eq!(h.plugin_configs(), config);
+    assert_eq!(h.plugin_states(), config);
+    aufraeumen(&p);
+}
+
+/// Ereignisse von `FAELLE`, die zur Instanz gehören (Nachfrage, Netz, Dialog).
+fn instanz_ereignisse(events: &[HostEvent]) -> usize {
+    events
+        .iter()
+        .filter(|e| match e {
+            HostEvent::Ask { plugin, .. }
+            | HostEvent::Net { plugin, .. }
+            | HostEvent::OpenDialog { plugin, .. } => plugin == FAELLE,
+            _ => false,
+        })
+        .count()
+}
+
+#[test]
+fn events_dropped_after_failure_or_stop() {
+    let (mut h, p) = gestartet("verworfen", &["test-faelle"]);
+    // Dialog und Nachfrage stehen noch im Ausgang, dann fällt das Plug-in aus.
+    h.run_command("planora.test-faelle.langsam-dialog");
+    h.run_command("planora.test-faelle.recht");
+    h.run_command("planora.test-faelle.panik");
+    let events = h.poll();
+    assert_eq!(instanz_ereignisse(&events), 0, "{events:?}");
+    assert_eq!(ausfaelle(&events), 1);
+
+    // Dasselbe beim Neustart und beim Ausschalten.
+    h.restart(FAELLE);
+    warten(&mut h, FAELLE);
+    h.run_command("planora.test-faelle.recht");
+    h.restart(FAELLE);
+    let events = warten(&mut h, FAELLE);
+    assert_eq!(instanz_ereignisse(&events), 0, "{events:?}");
+    h.run_command("planora.test-faelle.netz");
+    h.set_enabled(FAELLE, false);
+    let events = h.poll();
+    assert_eq!(instanz_ereignisse(&events), 0, "{events:?}");
+    assert!(events.iter().any(|e| matches!(e, HostEvent::Changed)));
+    aufraeumen(&p);
+}
+
+#[test]
+fn rescan_restarts_changed_only() {
+    let (mut h, p) = gestartet("rescan", &["test-faelle", "beispiel-hallo"]);
+    h.run_command("planora.test-faelle.recht");
+    let (_, _, g1) = asks(&h.poll())[0];
+
+    // Neuere Version installiert (wie „Plug-in installieren…“ mit einem neueren Paket).
+    let toml = p.user.join(FAELLE).join("plugin.toml");
+    let text = std::fs::read_to_string(&toml).unwrap();
+    std::fs::write(
+        &toml,
+        text.replace("version = \"0.1.0\"", "version = \"0.2.0\""),
+    )
+    .unwrap();
+    h.rescan(&BTreeMap::new());
+    assert_eq!(state(&h, FAELLE), EntryState::Loading);
+    assert_eq!(
+        state(&h, HALLO),
+        EntryState::Running,
+        "unverändert läuft weiter"
+    );
+    warten(&mut h, FAELLE);
+    assert_eq!(state(&h, FAELLE), EntryState::Running);
+    let e = h.entries().iter().find(|e| e.id == FAELLE).unwrap();
+    assert_eq!(
+        e.found[e.active.unwrap()].manifest.version.to_string(),
+        "0.2.0"
+    );
+    h.run_command("planora.test-faelle.recht");
+    let (_, _, g2) = asks(&h.poll())[0];
+    assert_ne!(g1, g2, "neue Generation");
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| c.full_id == "planora.beispiel-hallo.hallo")
+    );
+
+    // Entfernt: verschwindet; neu installiert und in `states` ausgeschaltet: bleibt aus.
+    places::uninstall(&p, HALLO).unwrap();
+    h.rescan(&BTreeMap::new());
+    assert!(h.entries().iter().all(|e| e.id != HALLO));
+    assert!(h.commands().iter().all(|c| c.plugin != HALLO));
+    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/beispiel-hallo.pcplugin");
+    places::install(&p, &Package::read(&std::fs::read(file).unwrap()).unwrap()).unwrap();
+    let aus = BTreeMap::from([(
+        HALLO.to_string(),
+        PluginState {
+            enabled: false,
+            rights: BTreeMap::new(),
+        },
+    )]);
+    h.rescan(&aus);
+    assert_eq!(state(&h, HALLO), EntryState::Off);
+    assert_eq!(state(&h, FAELLE), EntryState::Running);
     aufraeumen(&p);
 }

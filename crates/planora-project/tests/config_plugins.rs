@@ -72,7 +72,8 @@ fn plugins_lenient() {
     let c = Config::read_from(&p).unwrap();
     assert_eq!(c.root, Some(PathBuf::from("D:/Projekte")));
     assert_eq!(c.language.as_deref(), Some("en"));
-    assert!(!c.plugins.contains_key("a.b"));
+    // Falsches `enabled`: der Eintrag bleibt, eingeschaltet (Voreinstellung).
+    assert_eq!(c.plugins.get("a.b"), Some(&PluginConfig::default()));
     assert_eq!(
         c.plugins.get("c.d"),
         Some(&PluginConfig {
@@ -80,5 +81,52 @@ fn plugins_lenient() {
             rights: BTreeMap::from([("net".to_string(), "denied".to_string())]),
         })
     );
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+}
+
+#[test]
+fn plugins_bad_right_keeps_enabled() {
+    let p = temp_file("recht");
+    std::fs::write(
+        &p,
+        r#"{ "plugins": {
+            "a.b": {"enabled": false, "rights": {"net": 5, "model-read": "allowed", "fs-folder": "vielleicht"}},
+            "c.d": {"enabled": "ja", "rights": {"net": "denied"}},
+            "e.f": {"enabled": false, "rights": 7},
+            "g.h": 3
+        } }"#,
+    )
+    .unwrap();
+    let c = Config::read_from(&p).unwrap();
+    let rights = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert_eq!(
+        c.plugins.get("a.b"),
+        Some(&PluginConfig {
+            enabled: false,
+            rights: rights(&[("model-read", "allowed")]),
+        }),
+        "ein kaputtes Recht kostet nicht den Schalter"
+    );
+    assert_eq!(
+        c.plugins.get("c.d"),
+        Some(&PluginConfig {
+            enabled: true,
+            rights: rights(&[("net", "denied")]),
+        }),
+        "ein kaputter Schalter kostet nicht die Rechte"
+    );
+    assert_eq!(
+        c.plugins.get("e.f"),
+        Some(&PluginConfig {
+            enabled: false,
+            rights: BTreeMap::new(),
+        })
+    );
+    assert!(!c.plugins.contains_key("g.h"), "kein Objekt: übergangen");
     let _ = std::fs::remove_dir_all(p.parent().unwrap());
 }

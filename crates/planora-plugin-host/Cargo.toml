@@ -21,7 +21,6 @@ serde.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 sha2.workspace = true
-planora-project.workspace = true
 
 [dev-dependencies]
 miniz_oxide.workspace = true

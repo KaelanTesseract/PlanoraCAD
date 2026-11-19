@@ -17,7 +17,6 @@ pub mod texts;
 
 use manifest::{Manifest, Right};
 use places::{Found, Places};
-use planora_project::config::PluginConfig;
 use rights::{Answer, Grant, Pending, Requests, Rights, check_net_url};
 use runtime::{
     Command, Dialog, DialogEvent, Engine, HostCalls, HostInfo, Instance, Level, PluginError,
@@ -34,6 +33,26 @@ const MAX_FAILURES: u8 = 3;
 /// Mehr Ereignisse oder Ergebnisse als das nimmt das Postfach einer Instanz zwischen zwei
 /// Abholungen nicht an (ein Plug-in könnte sonst in einer Schleife den Speicher füllen).
 const MAX_QUEUE: usize = 1024;
+/// Ergebnis einer Anfrage, die das volle Postfach nicht mehr annimmt.
+const QUEUE_FULL: &str = "Warteschlange voll";
+
+/// Der zu speichernde Zustand eines Plug-ins: eingeschaltet oder nicht und die dauerhaft
+/// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`). Das Programm bildet
+/// ihn auf `planora_project::config::PluginConfig` ab; der Host kennt die Konfiguration nicht.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginState {
+    pub enabled: bool,
+    pub rights: BTreeMap<String, String>,
+}
+
+impl Default for PluginState {
+    fn default() -> Self {
+        PluginState {
+            enabled: true,
+            rights: BTreeMap::new(),
+        }
+    }
+}
 
 /// Zustand eines Plug-ins.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,7 +129,7 @@ pub enum HostEvent {
     },
     /// Das Plug-in ist ausgefallen (je Ausfall genau einmal).
     Failed { plugin: String, reason: String },
-    /// Etwas Gespeichertes hat sich geändert: [`PluginHost::plugin_configs`] neu schreiben.
+    /// Etwas Gespeichertes hat sich geändert: [`PluginHost::plugin_states`] neu speichern.
     Changed,
 }
 
@@ -161,37 +180,52 @@ impl Mailbox {
         }
     }
 
+    /// Ist das Ereignis-Postfach voll?
+    fn events_full(&self) -> bool {
+        self.events.len() >= MAX_QUEUE
+    }
+
+    /// Eine Anfrage, die das Postfach nicht mehr annimmt: das Plug-in erfährt es über `on-result`,
+    /// statt ewig zu warten. Es wird kein Zustand vermerkt, dessen Ereignis verloren ginge.
+    fn overflow(&mut self, request: u64) {
+        self.deliver(request, RequestResult::Failed(QUEUE_FULL.into()));
+    }
+
     fn net(&mut self, request: u64, url: String) {
-        if self.net_open.len() < MAX_QUEUE {
-            self.net_open.insert(request);
-            let e = HostEvent::Net {
-                plugin: self.plugin.clone(),
-                generation: self.generation,
-                request,
-                url,
-            };
-            self.event(e);
-        } else {
-            self.deliver(
-                request,
-                RequestResult::Failed("Zu viele offene Netzanfragen.".into()),
-            );
+        if self.events_full() || self.net_open.len() >= MAX_QUEUE {
+            self.overflow(request);
+            return;
         }
+        self.net_open.insert(request);
+        let e = HostEvent::Net {
+            plugin: self.plugin.clone(),
+            generation: self.generation,
+            request,
+            url,
+        };
+        self.event(e);
     }
 
     /// Fragt nach `right`, wenn nicht schon gefragt wird; sonst wartet `p` auf diese Antwort.
     fn ask(&mut self, p: Pending) {
         let right = pending_right(&p);
+        let request = pending_request(&p);
         if self.asks.contains_key(&right) {
             if self.waiting.len() < MAX_QUEUE {
                 self.waiting.push(p);
+            } else {
+                self.overflow(request);
             }
+            return;
+        }
+        if self.events_full() {
+            self.overflow(request);
             return;
         }
         let e = HostEvent::Ask {
             plugin: self.plugin.clone(),
             generation: self.generation,
-            request: pending_request(&p),
+            request,
             right,
         };
         self.asks.insert(right, p);
@@ -306,7 +340,6 @@ type Started = Result<(Instance, Registration, PluginTexts), PluginError>;
 
 /// Nachricht eines Start-Threads.
 struct Loaded {
-    index: usize,
     generation: u64,
     result: Started,
 }
@@ -323,6 +356,53 @@ struct Slot {
     texts: Option<PluginTexts>,
 }
 
+impl Slot {
+    fn new() -> Slot {
+        Slot {
+            enabled: true,
+            ..Slot::default()
+        }
+    }
+}
+
+/// Durchsucht die Fundorte und fasst die Ordner je Kennung zu Einträgen zusammen (Zustand `Off`,
+/// ohne startbaren Ordner `Failed(problem)`).
+fn scan_entries(places: &Places) -> Vec<PluginEntry> {
+    let mut groups: BTreeMap<String, Vec<Found>> = BTreeMap::new();
+    for f in places::scan(places) {
+        groups.entry(f.manifest.id.clone()).or_default().push(f);
+    }
+    groups
+        .into_iter()
+        .map(|(id, found)| {
+            let active = places::pick_active(&found);
+            let state = match active {
+                Some(_) => EntryState::Off,
+                None => EntryState::Failed(
+                    found
+                        .iter()
+                        .find_map(|f| f.problem.clone())
+                        .unwrap_or_default(),
+                ),
+            };
+            PluginEntry {
+                id,
+                found,
+                active,
+                state,
+                rights: Rights::default(),
+                failures: 0,
+            }
+        })
+        .collect()
+}
+
+/// Woran `rescan` erkennt, ob ein Plug-in gleich blieb: Ordner und Version des aktiven Fundorts.
+fn active_key(e: &PluginEntry) -> Option<(PathBuf, semver::Version)> {
+    e.active
+        .map(|a| (e.found[a].dir.clone(), e.found[a].manifest.version.clone()))
+}
+
 /// Alle Plug-ins des Programms: Fundorte, Zustand, Instanzen und das Ereignis-Postfach.
 pub struct PluginHost {
     places: Places,
@@ -330,7 +410,7 @@ pub struct PluginHost {
     entries: Vec<PluginEntry>,
     slots: Vec<Slot>,
     /// Der Stand aus der Konfiguration (auch für Plug-ins, die gerade nicht gefunden werden).
-    base: BTreeMap<String, PluginConfig>,
+    base: BTreeMap<String, PluginState>,
     outbox: Vec<HostEvent>,
     next_generation: u64,
     language: String,
@@ -342,40 +422,8 @@ impl PluginHost {
     /// Durchsucht die Fundorte und richtet die Laufzeit ein; gestartet wird erst mit
     /// [`start_all`](Self::start_all).
     pub fn new(places: Places) -> PluginHost {
-        let mut groups: BTreeMap<String, Vec<Found>> = BTreeMap::new();
-        for f in places::scan(&places) {
-            groups.entry(f.manifest.id.clone()).or_default().push(f);
-        }
-        let entries: Vec<PluginEntry> = groups
-            .into_iter()
-            .map(|(id, found)| {
-                let active = places::pick_active(&found);
-                let state = match active {
-                    Some(_) => EntryState::Off,
-                    None => EntryState::Failed(
-                        found
-                            .iter()
-                            .find_map(|f| f.problem.clone())
-                            .unwrap_or_default(),
-                    ),
-                };
-                PluginEntry {
-                    id,
-                    found,
-                    active,
-                    state,
-                    rights: Rights::default(),
-                    failures: 0,
-                }
-            })
-            .collect();
-        let slots = entries
-            .iter()
-            .map(|_| Slot {
-                enabled: true,
-                ..Slot::default()
-            })
-            .collect();
+        let entries = scan_entries(&places);
+        let slots = entries.iter().map(|_| Slot::new()).collect();
         let (tx, rx) = std::sync::mpsc::channel();
         PluginHost {
             places,
@@ -408,31 +456,105 @@ impl PluginHost {
 
     /// Übernimmt den gespeicherten Zustand und startet alle eingeschalteten Plug-ins im
     /// Hintergrund.
-    pub fn start_all(&mut self, config: &BTreeMap<String, PluginConfig>) {
-        self.base = config.clone();
+    pub fn start_all(&mut self, states: &BTreeMap<String, PluginState>) {
+        self.base = states.clone();
         for i in 0..self.entries.len() {
-            if let Some(c) = config.get(&self.entries[i].id) {
-                self.slots[i].enabled = c.enabled;
-                for (id, grant) in &c.rights {
-                    let answer = match grant.as_str() {
-                        "allowed" => Answer::Allow,
-                        "denied" => Answer::Deny,
-                        _ => continue,
-                    };
-                    if let Some(r) = Right::from_id(id) {
-                        self.entries[i].rights.answer(r, answer);
-                    }
-                }
-            }
+            self.apply_state(i, states);
             if self.slots[i].enabled && self.entries[i].state == EntryState::Off {
                 self.start(i);
             }
         }
     }
 
-    /// Der zu speichernde Zustand: der Stand aus der Konfiguration, darüber der aktuelle jedes
+    /// Durchsucht die Fundorte neu (nach Installieren oder Entfernen). Plug-ins, deren aktiver
+    /// Ordner gleich blieb (Ordner und Version), laufen weiter; geänderte werden beendet und neu
+    /// gestartet (neue Generation), verschwundene beendet, neue mit `states` übernommen und,
+    /// wenn eingeschaltet, gestartet. Schalter, Rechte und Ausfallzähler schon bekannter
+    /// Plug-ins bleiben, wie sie in dieser Sitzung sind.
+    pub fn rescan(&mut self, states: &BTreeMap<String, PluginState>) {
+        // Den Stand dieser Sitzung behalten, auch für Plug-ins, die gleich verschwinden.
+        let mut base = self.plugin_states();
+        for (k, v) in states {
+            base.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        self.base = base;
+        let fresh = scan_entries(&self.places);
+        // Beenden, was wegfällt oder sich ändert.
+        for i in 0..self.entries.len() {
+            let keep = fresh
+                .iter()
+                .find(|f| f.id == self.entries[i].id)
+                .is_some_and(|f| active_key(f) == active_key(&self.entries[i]));
+            if !keep {
+                self.stop_instance(i);
+            }
+        }
+        let mut old: BTreeMap<String, (PluginEntry, Slot)> = std::mem::take(&mut self.entries)
+            .into_iter()
+            .zip(std::mem::take(&mut self.slots))
+            .map(|(e, s)| (e.id.clone(), (e, s)))
+            .collect();
+        let mut to_start = Vec::new();
+        for mut entry in fresh {
+            let i = self.entries.len();
+            match old.remove(&entry.id) {
+                Some((before, slot)) => {
+                    let unchanged = active_key(&before) == active_key(&entry);
+                    entry.rights = before.rights;
+                    entry.failures = before.failures;
+                    if unchanged {
+                        entry.state = before.state;
+                    } else if entry.active.is_some() {
+                        entry.state = if entry.failures >= MAX_FAILURES {
+                            EntryState::Stopped
+                        } else {
+                            EntryState::Off
+                        };
+                        if slot.enabled {
+                            to_start.push(i);
+                        }
+                    }
+                    self.entries.push(entry);
+                    self.slots.push(slot);
+                }
+                None => {
+                    self.entries.push(entry);
+                    self.slots.push(Slot::new());
+                    self.apply_state(i, &self.base.clone());
+                    if self.slots[i].enabled {
+                        to_start.push(i);
+                    }
+                }
+            }
+        }
+        for i in to_start {
+            if self.entries[i].state == EntryState::Off {
+                self.start(i);
+            }
+        }
+    }
+
+    /// Übernimmt Schalter und Rechte für Eintrag `i` aus `states`.
+    fn apply_state(&mut self, i: usize, states: &BTreeMap<String, PluginState>) {
+        let Some(c) = states.get(&self.entries[i].id) else {
+            return;
+        };
+        self.slots[i].enabled = c.enabled;
+        for (id, grant) in &c.rights {
+            let answer = match grant.as_str() {
+                "allowed" => Answer::Allow,
+                "denied" => Answer::Deny,
+                _ => continue,
+            };
+            if let Some(r) = Right::from_id(id) {
+                self.entries[i].rights.answer(r, answer);
+            }
+        }
+    }
+
+    /// Der zu speichernde Zustand: der Stand aus `start_all`/`rescan`, darüber der aktuelle jedes
     /// gefundenen Plug-ins. Plug-ins in Voreinstellung (an, keine Rechte) fehlen.
-    pub fn plugin_configs(&self) -> BTreeMap<String, PluginConfig> {
+    pub fn plugin_states(&self) -> BTreeMap<String, PluginState> {
         let mut out = self.base.clone();
         for (e, s) in self.entries.iter().zip(&self.slots) {
             // Unbekannte Rechte (aus einer neueren Programmversion) bleiben erhalten.
@@ -453,11 +575,11 @@ impl PluginHost {
                 };
                 rights.insert(r.id().to_string(), g.to_string());
             }
-            let c = PluginConfig {
+            let c = PluginState {
                 enabled: s.enabled,
                 rights,
             };
-            if c == PluginConfig::default() {
+            if c == PluginState::default() {
                 out.remove(&e.id);
             } else {
                 out.insert(e.id.clone(), c);
@@ -656,6 +778,7 @@ impl PluginHost {
     /// Beendet die Instanz (falls eine läuft) und vergisst ihr Postfach; ein noch ladender Start
     /// wird beim Abholen verworfen (seine Generation stimmt dann nicht mehr).
     fn stop_instance(&mut self, i: usize) {
+        self.retract(i);
         let slot = &mut self.slots[i];
         if let Some(mut inst) = slot.instance.take() {
             inst.shutdown();
@@ -729,11 +852,7 @@ impl PluginHost {
             .name(format!("plugin-start-{}", manifest.id))
             .spawn(move || {
                 let result = start_instance(&engine, &cache, &dir, &manifest, info, mailbox);
-                let _ = tx.send(Loaded {
-                    index: i,
-                    generation,
-                    result,
-                });
+                let _ = tx.send(Loaded { generation, result });
             });
         if let Err(e) = spawned {
             self.fail(i, format!("Der Start-Thread ließ sich nicht anlegen: {e}"));
@@ -742,13 +861,19 @@ impl PluginHost {
 
     /// Übernimmt das Ergebnis eines Start-Threads, wenn es noch zur aktuellen Generation gehört.
     fn finish_start(&mut self, loaded: Loaded) {
-        let i = loaded.index;
-        if i >= self.slots.len()
-            || self.slots[i].generation != loaded.generation
-            || self.entries[i].state != EntryState::Loading
-        {
+        // Generationen sind im ganzen Host eindeutig; `rescan` darf die Reihenfolge ändern.
+        let slot = self
+            .slots
+            .iter()
+            .position(|s| s.generation != 0 && s.generation == loaded.generation);
+        let Some(i) = slot.filter(|&i| self.entries[i].state == EntryState::Loading) else {
+            // Veraltet (ausgeschaltet, neu gestartet, entfernt): `init` lief schon, also sauber
+            // beenden.
+            if let Ok((mut instance, _, _)) = loaded.result {
+                instance.shutdown();
+            }
             return;
-        }
+        };
         match loaded.result {
             Ok((instance, registration, texts)) => {
                 let slot = &mut self.slots[i];
@@ -794,6 +919,24 @@ impl PluginHost {
         }
     }
 
+    /// Nimmt noch nicht abgeholte Nachfragen, Netzanfragen (der aktuellen Generation) und
+    /// Dialoge von Eintrag `i` aus dem Ausgang, weil die Instanz gleich verschwindet. Meldungen,
+    /// Protokoll und Ausfälle bleiben.
+    fn retract(&mut self, i: usize) {
+        let id = &self.entries[i].id;
+        let current = self.slots[i].generation;
+        self.outbox.retain(|e| match e {
+            HostEvent::Ask {
+                plugin, generation, ..
+            }
+            | HostEvent::Net {
+                plugin, generation, ..
+            } => !(plugin == id && *generation == current),
+            HostEvent::OpenDialog { plugin, .. } => plugin != id,
+            _ => true,
+        });
+    }
+
     /// Holt die Ereignisse aus dem Postfach von Eintrag `i`.
     fn drain(&mut self, i: usize) {
         if let Some(mb) = &self.slots[i].mailbox {
@@ -803,6 +946,7 @@ impl PluginHost {
 
     /// Ein Ausfall: Instanz weg, Zähler hoch, genau ein [`HostEvent::Failed`].
     fn fail(&mut self, i: usize, reason: String) {
+        self.retract(i);
         let slot = &mut self.slots[i];
         slot.instance = None;
         slot.mailbox = None;
@@ -859,4 +1003,71 @@ fn start_instance(
     )?;
     let registration = instance.init(info)?;
     Ok((instance, registration, PluginTexts::new(&languages)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mailbox() -> Mailbox {
+        let manifest = Manifest::parse(
+            "id = \"a.b\"\nname = \"A\"\nversion = \"0.1.0\"\napi = \"0.1\"\nauthor = \"x\"\n\
+             license = \"MIT\"\ndescription = \"d\"\nrights = [\"net\"]\nnet-hosts = [\"example.org\"]\n",
+        )
+        .unwrap();
+        Mailbox {
+            plugin: "a.b".into(),
+            generation: 1,
+            manifest,
+            rights: Rights::default(),
+            requests: Requests::default(),
+            events: Vec::new(),
+            deliveries: Vec::new(),
+            asks: BTreeMap::new(),
+            waiting: Vec::new(),
+            net_open: BTreeSet::new(),
+        }
+    }
+
+    fn voll() -> RequestResult {
+        RequestResult::Failed(QUEUE_FULL.into())
+    }
+
+    #[test]
+    fn full_queue_records_no_state() {
+        let mut mb = mailbox();
+        mb.events = vec![HostEvent::Changed; MAX_QUEUE];
+        mb.ask(Pending::AskRight {
+            request: 1,
+            right: Right::Net,
+        });
+        mb.net(2, "https://example.org/".into());
+        assert!(mb.asks.is_empty(), "keine Nachfrage ohne Ereignis");
+        assert!(
+            mb.net_open.is_empty(),
+            "keine offene Netzanfrage ohne Ereignis"
+        );
+        assert_eq!(mb.deliveries, vec![(1, voll()), (2, voll())]);
+    }
+
+    #[test]
+    fn full_waiting_list_answers_failed() {
+        let mut mb = mailbox();
+        mb.ask(Pending::AskRight {
+            request: 1,
+            right: Right::Net,
+        });
+        mb.waiting = (0..MAX_QUEUE as u64)
+            .map(|n| Pending::AskRight {
+                request: 100 + n,
+                right: Right::Net,
+            })
+            .collect();
+        mb.ask(Pending::Net {
+            request: 2,
+            url: "https://example.org/".into(),
+        });
+        assert_eq!(mb.waiting.len(), MAX_QUEUE);
+        assert_eq!(mb.deliveries, vec![(2, voll())]);
+    }
 }

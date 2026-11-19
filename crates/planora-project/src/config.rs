@@ -507,9 +507,10 @@ fn lenient_favorites<'de, D: Deserializer<'de>>(
     Ok(clean_favorites(list))
 }
 
-/// Liest `plugins` nachsichtig: ein falscher Typ ergibt „leer“, Einträge, die sich nicht als
-/// [`PluginConfig`] lesen lassen (etwa `"enabled": "ja"`), werden übergangen; Rechte mit einem
-/// anderen Wert als `"allowed"`/`"denied"` fallen einzeln weg.
+/// Liest `plugins` nachsichtig: ein falscher Typ ergibt „leer“, ein Eintrag, der kein Objekt ist,
+/// wird übergangen. `enabled` und `rights` werden getrennt gelesen, damit ein kaputter Wert nicht
+/// den anderen kostet: ein `enabled`, das kein Wahrheitswert ist, gilt als eingeschaltet; Rechte
+/// mit einem anderen Wert als `"allowed"`/`"denied"` fallen einzeln weg.
 fn lenient_plugins<'de, D: Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<BTreeMap<String, PluginConfig>, D::Error> {
@@ -520,9 +521,24 @@ fn lenient_plugins<'de, D: Deserializer<'de>>(
     Ok(map
         .iter()
         .filter_map(|(id, v)| {
-            let mut c: PluginConfig = serde_json::from_value(v.clone()).ok()?;
-            c.rights.retain(|_, g| g == "allowed" || g == "denied");
-            Some((id.clone(), c))
+            let entry = v.as_object()?;
+            let enabled = entry
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            let rights = entry
+                .get("rights")
+                .and_then(serde_json::Value::as_object)
+                .map(|r| {
+                    r.iter()
+                        .filter_map(|(k, g)| {
+                            let g = g.as_str()?;
+                            (g == "allowed" || g == "denied").then(|| (k.clone(), g.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some((id.clone(), PluginConfig { enabled, rights }))
         })
         .collect())
 }
