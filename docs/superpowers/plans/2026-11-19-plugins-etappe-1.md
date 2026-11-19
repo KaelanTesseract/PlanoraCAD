@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** PlanoraCAD lädt abgeschottete WebAssembly-Plug-ins aus `.pcplugin`-Dateien, fragt Rechte beim ersten Gebrauch ab, zeigt ihre Befehle im Menü „Hilfsprogramme“ und einfache Dialoge, und überlebt kaputte Plug-ins.
+**Goal:** PlanoraCAD lädt abgeschottete WebAssembly-Plug-ins aus `.pcplugin`-Dateien oder über den Link ihres GitHub-Repos (und hält sie darüber aktuell), fragt Rechte beim ersten Gebrauch ab, zeigt ihre Befehle im Menü „Hilfsprogramme“ und einfache Dialoge, und überlebt kaputte Plug-ins.
 
 **Architecture:** Neues Crate `planora-plugin-api` (nur WIT), neues Crate `planora-plugin-host` (wasmtime ohne egui: Paket, Laufzeit, Grenzen, Rechte, Fundorte), Oberflächenseite in `planora-app` (Verwaltung im `Workspace`, Menü, Dialoge, Rechte-Nachfrage, Einstellungsabschnitt). Plug-ins sind Rust-Komponenten für `wasm32-wasip2` in einem eigenen Workspace `plugins/`; ihre `.wasm` liegen als Testdaten im Repo.
 
@@ -53,6 +53,7 @@
 | `crates/planora-app/src/plugin_dialog.rs` | beschriebene Dialoge zeichnen |
 | `crates/planora-app/src/plugin_prompts.rs` | Rechte-Nachfrage, Installationsdialog |
 | `crates/planora-app/src/settings_window.rs` | Abschnitt „Plug-ins“ |
+| `crates/planora-update/src/plugin_source.rs` | Repo-Link lesen, Releases eines Plug-in-Repos wählen und prüfen |
 | `plugins/{Cargo.toml,beispiel-hallo,test-faelle}` | Plug-in-Workspace (nicht im Haupt-Workspace) |
 | `tools/build-plugins.ps1`, `tools/build-plugins.sh` | Plug-ins bauen, `.wasm` und Quell-Hash nach `crates/planora-plugin-host/tests/data/` |
 | `docs/plugins/entwickler.md` | Entwickler-Doku |
@@ -275,7 +276,43 @@ Verhalten: Titel und Feldbeschriftungen sind Text-Schlüssel und werden **bei je
 - [ ] **Step 2: FAIL prüfen, implementieren, PASS** (`cargo test -p planora-app --test plugin_settings`, `cargo test -p planora-plugin-host`).
 - [ ] **Step 3: Commit** `Plug-ins Etappe 1 Task 7: Einstellungen Plug-ins und Installation`.
 
-### Task 8: Doku, Prüfung, Messung
+### Task 8: Installieren und Aktualisieren über den Repo-Link
+
+**Files:**
+- Create: `crates/planora-update/src/plugin_source.rs`, `crates/planora-update/tests/plugin_source.rs`
+- Modify: `crates/planora-update/src/lib.rs`, `crates/planora-update/src/install.rs` (`redirect_target` und die Host-Regel ohne festes `REPO` nutzbar machen, ohne das Verhalten für Programm-Updates zu ändern), `crates/planora-plugin-host/src/places.rs` (`herkunft.json`), `crates/planora-project/src/config.rs` (`last_plugin_check`), `crates/planora-app/src/plugins.rs`, `crates/planora-app/src/plugin_prompts.rs`, `crates/planora-app/src/settings_window.rs`, `crates/planora-i18n/languages/{de,en}.ftl`
+- Create: `crates/planora-app/tests/plugin_repo.rs`
+
+**Interfaces:**
+- Consumes: `Package::read`, `places::install`, `PluginHost::rescan` (Task 4); Installationsdialog und Abschnitt „Plug-ins“ (Task 7); `planora_update::{Channel, parse_notes, get_limited}`; `planora_update::check::due` (Tagesregel); `Config::update_check`, `Config::update_channel`.
+- Produces:
+  - `plugin_source::RepoLink { owner: String, repo: String }`; `fn parse_repo_link(text: &str) -> Result<RepoLink, String>`; `fn releases_url(&self) -> String` (= `https://api.github.com/repos/<owner>/<repo>/releases`); `fn web_url(&self) -> String` (= `https://github.com/<owner>/<repo>`).
+  - `plugin_source::PluginRelease { version: semver::Version, tag: String, notes: String, package: AssetRef, sha256: Option<AssetRef> }`; `fn parse_plugin_releases(json: &str, link: &RepoLink) -> Result<Vec<PluginRelease>, String>` (Entwürfe übergangen; Release ohne oder mit mehreren `*.pcplugin` übergangen; Asset-URLs nur `https://github.com/<owner>/<repo>/releases/download/<tag>/<name>`); `fn pick_plugin_release(releases: &[PluginRelease], installed: Option<&Version>, channel: Channel) -> Option<&PluginRelease>` (neueste passende, höher als `installed`).
+  - `fn check_downloaded(pkg: &Package, release: &PluginRelease, installed_id: Option<&str>) -> Result<(), String>`: Tag ohne `v` = `pkg.manifest.version`; `installed_id` gesetzt ⇒ gleiche `id`. (Liegt in `planora-app`, weil `planora-update` `Package` nicht kennt.)
+  - Grenzen: Releases-JSON ≤ 4 MiB, Paket ≤ `MAX_PACKAGE` (64 MiB), Prüfsummendatei ≤ 64 KiB, Zeitgrenze je Anfrage 30 s; Weiterleitungen nur nach `github.com`, `api.github.com`, `*.githubusercontent.com` (bestehende Regel aus `redirect_target`).
+  - `places::Provenance { link: String, tag: String }`; `fn read_provenance(dir: &Path) -> Option<Provenance>`, `fn write_provenance(dir: &Path, p: &Provenance) -> io::Result<()>` (`herkunft.json`, nachsichtig gelesen); `install` bekommt `provenance: Option<&Provenance>`.
+  - In `Plugins`: `fn install_from_link(&mut self, text: &str)` (startet einen `Job`: Releases holen → wählen → Paket und ggf. Prüfsumme laden → `Package::read` → `check_downloaded` → Installationsdialog aus Task 7 mit den Paketdaten; erst „Installieren“ schreibt auf die Platte und ruft `rescan`); `fn check_updates(&mut self, manual: bool)` (je installiertem Plug-in mit `herkunft.json` ein Job); `fn updates(&self) -> &[PluginUpdate]` (`PluginUpdate { id: String, from: Version, to: PluginRelease, new_rights: BTreeSet<Right> }`; `new_rights` erst nach dem Laden des Pakets bekannt, vorher leer); `fn apply_update(&mut self, id: &str)`.
+  - Oberfläche:
+    - Installationsdialog aus Task 7 mit zwei Wegen: Knopf „Aus Datei…“ und Feld „Repo-Link“ mit Knopf „Holen“ (`plugin-install-link`, `plugin-install-fetch`), währenddessen „Wird geholt…“ und „Abbrechen“. Fehler als Text im Dialog: `plugin-link-invalid` „Das ist kein GitHub-Repo-Link (https://github.com/besitzer/repo).“, `plugin-link-no-release` „In diesem Repo gibt es kein Release mit einer .pcplugin-Datei.“, `plugin-link-mismatch` „Das Release { $tag } passt nicht zur Plug-in-Version { $version }.“, `plugin-link-checksum` „Die Prüfsumme stimmt nicht.“, `plugin-link-network` „Keine Verbindung zu GitHub: { $detail }“.
+    - Abschnitt „Plug-ins“: bei Plug-ins mit Link die Zeile „Quelle: <web_url>“, Knopf „Nach Updates suchen“ (`plugin-check-updates`), bei verfügbarem Update „Aktualisieren auf { $version }“ (`plugin-update-to`).
+    - Hinweis oben im Fenster wie die Fehlerleiste: „Für { $count } Plug-ins gibt es Updates.“ (`plugin-updates-available`, Fluent-Mehrzahl) mit „Anzeigen“ (öffnet Abschnitt „Plug-ins“) und „Schließen“.
+    - Aktualisieren-Dialog: alte → neue Version, Release-Notizen (über `parse_notes`, wie im Update-Dialog des Programms), „Neu verlangte Rechte: …“ (nur wenn nicht leer, mit dem Satz „Das Programm fragt beim ersten Gebrauch nach“), Knöpfe „Aktualisieren“, „Abbrechen“. Erteilte Rechte bleiben.
+  - Automatische Prüfung: beim Start, wenn `config.update_check` an ist und `due(now, last_plugin_check, true, false)`; Zeitpunkt im neuen Config-Feld `last_plugin_check: Option<u64>` (nachsichtig, nicht geschrieben, wenn `None`). Mitgelieferte Plug-ins werden nie geprüft.
+
+- [ ] **Step 1: Failing Tests in `crates/planora-update/tests/plugin_source.rs`:** `link_forms` (`https://github.com/a/b`, `github.com/a/b`, `https://github.com/a/b/`, `https://github.com/a/b.git`, Großschreibung im Host → alle `RepoLink { owner: "a", repo: "b" }`); `link_rejects` (`https://gitlab.com/a/b`, `https://github.com/a`, `https://github.com/a/b/tree/main`, `https://github.com/a/b?x=1`, `https://u@github.com/a/b`, `http://github.com/a/b`, Besitzer oder Repo mit `..`, leer, Leerzeichen); `releases_parse` (Beispiel-JSON mit Entwurf, Vorabversion, Release ohne Paket, Release mit zwei Paketen, gültigem Release mit `.pcplugin` und `.pcplugin.sha256`, fremder Asset-URL → nur die gültigen, fremde URL verworfen); `pick_respects_channel_and_installed` (Kanal `stable` überspringt `0.2.0-beta.1`; `installed = 0.2.0` → keine Wahl bei neuestem `0.2.0`); `redirect_rule_for_plugin_assets` (Weiterleitung von einer Plug-in-Asset-URL nach `objects.githubusercontent.com` erlaubt, nach `example.org` abgelehnt; bestehende Tests von `redirect_target` bleiben grün).
+- [ ] **Step 2: FAIL prüfen, `plugin_source.rs` implementieren**, PASS (`cargo test -p planora-update`).
+- [ ] **Step 3: Failing Tests für `herkunft.json`** in `crates/planora-plugin-host/tests/places.rs`: `provenance_roundtrip`, `provenance_lenient` (kaputtes JSON → `None`, Plug-in lädt trotzdem), `install_writes_provenance`. Implementieren, PASS (`cargo test -p planora-plugin-host`).
+- [ ] **Step 4: Failing Tests in `crates/planora-app/tests/plugin_repo.rs`** (HTTP über die austauschbare Netzfunktion in `Plugins` aus Task 5; Antworten aus Testdaten: Releases-JSON und `tests/data/beispiel-hallo.pcplugin`; für ein Update ein zur Testzeit gebautes Paket aus demselben Wasm mit `version = "0.2.0"` und zusätzlichem Recht `net`):
+  - `install_from_link_shows_dialog_then_runs` (Link eingeben → Dialog mit Name, Version, Lizenz → „Installieren“ → Befehl im Menü, `herkunft.json` vorhanden).
+  - `install_from_link_errors` (ungültiger Link, kein Release, falsche Prüfsumme, Tag passt nicht, Netzfehler → jeweils der Text aus den Interfaces, nichts installiert).
+  - `update_found_and_applied` (installiert 0.1.0 mit Link → `check_updates(true)` → `updates()` enthält 0.2.0 mit `new_rights == {net}` → `apply_update` → läuft 0.2.0, neue Generation, `net` noch nicht erteilt, alte Rechte erhalten).
+  - `no_downgrade_and_no_foreign_id` (Release mit 0.0.9 wird nicht angeboten; Release mit anderer `id` wird beim Aktualisieren abgelehnt).
+  - `auto_check_daily` (`update_check` aus → keine Anfrage; an und `last_plugin_check` vor 25 h → eine Anfrage je Plug-in mit Link, danach `last_plugin_check` gesetzt; vor 1 h → keine).
+  - `bundled_plugins_not_checked`.
+- [ ] **Step 5: FAIL prüfen, implementieren, PASS** (`cargo test -p planora-app --test plugin_repo`, `cargo test -p planora-i18n`).
+- [ ] **Step 6: Commit** `Plug-ins Etappe 1 Task 8: Installieren und Aktualisieren über den Repo-Link`.
+
+### Task 9: Doku, Prüfung, Messung
 
 **Files:**
 - Create: `docs/plugins/entwickler.md`, Wiki-Seite „Plug-ins“ im Benutzer-Wiki (Ort wie bestehende Wiki-Seiten im Repo)
@@ -285,5 +322,5 @@ Verhalten: Titel und Feldbeschriftungen sind Text-Schlüssel und werden **bei je
 - [ ] **Step 2: Volle Tests Windows:** `$env:CARGO_INCREMENTAL=0; $env:CARGO_PROFILE_DEV_DEBUG=0; cargo test --workspace` → 0 failed; `cargo clippy --workspace --all-targets` → keine Warnungen; `cargo deny check` → ok.
 - [ ] **Step 3: Volle Tests Ubuntu (WSL)** mit denselben Variablen → 0 failed außer dem bekannten Vorschaubild-Test als root; danach WSL aufräumen laut Global Constraints.
 - [ ] **Step 4: Messen und notieren:** Programmstart ohne Plug-ins und mit beiden Beispiel-Plug-ins (erster Start mit Übersetzen, zweiter Start aus dem Zwischenspeicher), Größe `planora-app.exe` vorher/nachher, Release-Bauzeit vorher/nachher. Ziel: zweiter Start höchstens 50 ms langsamer als ohne Plug-ins.
-- [ ] **Step 5: Dennis fragen**, ob er jetzt den Handtest machen möchte (Installieren aus Datei, Hallo-Dialog, Rechte-Nachfrage mit `test-faelle.netz`, Ausfall und Neu starten, Einstellungen).
-- [ ] **Step 6: Commit** `Plug-ins Etappe 1 Task 8: Doku, Prüfung, Messung`; Vault-Notiz in `D:\Vault\Vault\Projekte\PlanoraCAD\`.
+- [ ] **Step 5: Dennis fragen**, ob er jetzt den Handtest machen möchte (Installieren aus Datei und über einen Repo-Link, Update eines Plug-ins, Hallo-Dialog, Rechte-Nachfrage mit `test-faelle.netz`, Ausfall und Neu starten, Einstellungen).
+- [ ] **Step 6: Commit** `Plug-ins Etappe 1 Task 9: Doku, Prüfung, Messung`; Vault-Notiz in `D:\Vault\Vault\Projekte\PlanoraCAD\`.

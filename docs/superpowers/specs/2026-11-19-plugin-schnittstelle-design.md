@@ -30,7 +30,7 @@ Es gibt drei Vorhaben, jedes einzeln geplant:
 
 **Ziele (Vorhaben 1):** Laufzeit, versionierter Vertrag, Paketformat, Installation aus Datei, Rechte, Plug-in-Verwaltung in den Einstellungen, Dateiabschnitte, Befehle/Menüs/Keymap/Baum/Dialoge, Arbeitsbereiche mit Leisten und Zeichenfläche, zweites Fenster, Beispiel-Plug-ins in Rust, Entwickler-Doku.
 
-**Nicht-Ziele:** Umzug der Elektronik (Vorhaben 2); Installer-Komponente, Updates von Plug-ins, Katalog, Signaturprüfung gegen einen Schlüssel (Vorhaben 3; das Paketformat hat aber schon den Platz dafür); Beispiel-Plug-ins in C/C++, Go, Python (Vorlagen und Doku genügen; gebaut wird nur Rust, **Vorschlag (Claude)**: ein Python-Hallo-Welt nur als Rauchtest, wenn componentize-py ohne Aufwand läuft); Plug-ins, die eigene 3D-Körper berechnen oder in den Modellierkern eingreifen.
+**Nicht-Ziele:** Umzug der Elektronik (Vorhaben 2); Installer-Komponente, Katalog, Signaturprüfung gegen einen Schlüssel (Vorhaben 3; das Paketformat hat aber schon den Platz dafür); Beispiel-Plug-ins in C/C++, Go, Python (Vorlagen und Doku genügen; gebaut wird nur Rust, **Vorschlag (Claude)**: ein Python-Hallo-Welt nur als Rauchtest, wenn componentize-py ohne Aufwand läuft); Plug-ins, die eigene 3D-Körper berechnen oder in den Modellierkern eingreifen.
 
 **Anti-Ziele:** Plug-ins zeichnen keine freien Pixel und bekommen keinen egui-Zugang; kein Plug-in-Code läuft außerhalb der Abschottung, auch nicht die mitgelieferten.
 
@@ -38,7 +38,7 @@ Es gibt drei Vorhaben, jedes einzeln geplant:
 
 1. **Bauart A, WebAssembly** mit **wasmtime und Component Model/WIT** (Weg 1 von drei; verworfen: wasmi mit eigenem Datenaustausch, zu langsam für große Platinen und keine Sprachanschlüsse; Extism, untypisierter JSON-Vertrag bei gleicher Größe).
 2. **Oberfläche beschreiben (Weg A):** Das Plug-in beschreibt, was es zeigen will; das Programm zeichnet alles selbst. Verworfen: eigenes egui im Plug-in mit fertigen Zeichenlisten (billigerer Umzug der Elektronik, aber uneinheitliches Aussehen, größere Plug-ins, weniger Kontrolle bei fremdem Code).
-3. **Herkunft:** fremde Plug-ins kommen **als Datei**, installiert über „Plug-in installieren…“. Katalog später (Vorhaben 3), das Paketformat ist darauf vorbereitet. Mitgelieferte Plug-ins kommen über den Installer.
+3. **Herkunft:** fremde Plug-ins kommen **als Datei** oder über den **Link ihres Repos** (Dennis, 2026-11-19, in Etappe 1): „Plug-in installieren…“ nimmt eine Datei oder einen Repo-Link; ein über den Link installiertes Plug-in hält sich darüber aktuell. Katalog später (Vorhaben 3; dann eine Liste solcher Links). Mitgelieferte Plug-ins kommen über den Installer und werden mit dem Programm aktualisiert.
 4. **Lizenz:** Plug-ins müssen **GPL-verträglich** lizenziert sein (Dennis, 2026-11-19; verworfen: eine Plug-in-Ausnahme nach §7 GPLv3, die jede Lizenz erlaubt hätte). Siehe „Lizenz der Plug-ins“.
 5. **Rechte:** wie unten unter „Rechte“, Nachfrage **beim ersten Gebrauch**, pro Plug-in gemerkt, in den Einstellungen widerrufbar.
 6. Elektronik ist das erste Plug-in; die Schnittstelle muss ganze Arbeitsbereiche tragen (eigene Zeichenfläche, Leisten, Dialoge, Menüs, Keymap, Baumknoten, Dateiabschnitte, Rückgängig im selben Schritt, zwei Fenster).
@@ -71,6 +71,15 @@ Eine Datei `name.pcplugin` = ZIP mit:
 - optional `signature` (Platz für Vorhaben 3; wird jetzt gelesen und angezeigt als „nicht signiert“/„signiert, nicht geprüft“, nicht geprüft).
 
 Grenzen beim Lesen wie bei Projektdateien (Größe, Anzahl Einträge, keine Pfade mit `..`), **Vorschlag (Claude)**: Paket ≤ 64 MB, Wasm ≤ 32 MB.
+
+### Installieren und Aktualisieren über den Repo-Link
+
+- **Link:** in Etappe 1 nur GitHub: `https://github.com/<besitzer>/<repo>` (auch ohne `https://`, mit `/` oder `.git` am Ende). Andere Adressen werden mit Hinweis abgelehnt (**Vorschlag (Claude)**; weitere Hoster später).
+- **Quelle:** die Releases des Repos über `https://api.github.com/repos/<besitzer>/<repo>/releases`. Entwürfe zählen nie; Vorabversionen nur, wenn der Update-Kanal des Programms sie einschließt (dieselbe Regel wie bei den Programm-Updates). Ein Release zählt, wenn es **genau eine** Datei `*.pcplugin` hat; liegt daneben `<datei>.sha256`, wird die Prüfsumme geprüft.
+- **Prüfungen:** Tag (mit oder ohne `v`) = `version` in `plugin.toml`; bei einem Update gleiche `id` wie das installierte Plug-in und höhere Version (nie zurück). Download nur über HTTPS von `github.com`, `api.github.com` und `*.githubusercontent.com`, Weiterleitungen nur dorthin (wie bei den Programm-Updates), Paketgrenze 64 MB. Das Programm lädt selbst; das Plug-in hat damit nichts zu tun und braucht kein Recht.
+- **Herkunft merken:** im Plug-in-Ordner `herkunft.json` mit Link und installiertem Tag (**Vorschlag (Claude)**: gehört zur Installation und verschwindet mit ihr).
+- **Aktuell halten:** beim Start einmal am Tag (dieselbe Regel wie die Update-Prüfung des Programms, abschaltbar mit demselben Schalter) und mit dem Knopf „Nach Updates suchen“ in den Einstellungen. Gibt es neue Versionen, ein Hinweis „Für N Plug-ins gibt es Updates“; im Abschnitt „Plug-ins“ steht beim Plug-in „Aktualisieren“. Der Aktualisieren-Dialog zeigt alte und neue Version, die Release-Notizen und **neu verlangte Rechte**; erteilte Rechte bleiben, neue werden beim ersten Gebrauch gefragt. Danach läuft die neue Version ohne Neustart.
+- Mitgelieferte Plug-ins haben keinen Link; ein über den Link installiertes Plug-in gleicher `id` überdeckt sie nach der bestehenden Versionsregel.
 
 ### Fundorte
 
@@ -145,7 +154,7 @@ Beschriftung, Zahl mit Einheit (bestehendes Formelfeld mit Parametern), Text, Au
 
 ## Etappen
 
-1. **Grundgerüst:** Crates `planora-plugin-api`, `-host`, `-sdk`; wasmtime-Einbettung mit Grenzen; Paketformat, Installation aus Datei, Fundorte; Einstellungsseite „Plug-ins“; Rechte mit Nachfragedialog (an `net` beispielhaft); Fehlerbehandlung; Befehl im Menü „Zusatzmodule“, Meldung, einfacher Dialog; Beispiel-Plug-in `beispiel-hallo`; cargo-deny für wasmtime; Entwickler-Doku (erste Fassung) und Benutzer-Wiki-Seite.
+1. **Grundgerüst:** Crates `planora-plugin-api`, `-host`, `-sdk`; wasmtime-Einbettung mit Grenzen; Paketformat, Installation aus Datei und über den Repo-Link mit Updates, Fundorte; Einstellungsseite „Plug-ins“; Rechte mit Nachfragedialog (an `net` beispielhaft); Fehlerbehandlung; Befehl im Menü „Zusatzmodule“, Meldung, einfacher Dialog; Beispiel-Plug-in `beispiel-hallo`; cargo-deny für wasmtime; Entwickler-Doku (erste Fassung) und Benutzer-Wiki-Seite.
 2. **Dateiabschnitte und Befehle:** Plug-in-Abschnitte im Dokument mit Rückgängig, neue Formatnummer, Erhalt fremder Abschnitte, Schema-Upgrade; Keymap, Baumknoten, alle Dialogbausteine, Datei-Dialog-Zugriff, `fs-folder`, `model-read`, `model-write`; `beispiel-hallo` erweitert (Zähler im Dokument, Baum, Import einer Textdatei).
 3. **Arbeitsbereiche mit Zeichenfläche:** Arbeitsbereich, Leiste, Zeichenbefehle, Ebenen, Ziehen, Fangen, Ereignisse, zweites Fenster; `beispiel-flaeche` (einfacher Zeichen-Arbeitsbereich mit Rechtecken und Linien), Messtest.
 
