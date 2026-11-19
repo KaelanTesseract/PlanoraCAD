@@ -769,6 +769,15 @@ impl PluginHost {
         out
     }
 
+    /// Der Text `key` aus den Sprachdateien des laufenden Plug-ins `plugin` in der Sprache
+    /// `language` (sonst Englisch, sonst der Schlüssel selbst). Für die Beschriftungen seiner
+    /// Dialoge, die das Programm in jedem Bild neu übersetzt.
+    pub fn text(&self, plugin: &str, language: &str, key: &str) -> String {
+        self.running(plugin)
+            .and_then(|i| self.slots[i].texts.as_ref())
+            .map_or_else(|| key.to_string(), |t| t.text(language, key, &[]))
+    }
+
     fn index(&self, id: &str) -> Option<usize> {
         self.entries.iter().position(|e| e.id == id)
     }

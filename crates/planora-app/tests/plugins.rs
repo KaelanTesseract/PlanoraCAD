@@ -237,13 +237,13 @@ fn menu_lists_plugin_command() {
     assert!(find(&seen, "Verwalten …").is_some(), "{}", join(&seen));
     assert!(find(&seen, "Hallo sagen").is_some(), "{}", join(&seen));
 
-    // Der Befehl läuft: das Beispiel öffnet seinen Dialog (gezeichnet wird er in Task 6).
+    // Der Befehl läuft: das Beispiel öffnet seinen Dialog.
     menue_klick(&mut ws, &ctx, &mut shell, &seen, "Hallo sagen", &mut got);
     assert_eq!(got, MenuRequest::None);
     bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.dialogs.len(), 1, "Dialog vermerkt");
     assert_eq!(ws.plugins.dialogs[0].plugin, HALLO);
-    assert_eq!(ws.plugins.dialogs[0].dialog.id, "gruss");
+    assert_eq!(ws.plugins.dialogs[0].spec.id, "gruss");
 }
 
 #[test]

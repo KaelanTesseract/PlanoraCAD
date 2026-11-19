@@ -6,12 +6,14 @@
 //! Dazu das Untermenü Datei → „Zusatzmodule“ mit den Befehlen aller laufenden Plug-ins.
 //!
 //! Kein Aufruf hier wartet: der Host kehrt sofort zurück, das Netz läuft nur in Aufträgen.
-//! Dialoge der Plug-ins werden hier nur vermerkt ([`Plugins::dialogs`]); gezeichnet werden sie
-//! ab Task 6.
+//! Die Dialoge der Plug-ins ([`Plugins::dialogs`]) zeichnet [`crate::plugin_dialog`]; ihre
+//! Ereignisse gehen hier an den Host.
 
 use crate::app::MenuRequest;
 use crate::diag;
 use crate::jobs::{Job, Poll};
+use crate::plugin_dialog;
+pub use crate::plugin_dialog::OpenPluginDialog;
 use crate::plugin_prompts::{self, BannerAction, BannerLine};
 use crate::settings_window::SettingsSection;
 use crate::theme;
@@ -20,7 +22,7 @@ use planora_i18n::tr;
 use planora_plugin_host::manifest::Right;
 use planora_plugin_host::places::Places;
 use planora_plugin_host::rights::Answer;
-use planora_plugin_host::runtime::{Dialog, HttpResponse, Level, RequestResult};
+use planora_plugin_host::runtime::{DialogEvent, HttpResponse, Level, RequestResult};
 use planora_plugin_host::{EntryState, HostEvent, PluginEntry, PluginHost, PluginState};
 use planora_project::config::{Config, PluginConfig};
 use std::collections::{BTreeMap, VecDeque};
@@ -51,13 +53,6 @@ pub struct PromptRequest {
     pub right: Right,
 }
 
-/// Ein offener Dialog eines Plug-ins (gezeichnet ab Task 6).
-#[derive(Clone, Debug, PartialEq)]
-pub struct OpenPluginDialog {
-    pub plugin: String,
-    pub dialog: Dialog,
-}
-
 /// Eine Zeile der Fehlerleiste: ein ausgefallenes Plug-in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FailureBanner {
@@ -74,7 +69,7 @@ pub struct Plugins {
     pub host: PluginHost,
     /// Wartende Rechte-Nachfragen; gezeigt wird nur die vorderste.
     pub prompts: VecDeque<PromptRequest>,
-    /// Offene Dialoge der Plug-ins (öffnen, ersetzen, schließen; gezeichnet ab Task 6).
+    /// Offene Dialoge der Plug-ins (öffnen, ersetzen, schließen; gezeichnet in [`Plugins::frame`]).
     pub dialogs: Vec<OpenPluginDialog>,
     pub net_jobs: Vec<NetJob>,
     pub banners: Vec<FailureBanner>,
@@ -219,15 +214,16 @@ impl Plugins {
                 match self
                     .dialogs
                     .iter_mut()
-                    .find(|d| d.plugin == plugin && d.dialog.id == dialog.id)
+                    .find(|d| d.plugin == plugin && d.spec.id == dialog.id)
                 {
-                    Some(open) => open.dialog = dialog,
-                    None => self.dialogs.push(OpenPluginDialog { plugin, dialog }),
+                    // Gleiche id: neue Felder, Werte gleicher Feld-id bleiben.
+                    Some(open) => open.reopen(dialog),
+                    None => self.dialogs.push(OpenPluginDialog::new(plugin, dialog)),
                 }
             }
             HostEvent::CloseDialog { plugin, id } => {
                 self.dialogs
-                    .retain(|d| !(d.plugin == plugin && d.dialog.id == id));
+                    .retain(|d| !(d.plugin == plugin && d.spec.id == id));
             }
             HostEvent::Ask {
                 plugin,
@@ -360,7 +356,35 @@ impl Plugins {
         std::mem::take(&mut self.messages)
     }
 
-    /// Ein Bild: [`Plugins::update`], dann die vorderste Nachfrage und die Fehlerleiste.
+    /// Zeichnet die offenen Dialoge (Texte in der aktuellen Sprache aus den Sprachdateien ihres
+    /// Plug-ins) und meldet ihre Ereignisse an den Host; nach `ok` und `cancel` ist der Dialog
+    /// zu, bevor das Plug-in davon erfährt. `true`, wenn ein Ereignis gemeldet wurde.
+    fn show_dialogs(&mut self, ctx: &egui::Context) -> bool {
+        let language = planora_i18n::current().id().to_string();
+        let mut events = Vec::new();
+        for d in &mut self.dialogs {
+            let host = &self.host;
+            let plugin = d.plugin.clone();
+            let texts = |key: &str| host.text(&plugin, &language, key);
+            if let Some(ev) = plugin_dialog::show(ctx, d, &texts) {
+                events.push((d.plugin.clone(), d.spec.id.clone(), ev));
+            }
+        }
+        let acted = !events.is_empty();
+        for (plugin, id, ev) in events {
+            if matches!(ev, DialogEvent::Ok(_) | DialogEvent::Cancel) {
+                self.dialogs
+                    .retain(|d| !(d.plugin == plugin && d.spec.id == id));
+            }
+            // Fällt das Plug-in dabei aus, räumt das `Failed` beim nächsten `poll` seine
+            // übrigen Dialoge weg.
+            self.host.dialog_event(&plugin, &id, ev);
+        }
+        acted
+    }
+
+    /// Ein Bild: [`Plugins::update`], dann die vorderste Nachfrage, die offenen Dialoge und
+    /// die Fehlerleiste.
     /// `true`, wenn sich `config.plugins` geändert hat.
     pub fn frame(&mut self, ctx: &egui::Context, config: &mut Config) -> bool {
         let changed = self.update(config);
@@ -373,6 +397,8 @@ impl Plugins {
                 acted = true;
             }
         }
+        // Nach der Nachfrage: deren Esc (Ablehnen) bricht nicht zugleich einen Dialog ab.
+        acted |= self.show_dialogs(ctx);
         let names: Vec<String> = self
             .banners
             .iter()
