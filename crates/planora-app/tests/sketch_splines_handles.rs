@@ -295,9 +295,10 @@ fn a_tool_change_takes_over_the_drag_of_a_fit_point_with_a_handle() {
     assert_eq!(undo_len(&s), steps + 1);
 }
 
-/// Der Rho-Griff ist immer da: Es gibt nichts einzuschalten, also ist es ein gewöhnlicher Zug.
+/// Der Rho-Griff ist immer da, der Werkzeugwechsel nimmt den Zug aber wie am Drehgriff des Textes
+/// zurück (Skizzen 12 Task 11, Verhalten nach Fusion prüft Handtest 3): Wert wie vorher, kein Schritt.
 #[test]
-fn a_tool_change_takes_over_the_rho_drag() {
+fn a_tool_change_reverts_the_rho_drag() {
     let (mut s, c) = conic_sketch(0.5);
     select(&mut s, &[Item::Curve(c)]);
     let at = conic_shoulder(v(0.0, 0.0), v(10.0, 12.0), v(20.0, 0.0), 0.5);
@@ -305,10 +306,8 @@ fn a_tool_change_takes_over_the_rho_drag() {
     assert!(begin(&mut s, at));
     drag(&mut s, at + v(0.0, 2.4));
     change_tool(&mut s);
-    assert!((rho_of(&s, c) - 0.7).abs() < 1e-9);
-    assert_eq!(undo_len(&s), steps + 1);
-    assert!(s.undo_sketch());
     assert_eq!(rho_of(&s, c), 0.5);
+    assert_eq!(undo_len(&s), steps);
 }
 
 /// Der erste Zug schaltet erst ein und bleibt beim Werkzeugwechsel nie halb stehen, auch nicht, wenn

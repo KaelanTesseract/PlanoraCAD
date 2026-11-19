@@ -574,6 +574,54 @@ pub fn format_angle(rad: f64) -> String {
     format!("{}°", format_number(rad.to_degrees(), 1))
 }
 
+/// Abstand der Winkelanzeige vom Zeiger in Bildpunkten (rechts unten daneben).
+const ROTATE_LABEL_GAP: f32 = 18.0;
+/// Schriftgröße der Winkelanzeige.
+const ROTATE_LABEL_SIZE: f32 = 12.0;
+
+/// Der Winkel, den ein laufender Drehzug gerade zeigt (Radiant), sonst `None`: Zug am Drehgriff eines
+/// Textes (Winkel des Textes), am Drehring und an den Drehbögen der Triade bei Verschieben/Kopieren
+/// (gedrehter Winkel um die Achse des Griffs).
+pub fn rotate_drag_angle(se: &SketchSession, sk: &Sketch) -> Option<f64> {
+    if let Some(grab) = se.curve_drag.as_ref().and_then(|d| d.text_rot) {
+        return sk.text_angle(grab.text);
+    }
+    let grip = se.grip_drag?.grip;
+    match grip {
+        Grip::Rotate => Some(se.transform.angle),
+        Grip::RotateX => Some(se.transform.angle_x),
+        Grip::RotateY => Some(se.transform.angle_y),
+        _ => None,
+    }
+}
+
+/// Lage und Text der Winkelanzeige am Zeiger `at`: neben dem Zeiger, der Text über [`format_angle`]
+/// (Einheit und Dezimaltrenner der Anzeige).
+pub fn rotate_angle_label(at: Pos2, angle_rad: f64) -> (Pos2, String) {
+    (
+        at + vec2(ROTATE_LABEL_GAP, ROTATE_LABEL_GAP),
+        format_angle(angle_rad),
+    )
+}
+
+/// Zeichnet die Winkelanzeige während eines Drehzugs am Zeiger.
+fn paint_rotate_angle(
+    painter: &egui::Painter,
+    se: &SketchSession,
+    sk: &Sketch,
+    pointer: Option<Pos2>,
+    col: &theme::SketchColors,
+) {
+    let (Some(angle), Some(p)) = (rotate_drag_angle(se, sk), pointer) else {
+        return;
+    };
+    let (at, text) = rotate_angle_label(p, angle);
+    let galley = painter.layout_no_wrap(text, FontId::proportional(ROTATE_LABEL_SIZE), col.text);
+    let r = Rect::from_min_size(at, galley.size()).expand(3.0);
+    painter.rect_filled(r, 3.0, col.label_bg);
+    painter.galley(at, galley, col.text);
+}
+
 /// Ist das ein Winkelmaß (Anzeige und Eingabe in Grad)?
 pub fn is_angle(kind: &ConstraintKind) -> bool {
     matches!(
@@ -4104,6 +4152,9 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
 
     // Triade der 3D-Skizze über der Skizze (Skizzen 10).
     crate::sketch_triad::paint(&painter, rect, state, pointer);
+
+    // Winkel am Zeiger beim Zug an einem Drehgriff (Text, Drehring und Drehbögen der Triade).
+    paint_rotate_angle(&painter, se, sk, pointer, &col);
 
     painter.extend(box_select_shapes(state));
 }
