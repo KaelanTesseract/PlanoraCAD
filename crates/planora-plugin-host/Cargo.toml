@@ -16,6 +16,8 @@ planora-plugin-api.workspace = true
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 planora-exchange.workspace = true
+# Meldungen in der Sprache des Programms (tr!, wie planora-update und planora-exchange).
+planora-i18n.workspace = true
 semver.workspace = true
 serde.workspace = true
 thiserror.workspace = true

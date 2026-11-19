@@ -21,7 +21,7 @@ use crate::keymap::{self, Action};
 use crate::plane_dialog::{PlaneCommand, PlaneDialog};
 use crate::project_actions::ProjectsUi;
 use crate::projects_window::{ProjectsEvent, ProjectsWindow};
-use crate::settings_window::{CheckHint, SettingsEvent, SettingsWindow};
+use crate::settings_window::{CheckHint, SettingsEvent, SettingsSection, SettingsWindow};
 use crate::shell::ShellState;
 use crate::sketch_state::Tool;
 use crate::state::{AppState, BodyKind, FontState, SketchRequest, StandardPlane};
@@ -99,7 +99,8 @@ pub enum MenuRequest {
     #[default]
     None,
     Projects,
-    Settings,
+    /// Die Einstellungen, auf Wunsch an einem Abschnitt.
+    Settings(Option<SettingsSection>),
     Shortcuts,
     Feedback,
 }
@@ -282,7 +283,10 @@ impl PlanoraApp {
         // Ist die Wurzel nicht nutzbar, startet die App ohne Bibliothek; Speichern fragt dann
         // zuerst nach einem Projektordner.
         let library = planora_project::library::Library::open(&root).ok();
-        let ws = Workspace::new(library, config);
+        let mut ws = Workspace::new(library, config);
+        // Nur hier laufen die Plug-ins aus den Fundorten des Programms (Tests nehmen Temp-Ordner).
+        ws.plugins =
+            crate::plugins::Plugins::new(planora_plugin_host::places::Places::system(), &ws.config);
         // Nur hier geht das Programm ins Netz und startet den Installer; Tests bekommen
         // Nachbildungen.
         let source = Arc::new(HttpSource::new(&running));
@@ -771,6 +775,18 @@ impl PlanoraApp {
         self.update_dialog.install_hidden = false;
     }
 
+    /// Das Fenster „Einstellungen“ (für Tests).
+    #[doc(hidden)]
+    pub fn settings_window(&self) -> &SettingsWindow {
+        &self.settings
+    }
+
+    /// Das Fenster „Einstellungen“, zum Ändern (für Tests).
+    #[doc(hidden)]
+    pub fn settings_window_mut(&mut self) -> &mut SettingsWindow {
+        &mut self.settings
+    }
+
     /// App ohne Fenster und Renderer für die Oberflächentests; ohne Netz (die Prüfung auf
     /// Updates meldet immer „kein Netz“ und speichert nichts).
     #[doc(hidden)]
@@ -1092,8 +1108,11 @@ impl PlanoraApp {
             MenuRequest::Projects => {
                 open_projects(&mut self.ws, &mut self.projects, &mut self.settings)
             }
-            MenuRequest::Settings => {
-                open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false)
+            MenuRequest::Settings(section) => {
+                open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false);
+                if self.settings.is_open() {
+                    self.settings.open_at(false, section);
+                }
             }
             MenuRequest::Shortcuts => open_overview(
                 &mut self.ws,
@@ -2189,6 +2208,13 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
         commands::run_action(ws, Action::Close);
         ui.close();
     }
+    // Plug-ins: „Verwalten …“ und die Befehle der laufenden Plug-ins (crate::plugins).
+    ui.menu_button(tr!("menu-file-addins"), |ui| {
+        let r = ws.plugins.addins_menu(ui);
+        if r != MenuRequest::None {
+            request = r;
+        }
+    });
     if entry(
         ui,
         ws.prompt.is_none(),
@@ -2197,7 +2223,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     .on_disabled_hover_text(tr!("menu-answer-prompt-first"))
     .clicked()
     {
-        request = MenuRequest::Settings;
+        request = MenuRequest::Settings(None);
         ui.close();
     }
     if entry(ui, true, icons::button(Icon::Quit, tr!("menu-file-quit"))).clicked() {
@@ -3296,6 +3322,8 @@ impl eframe::App for PlanoraApp {
         self.crash_notice_tick(&ctx, dark);
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
+        // Plug-ins: Ereignisse, Netz-Aufträge, Rechte-Nachfrage und Fehlerleiste.
+        crate::plugins::show(&ctx, &mut self.ws);
         // Nach allen Feldern und Dialogen (auch abgedockten): deren unverbrauchte Tasten; vor den
         // Schritten für Rückgängig, damit eine Änderung im selben Bild ein Schritt wird.
         self.shortcuts_from_children(&ctx);

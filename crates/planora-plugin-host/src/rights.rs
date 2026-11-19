@@ -1,6 +1,7 @@
 //! Rechte, Nutzerantworten und Anfragen mit Kennung.
 
 use crate::manifest::{Manifest, Right};
+use planora_i18n::tr;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Entscheidung über ein Recht.
@@ -105,35 +106,37 @@ pub enum Pending {
 /// Prüft eine Netz-Adresse gegen das Manifest: nur `https://`, Host exakt in
 /// `net-hosts` (ohne Groß-/Kleinschreibung), keine Zugangsdaten, Port nur 443.
 pub fn check_net_url(manifest: &Manifest, url: &str) -> Result<(), String> {
-    let (scheme, rest) = url.split_once("://").ok_or("keine gültige Adresse")?;
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| tr!("plugin-url-invalid"))?;
     if !scheme.eq_ignore_ascii_case("https") {
-        return Err("nur https ist erlaubt".into());
+        return Err(tr!("plugin-url-https-only"));
     }
     // Rückstriche behandeln Browser wie '/', deshalb ablehnen.
     if rest.contains('\\') {
-        return Err("ungültiges Zeichen in der Adresse".into());
+        return Err(tr!("plugin-url-bad-char"));
     }
     // Die Autorität endet am ersten '/', '?' oder '#'.
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..end];
     if authority.contains('@') {
-        return Err("Zugangsdaten in der Adresse sind nicht erlaubt".into());
+        return Err(tr!("plugin-url-credentials"));
     }
     if authority.starts_with('[') {
-        return Err("IP-Adressen sind nicht erlaubt".into());
+        return Err(tr!("plugin-url-ip"));
     }
     let host = match authority.split_once(':') {
         None => authority,
         Some((host, port)) => {
             if port != "443" {
-                return Err("nur Port 443 ist erlaubt".into());
+                return Err(tr!("plugin-url-port"));
             }
             host
         }
     };
     let host = host.strip_suffix('.').unwrap_or(host);
     if host.is_empty() {
-        return Err("kein Rechnername".into());
+        return Err(tr!("plugin-url-no-host"));
     }
     if manifest
         .net_hosts
@@ -142,6 +145,6 @@ pub fn check_net_url(manifest: &Manifest, url: &str) -> Result<(), String> {
     {
         Ok(())
     } else {
-        Err(format!("Rechner {host} ist nicht im Manifest freigegeben"))
+        Err(tr!("plugin-url-host-not-allowed", host = host))
     }
 }

@@ -168,6 +168,26 @@ impl crate::install::Downloader for HttpDownloader {
     }
 }
 
+/// Kennung der Anfragen von Plug-ins (wie die des Programms, ohne weitere Angaben).
+const PLUGIN_USER_AGENT: &str = concat!("PlanoraCAD/", env!("CARGO_PKG_VERSION"));
+
+/// Ein GET für ein Plug-in (nur Windows, sonst Fehler „nur Windows“): genau die Adresse `url`,
+/// nur HTTPS, ohne Weiterleitungen (eine 3xx-Antwort kommt als Antwort zurück), höchstens `max`
+/// Bytes Inhalt, `timeout` für die ganze Anfrage. Jeder Statuscode ist eine Antwort (Status,
+/// Inhalt); ein Fehler ist nur Netz, Zeit oder Größe. Ob die Adresse erlaubt ist, prüft der
+/// Aufrufer (für Plug-ins der Host gegen das Manifest). Wartet: nur in einem Arbeitsthread rufen.
+pub fn get_limited(url: &str, max: u64, timeout: Duration) -> Result<(u16, Vec<u8>), String> {
+    #[cfg(windows)]
+    {
+        windows::get_limited(url, max, timeout)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (url, max, timeout);
+        Err(tr!("update-detail-only-windows"))
+    }
+}
+
 /// Fehler zu einem Statuscode, `None` bei Erfolg (2xx). GitHub meldet das Rate-Limit mit 429
 /// oder mit 403 und `x-ratelimit-remaining: 0`.
 #[cfg(windows)]
@@ -329,6 +349,41 @@ mod windows {
         )))
     }
 
+    /// Client für Plug-ins: nur HTTPS, keine Weiterleitungen, Statuscodes als Antwort, eine
+    /// Zeitgrenze für die ganze Anfrage.
+    pub(super) fn plugin_agent(timeout: Duration) -> ureq::Agent {
+        let tls = TlsConfig::builder()
+            .provider(TlsProvider::NativeTls)
+            .root_certs(RootCerts::PlatformVerifier)
+            .build();
+        ureq::Agent::config_builder()
+            .tls_config(tls)
+            .https_only(true)
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .user_agent(PLUGIN_USER_AGENT)
+            .timeout_global(Some(timeout))
+            .build()
+            .new_agent()
+    }
+
+    pub(super) fn get_limited(
+        url: &str,
+        max: u64,
+        timeout: Duration,
+    ) -> Result<(u16, Vec<u8>), String> {
+        let text = |e: ureq::Error| net_error(e).to_string();
+        let mut response = plugin_agent(timeout).get(url).call().map_err(text)?;
+        let status = response.status().as_u16();
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(max)
+            .read_to_vec()
+            .map_err(text)?;
+        Ok((status, body))
+    }
+
     /// Netzfehler zu einem Fehler von `ureq`.
     pub(super) fn net_error(e: ureq::Error) -> NetError {
         match e {
@@ -446,5 +501,27 @@ mod tests {
             config.tls_config().root_certs(),
             ureq::tls::RootCerts::PlatformVerifier
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn plugin_agent_follows_no_redirect_and_keeps_limits() {
+        // Ein Plug-in darf nur zu Rechnern aus seinem Manifest; eine Weiterleitung ginge woandershin.
+        let a = windows::plugin_agent(Duration::from_secs(30));
+        let config = a.config();
+        assert_eq!(config.max_redirects(), 0);
+        assert!(config.https_only());
+        assert!(!config.http_status_as_error());
+        assert_eq!(config.timeouts().global, Some(Duration::from_secs(30)));
+        assert_eq!(
+            config.tls_config().provider(),
+            ureq::tls::TlsProvider::NativeTls
+        );
+    }
+
+    #[test]
+    fn get_limited_refuses_plain_http() {
+        // Nur HTTPS (unter Windows lehnt der Client ab, sonst gibt es gar kein Netz).
+        assert!(get_limited("http://127.0.0.1:9/", 16, Duration::from_secs(1)).is_err());
     }
 }

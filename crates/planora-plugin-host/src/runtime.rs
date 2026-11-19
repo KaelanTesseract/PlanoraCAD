@@ -11,6 +11,7 @@ use crate::bindings::planora::plugin::{i18n, log, net, rights, types, ui};
 use crate::manifest::Manifest;
 use crate::texts::PluginTexts;
 use bytes::Bytes;
+use planora_i18n::tr;
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,20 +44,20 @@ const COMMAND_TICKS: u64 = 500;
 /// Mehr Ausgabe (stdout/stderr) als das merkt sich die Laufzeit zwischen zwei Aufrufen nicht.
 const OUTPUT_CAP: usize = 64 << 10;
 
-/// Warum ein Aufruf nicht zum Ergebnis kam.
+/// Warum ein Aufruf nicht zum Ergebnis kam (Meldungen in der Sprache des Programms).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PluginError {
     /// Das Plug-in ließ sich nicht laden oder die Instanz ist nach einem Ausfall nicht mehr benutzbar.
     #[error("{0}")]
     Load(String),
     /// Das Plug-in ist abgestürzt (WebAssembly-Trap).
-    #[error("Das Plug-in ist abgestürzt: {0}")]
+    #[error("{}", tr!("plugin-error-trap", error = .0))]
     Trap(String),
     /// Das Plug-in hat seine Frist überschritten.
-    #[error("Das Plug-in hat zu lange gebraucht.")]
+    #[error("{}", tr!("plugin-error-timeout"))]
     Timeout,
     /// Das Plug-in wollte mehr Arbeitsspeicher, als das Manifest erlaubt.
-    #[error("Das Plug-in braucht mehr Arbeitsspeicher als erlaubt.")]
+    #[error("{}", tr!("plugin-error-out-of-memory"))]
     OutOfMemory,
     /// Das Plug-in hat selbst einen Fehler gemeldet (Text aus `result::err`); kein Ausfall.
     #[error("{0}")]
@@ -420,9 +421,7 @@ impl Ticker {
                     engine.increment_epoch();
                 }
             })
-            .map_err(|e| {
-                PluginError::Load(format!("Der Taktgeber ließ sich nicht starten: {e}"))
-            })?;
+            .map_err(|e| PluginError::Load(tr!("plugin-ticker-failed", error = e.to_string())))?;
         Ok(Ticker {
             stop,
             thread: Some(thread),
@@ -452,9 +451,8 @@ impl Engine {
         let mut config = wasmtime::Config::new();
         config.wasm_component_model(true);
         config.epoch_interruption(true);
-        let inner = wasmtime::Engine::new(&config).map_err(|e| {
-            PluginError::Load(format!("Die Laufzeit ließ sich nicht einrichten: {e}"))
-        })?;
+        let inner = wasmtime::Engine::new(&config)
+            .map_err(|e| PluginError::Load(tr!("plugin-runtime-failed", error = e.to_string())))?;
         let ticker = Arc::new(Ticker::start(inner.clone())?);
         Ok(Engine { inner, ticker })
     }
@@ -467,11 +465,11 @@ impl Engine {
     /// Prüft die Schnittstellenversion des Manifests (die einzige Stelle dafür).
     pub(crate) fn check_api(manifest: &Manifest) -> Result<(), PluginError> {
         if manifest.api != planora_plugin_api::API_VERSION {
-            return Err(PluginError::Load(format!(
-                "Das Plug-in „{}“ braucht PlanoraCAD-Schnittstelle {}, dieses Programm spricht {}.",
-                manifest.name,
-                manifest.api,
-                planora_plugin_api::API_VERSION
+            return Err(PluginError::Load(tr!(
+                "plugin-api-mismatch",
+                plugin = &manifest.name,
+                wanted = &manifest.api,
+                have = planora_plugin_api::API_VERSION
             )));
         }
         Ok(())
@@ -488,9 +486,10 @@ impl Engine {
     ) -> Result<Instance, PluginError> {
         Self::check_api(manifest)?;
         let component = Component::new(&self.inner, wasm).map_err(|e| {
-            PluginError::Load(format!(
-                "Das Plug-in „{}“ ließ sich nicht laden: {e:#}",
-                manifest.name
+            PluginError::Load(tr!(
+                "plugin-load-failed",
+                plugin = &manifest.name,
+                error = format!("{e:#}")
             ))
         })?;
         self.instantiate_component(manifest, &component, languages, host)
@@ -505,19 +504,19 @@ impl Engine {
         host: Box<dyn HostCalls>,
     ) -> Result<Instance, PluginError> {
         Self::check_api(manifest)?;
-        let load = |what: &str, e: wasmtime::Error| {
-            PluginError::Load(format!(
-                "Das Plug-in „{}“ ließ sich nicht {what}: {e:#}",
-                manifest.name
+        let setup = |e: wasmtime::Error| {
+            PluginError::Load(tr!(
+                "plugin-setup-failed",
+                plugin = &manifest.name,
+                error = format!("{e:#}")
             ))
         };
         let mut linker = Linker::<State>::new(&self.inner);
         linker.allow_shadowing(true);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|e| load("einrichten", e))?;
-        clock_with_deadline(&mut linker).map_err(|e| load("einrichten", e))?;
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(setup)?;
+        clock_with_deadline(&mut linker).map_err(setup)?;
         linker.allow_shadowing(false);
-        Plugin::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
-            .map_err(|e| load("einrichten", e))?;
+        Plugin::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s).map_err(setup)?;
 
         let stdout = Ausgabe::default();
         let stderr = Ausgabe::default();
@@ -547,7 +546,7 @@ impl Engine {
             Ok(p) => p,
             Err(e) => {
                 return Err(match classify(&e, store.data().limits.oom) {
-                    PluginError::Trap(_) => load("einrichten", e),
+                    PluginError::Trap(_) => setup(e),
                     other => other,
                 });
             }
@@ -659,7 +658,7 @@ impl Instance {
             self.store
                 .data_mut()
                 .host
-                .log(Level::Error, &format!("Beim Beenden des Plug-ins: {e}"));
+                .log(Level::Error, &format!("On shutdown: {e}"));
         }
     }
 }

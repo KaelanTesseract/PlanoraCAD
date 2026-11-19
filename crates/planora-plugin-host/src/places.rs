@@ -7,6 +7,7 @@
 use crate::manifest::Manifest;
 use crate::package::{MAX_WASM, Package};
 use crate::runtime::{Component, Engine, PluginError};
+use planora_i18n::tr;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -128,19 +129,26 @@ fn examine(dir: &Path, origin: Origin) -> Found {
     };
     let text = match std::fs::read_to_string(dir.join(MANIFEST_FILE)) {
         Ok(t) => t,
-        Err(e) => return broken(format!("{MANIFEST_FILE} ist nicht lesbar: {e}")),
+        Err(e) => {
+            return broken(tr!(
+                "plugin-dir-unreadable",
+                file = MANIFEST_FILE,
+                error = e.to_string()
+            ));
+        }
     };
     let manifest = match Manifest::parse(&text) {
         Ok(m) => m,
         Err(e) => return broken(e.to_string()),
     };
     let problem = if manifest.id != dir_name {
-        Some(format!(
-            "Der Ordner „{dir_name}“ passt nicht zur Kennung „{}“.",
-            manifest.id
+        Some(tr!(
+            "plugin-dir-id-mismatch",
+            dir = dir_name,
+            id = &manifest.id
         ))
     } else if !dir.join(WASM_FILE).is_file() {
-        Some(format!("Im Plug-in-Ordner fehlt die Datei „{WASM_FILE}“."))
+        Some(tr!("plugin-dir-missing-file", file = WASM_FILE))
     } else {
         None
     };
@@ -248,9 +256,7 @@ pub fn uninstall(places: &Places, id: &str) -> io::Result<()> {
         Some(f) => std::fs::remove_dir_all(f.dir),
         None => Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!(
-                "Das Plug-in „{id}“ ist nicht vom Nutzer installiert und lässt sich nicht entfernen."
-            ),
+            tr!("plugin-not-user-installed", id = id),
         )),
     }
 }
@@ -261,9 +267,10 @@ pub fn read_files(dir: &Path) -> io::Result<(Vec<u8>, BTreeMap<String, String>)>
     if std::fs::metadata(&wasm_path)?.len() > MAX_WASM {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!(
-                "{WASM_FILE} ist größer als erlaubt ({} MiB).",
-                MAX_WASM >> 20
+            tr!(
+                "plugin-wasm-too-large",
+                file = WASM_FILE,
+                max_mib = (MAX_WASM >> 20).to_string()
             ),
         ));
     }
@@ -334,7 +341,7 @@ pub fn load_component(
         }
     }
     let component = Component::new(inner, wasm)
-        .map_err(|e| PluginError::Load(format!("Das Plug-in ließ sich nicht übersetzen: {e:#}")))?;
+        .map_err(|e| PluginError::Load(tr!("plugin-compile-failed", error = format!("{e:#}"))))?;
     if let Ok(bytes) = component.serialize() {
         let _ = write_atomic(&file, &bytes);
     }

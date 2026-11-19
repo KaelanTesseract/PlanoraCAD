@@ -17,6 +17,7 @@ pub mod texts;
 
 use manifest::{Manifest, Right};
 use places::{Found, Places};
+use planora_i18n::tr;
 use rights::{Answer, Grant, Pending, Requests, Rights, check_net_url};
 use runtime::{
     Command, Dialog, DialogEvent, Engine, HostCalls, HostInfo, Instance, Level, PluginError,
@@ -34,7 +35,9 @@ const MAX_FAILURES: u8 = 3;
 /// Abholungen nicht an (ein Plug-in könnte sonst in einer Schleife den Speicher füllen).
 const MAX_QUEUE: usize = 1024;
 /// Ergebnis einer Anfrage, die das volle Postfach nicht mehr annimmt.
-const QUEUE_FULL: &str = "Warteschlange voll";
+fn queue_full() -> String {
+    tr!("plugin-queue-full")
+}
 
 /// Der zu speichernde Zustand eines Plug-ins: eingeschaltet oder nicht und die dauerhaft
 /// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`). Das Programm bildet
@@ -188,7 +191,7 @@ impl Mailbox {
     /// Eine Anfrage, die das Postfach nicht mehr annimmt: das Plug-in erfährt es über `on-result`,
     /// statt ewig zu warten. Es wird kein Zustand vermerkt, dessen Ereignis verloren ginge.
     fn overflow(&mut self, request: u64) {
-        self.deliver(request, RequestResult::Failed(QUEUE_FULL.into()));
+        self.deliver(request, RequestResult::Failed(queue_full()));
     }
 
     fn net(&mut self, request: u64, url: String) {
@@ -855,7 +858,7 @@ impl PluginHost {
                 let _ = tx.send(Loaded { generation, result });
             });
         if let Err(e) = spawned {
-            self.fail(i, format!("Der Start-Thread ließ sich nicht anlegen: {e}"));
+            self.fail(i, tr!("plugin-start-thread-failed", error = e.to_string()));
         }
     }
 
@@ -989,9 +992,10 @@ fn start_instance(
 ) -> Started {
     Engine::check_api(manifest)?;
     let (wasm, languages) = places::read_files(dir).map_err(|e| {
-        PluginError::Load(format!(
-            "Das Plug-in „{}“ ließ sich nicht lesen: {e}",
-            manifest.name
+        PluginError::Load(tr!(
+            "plugin-read-failed",
+            plugin = &manifest.name,
+            error = e.to_string()
         ))
     })?;
     let component = places::load_component(engine, cache, &wasm)?;
@@ -1030,7 +1034,7 @@ mod tests {
     }
 
     fn voll() -> RequestResult {
-        RequestResult::Failed(QUEUE_FULL.into())
+        RequestResult::Failed(queue_full())
     }
 
     #[test]

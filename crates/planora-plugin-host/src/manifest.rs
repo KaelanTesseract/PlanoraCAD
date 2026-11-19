@@ -2,6 +2,7 @@
 //!
 //! Unbekannte Schlüssel werden bewusst nicht abgelehnt, damit neuere Pakete lesbar bleiben.
 
+use planora_i18n::tr;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 
@@ -42,32 +43,40 @@ impl Right {
     }
 }
 
-/// Warum ein Manifest nicht gelesen wurde (Meldungen deutsch).
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Warum ein Manifest nicht gelesen wurde (Meldungen in der Sprache des Programms).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestError {
-    #[error("plugin.toml ist nicht lesbar: {0}")]
     Toml(String),
-    #[error(
-        "plugin.toml: Die Kennung „{0}“ ist ungültig (Kleinbuchstaben, Ziffern, Punkte und Bindestriche, mindestens ein Punkt, höchstens 64 Zeichen)."
-    )]
     BadId(String),
-    #[error("plugin.toml: Die Version „{0}“ ist ungültig (erwartet wird z. B. 0.1.0).")]
     BadVersion(String),
-    #[error("plugin.toml: Das Recht „{0}“ ist unbekannt.")]
     UnknownRight(String),
-    #[error("plugin.toml: Das Recht „net“ braucht eine Liste net-hosts.")]
     NetWithoutHosts,
-    #[error("plugin.toml: net-hosts ist nur mit dem Recht „net“ erlaubt.")]
     HostsWithoutNet,
-    #[error(
-        "plugin.toml: Der Rechner „{0}“ in net-hosts ist ungültig (nur der Name, ohne Schema, Pfad oder Port)."
-    )]
     BadHost(String),
-    #[error("plugin.toml: memory-mb muss zwischen 1 und 2048 liegen, steht aber auf {0}.")]
     BadMemory(u32),
-    #[error("plugin.toml: Das Feld {0} darf nicht leer sein.")]
     Empty(&'static str),
 }
+
+impl std::fmt::Display for ManifestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            ManifestError::Toml(e) => tr!("plugin-manifest-toml", error = e),
+            ManifestError::BadId(id) => tr!("plugin-manifest-bad-id", id = id),
+            ManifestError::BadVersion(v) => tr!("plugin-manifest-bad-version", version = v),
+            ManifestError::UnknownRight(r) => tr!("plugin-manifest-unknown-right", right = r),
+            ManifestError::NetWithoutHosts => tr!("plugin-manifest-net-without-hosts"),
+            ManifestError::HostsWithoutNet => tr!("plugin-manifest-hosts-without-net"),
+            ManifestError::BadHost(h) => tr!("plugin-manifest-bad-host", host = h),
+            ManifestError::BadMemory(m) => {
+                tr!("plugin-manifest-bad-memory", value = m.to_string())
+            }
+            ManifestError::Empty(field) => tr!("plugin-manifest-empty", field = *field),
+        };
+        f.write_str(&text)
+    }
+}
+
+impl std::error::Error for ManifestError {}
 
 /// Der Arbeitsspeicher, wenn das Manifest nichts angibt (in MiB).
 const DEFAULT_MEMORY_MB: u32 = 512;

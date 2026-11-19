@@ -441,7 +441,7 @@ fn the_file_menu_has_projects_with_ctrl_o_and_settings() {
 fn the_menu_bar_reports_projects_and_settings() {
     for (entry, want) in [
         (projects_entry(), MenuRequest::Projects),
-        (settings_entry(), MenuRequest::Settings),
+        (settings_entry(), MenuRequest::Settings(None)),
     ] {
         let ctx = egui::Context::default();
         ctx.set_fonts(fonts::definitions());
@@ -885,7 +885,7 @@ fn the_settings_entry_is_disabled_while_a_prompt_is_open() {
         let want = if prompt {
             MenuRequest::None
         } else {
-            MenuRequest::Settings
+            MenuRequest::Settings(None)
         };
         assert_eq!(got, want, "Rückfrage offen: {prompt}");
     }

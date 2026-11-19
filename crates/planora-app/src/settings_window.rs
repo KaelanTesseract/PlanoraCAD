@@ -359,9 +359,21 @@ pub enum SettingsEvent {
     Closed { return_to_projects: bool },
 }
 
+/// Ein Abschnitt, an dem das Fenster geöffnet werden kann (Datei → „Zusatzmodule“ →
+/// „Verwalten …“ öffnet am Abschnitt Plug-ins).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsSection {
+    /// Die Plug-ins (der Abschnitt selbst kommt mit Plug-ins Etappe 1, Task 7).
+    Plugins,
+}
+
 #[derive(Default)]
 pub struct SettingsWindow {
     open: bool,
+    /// Der Abschnitt, zu dem das Fenster beim Öffnen rollen soll ([`SettingsWindow::open_at`]).
+    /// Noch ohne Wirkung beim Zeichnen: den Abschnitt Plug-ins zeichnet erst Task 7, der dort
+    /// hinrollt und das Ziel mit [`SettingsWindow::take_scroll_target`] abholt.
+    scroll_target: Option<SettingsSection>,
     /// Beim Schließen wieder das Fenster „Projekte“ öffnen.
     return_to_projects: bool,
     /// Dateiauswahl im Ordner-Modus, solange gewählt wird.
@@ -395,6 +407,7 @@ impl SettingsWindow {
     /// Öffnet das Fenster; leert Meldung und Auswahl.
     pub fn open(&mut self, return_to_projects: bool) {
         self.open = true;
+        self.scroll_target = None;
         self.return_to_projects = return_to_projects;
         self.chooser = None;
         self.message = None;
@@ -406,6 +419,22 @@ impl SettingsWindow {
             self.check_hint = None;
         }
         self.keys = CaptureState::default();
+    }
+
+    /// Wie [`SettingsWindow::open`], dazu der Abschnitt, zu dem das Fenster rollen soll.
+    pub fn open_at(&mut self, return_to_projects: bool, section: Option<SettingsSection>) {
+        self.open(return_to_projects);
+        self.scroll_target = section;
+    }
+
+    /// Der Abschnitt, zu dem das Fenster rollen soll (noch nicht abgeholt).
+    pub fn scroll_target(&self) -> Option<SettingsSection> {
+        self.scroll_target
+    }
+
+    /// Holt das Rollziel ab (beim Zeichnen des Abschnitts, ab Task 7).
+    pub fn take_scroll_target(&mut self) -> Option<SettingsSection> {
+        self.scroll_target.take()
     }
 
     /// Schließt das Fenster; ein laufendes Erfassen einer Taste endet (die Sperre der Kürzel

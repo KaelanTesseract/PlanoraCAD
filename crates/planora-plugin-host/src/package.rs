@@ -4,6 +4,7 @@
 
 use crate::manifest::{Manifest, ManifestError};
 use planora_exchange::zip_read::{ZipRead, ZipReadError, ZipReadLimits};
+use planora_i18n::tr;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
@@ -28,18 +29,18 @@ pub enum Signature {
     Present,
 }
 
-/// Warum ein Paket nicht gelesen wurde (Meldungen deutsch).
+/// Warum ein Paket nicht gelesen wurde (Meldungen in der Sprache des Programms).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PackageError {
-    #[error("Das Paket ist größer als erlaubt ({} MiB).", MAX_PACKAGE >> 20)]
+    #[error("{}", tr!("plugin-package-too-large", max_mib = (MAX_PACKAGE >> 20).to_string()))]
     TooLarge,
-    #[error("Das Paket ist keine gültige ZIP-Datei: {0}")]
+    #[error("{}", tr!("plugin-package-zip", error = .0.to_string()))]
     Zip(#[from] ZipReadError),
-    #[error("Im Paket fehlt die Datei „{0}“.")]
+    #[error("{}", tr!("plugin-package-missing", file = .0))]
     Missing(String),
     #[error("{0}")]
     Manifest(#[from] ManifestError),
-    #[error("Die Datei „{0}“ im Paket ist kein gültiger Text (UTF-8).")]
+    #[error("{}", tr!("plugin-package-not-utf8", file = .0))]
     NotUtf8(String),
 }
 

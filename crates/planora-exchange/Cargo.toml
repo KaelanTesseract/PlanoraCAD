@@ -15,7 +15,6 @@ dxf.workspace = true
 usvg.workspace = true
 flate2.workspace = true
 miniz_oxide.workspace = true
-thiserror.workspace = true
 image.workspace = true
 
 [dev-dependencies]

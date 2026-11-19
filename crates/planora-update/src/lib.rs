@@ -15,6 +15,7 @@ pub mod sha256;
 mod version;
 
 pub use channel::Channel;
+pub use net::get_limited;
 pub use notes::{NoteBlock, Span, parse_notes};
 pub use release::{
     AssetRef, LICENSES_NAME, MAX_NOTES_CHARS, MAX_NOTES_RELEASES, REPO, Release, ReleaseError,

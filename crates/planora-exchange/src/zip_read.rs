@@ -9,6 +9,8 @@
 //! seine CRC32 geprüft. Namen mit `..`, absolute Pfade und Laufwerksbuchstaben werden abgelehnt.
 
 use crate::zip::crc32;
+use planora_i18n::tr;
+use std::fmt;
 
 /// Grenzen beim Lesen.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,24 +23,40 @@ pub struct ZipReadLimits {
     pub max_total: u64,
 }
 
-/// Warum eine ZIP-Datei nicht gelesen wurde (Meldungen deutsch).
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Warum eine ZIP-Datei nicht gelesen wurde (Meldungen in der Sprache des Programms).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZipReadError {
-    #[error("Die Datei ist keine gültige ZIP-Datei.")]
     BadZip,
-    #[error("ZIP64-Dateien werden nicht unterstützt.")]
     Zip64,
-    #[error("Die ZIP-Datei enthält mehr als {max} Einträge.")]
     TooManyEntries { max: usize },
-    #[error("Die ZIP-Datei ist entpackt größer als erlaubt ({max_mib} MiB).")]
     TooLarge { max_mib: u64 },
-    #[error("Der Eintrag „{0}“ hat einen unzulässigen Pfad.")]
     UnsafePath(String),
-    #[error("Der Eintrag „{0}“ ist verschlüsselt.")]
     Encrypted(String),
-    #[error("Der Eintrag „{name}“ nutzt die nicht unterstützte Packmethode {method}.")]
     Method { name: String, method: u16 },
 }
+
+impl fmt::Display for ZipReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            ZipReadError::BadZip => tr!("zip-read-bad"),
+            ZipReadError::Zip64 => tr!("zip-read-zip64"),
+            ZipReadError::TooManyEntries { max } => {
+                tr!("zip-read-too-many", max = max.to_string())
+            }
+            ZipReadError::TooLarge { max_mib } => {
+                tr!("zip-read-too-large", max_mib = max_mib.to_string())
+            }
+            ZipReadError::UnsafePath(name) => tr!("zip-read-unsafe-path", name = name),
+            ZipReadError::Encrypted(name) => tr!("zip-read-encrypted", name = name),
+            ZipReadError::Method { name, method } => {
+                tr!("zip-read-method", name = name, method = method.to_string())
+            }
+        };
+        f.write_str(&text)
+    }
+}
+
+impl std::error::Error for ZipReadError {}
 
 const EOCD_SIG: u32 = 0x0605_4b50;
 const CENTRAL_SIG: u32 = 0x0201_4b50;

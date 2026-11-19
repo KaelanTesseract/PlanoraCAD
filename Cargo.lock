@@ -3212,6 +3212,7 @@ dependencies = [
  "planora-kernel",
  "planora-math",
  "planora-mesh",
+ "planora-plugin-host",
  "planora-project",
  "planora-render",
  "planora-sketch",
@@ -3252,7 +3253,6 @@ dependencies = [
  "planora-math",
  "planora-mesh",
  "serde_json",
- "thiserror 2.0.21",
  "usvg",
 ]
 
@@ -3326,6 +3326,7 @@ dependencies = [
  "fluent-bundle",
  "miniz_oxide 0.9.1",
  "planora-exchange",
+ "planora-i18n",
  "planora-plugin-api",
  "semver",
  "serde",
