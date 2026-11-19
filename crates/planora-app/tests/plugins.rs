@@ -9,9 +9,9 @@ use common::{Seen, collect_seen, find, join};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 use planora_app::app::{self, MenuRequest, PlanoraApp};
 use planora_app::plugins::{self, Plugins};
-use planora_app::settings_window::SettingsSection;
+use planora_app::settings_window::{ChooserPurpose, SettingsSection};
 use planora_app::shell::ShellState;
-use planora_app::workspace::Workspace;
+use planora_app::workspace::{Prompt, Workspace};
 use planora_app::{fonts, theme};
 use planora_plugin_host::EntryState;
 use planora_plugin_host::manifest::Right;
@@ -540,4 +540,68 @@ fn persist_writes_plugins_only_when_pending() {
     // Ein anderes Feld zu speichern lässt die Plug-ins auf der Platte stehen.
     ws.set_theme(false);
     assert_eq!(gespeichert(&ws), Some(eintrag));
+}
+
+#[test]
+fn manage_disabled_while_prompt_open() {
+    let (mut ws, ctx) = arbeitsbereich("verwalten-gesperrt", &[], Config::default());
+    ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    ws.prompt = Some(Prompt::Notice("offen".to_string()));
+    let mut shell = ShellState::default();
+    let mut got = MenuRequest::None;
+    let seen = menue_bild(&mut ws, &ctx, &mut shell, vec![], &mut got);
+    let seen = menue_klick(&mut ws, &ctx, &mut shell, &seen, "Datei", &mut got);
+    let seen = menue_klick(&mut ws, &ctx, &mut shell, &seen, "Zusatzmodule", &mut got);
+    // Wie „Einstellungen“: der Grund beim Überfahren.
+    let at = find(&seen, "Verwalten …").unwrap().rect.center();
+    // Tooltips brauchen vergehende Zeit: Bilder im Abstand von 0,1 s.
+    let mut hovered = Vec::new();
+    for i in 0..10 {
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0))),
+            events: vec![Event::PointerMoved(at)],
+            time: Some(100.0 + f64::from(i) * 0.1),
+            ..Default::default()
+        };
+        let out = ctx.run_ui(raw, |ui| {
+            app::menu_bar(ui, &mut ws, &mut shell);
+        });
+        hovered = collect_seen(&out.shapes);
+        out.drop_without_applying_deltas();
+    }
+    assert!(
+        find(&hovered, "Zuerst die offene Rückfrage beantworten.").is_some(),
+        "{}",
+        join(&hovered)
+    );
+    menue_klick(&mut ws, &ctx, &mut shell, &hovered, "Verwalten …", &mut got);
+    assert_eq!(
+        got,
+        MenuRequest::None,
+        "bei offener Rückfrage nicht wählbar"
+    );
+}
+
+#[test]
+fn settings_request_leaves_window_alone_while_prompt_open() {
+    let (ws, ctx) = arbeitsbereich("einstellungen-rueckfrage", &[], Config::default());
+    let mut app = PlanoraApp::for_tests(ws);
+    app.apply_menu_request(&ctx, MenuRequest::Settings(None));
+    assert!(app.settings_window().is_open());
+    app.settings_window_mut().start_choosing_plugin();
+    app.ws_mut().prompt = Some(Prompt::Notice("offen".to_string()));
+    // Ein schon offenes Fenster bleibt, wie es ist (keine neue Öffnung, kein Rollziel).
+    app.apply_menu_request(&ctx, MenuRequest::Settings(Some(SettingsSection::Plugins)));
+    assert!(app.settings_window().is_open());
+    assert_eq!(
+        app.settings_window().chooser_purpose(),
+        Some(ChooserPurpose::Plugin),
+        "die Auswahl bleibt offen"
+    );
+    assert_eq!(app.settings_window().scroll_target(), None);
+    // Ein geschlossenes öffnet bei offener Rückfrage nicht.
+    app.settings_window_mut().close();
+    app.apply_menu_request(&ctx, MenuRequest::Settings(Some(SettingsSection::Plugins)));
+    assert!(!app.settings_window().is_open());
+    assert_eq!(app.settings_window().scroll_target(), None);
 }

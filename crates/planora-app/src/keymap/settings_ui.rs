@@ -124,13 +124,14 @@ pub fn table_max_height(content_h: f32) -> f32 {
 }
 
 /// Wie [`table_max_height`] für ein Programmfenster `content`: stehen „Darstellung“ und
-/// „Updates“ untereinander, bleibt [`ONE_COLUMN_EXTRA_H`] weniger.
-fn table_height_in(content: egui::Rect) -> f32 {
+/// „Updates“ untereinander, bleibt [`ONE_COLUMN_EXTRA_H`] weniger; `extra_h` belegen weitere
+/// Abschnitte, deren Höhe sich ändert (der Abschnitt „Plug-ins“ mit seiner Liste).
+fn table_height_in(content: egui::Rect, extra_h: f32) -> f32 {
     let h = if content.width() >= crate::settings_window::TWO_COLUMNS_FROM {
         content.height()
     } else {
         content.height() - ONE_COLUMN_EXTRA_H
-    };
+    } - extra_h.max(0.0);
     table_max_height(h)
 }
 
@@ -458,6 +459,18 @@ enum Click {
 /// vorher die Ereignisse des Erfassens ([`capture_input`]; das Fenster hat das meist schon
 /// getan, dann ist nichts mehr da).
 pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
+    show_reserving(ui, ws, state, 0.0);
+}
+
+/// Wie [`show`]; die Tabelle wird um `extra_h` niedriger (Platz, den weitere Abschnitte des
+/// Einstellungsfensters über [`TABLE_RESERVED_H`] hinaus belegen), damit das Fenster die
+/// Menüleiste frei lässt.
+pub fn show_reserving(
+    ui: &mut egui::Ui,
+    ws: &mut Workspace,
+    state: &mut CaptureState,
+    extra_h: f32,
+) {
     let locked = !ui.is_enabled();
     capture_input(ui.ctx(), ws, state, locked);
     // Erfassen seit dem vorigen Bild (nicht gerade erst mit diesem Klick begonnen).
@@ -527,7 +540,7 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
         egui::ScrollArea::vertical()
             .id_salt("tastenkuerzel_tabelle")
             .auto_shrink([false, true])
-            .max_height(table_height_in(ui.ctx().content_rect())),
+            .max_height(table_height_in(ui.ctx().content_rect(), extra_h)),
         |ui| {
             ui.set_max_width(table_w);
             ui.add_enabled_ui(!hold, |ui| {

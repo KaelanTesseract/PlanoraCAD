@@ -1108,12 +1108,13 @@ impl PlanoraApp {
             MenuRequest::Projects => {
                 open_projects(&mut self.ws, &mut self.projects, &mut self.settings)
             }
-            MenuRequest::Settings(section) => {
-                open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false);
-                if self.settings.is_open() {
-                    self.settings.open_at(false, section);
-                }
-            }
+            MenuRequest::Settings(section) => open_settings_at(
+                &mut self.ws,
+                &mut self.projects,
+                &mut self.settings,
+                false,
+                section,
+            ),
             MenuRequest::Shortcuts => open_overview(
                 &mut self.ws,
                 &mut self.projects,
@@ -1756,11 +1757,24 @@ pub fn open_settings(
     settings: &mut SettingsWindow,
     return_to_projects: bool,
 ) {
+    open_settings_at(ws, projects, settings, return_to_projects, None);
+}
+
+/// Wie [`open_settings`], dazu der Abschnitt, zu dem das Fenster rollt (Datei → „Zusatzmodule“
+/// → „Verwalten …“). Öffnet es nicht (offene Rückfrage), bleibt auch ein schon offenes Fenster,
+/// wie es ist.
+pub fn open_settings_at(
+    ws: &mut Workspace,
+    projects: &mut ProjectsWindow,
+    settings: &mut SettingsWindow,
+    return_to_projects: bool,
+    section: Option<SettingsSection>,
+) {
     if ws.prompt.is_some() || !close_file_windows(ws) {
         return;
     }
     close_projects(projects);
-    settings.open(return_to_projects);
+    settings.open_at(return_to_projects, section);
 }
 
 /// Öffnet die Übersicht „Tastenkürzel“ (Menü Ansicht und Taste S) mit aktivem Suchfeld. Sie
@@ -2210,7 +2224,8 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     }
     // Plug-ins: „Verwalten …“ und die Befehle der laufenden Plug-ins (crate::plugins).
     ui.menu_button(tr!("menu-file-addins"), |ui| {
-        let r = ws.plugins.addins_menu(ui);
+        let manage = ws.prompt.is_none();
+        let r = ws.plugins.addins_menu(ui, manage);
         if r != MenuRequest::None {
             request = r;
         }

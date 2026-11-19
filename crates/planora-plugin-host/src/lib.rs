@@ -8,6 +8,7 @@
 //! gehen erst beim nächsten `poll` als `on-result` an das Plug-in.
 
 mod bindings;
+pub mod licenses;
 pub mod manifest;
 pub mod package;
 pub mod places;

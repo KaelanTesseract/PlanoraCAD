@@ -8,6 +8,11 @@
 //! Kein Aufruf hier wartet: der Host kehrt sofort zurück, das Netz läuft nur in Aufträgen.
 //! Die Dialoge der Plug-ins ([`Plugins::dialogs`]) zeichnet [`crate::plugin_dialog`]; ihre
 //! Ereignisse gehen hier an den Host.
+//!
+//! Task 7: Installieren, Entfernen und die Verwaltung in den Einstellungen. Ein Paket wird in
+//! einem [`Job`] gelesen (bis 64 MiB samt Entpacken, das soll das Bild nicht anhalten) und dann
+//! als [`InstallOffer`] im Installationsdialog angeboten; der Dialog liest selbst nichts, so kann
+//! ein zweiter Weg (Repo-Link) ihm ebenso ein fertiges Paket geben ([`Plugins::offer_install`]).
 
 use crate::app::MenuRequest;
 use crate::diag;
@@ -15,18 +20,20 @@ use crate::jobs::{Job, Poll};
 use crate::plugin_dialog;
 pub use crate::plugin_dialog::OpenPluginDialog;
 use crate::plugin_prompts::{self, BannerAction, BannerLine};
+pub use crate::plugin_prompts::{InstallChoice, InstallOffer};
 use crate::settings_window::SettingsSection;
 use crate::theme;
 use crate::workspace::Workspace;
 use planora_i18n::tr;
 use planora_plugin_host::manifest::Right;
-use planora_plugin_host::places::Places;
+use planora_plugin_host::package::{MAX_PACKAGE, Package, PackageError};
+use planora_plugin_host::places::{self as plugin_places, Places};
 use planora_plugin_host::rights::Answer;
 use planora_plugin_host::runtime::{DialogEvent, HttpResponse, Level, RequestResult};
 use planora_plugin_host::{EntryState, HostEvent, PluginEntry, PluginHost, PluginState};
 use planora_project::config::{Config, PluginConfig};
 use std::collections::{BTreeMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Größte Antwort einer Netzanfrage eines Plug-ins (Bytes); eine größere zählt als Fehler.
@@ -80,6 +87,13 @@ pub struct Plugins {
     /// Die neueste Generation je Plug-in aus seinen Ereignissen: ältere Nachfragen und Aufträge
     /// gehören zu einer beendeten Instanz.
     generations: BTreeMap<String, u64>,
+    /// Das Paket im Installationsdialog (gezeichnet in [`Plugins::frame`]).
+    pub install: Option<InstallOffer>,
+    /// Ein Paket wird gerade gelesen ([`Plugins::read_package`]): Paket und Pfad oder ein Fehler.
+    reading: Option<Job<Result<(Package, PathBuf), String>>>,
+    /// Hinweis im Abschnitt „Plug-ins“ der Einstellungen (Lesen, Installieren, Entfernen oder
+    /// Speichern misslang); die nächste Handlung dort leert ihn.
+    pub note: Option<String>,
 }
 
 impl Default for Plugins {
@@ -122,8 +136,22 @@ pub fn write_states(host: &PluginHost, config: &mut Config) {
         .collect();
 }
 
+/// Liest das Paket `path` (im Arbeitsthread eines [`Job`]); ein zu großes wird gar nicht erst
+/// gelesen.
+fn read_package_file(path: &Path) -> Result<Package, String> {
+    let failed = |e: String| tr!("plugin-package-read-failed", error = e);
+    let size = std::fs::metadata(path)
+        .map_err(|e| failed(e.to_string()))?
+        .len();
+    if size > MAX_PACKAGE {
+        return Err(failed(PackageError::TooLarge.to_string()));
+    }
+    let data = std::fs::read(path).map_err(|e| failed(e.to_string()))?;
+    Package::read(&data).map_err(|e| failed(e.to_string()))
+}
+
 /// Der Anzeigename eines Plug-ins (aus dem Manifest des aktiven Fundorts, sonst die Kennung).
-fn entry_name(e: &PluginEntry) -> String {
+pub fn entry_name(e: &PluginEntry) -> String {
     e.active
         .or(if e.found.is_empty() { None } else { Some(0) })
         .map_or_else(|| e.id.clone(), |a| e.found[a].manifest.name.clone())
@@ -159,6 +187,9 @@ impl Plugins {
             fetch: default_fetch,
             messages: Vec::new(),
             generations: BTreeMap::new(),
+            install: None,
+            reading: None,
+            note: None,
         }
     }
 
@@ -351,6 +382,89 @@ impl Plugins {
         self.host.set_enabled(id, on);
     }
 
+    /// Liest das Paket `path` im Hintergrund; ist es gelesen, erscheint der Installationsdialog
+    /// (ein Fehler steht in [`Plugins::note`]). Ein noch laufendes Lesen wird verworfen.
+    pub fn read_package(&mut self, path: PathBuf) {
+        self.note = None;
+        self.install = None;
+        self.reading = Some(Job::spawn(move |_| {
+            read_package_file(&path).map(|pkg| (pkg, path))
+        }));
+    }
+
+    /// Wird gerade ein Paket gelesen?
+    pub fn is_reading(&self) -> bool {
+        self.reading.is_some()
+    }
+
+    /// Bietet ein fertig gelesenes Paket im Installationsdialog an; `source` ist die Herkunft für
+    /// die Anzeige (Pfad der Datei, später der Repo-Link). Gibt es die Kennung schon, fragt der
+    /// Dialog nach dem Ersetzen (mit der Version des laufenden, sonst des ersten Fundorts).
+    pub fn offer_install(&mut self, package: Package, source: Option<String>) {
+        let replaces = self.entry(&package.manifest.id).and_then(|e| {
+            let i = e.active.or((!e.found.is_empty()).then_some(0))?;
+            Some(e.found[i].manifest.version.to_string())
+        });
+        self.install = Some(InstallOffer {
+            package,
+            source,
+            replaces,
+        });
+    }
+
+    /// Installiert das angebotene Paket für den Nutzer und sucht die Fundorte neu
+    /// ([`PluginHost::rescan`] mit dem Stand aus `config`): ein neues Plug-in startet ohne
+    /// Neustart, eine geänderte Version startet neu. `false` (Hinweis in [`Plugins::note`]),
+    /// wenn es misslang; ohne Angebot nichts.
+    pub fn install_offered(&mut self, config: &Config) -> bool {
+        let Some(offer) = self.install.take() else {
+            return false;
+        };
+        self.note = None;
+        if let Err(e) = plugin_places::install(self.host.places(), &offer.package) {
+            self.note = Some(tr!("plugin-install-failed", error = e.to_string()));
+            return false;
+        }
+        self.forget(&offer.package.manifest.id);
+        self.host.rescan(&states_from_config(config));
+        true
+    }
+
+    /// Entfernt das vom Nutzer installierte Plug-in `id` und sucht die Fundorte neu (ein
+    /// mitgeliefertes derselben Kennung läuft danach). `false` (Hinweis in [`Plugins::note`]),
+    /// wenn es misslang.
+    pub fn remove(&mut self, id: &str, config: &Config) -> bool {
+        self.note = None;
+        if let Err(e) = plugin_places::uninstall(self.host.places(), id) {
+            self.note = Some(tr!("plugin-remove-failed", error = e.to_string()));
+            return false;
+        }
+        self.forget(id);
+        self.banners.retain(|b| b.plugin != id);
+        self.host.rescan(&states_from_config(config));
+        true
+    }
+
+    /// Holt ein fertig gelesenes Paket ab und bietet es an (Fehler in [`Plugins::note`]).
+    fn poll_reading(&mut self) {
+        let Some(job) = &self.reading else {
+            return;
+        };
+        let result = match job.poll() {
+            Poll::Pending => return,
+            Poll::Ready(r) => r,
+            Poll::Lost => Err(tr!(
+                "plugin-package-read-failed",
+                error = tr!("plugin-package-read-aborted")
+            )),
+        };
+        self.reading = None;
+        match result {
+            Ok((pkg, path)) => self.offer_install(pkg, Some(path.display().to_string())),
+            Err(e) => self.note = Some(e),
+        }
+    }
+
     /// Die Meldungen für die Statuszeile seit dem letzten Abholen.
     pub fn take_messages(&mut self) -> Vec<String> {
         std::mem::take(&mut self.messages)
@@ -387,8 +501,20 @@ impl Plugins {
     /// die Fehlerleiste.
     /// `true`, wenn sich `config.plugins` geändert hat.
     pub fn frame(&mut self, ctx: &egui::Context, config: &mut Config) -> bool {
-        let changed = self.update(config);
+        let mut changed = self.update(config);
         let mut acted = changed || !self.messages.is_empty();
+        let was_reading = self.is_reading();
+        self.poll_reading();
+        acted |= was_reading && !self.is_reading();
+        if let Some(offer) = &self.install
+            && let Some(choice) = plugin_prompts::show_install(ctx, offer)
+        {
+            match choice {
+                InstallChoice::Install => changed |= self.install_offered(config),
+                InstallChoice::Cancel => self.install = None,
+            }
+            acted = true;
+        }
         if let Some(p) = self.prompts.front() {
             let name = self.plugin_name(&p.plugin);
             let hosts = self.net_hosts(&p.plugin);
@@ -431,20 +557,25 @@ impl Plugins {
             .entries()
             .iter()
             .any(|e| e.state == EntryState::Loading);
-        if loading || !self.net_jobs.is_empty() {
+        if loading || !self.net_jobs.is_empty() || self.is_reading() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
-        // Eine Antwort in diesem Bild ändert `config.plugins` erst nach dem nächsten `poll`.
+        // Eine Antwort in diesem Bild ändert `config.plugins` erst nach dem nächsten `poll`; nach
+        // dem Installieren wird gleich gespeichert.
         changed
     }
 
     /// Untermenü Datei → „Zusatzmodule“: „Verwalten …“ (öffnet die Einstellungen am Abschnitt
     /// Plug-ins), dann die Befehle aller laufenden Plug-ins nach Plug-in-Name; ein Plug-in mit
     /// mehr als einem Befehl bekommt ein Untermenü. Ein gewählter Befehl läuft sofort.
-    pub fn addins_menu(&mut self, ui: &mut egui::Ui) -> MenuRequest {
+    /// `manage`: „Verwalten …“ ist wählbar (nicht bei offener Rückfrage, wie „Einstellungen“).
+    pub fn addins_menu(&mut self, ui: &mut egui::Ui, manage: bool) -> MenuRequest {
         let mut request = MenuRequest::None;
         let addins = egui::Button::new(tr!("menu-file-addins-manage"));
-        if theme::entry(ui, true, addins).clicked() {
+        if theme::entry(ui, manage, addins)
+            .on_disabled_hover_text(tr!("menu-answer-prompt-first"))
+            .clicked()
+        {
             request = MenuRequest::Settings(Some(SettingsSection::Plugins));
             ui.close();
         }
@@ -493,5 +624,27 @@ pub fn show(ctx: &egui::Context, ws: &mut Workspace) {
     }
     if let Some(last) = ws.plugins.take_messages().pop() {
         ws.active_tab_mut().state.message = Some(last);
+    }
+}
+
+/// Speichert den Stand der Plug-ins gleich (nach Schalter, Zurücknehmen, Entfernen in den
+/// Einstellungen): `config.plugins` aus dem Host, vormerken, schreiben. Misslingt das Schreiben,
+/// steht ein Hinweis in [`Plugins::note`] (der Stand gilt für die Sitzung und kommt mit dem
+/// nächsten gelungenen Schreiben in die Datei).
+pub fn persist(ws: &mut Workspace) -> bool {
+    write_states(&ws.plugins.host, &mut ws.config);
+    ws.plugins_pending = true;
+    let written = ws.try_persist_config();
+    if !written {
+        ws.plugins.note = Some(tr!("plugin-settings-not-saved"));
+    }
+    written
+}
+
+/// Entfernt das vom Nutzer installierte Plug-in `id` (nach der Rückfrage „Plug-in X entfernen?“)
+/// und speichert den Stand.
+pub fn remove(ws: &mut Workspace, id: &str) {
+    if ws.plugins.remove(id, &ws.config) {
+        persist(ws);
     }
 }

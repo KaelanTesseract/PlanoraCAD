@@ -776,6 +776,11 @@ pub enum Prompt {
     /// Sprache lässt sich bei offenem Hinweis nicht wechseln (die Fehlertexte aus
     /// `planora-project` folgen in Task 13).
     Notice(String),
+    /// „Plug-in X entfernen?“ aus den Einstellungen (Kennung und Anzeigename).
+    RemovePlugin {
+        id: String,
+        name: String,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
