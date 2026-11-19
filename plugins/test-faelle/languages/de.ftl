@@ -7,3 +7,4 @@ recht-befehl = Recht anfragen
 langsam-dialog-befehl = Langsamer Dialog
 umgebung-befehl = Umgebung zeigen
 langsam-titel = Langsam
+schlafen-befehl = Lange warten

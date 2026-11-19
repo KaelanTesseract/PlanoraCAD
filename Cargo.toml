@@ -88,10 +88,10 @@ wasmtime = { version = "=50.0.3", default-features = false, features = ["craneli
 wasmtime-wasi = { version = "=50.0.3", default-features = false, features = ["p2"] }
 # Für die Ausgabe-Umleitung der Plug-ins (alle schon über wasmtime-wasi im Baum, MIT bzw. MIT OR Apache-2.0):
 # bytes und async-trait für die Strom-Schnittstelle, tokio nur wegen des Merkmals AsyncWrite, das
-# wasmtime-wasi von jedem Ausgabestrom verlangt.
+# wasmtime-wasi von jedem Ausgabestrom verlangt, und "time" für die Wartezeiten der Plug-ins.
 bytes = "1"
 async-trait = "0.1"
-tokio = { version = "1", default-features = false }
+tokio = { version = "1", default-features = false, features = ["time"] }
 sha2 = "0.10"
 
 [workspace.lints.clippy]

@@ -5,6 +5,8 @@ resolver = "3"
 members = ["beispiel-hallo", "test-faelle"]
 
 [workspace.dependencies]
+# wit-bindgen (Plug-in-Seite des Vertrags), am 2026-11-19 geprüft: Apache-2.0 WITH LLVM-exception OR
+# Apache-2.0 OR MIT; Unterpakete siehe cargo deny (Aufruf im Ordner plugins/ mit --config ../deny.toml).
 wit-bindgen = { version = "0.63", default-features = false, features = ["macros", "realloc"] }
 
 [profile.release]

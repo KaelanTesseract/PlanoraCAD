@@ -12,7 +12,7 @@ use planora::plugin::{net, rights, ui};
 
 struct Faelle;
 
-const BEFEHLE: [&str; 8] = [
+const BEFEHLE: [&str; 9] = [
     "endlos",
     "speicher",
     "panik",
@@ -21,6 +21,7 @@ const BEFEHLE: [&str; 8] = [
     "recht",
     "langsam-dialog",
     "umgebung",
+    "schlafen",
 ];
 
 impl Guest for Faelle {
@@ -54,6 +55,11 @@ impl Guest for Faelle {
                     blöcke.push(vec![1u8; 1 << 20]);
                     std::hint::black_box(&blöcke);
                 }
+            }
+            "schlafen" => {
+                // Wartet praktisch ewig: die Wartezeit muss an der Frist scheitern, nicht den Aufruf blockieren.
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+                Ok(())
             }
             "panik" => panic!("absichtlicher Absturz"),
             "fehler" => Err("absichtlich".to_string()),

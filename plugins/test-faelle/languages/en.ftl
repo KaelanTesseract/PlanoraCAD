@@ -7,3 +7,4 @@ recht-befehl = recht-befehl
 langsam-dialog-befehl = langsam-dialog-befehl
 umgebung-befehl = umgebung-befehl
 langsam-titel = langsam-titel
+schlafen-befehl = schlafen-befehl

@@ -288,3 +288,18 @@ fn api_version_mismatch() {
         "{text}"
     );
 }
+
+#[test]
+fn host_sleep_cannot_outlast_deadline() {
+    // `std::thread::sleep` wird zu monotonic-clock.subscribe-duration + poll im Host; die Epochen-
+    // Unterbrechung greift dort nicht, deshalb lehnt die Laufzeit zu lange Wartezeiten selbst ab.
+    let engine = Engine::new().unwrap();
+    let (mut inst, _h) = starten("test-faelle", &engine);
+    let t = Instant::now();
+    assert_eq!(inst.run_command("schlafen"), Err(PluginError::Timeout));
+    assert!(t.elapsed() < Duration::from_secs(6), "{:?}", t.elapsed());
+    assert!(matches!(
+        inst.run_command("fehler"),
+        Err(PluginError::Load(_))
+    ));
+}

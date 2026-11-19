@@ -19,11 +19,12 @@ use std::task::{Context, Poll};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
+use wasmtime::component::Resource;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
-use wasmtime::{Store, StoreLimits, StoreLimitsBuilder, Trap};
+use wasmtime::{ResourceLimiter, Store, StoreContextMut, Trap, format_err};
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 use wasmtime_wasi::clocks::{HostMonotonicClock, HostWallClock};
-use wasmtime_wasi::p2::{OutputStream, Pollable, StreamError};
+use wasmtime_wasi::p2::{DynPollable, OutputStream, Pollable, StreamError, subscribe};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 pub use crate::bindings::planora::plugin::types::{
@@ -197,12 +198,151 @@ impl HostMonotonicClock for GrobeMonotonuhr {
     }
 }
 
+/// Bytes, die ein Tabellenelement für die Speichergrenze zählt (ein Zeiger plus Verwaltung).
+const TABLE_ELEMENT_BYTES: usize = 16;
+/// Höchstzahl der Kern-Instanzen, Speicher und Tabellen eines Plug-ins (eine Rust-Komponente braucht
+/// wenige; viel mehr deutet auf ein präpariertes Paket hin).
+const MAX_INSTANCES: usize = 32;
+const MAX_MEMORIES: usize = 8;
+const MAX_TABLES: usize = 8;
+
+/// Die Ressourcengrenze eines Plug-ins: der Arbeitsspeicher gilt für das ganze Plug-in, also für alle
+/// linearen Speicher zusammen plus die Tabellen (je Element [`TABLE_ELEMENT_BYTES`] Bytes). Wird ein
+/// Wachstum verweigert, merkt sich `oom` das, und der Aufruf bricht mit einem Trap ab.
+struct Grenzen {
+    limit: usize,
+    memory_bytes: usize,
+    table_bytes: usize,
+    oom: bool,
+}
+
+impl Grenzen {
+    fn new(memory_mb: u32) -> Grenzen {
+        Grenzen {
+            limit: (memory_mb as usize) << 20,
+            memory_bytes: 0,
+            table_bytes: 0,
+            oom: false,
+        }
+    }
+
+    fn deny(&mut self) -> wasmtime::Result<bool> {
+        self.oom = true;
+        Err(format_err!("Arbeitsspeichergrenze des Plug-ins erreicht"))
+    }
+}
+
+impl ResourceLimiter for Grenzen {
+    fn memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let neu = self
+            .memory_bytes
+            .saturating_sub(current)
+            .saturating_add(desired);
+        if neu.saturating_add(self.table_bytes) > self.limit {
+            return self.deny();
+        }
+        self.memory_bytes = neu;
+        Ok(true)
+    }
+
+    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.oom = true;
+        Err(format_err!("Arbeitsspeichergrenze des Plug-ins erreicht"))
+    }
+
+    fn table_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        let alt = current.saturating_mul(TABLE_ELEMENT_BYTES);
+        let neu = self
+            .table_bytes
+            .saturating_sub(alt)
+            .saturating_add(desired.saturating_mul(TABLE_ELEMENT_BYTES));
+        if neu.saturating_add(self.memory_bytes) > self.limit {
+            return self.deny();
+        }
+        self.table_bytes = neu;
+        Ok(true)
+    }
+
+    fn table_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.oom = true;
+        Err(format_err!("Arbeitsspeichergrenze des Plug-ins erreicht"))
+    }
+
+    fn instances(&self) -> usize {
+        MAX_INSTANCES
+    }
+
+    fn memories(&self) -> usize {
+        MAX_MEMORIES
+    }
+
+    fn tables(&self) -> usize {
+        MAX_TABLES
+    }
+}
+
+/// Eine Wartezeit des Plug-ins (`wasi:clocks/monotonic-clock.subscribe-*`), die in die Frist passt.
+struct Warten(std::time::Instant);
+
+#[async_trait::async_trait]
+impl Pollable for Warten {
+    async fn ready(&mut self) {
+        tokio::time::sleep_until(tokio::time::Instant::from_std(self.0)).await;
+    }
+}
+
+/// Legt eine Wartezeit an. Länger als der Rest der Frist darf sie nicht dauern: sonst wäre der Aufruf
+/// ohnehin nicht rechtzeitig fertig, und die Laufzeit bricht gleich mit `Trap::Interrupt` ab (die
+/// Epochen-Unterbrechung greift nur in WebAssembly-Code, nie, während der Host wartet).
+fn warten(state: &mut State, wait: Duration) -> wasmtime::Result<(Resource<DynPollable>,)> {
+    let now = std::time::Instant::now();
+    if wait > state.deadline.saturating_duration_since(now) {
+        return Err(Trap::Interrupt.into());
+    }
+    let r = state.table.push(Warten(now + wait))?;
+    Ok((subscribe(&mut state.table, r)?,))
+}
+
+/// Ersetzt die Wartefunktionen der Monotonuhr durch [`warten`].
+fn clock_with_deadline(linker: &mut Linker<State>) -> wasmtime::Result<()> {
+    let mut inst = linker.instance("wasi:clocks/monotonic-clock@0.2.12")?;
+    inst.func_wrap(
+        "subscribe-duration",
+        |mut c: StoreContextMut<'_, State>, (ns,): (u64,)| {
+            warten(c.data_mut(), Duration::from_nanos(ns))
+        },
+    )?;
+    inst.func_wrap(
+        "subscribe-instant",
+        |mut c: StoreContextMut<'_, State>, (when,): (u64,)| {
+            let state = c.data_mut();
+            let now = GrobeMonotonuhr(state.start).now();
+            warten(state, Duration::from_nanos(when.saturating_sub(now)))
+        },
+    )?;
+    Ok(())
+}
+
 /// Der Zustand eines Plug-ins im `Store`.
 struct State {
     host: Box<dyn HostCalls>,
     wasi: WasiCtx,
     table: ResourceTable,
-    limits: StoreLimits,
+    limits: Grenzen,
+    /// Start der Instanz (Nullpunkt der Monotonuhr).
+    start: std::time::Instant,
+    /// Wann die Frist des laufenden Aufrufs abläuft (für Wartezeiten des Plug-ins).
+    deadline: std::time::Instant,
     texts: PluginTexts,
     language: String,
 }
@@ -342,28 +482,30 @@ impl Engine {
         };
         let component = Component::new(&self.inner, wasm).map_err(|e| load("laden", e))?;
         let mut linker = Linker::<State>::new(&self.inner);
+        linker.allow_shadowing(true);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|e| load("einrichten", e))?;
+        clock_with_deadline(&mut linker).map_err(|e| load("einrichten", e))?;
+        linker.allow_shadowing(false);
         Plugin::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
             .map_err(|e| load("einrichten", e))?;
 
         let stdout = Ausgabe::default();
         let stderr = Ausgabe::default();
         // Leeres WASI: keine Ordner, keine Umgebung, keine Argumente, kein Netz.
+        let start = std::time::Instant::now();
         let wasi = WasiCtxBuilder::new()
             .stdout(stdout.clone())
             .stderr(stderr.clone())
             .wall_clock(FesteWanduhr)
-            .monotonic_clock(GrobeMonotonuhr(std::time::Instant::now()))
-            .build();
-        let limits = StoreLimitsBuilder::new()
-            .memory_size((manifest.memory_mb as usize) << 20)
-            .trap_on_grow_failure(true)
+            .monotonic_clock(GrobeMonotonuhr(start))
             .build();
         let state = State {
             host,
             wasi,
             table: ResourceTable::new(),
-            limits,
+            limits: Grenzen::new(manifest.memory_mb),
+            start,
+            deadline: start + TICK * CallKind::Command.ticks() as u32,
             texts: PluginTexts::new(languages),
             language: "en".to_string(),
         };
@@ -371,12 +513,15 @@ impl Engine {
         store.limiter(|s| &mut s.limits);
         // Auch das Einrichten der Instanz hat eine Frist (ein Start-Abschnitt könnte endlos laufen).
         store.set_epoch_deadline(CallKind::Command.ticks());
-        let plugin = Plugin::instantiate(&mut store, &component, &linker).map_err(|e| {
-            match classify(&e) {
-                PluginError::Trap(_) => load("einrichten", e),
-                other => other,
+        let plugin = match Plugin::instantiate(&mut store, &component, &linker) {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(match classify(&e, store.data().limits.oom) {
+                    PluginError::Trap(_) => load("einrichten", e),
+                    other => other,
+                });
             }
-        })?;
+        };
         Ok(Instance {
             store,
             plugin,
@@ -388,17 +533,15 @@ impl Engine {
     }
 }
 
-/// Ordnet einen Fehler der Laufzeit ein.
-fn classify(e: &wasmtime::Error) -> PluginError {
+/// Ordnet einen Fehler der Laufzeit ein. `oom` ist die Fahne der Speichergrenze.
+fn classify(e: &wasmtime::Error, oom: bool) -> PluginError {
+    if oom {
+        return PluginError::OutOfMemory;
+    }
     if e.downcast_ref::<Trap>() == Some(&Trap::Interrupt) {
         return PluginError::Timeout;
     }
-    let text = format!("{e:#}");
-    // Der Trap-Grund der Speichergrenze („forcing trap when growing memory to N bytes“).
-    if text.contains("forcing trap when growing memory") || text.contains("memory growth failure") {
-        return PluginError::OutOfMemory;
-    }
-    PluginError::Trap(text)
+    PluginError::Trap(format!("{e:#}"))
 }
 
 /// Eine laufende Plug-in-Instanz. Nach einem Ausfall ist sie „tot“: jeder weitere Aufruf gibt
@@ -425,11 +568,12 @@ impl Instance {
             ));
         }
         self.store.set_epoch_deadline(kind.ticks());
+        self.store.data_mut().deadline = std::time::Instant::now() + TICK * kind.ticks() as u32;
         let result = f(&self.plugin, &mut self.store);
         self.forward_output();
         result.map_err(|e| {
             self.dead = true;
-            classify(&e)
+            classify(&e, self.store.data().limits.oom)
         })
     }
 
@@ -478,5 +622,45 @@ impl Instance {
                 .host
                 .log(Level::Error, &format!("Beim Beenden des Plug-ins: {e}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn limiter_sums_memories_and_tables() {
+        let mut g = Grenzen::new(1); // 1 MiB
+        assert!(g.memory_growing(0, 400 << 10, None).unwrap());
+        // Ein zweiter Speicher zählt mit.
+        assert!(g.memory_growing(0, 400 << 10, None).unwrap());
+        // Wachstum eines Speichers zählt nur den Zuwachs.
+        assert!(g.memory_growing(400 << 10, 420 << 10, None).unwrap());
+        assert!(!g.oom);
+        // 220 KiB Tabelle passen nicht mehr (400 + 420 + 220 > 1024 KiB).
+        assert!(
+            g.table_growing(0, (220 << 10) / TABLE_ELEMENT_BYTES, None)
+                .is_err()
+        );
+        assert!(g.oom);
+    }
+
+    #[test]
+    fn limiter_denies_huge_table() {
+        let mut g = Grenzen::new(64);
+        assert!(g.table_growing(0, 10_000, None).unwrap());
+        assert!(g.table_growing(10_000, 100_000_000, None).is_err());
+        assert!(g.oom);
+        assert_eq!(
+            classify(&format_err!("egal"), g.oom),
+            PluginError::OutOfMemory
+        );
+    }
+
+    #[test]
+    fn limiter_caps_counts() {
+        let g = Grenzen::new(64);
+        assert_eq!((g.instances(), g.memories(), g.tables()), (32, 8, 8));
     }
 }
