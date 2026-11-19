@@ -2294,9 +2294,9 @@ Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec
   - ~~Die Knöpfe der Abhängigkeiten wirken nur auf eine schon getroffene Auswahl (zuerst wählen, dann Knopf); Fusion erlaubt auch erst den Befehl, dann die Auswahl.~~ Behoben (dac1682): Ohne passende Auswahl startet der Knopf (oder seine Taste) den Befehl; er erscheint aktiv, die Statuszeile sagt, was zu wählen ist. Klicks wählen die Bezüge (eine passende Teilauswahl zählt als erster), sobald es reicht, entsteht die Abhängigkeit (ein Schritt), und der Befehl bleibt für das nächste Paar, bis Esc, Rechtsklick oder ein anderes Werkzeug. Ein unpassender Bezug wird mit der vorhandenen Meldung abgelehnt; Glatt nimmt das Ende nach der Klicklage. Die Maßknöpfe bleiben, wie sie waren.
   - ~~Bricht man ein Zeichenwerkzeug nach dem ersten Klick ab (Esc, Rechtsklick, Werkzeugwechsel, Skizze beenden), bleibt der gesetzte Punkt stehen (Rückgängig-Schritt „Punkt setzen“).~~ Behoben (1302ddc): Ein Befehl ohne fertige Form hinterlässt nichts, keinen Punkt, keine Fangbindung, keinen Schritt. Gefangene vorhandene Punkte und fertige Linien eines Linienzugs bleiben.
   - ~~Ein Klick auf ein fest stehendes Feld des Musters gibt ihm nicht die Tastatur, nur Tab wechselt.~~ Behoben (aea321f): Ein Klick in ein Feld setzt dort den Fokus; er wählt weiter kein Exemplar ab. Die Felder am Zeiger nehmen weiter keine Maus an (sie folgen dem Zeiger). **Erledigt in Skizzen 11a: wie Fusion, A9** (die Felder am Zeiger nehmen keinen Mausklick an; der Klick geht an die Zeichnung und gibt dem Feld keinen Fokus).
-- `Id::from_index` schneidet große Indizes still ab (schon vorher, betrifft auch `MusterWert`). Härten.
-- Ein lebendes Glatt mit veraltetem Ende aus einer von Hand geänderten Datei lädt still und liefert keine Zeile; mögliche Härtung in `from_data`.
-- Löser: Die Vorschau klont die Skizze je Bild; `add_constraint` baut die Gruppen für die Schleifenprüfung neu (im schlimmsten Fall quadratisch); Gleitkommarauschen in einer Rückkopplung könnte ein falsches `NotConverged` geben, und `dof` wird im gemeldeten Fall nicht neu berechnet.
+- ~~`Id::from_index` schneidet große Indizes still ab (schon vorher, betrifft auch `MusterWert`). Härten.~~ Erledigt in Skizzen 12 (Task 13): `Id::try_from_index`, der Ladeweg meldet zu große Indizes als beschädigte Datei.
+- ~~Ein lebendes Glatt mit veraltetem Ende aus einer von Hand geänderten Datei lädt still und liefert keine Zeile; mögliche Härtung in `from_data`.~~ Erledigt in Skizzen 12 (Task 13): Das Laden meldet es als beschädigt (`sketch-err-data-smooth-end`).
+- Löser (Härtung in Skizzen 12, Task 13 erledigt: Vorschau ohne Klon je Bild, `add_constraint` führt die Gruppen fort, `dof` ohne überholte Gruppen): Die Vorschau klont die Skizze je Bild; `add_constraint` baut die Gruppen für die Schleifenprüfung neu (im schlimmsten Fall quadratisch); Gleitkommarauschen in einer Rückkopplung könnte ein falsches `NotConverged` geben, und `dof` wird im gemeldeten Fall nicht neu berechnet.
 - Löschen der Auswahl ist eine Einheit: Lehnt die Skizze einen Teil ab (Abwählen eines Exemplars brächte eine Schleife), bleibt alles stehen, auch die anderen gewählten Teile; die Meldung nennt den Grund. Wer den Rest löschen will, nimmt das Exemplar aus der Auswahl.
 - `set_curve_kind` an einer fremden Kurve kann ein anderes Muster auflösen (selten); die Version zählt bei einem Befehl mehrfach hoch (kostet höchstens ein Neuzeichnen).
 - Eine Anzahl mit Formel 0 meldet „mm“ statt einer Zahl.
@@ -3199,7 +3199,7 @@ Aus dem Ledger der Aufgaben 1 bis 16 und aus K1/K2 gesammelt, soweit nicht schon
   - K1 (Handtest 1): Eine Skizze, die selbst aus ist und von einer ausgeblendeten Gruppe verdeckt wird, zeichnet halb gedämpft.
   - K2: Tests fehlen für senkrechte Ausrichtung, für einen festgehaltenen Rahmen auf Dokumentebene und für die Rückfrage im Dialog; ein geladener Text kann bis zur Berührung überlaufen (gewollt, bytegleich).
 - **Weitere zurückgestellte Kleinigkeiten (Abschlussprüfung):** Task 7: Der Test „Toleranz null“ prüft den Schlüssel nicht. Task 2 und Task 11 (Sprachwechsel): Die neuen Tests wurden ohne vorherigen roten Lauf geschrieben. Es fehlt ein Test im Feature-Crate für das Nachführen des Hinweispunkts der Fläche (`face_hinted`, `include.rs:192`, `surface_project.rs:172`); der Rundlauf-Test in `format22.rs` prüft nur die Datei. `sketch_data_bytes` (`history.rs:278`) zählt `text_formulas` nicht mit, die Speicherschätzung des Skizzenverlaufs ist dadurch leicht zu klein.
-- **Leistung in der App, später (nicht gemessen, nicht geändert):** `Document::reshape_texts` (`ops.rs:172`) klont jede Skizze mit Text bei jedem Aufruf, auch ohne Änderung (nach Parameteränderung, Rückgängig/Wiederholen, Einheiten- und Sprachwechsel); der Klon wird nur für `follow_text_profiles` bei `report.changed` gebraucht. `compute_sketch` (`compute.rs:901`) baut je Skizze einen `ParamScope` (`params.rs:165`), auch ohne Texte; vorher `sketch.texts().next().is_some()` prüfen. `grow_frame_to_fit` (`text.rs:1783`) klont die ganze Skizze und löst bei jedem gewachsenen Text im Reshape. `is_feature_hidden` (`state.rs:1045`, `sketch_groups.rs:306`) läuft bei jedem Aufruf die Gruppenkette hoch. `text_rotate_grips` (`sketch_view.rs:3480/3487`) läuft zweimal je Bild. Keine dieser Stellen liegt im Lösen oder Zugschritt der Messkette.
+- ~~**Leistung in der App, später (nicht gemessen, nicht geändert):**~~ Erledigt in Skizzen 12 (Task 12 und 12b, siehe dort). Alter Wortlaut: `Document::reshape_texts` (`ops.rs:172`) klont jede Skizze mit Text bei jedem Aufruf, auch ohne Änderung (nach Parameteränderung, Rückgängig/Wiederholen, Einheiten- und Sprachwechsel); der Klon wird nur für `follow_text_profiles` bei `report.changed` gebraucht. `compute_sketch` (`compute.rs:901`) baut je Skizze einen `ParamScope` (`params.rs:165`), auch ohne Texte; vorher `sketch.texts().next().is_some()` prüfen. `grow_frame_to_fit` (`text.rs:1783`) klont die ganze Skizze und löst bei jedem gewachsenen Text im Reshape. `is_feature_hidden` (`state.rs:1045`, `sketch_groups.rs:306`) läuft bei jedem Aufruf die Gruppenkette hoch. `text_rotate_grips` (`sketch_view.rs:3480/3487`) läuft zweimal je Bild. Keine dieser Stellen liegt im Lösen oder Zugschritt der Messkette.
 - **Messläufe (Gesamtprüfung Task 17, Windows):** Die 3D-Kette ist im Release langsamer als im 11a-Ledger: Zugschritt 0,030-0,036 s gegen 0,026 s (+15 bis +38 %), Lösen 0,021-0,024 s gegen 0,018 s (+17 bis +33 %; der erste Lauf mit parallelen Tests: 0,026/0,032 s). Die Ziele (höchstens 0,5 s und 50 ms) sind eingehalten; der A/B-Vergleich danach (Worktree 1e56103c gegen 11b, abwechselnd, je zweimal) zeigt keinen Unterschied: 3D-Kette lösen 0,020/0,021 s vor und 0,019/0,019 s nach 11b, Zugschritt 0,030/0,026 s gegen 0,027/0,026 s; 2D-Kette 0,020/0,021 gegen 0,020/0,020 s (Zug 0,015/0,016 gegen 0,015/0,014 s). Die höheren Werte kamen also von der Maschinenlast, nicht von 11b. Die 2D-Kette (Lösen 0,021-0,026 s, Zug 0,016-0,019 s) und 500 Bögen (Zug 0,007-0,010 s) liegen leicht über dem Ledger, 100 000 Linien (24,9 s) darunter. Rot: `isoparametric_copy_roundtrips` (Test veraltet, behoben in der Korrekturrunde), unter Ubuntu als root zusätzlich `a_locked_old_json_never_ends_up_next_to_a_new_png`, `real_step_text_limit` (auch auf master); `cargo deny` meldet chrono (RUSTSEC-2026-0543, über dxf, nicht 11b). Ein einmaliger Wackler in `sketch_clipboard` (K1) ist nicht reproduziert; das Log des Abschlusslaufs liegt unter `.superpowers/sdd/2026-11-17-skizzen-uebernehmen/final-windows-tests.log`.
 
 ### Skizzen 11b: Mit Fusion abgleichen
@@ -3308,3 +3308,44 @@ Leistung in der App (Task 12, Liste aus Skizzen 11b):
   - Anklicken (`finished_sketch_under`) nutzt denselben Speicher. Danach blieben 4,3 ms je Zeigerstellung: `Mapper::to_screen3` baut je Punkt die Kameramatrix neu. Neu `OrbitCamera::project_with` und `Mapper::screen3_fn` (Matrix einmal je Zeigerstellung, gleiches Ergebnis, Test `screen3_fn_equals_to_screen3`). Hover-Wahl über 2000 Kurven: 5,4 → 1,55 ms.
   - `sketch_draw_timing` danach: (a) 1,57 ms, (b) 1,53 ms, (c) 13,1 ms (Rechnerdrift beachten, siehe oben).
   - **Nicht gemacht:** Galleys der Maße fertiger Skizzen (`finished_dimension_shapes`) nicht eigens gespeichert; „Maße anzeigen“ ist fertig vorgabemäßig aus und egui hält Galleys selbst vor, in der Messszene kostet es nichts. **Offen:** Dieselbe Matrix je Punkt steckt auch in anderen Wegen über `to_screen3` (etwa `sketch_curve_under`, Overlay der geöffneten Skizze); dort nicht gemessen. Der Speicher hält die Linienzüge im Speicher (Messszene etwa 7 MB).
+
+### Abschluss Skizzen 12: Härtungen und Leistung erledigt, offene Annahmen für Handtest 3
+
+Stand Task 14 (2026-11-19): **Härtungen nach Skizzen 5 erledigt** (Task 13, Schleifen über mehrere Muster, `add_constraint` fortgeführt, Mustervorschau ohne Neuaufbau, `Id::from_index`, Glatt-Ende in `from_data`, parallele Richtungen, `dof`). **Leistung aus Skizzen 11b erledigt** (Task 12 und 12b: `reshape_texts`, `compute_sketch`, `grow_frame_to_fit` nur gemessen, `is_feature_hidden`, `text_rotate_grips`, fertige Skizzen ohne Neuabtastung je Bild). Nicht erledigt, bewusst: Lösen nur der eigenen Gruppe in `solve_holding_connected`; Galleys der Maße fertiger Skizzen nicht gespeichert; weitere Wege über `to_screen3` (etwa `sketch_curve_under`, Overlay der geöffneten Skizze) ohne die Matrix je Zeigerstellung; der Linienzug-Speicher hält in der Messszene etwa 7 MB; Parameteränderung mit 250 Texten rund 320 ms (Löser).
+
+Alle offenen Annahmen, die Handtest 3 gegen Fusion prüft (jede in der Reihenfolge der Abschnitte oben; angekreuzt wird erst nach dem Test):
+
+*Anzeige und Tiefe*
+- [ ] Schnittflächen bei Slice sind nicht gefüllt.
+- [ ] Slice schneidet die Kameraseite (folgt der Kamera, nicht der Skizzennormalen); Raster und Achsenkreuz werden nicht mitgeschnitten.
+- [ ] `SLICE_EPS` = 1e-3 mm; Genauigkeit von `d` in f32 weit vom Ursprung (ab etwa 10 m) ungeprüft.
+- [ ] Das Umschalten von Slice und Profil ist ein Rückgängig-Schritt, wie das Auge (so auch alle anderen Anzeigehaken).
+- [ ] Punkte, Zeichen und Maße der Skizze bleiben obenauf und werden nicht von Körpern verdeckt.
+- [ ] Zeichenreihenfolge: Leinwandrahmen und Dialogmarken liegen über den Skizzenlinien.
+- [ ] Strichstärken 1,2 / 1,0 / 2,0 / 1,5 Punkte und Strichmuster 6/4 mal Pixelfaktor sehen wie bei Fusion aus; Tiefenversatz `STROKE_DEPTH_BIAS` und Kantenglättung `STROKE_FEATHER_PX` zeigen keine Löcher auf Körperflächen und kein Durchscheinen dünner Wände.
+
+*Anzeigeoptionen*
+- [ ] Form: Symbol „Anzeigeoptionen“ mit Aufklappfeld statt Haken in der Palette (Wunsch von Dennis, nicht Fusion); Namen und Reihenfolge wie Fusion.
+- [ ] „Punkte anzeigen“ aus: Punkte nicht wählbar (auch nicht per Rahmen und in 3D), Fang auf sie bleibt.
+- [ ] Zeichen (Abhängigkeiten) und Maße an ausgeblendeter Geometrie bleiben sichtbar.
+- [ ] Gewähltes bleibt beim Ausblenden gewählt; Entf kann auch Ausgeblendetes löschen.
+- [ ] Zieht man auf dem Skizzennamen, zieht das Fenster, nicht die Textauswahl.
+- [ ] Abgedocktes Skizzenfeld: Symbol „Anzeigeoptionen“ und „Blick auf“ lassen sich anklicken (Fix-Runde 2 hat den Ziehstreifen ausgespart; nur im Handtest belegbar).
+
+*Fertige Skizzen in 3D*
+- [ ] Ein Klick auf eine Kurve markiert die Skizze im Baum nicht.
+- [ ] Entf und Doppelklick auf eine gewählte Kurve tun nichts.
+- [ ] Unsichtbare Punkte am Kurvenende (Griffe) sind in 3D wählbar.
+- [ ] Liegt eine Skizze hinter einer Ebene oder Leinwand, gewinnt beim Klick die Skizze.
+- [ ] Körperkante vor Skizzenkurve: Bei gleichem Abstand gewinnt die Körperkante.
+- [ ] „Maße anzeigen“ an fertigen Skizzen zeigt nur den Text (keine Hilfslinien) und ist an den Haken „Maße anzeigen“ der Skizze gekoppelt; beide müssen an sein.
+- [ ] Rechtsklickmenü der fertigen Skizze: „Skizze bearbeiten“, „Maße anzeigen“, „Ausblenden“ (Namen und Reihenfolge).
+- [ ] Achsenfeld des Ebenen-Fensters nimmt nur gerade Linien, das Punktfeld nur Punkte; ein Klick auf die falsche Art trifft nichts.
+
+*Winkelanzeige und Werkzeugwechsel*
+- [ ] Beim Zug an einem Drehgriff zeigt Fusion den Winkel seit dem Fassen; beim Text-Drehgriff steht der Winkel des Textes absolut.
+- [ ] Werkzeugwechsel mitten im Zug (Rho-Griff und Drehgriff des Textes): „zurücknehmen“ gilt für beide; was Fusion tut, ist offen.
+
+*Datei und Härtungen*
+- [ ] Format 23 nur bei abweichendem Anzeigehaken; alte Dateien bytegleich (durch Tests belegt, im Handtest nur eine Datei von Hand öffnen).
+- [ ] Beim Laden werden alle Muster eines Kreises von Mustern aufgelöst (nicht nur eins).
