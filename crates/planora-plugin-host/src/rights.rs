@@ -79,6 +79,29 @@ impl Rights {
     pub fn reset_once(&mut self) {
         self.once.clear();
     }
+
+    /// Was von den dauerhaften Entscheidungen bleibt, wenn das Plug-in mit dem Manifest `old`
+    /// durch eines mit `new` ersetzt wird (die Pakete sind nicht signiert, die Kennung allein
+    /// sagt nicht, wer es ist): nichts ohne altes Manifest oder bei anderem `author`; `net` fällt
+    /// weg, wenn sich die Rechner in `net-hosts` geändert haben (ohne Rücksicht auf Groß- und
+    /// Kleinschreibung); Rechte, die `new` nicht mehr verlangt, fallen weg. „Nur dieses Mal“
+    /// verfällt immer.
+    pub fn carry_over(&self, old: Option<&Manifest>, new: &Manifest) -> Rights {
+        let mut out = Rights::default();
+        let Some(old) = old.filter(|o| o.author == new.author) else {
+            return out;
+        };
+        let hosts = |m: &Manifest| -> BTreeSet<String> {
+            m.net_hosts.iter().map(|h| h.to_ascii_lowercase()).collect()
+        };
+        let same_hosts = hosts(old) == hosts(new);
+        for (r, g) in self.saved() {
+            if new.rights.contains(&r) && (r != Right::Net || same_hosts) {
+                out.saved.insert(r, g);
+            }
+        }
+        out
+    }
 }
 
 /// Zähler für Anfragen mit Kennung (ab 1, je Instanz neu).

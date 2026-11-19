@@ -5,7 +5,7 @@
 use planora_plugin_host::manifest::Right;
 use planora_plugin_host::package::Package;
 use planora_plugin_host::places::{self, Places};
-use planora_plugin_host::rights::Answer;
+use planora_plugin_host::rights::{Answer, Grant};
 use planora_plugin_host::runtime::{HttpResponse, RequestResult};
 use planora_plugin_host::{EntryState, HostEvent, PluginHost, PluginState};
 use std::collections::BTreeMap;
@@ -443,5 +443,157 @@ fn rescan_restarts_changed_only() {
     h.rescan(&aus);
     assert_eq!(state(&h, HALLO), EntryState::Off);
     assert_eq!(state(&h, FAELLE), EntryState::Running);
+    aufraeumen(&p);
+}
+
+/// test-faelle installiert und gestartet, `net` dauerhaft erlaubt (wie aus der Konfiguration).
+fn mit_netzrecht(name: &str, bundled_too: bool) -> (PluginHost, Places) {
+    let p = orte(name, &["test-faelle"]);
+    if bundled_too {
+        let bundled = Places {
+            bundled: Vec::new(),
+            user: p.bundled[0].clone(),
+            cache: p.cache.clone(),
+        };
+        let file =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/test-faelle.pcplugin");
+        places::install(
+            &bundled,
+            &Package::read(&std::fs::read(file).unwrap()).unwrap(),
+        )
+        .unwrap();
+    }
+    let mut h = PluginHost::new(p.clone());
+    h.start_all(&BTreeMap::from([(
+        FAELLE.to_string(),
+        PluginState {
+            enabled: true,
+            rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
+        },
+    )]));
+    warten(&mut h, FAELLE);
+    assert_eq!(state(&h, FAELLE), EntryState::Running);
+    assert_eq!(net(&h), Some(Grant::Allowed));
+    (h, p)
+}
+
+fn net(h: &PluginHost) -> Option<Grant> {
+    h.entries()
+        .iter()
+        .find(|e| e.id == FAELLE)
+        .unwrap()
+        .rights
+        .state(Right::Net)
+}
+
+/// Ändert das installierte plugin.toml von test-faelle (wie ein Ersetzen durch ein neues Paket).
+fn manifest_aendern(p: &Places, from: &str, to: &str) {
+    let toml = p.user.join(FAELLE).join("plugin.toml");
+    let text = std::fs::read_to_string(&toml).unwrap();
+    assert!(text.contains(from), "{text}");
+    std::fs::write(&toml, text.replace(from, to)).unwrap();
+}
+
+#[test]
+fn replace_keeps_rights_of_same_author_only() {
+    // Gleicher Autor, neue Version: das Recht bleibt.
+    let (mut h, p) = mit_netzrecht("ersetzen-autor", false);
+    manifest_aendern(&p, "version = \"0.1.0\"", "version = \"0.2.0\"");
+    h.rescan(&BTreeMap::new());
+    warten(&mut h, FAELLE);
+    assert_eq!(net(&h), Some(Grant::Allowed), "gleicher Autor");
+    // Rechner nur anders geschrieben: bleibt (ohne Rücksicht auf Groß- und Kleinschreibung).
+    manifest_aendern(&p, "\"example.org\"", "\"EXAMPLE.org\"");
+    manifest_aendern(&p, "version = \"0.2.0\"", "version = \"0.2.1\"");
+    h.rescan(&BTreeMap::new());
+    warten(&mut h, FAELLE);
+    assert_eq!(net(&h), Some(Grant::Allowed), "gleiche Rechner");
+    // Andere Rechner: `net` fällt weg.
+    manifest_aendern(&p, "\"EXAMPLE.org\"", "\"example.com\"");
+    manifest_aendern(&p, "version = \"0.2.1\"", "version = \"0.3.0\"");
+    h.rescan(&BTreeMap::new());
+    warten(&mut h, FAELLE);
+    assert_eq!(net(&h), None, "andere Rechner");
+    assert!(
+        !h.plugin_states().contains_key(FAELLE),
+        "nichts mehr zu speichern"
+    );
+    aufraeumen(&p);
+
+    // Anderer Autor: alle Rechte fallen weg.
+    let (mut h, p) = mit_netzrecht("ersetzen-fremd", false);
+    manifest_aendern(&p, "author = \"Dennis Guse\"", "author = \"Jemand anders\"");
+    manifest_aendern(&p, "version = \"0.1.0\"", "version = \"0.2.0\"");
+    h.rescan(&BTreeMap::new());
+    warten(&mut h, FAELLE);
+    assert_eq!(net(&h), None, "anderer Autor");
+    aufraeumen(&p);
+
+    // Ein Recht, das die neue Version nicht mehr verlangt, fällt weg.
+    let (mut h, p) = mit_netzrecht("ersetzen-ohne-netz", false);
+    manifest_aendern(&p, "rights = [\"net\"]", "rights = []");
+    manifest_aendern(&p, "net-hosts = [\"example.org\"]", "");
+    manifest_aendern(&p, "version = \"0.1.0\"", "version = \"0.2.0\"");
+    h.rescan(&BTreeMap::new());
+    warten(&mut h, FAELLE);
+    assert_eq!(state(&h, FAELLE), EntryState::Running);
+    assert_eq!(net(&h), None, "nicht mehr verlangt");
+    aufraeumen(&p);
+}
+
+#[test]
+fn forget_state_leaves_bundled_copy_without_rights() {
+    let (mut h, p) = mit_netzrecht("vergessen", true);
+    let e = h.entries().iter().find(|e| e.id == FAELLE).unwrap();
+    assert_eq!(e.found.len(), 2);
+    assert_eq!(e.found[e.active.unwrap()].origin, places::Origin::User);
+    places::uninstall(&p, FAELLE).unwrap();
+    h.forget_state(FAELLE);
+    // Der Stand der Konfiguration (noch mit dem Recht) zählt nach dem Vergessen nicht mehr.
+    h.rescan(&BTreeMap::new());
+    warten(&mut h, FAELLE);
+    let e = h.entries().iter().find(|e| e.id == FAELLE).unwrap();
+    assert_eq!(e.found[e.active.unwrap()].origin, places::Origin::Bundled);
+    assert_eq!(state(&h, FAELLE), EntryState::Running);
+    assert_eq!(net(&h), None);
+    assert!(!h.plugin_states().contains_key(FAELLE));
+    aufraeumen(&p);
+}
+
+#[test]
+fn replaced_restarts_same_version() {
+    let (mut h, p) = mit_netzrecht("gleiche-version", false);
+    h.run_command("planora.test-faelle.netz");
+    let g1 = h.poll().iter().find_map(|e| match e {
+        HostEvent::Net { generation, .. } | HostEvent::Ask { generation, .. } => Some(*generation),
+        _ => None,
+    });
+    let old = {
+        let e = h.entries().iter().find(|e| e.id == FAELLE).unwrap();
+        e.found[e.active.unwrap()].manifest.clone()
+    };
+    // Gleiche Version erneut installiert (anderer Autor): rescan lässt es laufen, `replaced`
+    // gleicht die Rechte ab und startet neu.
+    manifest_aendern(&p, "author = \"Dennis Guse\"", "author = \"Jemand anders\"");
+    h.rescan(&BTreeMap::new());
+    assert_eq!(
+        state(&h, FAELLE),
+        EntryState::Running,
+        "rescan allein startet nicht neu"
+    );
+    h.replaced(FAELLE, Some(&old));
+    assert_eq!(state(&h, FAELLE), EntryState::Loading, "neu gestartet");
+    assert_eq!(net(&h), None, "anderer Autor");
+    warten(&mut h, FAELLE);
+    assert_eq!(state(&h, FAELLE), EntryState::Running);
+    h.run_command("planora.test-faelle.netz");
+    let g2 = h.poll().iter().find_map(|e| match e {
+        HostEvent::Net { generation, .. } | HostEvent::Ask { generation, .. } => Some(*generation),
+        _ => None,
+    });
+    assert!(
+        g1.is_some() && g2.is_some() && g1 != g2,
+        "neue Generation: {g1:?} {g2:?}"
+    );
     aufraeumen(&p);
 }

@@ -543,3 +543,230 @@ fn opening_at_plugins_scrolls_there() {
     );
     assert!(scrolled > 0.0, "im Fenster: {scrolled}");
 }
+
+// --- Fix-Runde 1: Rechte bei Entfernen und Ersetzen -------------------------------------------
+
+fn netz_erlaubt() -> Config {
+    let mut config = Config::default();
+    config.plugins.insert(
+        FAELLE.to_string(),
+        PluginConfig {
+            enabled: true,
+            rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
+        },
+    );
+    config
+}
+
+fn net_state(h: &H) -> Option<Grant> {
+    h.ws.plugins
+        .host
+        .entries()
+        .iter()
+        .find(|e| e.id == FAELLE)
+        .unwrap()
+        .rights
+        .state(Right::Net)
+}
+
+#[test]
+fn remove_then_reinstall_has_no_grants() {
+    let mut h = harness(
+        "neu-ohne-rechte",
+        orte("neu-ohne-rechte", &[], &["test-faelle"]),
+        netz_erlaubt(),
+    );
+    assert_eq!(net_state(&h), Some(Grant::Allowed));
+    plugins::remove(&mut h.ws, FAELLE);
+    assert!(!h.ws.config.plugins.contains_key(FAELLE));
+    assert_eq!(gespeichert(&h, FAELLE), None, "ganzer Eintrag gelöscht");
+    warten(&mut h);
+    h.ws.plugins.offer_install(paket("test-faelle"), None);
+    assert_eq!(
+        h.ws.plugins.install.as_ref().unwrap().grants,
+        vec![(Right::Net, None)]
+    );
+    let seen = bild(&mut h, vec![]);
+    assert!(
+        has(&seen, "wird beim ersten Gebrauch gefragt"),
+        "{}",
+        join(&seen)
+    );
+    assert!(has(&seen, "Das Programm fragt beim ersten Gebrauch nach."));
+    klick(&mut h, &seen, "Installieren");
+    warten(&mut h);
+    assert_eq!(entry_state(&h, FAELLE), Some(EntryState::Running));
+    assert_eq!(net_state(&h), None, "fragt wieder");
+    assert_eq!(gespeichert(&h, FAELLE), None);
+}
+
+#[test]
+fn fresh_install_ignores_stale_config() {
+    // Kein Fundort, aber ein alter Eintrag in der Konfiguration (etwa von Hand entfernt).
+    let mut h = harness(
+        "alter-eintrag",
+        orte("alter-eintrag", &[], &[]),
+        netz_erlaubt(),
+    );
+    h.ws.plugins.offer_install(paket("test-faelle"), None);
+    assert_eq!(
+        h.ws.plugins.install.as_ref().unwrap().grants,
+        vec![(Right::Net, None)]
+    );
+    assert!(h.ws.plugins.install_offered(&mut h.ws.config));
+    warten(&mut h);
+    assert_eq!(entry_state(&h, FAELLE), Some(EntryState::Running));
+    assert_eq!(net_state(&h), None);
+    assert!(!h.ws.config.plugins.contains_key(FAELLE));
+}
+
+#[test]
+fn replace_same_author_keeps_grants_and_restarts() {
+    let mut h = harness(
+        "ersetzen-rechte",
+        orte("ersetzen-rechte", &[], &["test-faelle"]),
+        netz_erlaubt(),
+    );
+    h.ws.plugins.offer_install(paket("test-faelle"), None);
+    assert_eq!(
+        h.ws.plugins.install.as_ref().unwrap().grants,
+        vec![(Right::Net, Some(Grant::Allowed))]
+    );
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "bereits erlaubt"), "{}", join(&seen));
+    assert!(
+        !has(&seen, "Das Programm fragt beim ersten Gebrauch nach."),
+        "nichts mehr zu fragen"
+    );
+    assert!(has(&seen, "Version 0.1.0 ersetzen durch Version 0.1.0?"));
+    // Gleiche Version: startet trotzdem neu, damit der neue Code läuft.
+    assert!(h.ws.plugins.install_offered(&mut h.ws.config));
+    assert_eq!(entry_state(&h, FAELLE), Some(EntryState::Loading));
+    warten(&mut h);
+    assert_eq!(entry_state(&h, FAELLE), Some(EntryState::Running));
+    assert_eq!(net_state(&h), Some(Grant::Allowed));
+}
+
+#[test]
+fn dialog_shows_dropped_grants() {
+    let mut h = harness(
+        "ersetzen-anzeige",
+        orte("ersetzen-anzeige", &[], &["test-faelle"]),
+        netz_erlaubt(),
+    );
+    // Anderer Autor: alles wird wieder gefragt.
+    let mut pkg = paket("test-faelle");
+    pkg.manifest.author = "Jemand anders".to_string();
+    h.ws.plugins.offer_install(pkg, None);
+    assert_eq!(
+        h.ws.plugins.install.as_ref().unwrap().grants,
+        vec![(Right::Net, None)]
+    );
+    let seen = bild(&mut h, vec![]);
+    assert!(
+        has(&seen, "wird beim ersten Gebrauch gefragt"),
+        "{}",
+        join(&seen)
+    );
+    assert!(!has(&seen, "bereits erlaubt"));
+    // Andere Rechner: `net` wird wieder gefragt; nur anders geschrieben: bleibt.
+    let mut pkg = paket("test-faelle");
+    pkg.manifest.net_hosts = vec!["example.com".to_string()];
+    h.ws.plugins.offer_install(pkg, None);
+    assert_eq!(
+        h.ws.plugins.install.as_ref().unwrap().grants,
+        vec![(Right::Net, None)]
+    );
+    let mut pkg = paket("test-faelle");
+    pkg.manifest.net_hosts = vec!["Example.ORG".to_string()];
+    h.ws.plugins.offer_install(pkg, None);
+    assert_eq!(
+        h.ws.plugins.install.as_ref().unwrap().grants,
+        vec![(Right::Net, Some(Grant::Allowed))]
+    );
+}
+
+#[test]
+fn removed_user_copy_leaves_bundled_without_grants() {
+    let mut h = harness(
+        "mitgeliefert-ohne-rechte",
+        orte(
+            "mitgeliefert-ohne-rechte",
+            &["test-faelle"],
+            &["test-faelle"],
+        ),
+        netz_erlaubt(),
+    );
+    let e =
+        h.ws.plugins
+            .host
+            .entries()
+            .iter()
+            .find(|e| e.id == FAELLE)
+            .unwrap();
+    assert_eq!(e.found[e.active.unwrap()].origin, Origin::User);
+    assert_eq!(net_state(&h), Some(Grant::Allowed));
+    plugins::remove(&mut h.ws, FAELLE);
+    warten(&mut h);
+    let e =
+        h.ws.plugins
+            .host
+            .entries()
+            .iter()
+            .find(|e| e.id == FAELLE)
+            .unwrap();
+    assert_eq!(e.found.len(), 1);
+    assert_eq!(e.found[0].origin, Origin::Bundled);
+    assert_eq!(entry_state(&h, FAELLE), Some(EntryState::Running));
+    assert_eq!(net_state(&h), None);
+    assert_eq!(gespeichert(&h, FAELLE), None);
+}
+
+#[test]
+fn install_locked_while_prompt_open() {
+    let mut h = harness("gesperrt", orte("gesperrt", &[], &[]), Config::default());
+    h.ws.prompt = Some(Prompt::Notice("offen".to_string()));
+    h.ws.plugins.offer_install(paket("test-faelle"), None);
+    let seen = bild(&mut h, vec![]);
+    klick(&mut h, &seen, "Installieren");
+    assert!(h.ws.plugins.install.is_some(), "gesperrt");
+    assert_eq!(entry_state(&h, FAELLE), None);
+    // Grund beim Überfahren (Tooltips brauchen vergehende Zeit).
+    h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    let at = seen
+        .iter()
+        .rev()
+        .find(|s| s.text == "Installieren")
+        .unwrap()
+        .rect
+        .center();
+    let mut hovered = Vec::new();
+    for i in 0..10 {
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, h.size)),
+            events: vec![Event::PointerMoved(at)],
+            time: Some(100.0 + f64::from(i) * 0.1),
+            ..Default::default()
+        };
+        let (ws, w) = (&mut h.ws, &mut h.w);
+        let out = h.ctx.run_ui(raw, |ui| {
+            let ctx = ui.ctx().clone();
+            w.show_in(&ctx, ws);
+            plugins::show(&ctx, ws);
+        });
+        hovered = collect_seen(&out.shapes);
+        out.drop_without_applying_deltas();
+    }
+    assert!(
+        has(&hovered, "Zuerst die offene Rückfrage beantworten."),
+        "{}",
+        join(&hovered)
+    );
+    // Rückfrage beantwortet: jetzt geht es.
+    h.ws.prompt = None;
+    let seen = bild(&mut h, vec![]);
+    klick(&mut h, &seen, "Installieren");
+    assert!(h.ws.plugins.install.is_none());
+    warten(&mut h);
+    assert_eq!(entry_state(&h, FAELLE), Some(EntryState::Running));
+}

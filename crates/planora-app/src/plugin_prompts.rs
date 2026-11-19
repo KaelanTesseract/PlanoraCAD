@@ -177,6 +177,19 @@ pub struct InstallOffer {
     /// Version der schon vorhandenen Kennung (dann fragt der Dialog „Version A ersetzen durch
     /// Version B?“).
     pub replaces: Option<String>,
+    /// Je verlangtem Recht, was nach dem Installieren gilt (`None`: wird beim ersten Gebrauch
+    /// gefragt); siehe [`Rights::carry_over`](planora_plugin_host::rights::Rights::carry_over).
+    pub grants: Vec<(Right, Option<Grant>)>,
+}
+
+/// Zustand eines verlangten Rechts im Installationsdialog („bereits erlaubt“, „abgelehnt“,
+/// „wird beim ersten Gebrauch gefragt“).
+pub fn install_grant_text(grant: Option<Grant>) -> String {
+    match grant {
+        Some(Grant::Allowed) => tr!("plugin-install-right-allowed"),
+        Some(Grant::Denied) => tr!("plugin-install-right-denied"),
+        None => tr!("plugin-install-right-ask"),
+    }
 }
 
 /// Wahl im Installationsdialog.
@@ -189,8 +202,13 @@ pub enum InstallChoice {
 /// Der Installationsdialog (festes Fenster in der Mitte, Id `"planora_plugin_install"`): Name,
 /// Version, Autor, Lizenz (mit Hinweis, wenn sie nicht GPL-verträglich ist), Signatur, verlangte
 /// Rechte, Speicherbedarf (nur wenn nicht [`DEFAULT_MEMORY_MB`]), Quelle und gegebenenfalls die
-/// Ersetzen-Frage; Knöpfe „Installieren“ und „Abbrechen“ (Esc wirkt wie „Abbrechen“).
-pub fn show_install(ctx: &egui::Context, offer: &InstallOffer) -> Option<InstallChoice> {
+/// Ersetzen-Frage; Knöpfe „Installieren“ und „Abbrechen“ (Esc wirkt wie „Abbrechen“). `locked`:
+/// eine Rückfrage ist offen, „Installieren“ ist gesperrt (Grund beim Überfahren).
+pub fn show_install(
+    ctx: &egui::Context,
+    offer: &InstallOffer,
+    locked: bool,
+) -> Option<InstallChoice> {
     let m = &offer.package.manifest;
     let mut choice = None;
     Dialog::new(tr!("plugin-install-title"), DialogSize::Prompt)
@@ -217,11 +235,16 @@ pub fn show_install(ctx: &egui::Context, offer: &InstallOffer) -> Option<Install
             } else {
                 ui.label(tr!("plugin-settings-rights"));
                 ui.indent("planora_plugin_install_rights", |ui| {
-                    for r in &m.rights {
-                        ui.label(right_name(*r, &m.net_hosts));
+                    for &(r, grant) in &offer.grants {
+                        ui.horizontal(|ui| {
+                            ui.label(right_name(r, &m.net_hosts));
+                            ui.weak(install_grant_text(grant));
+                        });
                     }
                 });
-                ui.label(tr!("plugin-install-rights-hint"));
+                if offer.grants.iter().any(|(_, g)| g.is_none()) {
+                    ui.label(tr!("plugin-install-rights-hint"));
+                }
             }
             if m.memory_mb != DEFAULT_MEMORY_MB {
                 ui.label(tr!("plugin-install-memory", mb = m.memory_mb.to_string()));
@@ -237,7 +260,11 @@ pub fn show_install(ctx: &egui::Context, offer: &InstallOffer) -> Option<Install
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button(tr!("plugin-install-confirm")).clicked() {
+                if ui
+                    .add_enabled(!locked, egui::Button::new(tr!("plugin-install-confirm")))
+                    .on_disabled_hover_text(tr!("menu-answer-prompt-first"))
+                    .clicked()
+                {
                     choice = Some(InstallChoice::Install);
                 }
                 if ui.button(tr!("common-cancel")).clicked() {

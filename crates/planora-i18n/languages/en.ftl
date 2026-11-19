@@ -3945,3 +3945,6 @@ plugin-install-confirm = Install
 plugin-install-failed = The plug-in could not be installed: { $error }
 plugin-package-read-failed = The package could not be read: { $error }
 plugin-package-read-aborted = Reading was aborted.
+plugin-install-right-allowed = already allowed
+plugin-install-right-denied = denied
+plugin-install-right-ask = asked on first use

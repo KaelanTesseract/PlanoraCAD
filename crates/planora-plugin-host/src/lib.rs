@@ -402,6 +402,11 @@ fn scan_entries(places: &Places) -> Vec<PluginEntry> {
 }
 
 /// Woran `rescan` erkennt, ob ein Plug-in gleich blieb: Ordner und Version des aktiven Fundorts.
+/// Das Manifest des laufenden Fundorts.
+fn active_manifest(e: &PluginEntry) -> Option<&Manifest> {
+    e.active.map(|a| &e.found[a].manifest)
+}
+
 fn active_key(e: &PluginEntry) -> Option<(PathBuf, semver::Version)> {
     e.active
         .map(|a| (e.found[a].dir.clone(), e.found[a].manifest.version.clone()))
@@ -473,8 +478,9 @@ impl PluginHost {
     /// Durchsucht die Fundorte neu (nach Installieren oder Entfernen). Plug-ins, deren aktiver
     /// Ordner gleich blieb (Ordner und Version), laufen weiter; geänderte werden beendet und neu
     /// gestartet (neue Generation), verschwundene beendet, neue mit `states` übernommen und,
-    /// wenn eingeschaltet, gestartet. Schalter, Rechte und Ausfallzähler schon bekannter
-    /// Plug-ins bleiben, wie sie in dieser Sitzung sind.
+    /// wenn eingeschaltet, gestartet. Schalter und Ausfallzähler schon bekannter Plug-ins
+    /// bleiben, wie sie in dieser Sitzung sind; ihre Rechte auch, solange der aktive Ordner
+    /// gleich blieb, sonst nur nach [`Rights::carry_over`] (gleicher Autor, gleiche Rechner).
     pub fn rescan(&mut self, states: &BTreeMap<String, PluginState>) {
         // Den Stand dieser Sitzung behalten, auch für Plug-ins, die gleich verschwinden.
         let mut base = self.plugin_states();
@@ -504,7 +510,12 @@ impl PluginHost {
             match old.remove(&entry.id) {
                 Some((before, slot)) => {
                     let unchanged = active_key(&before) == active_key(&entry);
-                    entry.rights = before.rights;
+                    entry.rights = match (unchanged, active_manifest(&entry)) {
+                        (false, Some(new)) => {
+                            before.rights.carry_over(active_manifest(&before), new)
+                        }
+                        _ => before.rights,
+                    };
                     entry.failures = before.failures;
                     if unchanged {
                         entry.state = before.state;
@@ -686,6 +697,44 @@ impl PluginHost {
             lock(mb).rights = self.entries[i].rights.clone();
         }
         self.outbox.push(HostEvent::Changed);
+    }
+
+    /// Vergisst den gespeicherten Stand von `id` ganz (nach „Entfernen“ und vor einer
+    /// Neuinstallation): kein Eintrag mehr im Stand aus der Konfiguration, ein noch gefundenes
+    /// Plug-in dieser Kennung (etwa das mitgelieferte unter dem entfernten) hat keine Rechte mehr
+    /// und ist eingeschaltet. Meldet [`HostEvent::Changed`].
+    pub fn forget_state(&mut self, id: &str) {
+        self.base.remove(id);
+        if let Some(i) = self.index(id) {
+            self.entries[i].rights = Rights::default();
+            self.slots[i].enabled = true;
+            if let Some(mb) = &self.slots[i].mailbox {
+                lock(mb).rights = Rights::default();
+            }
+        }
+        self.outbox.push(HostEvent::Changed);
+    }
+
+    /// Nach dem Ersetzen von `id` (Installieren über ein vorhandenes, nach [`rescan`]): die
+    /// Rechte nach [`Rights::carry_over`] gegen das vorige Manifest `old` abgleichen und das
+    /// Plug-in neu starten, damit der neue Code läuft, auch bei gleicher Version (die `rescan`
+    /// weiterlaufen lässt). Lädt es schon neu, bleibt es dabei. Meldet [`HostEvent::Changed`].
+    ///
+    /// [`rescan`]: Self::rescan
+    pub fn replaced(&mut self, id: &str, old: Option<&Manifest>) {
+        let Some(i) = self.index(id) else {
+            return;
+        };
+        let Some(new) = active_manifest(&self.entries[i]).cloned() else {
+            return;
+        };
+        let rights = self.entries[i].rights.carry_over(old, &new);
+        if let Some(mb) = &self.slots[i].mailbox {
+            lock(mb).rights = rights.clone();
+        }
+        self.entries[i].rights = rights;
+        self.outbox.push(HostEvent::Changed);
+        self.restart(id);
     }
 
     /// Das Ergebnis einer Netzanfrage ([`HostEvent::Net`]); geht beim nächsten `poll` an das

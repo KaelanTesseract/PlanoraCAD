@@ -28,7 +28,7 @@ use planora_i18n::tr;
 use planora_plugin_host::manifest::Right;
 use planora_plugin_host::package::{MAX_PACKAGE, Package, PackageError};
 use planora_plugin_host::places::{self as plugin_places, Places};
-use planora_plugin_host::rights::Answer;
+use planora_plugin_host::rights::{Answer, Rights};
 use planora_plugin_host::runtime::{DialogEvent, HttpResponse, Level, RequestResult};
 use planora_plugin_host::{EntryState, HostEvent, PluginEntry, PluginHost, PluginState};
 use planora_project::config::{Config, PluginConfig};
@@ -400,45 +400,78 @@ impl Plugins {
     /// Bietet ein fertig gelesenes Paket im Installationsdialog an; `source` ist die Herkunft für
     /// die Anzeige (Pfad der Datei, später der Repo-Link). Gibt es die Kennung schon, fragt der
     /// Dialog nach dem Ersetzen (mit der Version des laufenden, sonst des ersten Fundorts).
+    /// Je verlangtem Recht steht im Dialog, was nach dem Installieren gilt
+    /// ([`Rights::carry_over`] gegen das laufende Manifest; neu installiert: nichts).
     pub fn offer_install(&mut self, package: Package, source: Option<String>) {
-        let replaces = self.entry(&package.manifest.id).and_then(|e| {
-            let i = e.active.or((!e.found.is_empty()).then_some(0))?;
-            Some(e.found[i].manifest.version.to_string())
+        let existing = self
+            .entry(&package.manifest.id)
+            .filter(|e| !e.found.is_empty());
+        let replaces = existing.map(|e| {
+            let i = e.active.unwrap_or(0);
+            e.found[i].manifest.version.to_string()
         });
+        let carried = existing.map_or_else(Rights::default, |e| {
+            e.rights
+                .carry_over(e.active.map(|a| &e.found[a].manifest), &package.manifest)
+        });
+        let grants = package
+            .manifest
+            .rights
+            .iter()
+            .map(|&r| (r, carried.state(r)))
+            .collect();
         self.install = Some(InstallOffer {
             package,
             source,
             replaces,
+            grants,
         });
     }
 
     /// Installiert das angebotene Paket für den Nutzer und sucht die Fundorte neu
     /// ([`PluginHost::rescan`] mit dem Stand aus `config`): ein neues Plug-in startet ohne
-    /// Neustart, eine geänderte Version startet neu. `false` (Hinweis in [`Plugins::note`]),
-    /// wenn es misslang; ohne Angebot nichts.
-    pub fn install_offered(&mut self, config: &Config) -> bool {
+    /// Neustart. Gibt es die Kennung noch nicht, beginnt es ohne Rechte (ein alter Eintrag in
+    /// `config.plugins` fällt weg); ersetzt es eine vorhandene, bleiben Rechte nur nach
+    /// [`Rights::carry_over`], und es startet neu, auch bei gleicher Version
+    /// ([`PluginHost::replaced`]). `false` (Hinweis in [`Plugins::note`]), wenn es misslang;
+    /// ohne Angebot nichts.
+    pub fn install_offered(&mut self, config: &mut Config) -> bool {
         let Some(offer) = self.install.take() else {
             return false;
         };
         self.note = None;
+        let id = offer.package.manifest.id.clone();
+        let existing = self.entry(&id).filter(|e| !e.found.is_empty());
+        let old = existing.and_then(|e| e.active.map(|a| e.found[a].manifest.clone()));
+        let fresh = existing.is_none();
         if let Err(e) = plugin_places::install(self.host.places(), &offer.package) {
             self.note = Some(tr!("plugin-install-failed", error = e.to_string()));
             return false;
         }
-        self.forget(&offer.package.manifest.id);
+        if fresh {
+            config.plugins.remove(&id);
+            self.host.forget_state(&id);
+        }
+        self.forget(&id);
         self.host.rescan(&states_from_config(config));
+        if !fresh {
+            self.host.replaced(&id, old.as_ref());
+        }
         true
     }
 
-    /// Entfernt das vom Nutzer installierte Plug-in `id` und sucht die Fundorte neu (ein
-    /// mitgeliefertes derselben Kennung läuft danach). `false` (Hinweis in [`Plugins::note`]),
-    /// wenn es misslang.
-    pub fn remove(&mut self, id: &str, config: &Config) -> bool {
+    /// Entfernt das vom Nutzer installierte Plug-in `id` mit seinem ganzen gespeicherten Stand
+    /// (`config.plugins[id]`, Rechte und Schalter) und sucht die Fundorte neu; ein
+    /// mitgeliefertes derselben Kennung läuft danach ohne Rechte. `false` (Hinweis in
+    /// [`Plugins::note`]), wenn es misslang.
+    pub fn remove(&mut self, id: &str, config: &mut Config) -> bool {
         self.note = None;
         if let Err(e) = plugin_places::uninstall(self.host.places(), id) {
             self.note = Some(tr!("plugin-remove-failed", error = e.to_string()));
             return false;
         }
+        config.plugins.remove(id);
+        self.host.forget_state(id);
         self.forget(id);
         self.banners.retain(|b| b.plugin != id);
         self.host.rescan(&states_from_config(config));
@@ -500,14 +533,16 @@ impl Plugins {
     /// Ein Bild: [`Plugins::update`], dann die vorderste Nachfrage, die offenen Dialoge und
     /// die Fehlerleiste.
     /// `true`, wenn sich `config.plugins` geändert hat.
-    pub fn frame(&mut self, ctx: &egui::Context, config: &mut Config) -> bool {
+    /// `prompt_open`: eine Rückfrage des Arbeitsbereichs ist offen, „Installieren“ ist solange
+    /// gesperrt (eine wartende „Entfernen“-Rückfrage träfe sonst das gerade installierte).
+    pub fn frame(&mut self, ctx: &egui::Context, config: &mut Config, prompt_open: bool) -> bool {
         let mut changed = self.update(config);
         let mut acted = changed || !self.messages.is_empty();
         let was_reading = self.is_reading();
         self.poll_reading();
         acted |= was_reading && !self.is_reading();
         if let Some(offer) = &self.install
-            && let Some(choice) = plugin_prompts::show_install(ctx, offer)
+            && let Some(choice) = plugin_prompts::show_install(ctx, offer, prompt_open)
         {
             match choice {
                 InstallChoice::Install => changed |= self.install_offered(config),
@@ -618,7 +653,8 @@ impl Plugins {
 /// aktiven Tabs (der Arbeitsbereich hat immer einen), geänderter Zustand wird gleich gespeichert
 /// ([`Workspace::try_persist_config`]; misslingt das, später mit dem nächsten Schreiben).
 pub fn show(ctx: &egui::Context, ws: &mut Workspace) {
-    if ws.plugins.frame(ctx, &mut ws.config) {
+    let prompt_open = ws.prompt.is_some();
+    if ws.plugins.frame(ctx, &mut ws.config, prompt_open) {
         ws.plugins_pending = true;
         ws.try_persist_config();
     }
@@ -644,7 +680,7 @@ pub fn persist(ws: &mut Workspace) -> bool {
 /// Entfernt das vom Nutzer installierte Plug-in `id` (nach der Rückfrage „Plug-in X entfernen?“)
 /// und speichert den Stand.
 pub fn remove(ws: &mut Workspace, id: &str) {
-    if ws.plugins.remove(id, &ws.config) {
+    if ws.plugins.remove(id, &mut ws.config) {
         persist(ws);
     }
 }
