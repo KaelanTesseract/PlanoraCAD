@@ -268,10 +268,18 @@ fn create_sketch_pick_curved_face_keeps_mode() {
     s.create_cylinder(10.0, 20.0).unwrap();
     s.set_selection(None);
     s.selected_body = None;
-    look_from_above(&mut s, glam::Vec3::new(0.0, 0.0, 10.0));
+    // Blick von vorn waagerecht auf die Mantelfläche, neben den Grundebenen (die im Wahlmodus
+    // eingeblendet sind und durch den Zylinder gehen): Der Strahl kreuzt keine davon vorher.
+    s.camera = planora_render::OrbitCamera {
+        target: glam::Vec3::new(0.0, 0.0, 10.0),
+        distance: 200.0,
+        ..planora_render::OrbitCamera::default()
+    };
+    s.camera.look_along(-glam::Vec3::Y, glam::Vec3::Z);
+    s.camera.set_viewport(VIEWPORT.x, VIEWPORT.y);
     let before = feature_count(&s);
     s.start_create_sketch().unwrap();
-    let side = screen(&s, glam::Vec3::new(0.0, -10.0, 10.0));
+    let side = screen(&s, glam::Vec3::new(5.0, -(75.0f32).sqrt(), 7.0));
     view_click(&mut s, side, PointerButton::Primary);
     assert_eq!(
         s.message.as_deref(),
@@ -385,4 +393,68 @@ fn create_sketch_view_direction_like_fusion() {
         assert!((c - to_cam).length() < 0.02, "{plane:?}: Blick {c:?}");
         assert!((u - up).length() < 0.02, "{plane:?}: oben {u:?}");
     }
+}
+
+// ---- Ausgeblendete Grundebenen im Wahlmodus (Task 2) -------------------------------------------
+
+fn hide_origin(s: &mut AppState) {
+    for p in [StandardPlane::XY, StandardPlane::XZ, StandardPlane::YZ] {
+        s.set_origin_plane_shown(p, false);
+    }
+}
+
+fn origin_shown(s: &AppState) -> Vec<bool> {
+    [StandardPlane::XY, StandardPlane::XZ, StandardPlane::YZ]
+        .into_iter()
+        .map(|p| s.is_origin_plane_shown(p))
+        .collect()
+}
+
+#[test]
+fn hidden_origin_planes_show_while_picking() {
+    let mut s = AppState::new();
+    hide_origin(&mut s);
+    assert_eq!(s.origin_plane_rects().len(), 0);
+    s.start_create_sketch().unwrap();
+    assert_eq!(s.origin_plane_rects().len(), 3);
+    assert_eq!(origin_shown(&s), vec![false; 3], "Sichtbarkeit unverändert");
+    s.cancel_pending_pick();
+    assert_eq!(s.origin_plane_rects().len(), 0);
+}
+
+#[test]
+fn hidden_origin_plane_is_hit_while_picking() {
+    use planora_app::plane_dialog::PlaneClick;
+    use planora_app::state::PickFilter;
+    let mut s = AppState::new();
+    hide_origin(&mut s);
+    s.camera.set_viewport(VIEWPORT.x, VIEWPORT.y);
+    s.camera.look_along(glam::Vec3::Z, glam::Vec3::Y);
+    s.camera.distance = 200.0;
+    let p = screen(&s, glam::Vec3::new(10.0, 10.0, 0.0));
+    let cursor = glam::Vec2::new(p.x, p.y);
+    assert_eq!(s.plane_click_at(cursor, VIEWPORT, PickFilter::BASES), None);
+    s.start_create_sketch().unwrap();
+    assert_eq!(
+        s.plane_click_at(cursor, VIEWPORT, PickFilter::BASES),
+        Some(PlaneClick::Standard(StandardPlane::XY))
+    );
+    // Ein Klick in der Ansicht legt die Skizze auf die ausgeblendete Ebene.
+    view_click(&mut s, p, PointerButton::Primary);
+    let id = s.open_sketch_id().expect("Skizze offen");
+    assert_eq!(plane_of(&s, id), SketchPlane::Standard(StandardPlane::XY));
+    assert_eq!(origin_shown(&s), vec![false; 3]);
+    s.close_sketch();
+    assert_eq!(s.plane_click_at(cursor, VIEWPORT, PickFilter::BASES), None);
+}
+
+#[test]
+fn redefine_sketch_plane_shows_hidden_origin_planes() {
+    let mut s = AppState::new();
+    let sketch = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    hide_origin(&mut s);
+    s.start_redefine_sketch_plane(sketch).unwrap();
+    assert_eq!(s.origin_plane_rects().len(), 3);
 }

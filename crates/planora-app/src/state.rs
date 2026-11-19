@@ -2694,11 +2694,14 @@ impl AppState {
     }
 
     /// Die eingeblendeten Grundebenen als Rechtecke im Ursprung, so groß wie
-    /// Konstruktionsebenen ([`AppState::plane_rect_for`]).
+    /// Konstruktionsebenen ([`AppState::plane_rect_for`]). In einem Wahlmodus ohne Fenster
+    /// ([`PendingPick`]: „Skizze erstellen“, „Skizzenebene neu festlegen“) alle drei, auch
+    /// ausgeblendete, wie in Fusion; die Sichtbarkeit im Dokument bleibt dabei unverändert.
     pub fn origin_plane_rects(&self) -> Vec<(StandardPlane, PlaneRect)> {
+        let picking = self.pending_pick.is_some();
         [StandardPlane::XY, StandardPlane::XZ, StandardPlane::YZ]
             .into_iter()
-            .filter(|p| self.is_origin_plane_shown(*p))
+            .filter(|p| picking || self.is_origin_plane_shown(*p))
             .filter_map(|p| {
                 let def = PlaneDef::Offset {
                     base: PlaneBase::Standard(p),
@@ -2763,6 +2766,12 @@ impl AppState {
         let Some((plane, t)) = origin else {
             return hit.map(PlaneClick::View);
         };
+        // Eine nur für den Wahlmodus eingeblendete Grundebene (im Baum ausgeblendet) steht hinter
+        // jedem anderen Treffer zurück: Sie geht durch das Modell und soll Flächen dahinter nicht
+        // verdecken.
+        if hit.is_some() && !self.is_origin_plane_shown(plane) {
+            return hit.map(PlaneClick::View);
+        }
         // Abstand des anderen Treffers; Ecken und Kanten liegen vorn.
         let front = match hit {
             None => None,
