@@ -481,7 +481,8 @@ fn display_menu_entries_key() -> egui::Id {
 /// Ist das Aufklappfeld „Anzeigeoptionen“ offen? Die Ansicht liest es mit [`flyout_open`]: Esc und
 /// ein Drücken in die Zeichnung gehören dann dem Feld.
 pub fn display_menu_open(ctx: &egui::Context) -> bool {
-    egui::Popup::is_id_open(ctx, display_menu_id())
+    ctx.data(|d| d.get_temp::<bool>(display_menu_id()))
+        .unwrap_or(false)
 }
 
 /// Lage des Symbols „Anzeigeoptionen“ in der Namenszeile im letzten Bild (für Tests).
@@ -667,16 +668,23 @@ fn sketch_rects(ctx: &egui::Context) -> ShellRects {
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let Some(index) = state.open_sketch_id() else {
         // Mit der Skizze geht auch das Aufklappfeld „Anzeigeoptionen“ zu.
-        if display_menu_open(ctx) {
-            egui::Popup::close_id(ctx, display_menu_id());
-        }
-        state.sketch_display_menu_request = false;
+        state.sketch_display_menu_open = false;
+        ctx.data_mut(|d| d.insert_temp(display_menu_id(), false));
         return;
     };
-    // Befehl „Anzeigeoptionen“: öffnet oder schließt das Aufklappfeld.
-    if std::mem::take(&mut state.sketch_display_menu_request) {
-        egui::Popup::toggle_id(ctx, display_menu_id());
+    // Der Zustand liegt im Programmzustand (siehe `sketch_display_menu_open`) und wird für die
+    // Ansicht (`flyout_open`) und die Tests viewport-unabhängig im Kontext gespiegelt.
+    let mut menu_open = state.sketch_display_menu_open;
+    // Liegt das Skizzenfeld im eigenen Fenster, sieht dessen Aufklappfeld ein Drücken im
+    // Hauptfenster nicht: Es schließt hier (das Drücken gehört dem Feld, siehe `flyout_open`).
+    let undocked = crate::detach::with_state(ctx, |s| {
+        crate::detach::is_undocked(ctx, s, crate::detach::Place::SketchSide)
+    })
+    .unwrap_or(false);
+    if menu_open && undocked && ctx.input(|i| i.pointer.any_pressed()) {
+        menu_open = false;
     }
+    ctx.data_mut(|d| d.insert_temp(display_menu_id(), menu_open));
     let rects = sketch_rects(ctx);
     let Some(strip) = rects.strip else {
         return;
@@ -695,6 +703,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         three_d: false,
         three_d_changed: false,
         changed: false,
+        menu_open,
+        menu_was: menu_open,
         look_at: false,
         break_link: false,
         focus: None,
@@ -746,6 +756,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     state.sketch_show_grid = palette.grid;
     state.sketch_snap_grid = palette.snap;
     state.sketch_grid_changed |= palette.changed;
+    state.sketch_display_menu_open = palette.menu_open;
+    ctx.data_mut(|d| d.insert_temp(display_menu_id(), palette.menu_open));
     if palette.look_at {
         state.look_at_sketch();
     }
@@ -1008,6 +1020,11 @@ struct SketchPalette {
     three_d: bool,
     three_d_changed: bool,
     changed: bool,
+    /// Aufklappfeld „Anzeigeoptionen“ offen (Skizzen 12).
+    menu_open: bool,
+    /// Stand von `menu_open` am Bildanfang: Das Fenster des Skizzenfelds läuft je Bild eventuell
+    /// mehrmals, ein Klick auf das Symbol darf nur einmal umschalten.
+    menu_was: bool,
     /// Der Knopf „Blick auf“ wurde gedrückt.
     look_at: bool,
     /// Der Knopf „Verknüpfung aufheben“ wurde gedrückt (Skizzen 6).
@@ -1992,12 +2009,17 @@ fn display_menu_button_and_list(
     .on_hover_text(format!("{label}\n{}", tr!("sketch-display-menu-hint")));
     ui.data_mut(|d| d.insert_temp(display_menu_button_key(), button.rect));
     let mut entries: Vec<(String, egui::Rect)> = Vec::new();
-    // Ein Klick auf das Symbol schaltet um (`Popup::menu`); ein Klick auf einen Haken lässt das
-    // Feld offen, ein Klick daneben schließt es.
-    egui::Popup::menu(&button)
+    // Ein Klick auf das Symbol schaltet um; ein Klick auf einen Haken lässt das Feld offen, ein
+    // Klick daneben (unten) oder Esc (macht `Popup` selbst) schließt es.
+    if button.clicked() {
+        palette.menu_open = !palette.menu_was;
+    }
+    let mut open = palette.menu_open;
+    let shown = egui::Popup::menu(&button)
         .id(display_menu_id())
+        .open_bool(&mut open)
         .align(egui::RectAlign::BOTTOM_END)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
         .show(|ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             let grid = ui
@@ -2051,6 +2073,21 @@ fn display_menu_button_and_list(
                 entries.push((label, r.rect));
             }
         });
+    // Ein Drücken außerhalb von Feld und Symbol schließt es. Gedrückt, nicht geklickt: Das Fenster
+    // des Skizzenfelds läuft je Bild eventuell mehrmals, das Loslassen nach dem Öffnen träfe sonst
+    // schon das offene Feld.
+    if let Some(shown) = shown {
+        let outside = ui.input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|p| !shown.response.rect.contains(p) && !button.rect.contains(p))
+        });
+        if outside {
+            open = false;
+        }
+    }
+    palette.menu_open = open;
     ui.data_mut(|d| d.insert_temp(display_menu_entries_key(), entries));
 }
 

@@ -736,3 +736,103 @@ fn sketch_name_is_not_cut_next_to_the_dock_icon() {
         }
     }
 }
+
+// ---- Aufklappfeld „Anzeigeoptionen“ bei abgedocktem Skizzenfeld (Skizzen 12, Fix-Runde 1) --------
+
+fn detached_sketch_rig() -> Rig {
+    let column = DetachedWindow {
+        width: theme::PANEL_WIDTH,
+        ..window_at(1500.0, 100.0)
+    };
+    let mut rig = Rig::new(&[(Place::SketchSide, column)]);
+    open_sketch(&mut rig);
+    rig.settle(4);
+    rig
+}
+
+fn point_count(rig: &mut Rig) -> usize {
+    rig.state().session_sketch().unwrap().points().count()
+}
+
+#[test]
+fn undocked_display_menu_opens_by_click_and_by_command_and_closes_with_the_sketch() {
+    let mut rig = Rig::new(&[(
+        Place::SketchSide,
+        DetachedWindow {
+            width: theme::PANEL_WIDTH,
+            ..window_at(1500.0, 100.0)
+        },
+    )]);
+    let id = detach::viewport_id(Place::SketchSide);
+    let sketch = open_sketch(&mut rig);
+    rig.settle(4);
+    let ctx = rig.screen.ctx.clone();
+    assert!(!planora_app::sketch_panel::display_menu_open(&ctx));
+    // Befehl: öffnet das Feld im Kindfenster.
+    planora_app::commands::run_action(
+        rig.app.ws_mut(),
+        planora_app::keymap::Action::SketchDisplayMenu,
+    );
+    rig.settle(3);
+    assert!(
+        planora_app::sketch_panel::display_menu_open(&ctx),
+        "Befehl öffnet"
+    );
+    let child = rig.screen.child_seen(id);
+    assert!(find(&child, "Fang").is_some(), "{}", join(&child));
+    // Zweiter Aufruf schließt.
+    planora_app::commands::run_action(
+        rig.app.ws_mut(),
+        planora_app::keymap::Action::SketchDisplayMenu,
+    );
+    rig.settle(3);
+    assert!(!planora_app::sketch_panel::display_menu_open(&ctx));
+    // Skizzenende schließt. (Ein Klick auf das Symbol im Kindfenster lässt sich im Harness nicht
+    // prüfen: Der Ziehstreifen der Kopfzeile liegt über dem Symbol und nimmt nach egui-Regeln den
+    // Klick darunter nicht an, ebenso beim Haken „3D-Skizze“; siehe Fix-Bericht.)
+    planora_app::commands::run_action(
+        rig.app.ws_mut(),
+        planora_app::keymap::Action::SketchDisplayMenu,
+    );
+    rig.settle(3);
+    assert!(planora_app::sketch_panel::display_menu_open(&ctx));
+    rig.state().close_sketch();
+    rig.settle(3);
+    assert!(
+        !planora_app::sketch_panel::display_menu_open(&ctx),
+        "Skizzenende"
+    );
+    rig.state().open_sketch(sketch).unwrap();
+    rig.settle(3);
+    assert!(!planora_app::sketch_panel::display_menu_open(&ctx));
+}
+
+#[test]
+fn undocked_display_menu_open_eats_the_click_into_the_drawing() {
+    let mut rig = detached_sketch_rig();
+    {
+        let (se, sk) = rig.state().session_sketch_mut().unwrap();
+        se.set_tool(sk, planora_app::sketch_state::Tool::Point);
+    }
+    let ctx = rig.screen.ctx.clone();
+    let at = pos2(700.0, 500.0);
+    // Ohne Feld setzt der Klick einen Punkt.
+    let before = point_count(&mut rig);
+    rig.click(at);
+    assert_eq!(
+        point_count(&mut rig),
+        before + 1,
+        "Gegenprobe: Punkt gesetzt"
+    );
+    // Mit offenem Feld schließt der Klick nur das Feld.
+    planora_app::commands::run_action(
+        rig.app.ws_mut(),
+        planora_app::keymap::Action::SketchDisplayMenu,
+    );
+    rig.settle(3);
+    assert!(planora_app::sketch_panel::display_menu_open(&ctx));
+    let before = point_count(&mut rig);
+    rig.click(pos2(900.0, 300.0));
+    assert_eq!(point_count(&mut rig), before, "kein Punkt bei offenem Feld");
+    assert!(!planora_app::sketch_panel::display_menu_open(&ctx), "zu");
+}
