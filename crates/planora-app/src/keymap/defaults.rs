@@ -261,6 +261,9 @@ action_table! {
     SketchToggleSnap, "skizze.fang", "action-sketch-toggle-snap", Sketch, [];
     /// Fusion „Slice“ (Skizzen 12): Haken im Skizzenfeld, gehört zur Skizze; ohne Vorgabetaste.
     SketchSlice, "skizze.slice", "action-sketch-slice", Sketch, [];
+    /// Öffnet und schließt das Aufklappfeld „Anzeigeoptionen“ im Skizzenfeld (Skizzen 12); ohne
+    /// Vorgabetaste.
+    SketchDisplayMenu, "skizze.anzeige_menue", "action-sketch-display-menu", Sketch, [];
     /// Fusion „Punkte anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.
     SketchShowPoints, "skizze.punkte_anzeigen", "action-sketch-show-points", Sketch, [];
     /// Fusion „Maße anzeigen“ (Skizzen 12): Haken im Skizzenfeld; ohne Vorgabetaste.

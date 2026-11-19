@@ -275,6 +275,9 @@ pub struct AppState {
     pub sketch_snap_grid: bool,
     /// Ein Schalter wurde betätigt: Der Arbeitsbereich speichert den Stand und gibt ihn allen Tabs.
     pub sketch_grid_changed: bool,
+    /// Der Befehl `SketchDisplayMenu` wurde gegeben: Das Skizzenfeld schaltet im nächsten Bild das
+    /// Aufklappfeld „Anzeigeoptionen“ um (Skizzen 12).
+    pub sketch_display_menu_request: bool,
     /// „Ebenen anzeigen“ der Triade der 3D-Skizze (Rechtsklickmenü, Skizzen 10); Vorgabe an. Den
     /// Stand führt [`crate::workspace::Workspace::sync_triad_view`].
     pub triad_planes: bool,
@@ -784,6 +787,7 @@ impl AppState {
             sketch_show_grid: true,
             sketch_snap_grid: true,
             sketch_grid_changed: false,
+            sketch_display_menu_request: false,
             triad_planes: true,
             triad_handles: true,
             triad_view_changed: false,

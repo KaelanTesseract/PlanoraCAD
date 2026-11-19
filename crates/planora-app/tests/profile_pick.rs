@@ -536,9 +536,24 @@ fn the_sketch_field_has_the_show_profile_switch_on_top() {
         shapes = out.shapes.clone();
         out.drop_without_applying_deltas();
     }
-    let at = find_text(&shapes, "Profil anzeigen").expect("Häkchen im Skizzenfeld");
-    let constraints = find_text(&shapes, "Abhängigkeiten").expect("Abschnitt");
-    assert!(at.y < constraints.y, "oben im Feld");
+    // Die Haken stehen im Aufklappfeld hinter dem Symbol „Anzeigeoptionen“ (Skizzen 12).
+    assert!(find_text(&shapes, "Profil anzeigen").is_none(), "Feld zu");
+    let icon = sketch_panel::display_menu_button(&ctx).expect("Symbol Anzeigeoptionen");
+    for events in [
+        vec![egui::Event::PointerMoved(icon.center())],
+        vec![button(icon.center(), true)],
+        vec![button(icon.center(), false)],
+    ] {
+        ctx.run_ui(raw(events), |ui| sketch_panel::show(ui.ctx(), &mut s))
+            .drop_without_applying_deltas();
+    }
+    for _ in 0..3 {
+        let out = ctx.run_ui(raw(vec![]), |ui| sketch_panel::show(ui.ctx(), &mut s));
+        shapes = out.shapes.clone();
+        out.drop_without_applying_deltas();
+    }
+    let at = find_text(&shapes, "Profil anzeigen").expect("Häkchen im Aufklappfeld");
+    assert!(at.y > icon.bottom(), "das Feld klappt unter dem Symbol auf");
     for events in [
         vec![egui::Event::PointerMoved(at)],
         vec![button(at, true)],

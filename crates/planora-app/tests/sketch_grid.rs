@@ -581,27 +581,40 @@ fn find_text(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<Pos2> 
 
 /// Ein Klick auf den Schalter `label` im Skizzenfeld.
 fn click_switch(ctx: &egui::Context, s: &mut AppState, label: &str) {
-    let mut shapes = Vec::new();
-    for _ in 0..3 {
-        let out = ctx.run_ui(raw(vec![]), |ui| sketch_panel::show(ui.ctx(), s));
-        shapes = out.shapes.clone();
-        out.drop_without_applying_deltas();
+    let frames = |s: &mut AppState| {
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            let out = ctx.run_ui(raw(vec![]), |ui| sketch_panel::show(ui.ctx(), s));
+            shapes = out.shapes.clone();
+            out.drop_without_applying_deltas();
+        }
+        shapes
+    };
+    let click = |s: &mut AppState, at: Pos2| {
+        let button = |pressed| Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        for events in [
+            vec![Event::PointerMoved(at)],
+            vec![button(true)],
+            vec![button(false)],
+        ] {
+            ctx.run_ui(raw(events), |ui| sketch_panel::show(ui.ctx(), s))
+                .drop_without_applying_deltas();
+        }
+    };
+    let mut shapes = frames(s);
+    // Die Haken stehen im Aufklappfeld hinter dem Symbol „Anzeigeoptionen“ (Skizzen 12).
+    if find_text(&shapes, label).is_none() {
+        let icon = sketch_panel::display_menu_button(ctx).expect("Symbol Anzeigeoptionen");
+        click(s, icon.center());
+        shapes = frames(s);
     }
     let at = find_text(&shapes, label).unwrap_or_else(|| panic!("„{label}“ fehlt"));
-    let button = |pressed| Event::PointerButton {
-        pos: at,
-        button: PointerButton::Primary,
-        pressed,
-        modifiers: Modifiers::NONE,
-    };
-    for events in [
-        vec![Event::PointerMoved(at)],
-        vec![button(true)],
-        vec![button(false)],
-    ] {
-        ctx.run_ui(raw(events), |ui| sketch_panel::show(ui.ctx(), s))
-            .drop_without_applying_deltas();
-    }
+    click(s, at);
 }
 
 fn open_sketch(ws: &mut Workspace) {

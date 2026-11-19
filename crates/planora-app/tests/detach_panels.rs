@@ -334,7 +334,7 @@ fn sketch_side_window_appears_only_in_sketch() {
     assert!(rig.screen.child_runs(id) > 0, "Fenster mit der Skizze");
     let child = rig.screen.child_seen(id);
     assert!(
-        find(&child, "Profil anzeigen").is_some(),
+        find(&child, "Unterbestimmte finden").is_some(),
         "{}",
         join(&child)
     );

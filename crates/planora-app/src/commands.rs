@@ -365,6 +365,13 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 state.document.set_sketch_display(id, d);
             }
         }
+        Action::SketchDisplayMenu => {
+            // Das Skizzenfeld öffnet oder schließt das Aufklappfeld im nächsten Bild.
+            let state = &mut ws.active_tab_mut().state;
+            if state.open_sketch_id().is_some() {
+                state.sketch_display_menu_request = true;
+            }
+        }
         Action::SketchShowPoints
         | Action::SketchShowDimensions
         | Action::SketchShowConstraints
