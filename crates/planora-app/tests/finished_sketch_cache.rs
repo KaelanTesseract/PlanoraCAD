@@ -7,7 +7,10 @@ use glam::{Vec2, Vec3};
 use planora_app::sketch_view;
 use planora_app::state::{AppState, PickFilter, StandardPlane};
 use planora_app::viewport::stroke_view;
-use planora_feature::{FeatureId, FeatureKind, ParamEdit, ParamUnit, SketchFeature, SketchPlane};
+use planora_feature::{
+    CopySource, CopyTarget, EdgeCopy, EdgeRef, FeatureId, FeatureKind, FieldKey, Formulas,
+    ParamEdit, ParamUnit, SketchFeature, SketchPlane,
+};
 use planora_math::{DVec3, Frame, Tolerance};
 use planora_render::{Pick, StrokeVertex};
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
@@ -170,6 +173,56 @@ fn parameter_change_resamples() {
     assert_ne!(long, short, "längere Linie nach dem Parameter");
     s.edit_parameter(p, edit("20")).unwrap();
     assert_eq!(strokes(&s), short);
+}
+
+/// Schlussprüfung: Ändert sich der Körper, folgt die projizierte Linie einer fertigen Skizze
+/// (der Stand der berechneten Skizze wechselt, der Zwischenspeicher rechnet neu).
+#[test]
+fn projected_line_follows_a_changing_body() {
+    let mut s = prepared(AppState::new());
+    let p = s.add_parameter().unwrap();
+    let edit = |formula: &str| ParamEdit {
+        name: "L".into(),
+        formula: formula.into(),
+        unit: ParamUnit::Length,
+        comment: String::new(),
+    };
+    s.edit_parameter(p, edit("10")).unwrap();
+    let mut f = Formulas::new();
+    f.insert(FieldKey::Breite, "L".to_string());
+    s.create_box_with(DVec3::new(10.0, 10.0, 10.0), f).unwrap();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    // Eine Kante der Grundfläche, die entlang der Breite (x) läuft.
+    let solid = s.bodies[0].solid.clone();
+    let edge = solid
+        .edges
+        .iter()
+        .filter_map(|(e, _)| EdgeRef::from_edge(&solid, e, &s.kernel.tolerance).ok())
+        .find(|r| r.hint.z.abs() < 1e-6 && r.hint.x > 1.0 && r.hint.x < 9.0)
+        .expect("Kante an der Grundfläche entlang x");
+    let curve = {
+        let sk = s.session_sketch_mut().unwrap().1;
+        let a = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(10.0, 0.0).unwrap();
+        sk.add_line(a, b).unwrap()
+    };
+    s.sketch_draft.as_mut().unwrap().copies.push(EdgeCopy {
+        target: CopyTarget::Curve(curve),
+        piece: 0,
+        of: 1,
+        source: CopySource::Edge(edge),
+    });
+    s.try_close_sketch().unwrap();
+    let before = strokes(&s);
+    assert!(!before.is_empty(), "Gegenprobe: die Skizze wird gezeichnet");
+    s.edit_parameter(p, edit("25")).unwrap();
+    let after = strokes(&s);
+    assert_ne!(after, before, "die projizierte Linie folgt dem Körper");
+    s.edit_parameter(p, edit("10")).unwrap();
+    assert_eq!(strokes(&s), before, "und kehrt zurück");
 }
 
 #[test]

@@ -42,6 +42,8 @@ pub struct GpuScene {
     /// Skizzenlinien und -flächen (Skizzen 12): fertig projizierte Dreiecke, je Bild beschrieben.
     stroke_vertex_buffer: Option<wgpu::Buffer>,
     stroke_capacity: u32,
+    /// Die Warnung „zu viele Skizzenlinien“ kam schon (nur einmal melden).
+    stroke_limit_warned: bool,
     stroke_vertex_count: u32,
     uploaded_version: Option<u64>,
     /// Leinwände (Skizzen 9): vierte Pipeline samt Texturen.
@@ -268,6 +270,7 @@ impl GpuScene {
             grid_vertex_count: 0,
             stroke_vertex_buffer: None,
             stroke_capacity: 0,
+            stroke_limit_warned: false,
             stroke_vertex_count: 0,
             uploaded_version: None,
             canvases,
@@ -400,18 +403,27 @@ impl GpuScene {
         strokes: &[StrokeVertex],
     ) {
         self.stroke_vertex_count = 0;
-        let Ok(count) = u32::try_from(strokes.len()) else {
-            return;
-        };
+        // Passt nicht alles in einen Puffer, wird auf das Größtmögliche (ganze Dreiecke) begrenzt:
+        // Es wird teilweise gezeichnet statt gar nicht.
+        let vertex_bytes = std::mem::size_of::<StrokeVertex>() as u64;
+        let max_count =
+            u32::try_from(device.limits().max_buffer_size / vertex_bytes).unwrap_or(u32::MAX) / 3
+                * 3;
+        let wanted = u32::try_from(strokes.len()).unwrap_or(u32::MAX);
+        let count = wanted.min(max_count);
+        if count < wanted && !self.stroke_limit_warned {
+            self.stroke_limit_warned = true;
+            eprintln!(
+                "Warning: too many sketch lines for the graphics card, only the first {count} of {wanted} vertices are drawn"
+            );
+        }
         if count == 0 {
             return;
         }
+        let strokes = &strokes[..count as usize];
         if self.stroke_vertex_buffer.is_none() || count > self.stroke_capacity {
-            let capacity = count.next_power_of_two().max(1024);
-            let bytes = u64::from(capacity) * std::mem::size_of::<StrokeVertex>() as u64;
-            if bytes > device.limits().max_buffer_size {
-                return;
-            }
+            let capacity = count.next_power_of_two().max(1024).min(max_count);
+            let bytes = u64::from(capacity) * vertex_bytes;
             self.stroke_vertex_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("planora-stroke-vertices"),
                 size: bytes,

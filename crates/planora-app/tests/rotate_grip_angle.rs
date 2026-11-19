@@ -10,7 +10,7 @@ use egui::pos2;
 use planora_app::sketch_grips::Grip;
 use planora_app::sketch_state::{Item, SketchSession, Tool};
 use planora_app::sketch_view::{
-    PICK_RADIUS_PX, format_angle, rotate_angle_label, rotate_drag_angle,
+    PICK_RADIUS_PX, format_angle, place_pointer_label, rotate_drag_angle,
 };
 use planora_app::state::{AppState, StandardPlane};
 use planora_feature::SketchPlane;
@@ -185,17 +185,15 @@ fn triad_rotate_shows_angle() {
 
 #[test]
 fn angle_text_uses_display_units() {
-    let (at, label) = rotate_angle_label(pos2(100.0, 50.0), FRAC_PI_2);
-    assert!(at.x > 100.0 && at.y > 50.0, "neben dem Zeiger: {at:?}");
-    let de = with_lang(&german(), || {
-        rotate_angle_label(pos2(0.0, 0.0), FRAC_PI_2).1
-    });
-    let en = with_lang(&english(), || {
-        rotate_angle_label(pos2(0.0, 0.0), FRAC_PI_2).1
-    });
+    let de = with_lang(&german(), || format_angle(FRAC_PI_2));
+    let en = with_lang(&english(), || format_angle(FRAC_PI_2));
     assert_eq!(de, "90,0°");
     assert_eq!(en, "90.0°");
-    assert_eq!(label, format_angle(FRAC_PI_2));
+    // Lage: neben dem Zeiger (rechts unten), solange Platz ist.
+    let bounds = egui::Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+    let size = egui::vec2(40.0, 16.0);
+    let at = place_pointer_label(pos2(100.0, 50.0), size, &[], bounds);
+    assert!(at.x > 100.0 && at.y > 50.0, "neben dem Zeiger: {at:?}");
 }
 
 fn rho_of(s: &AppState, c: CurveId) -> f64 {

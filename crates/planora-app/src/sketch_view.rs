@@ -598,15 +598,6 @@ pub fn rotate_drag_angle(se: &SketchSession, sk: &Sketch) -> Option<f64> {
     }
 }
 
-/// Lage und Text der Winkelanzeige am Zeiger `at`: neben dem Zeiger, der Text über [`format_angle`]
-/// (Einheit und Dezimaltrenner der Anzeige).
-pub fn rotate_angle_label(at: Pos2, angle_rad: f64) -> (Pos2, String) {
-    (
-        at + vec2(ROTATE_LABEL_GAP, ROTATE_LABEL_GAP),
-        format_angle(angle_rad),
-    )
-}
-
 /// Obere linke Ecke eines Feldes der Größe `size` am Zeiger `pointer`: Es steht bevorzugt rechts unten
 /// neben dem Zeiger, liegt dort ein Eingabefeld aus `avoid` darunter oder ragt es aus `bounds`, geht
 /// es nach links und nach oben. Es bleibt immer in `bounds`; gibt es keinen freien Platz, gilt die
