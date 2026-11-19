@@ -322,10 +322,6 @@ menu-view-iso = Isometric
 menu-view-fit-all = Fit all
 menu-view-light = Light theme
 menu-view-dark = Dark theme
-menu-sketch-xy = Sketch on XY plane
-menu-sketch-xz = Sketch on XZ plane
-menu-sketch-yz = Sketch on YZ plane
-menu-sketch-on-face = Sketch on selected face
 
 ## Schnellzugriffe
 place-favorites-full = There are already 24 favorites. Please remove one first.
@@ -3653,6 +3649,7 @@ action-plane-mid = Midplane
 action-plane-three-points = Plane Through Three Points
 action-plane-tangent = Tangent Plane
 action-sketch-redefine-plane = Redefine Sketch Plane
+action-create-sketch = Create Sketch
 plane-slot-plane = Plane
 plane-slot-line = Line
 plane-slot-first-plane = First plane

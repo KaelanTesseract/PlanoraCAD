@@ -322,10 +322,6 @@ menu-view-iso = Isometrisch
 menu-view-fit-all = Alles einpassen
 menu-view-light = Helles Design
 menu-view-dark = Dunkles Design
-menu-sketch-xy = Skizze auf XY-Ebene
-menu-sketch-xz = Skizze auf XZ-Ebene
-menu-sketch-yz = Skizze auf YZ-Ebene
-menu-sketch-on-face = Skizze auf gewählter Fläche
 
 ## Schnellzugriffe
 place-favorites-full = Es gibt schon 24 Favoriten. Bitte zuerst einen entfernen.
@@ -3636,6 +3632,7 @@ action-plane-mid = Mittelebene
 action-plane-three-points = Ebene durch drei Punkte
 action-plane-tangent = Tangentialebene
 action-sketch-redefine-plane = Skizzenebene neu festlegen
+action-create-sketch = Skizze erstellen
 plane-slot-plane = Ebene
 plane-slot-line = Linie
 plane-slot-first-plane = Erste Ebene

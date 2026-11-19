@@ -24,7 +24,7 @@ use crate::projects_window::{ProjectsEvent, ProjectsWindow};
 use crate::settings_window::{CheckHint, SettingsEvent, SettingsWindow};
 use crate::shell::ShellState;
 use crate::sketch_state::Tool;
-use crate::state::{AppState, BodyKind, FontState, SketchRequest, StandardPlane};
+use crate::state::{AppState, BodyKind, FontState, SketchRequest};
 use crate::step_import_dialog::{self, StepImportDialog};
 use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
 use crate::update_dialog::{self, InstallView, UpdateAction, UpdateDialog};
@@ -38,13 +38,11 @@ use crate::{
     about_dialog, browser, commands, drawing_view, fonts, parameter_dialog, prompts, shell_panels,
     sketch_panel, theme, viewport,
 };
-use planora_feature::SketchPlane;
 use planora_i18n::tr;
 use planora_kernel::BoolOp;
 use planora_project::config::WindowState;
 use planora_render::gpu::GpuScene;
-use planora_render::{FaceRef, Pick, ViewFace};
-use planora_sketch::plane_of_face;
+use planora_render::ViewFace;
 use planora_update::Update;
 use planora_update::check::{CheckOutcome, HttpSource, NetError, ReleaseSource, due};
 use planora_update::install::{
@@ -2918,70 +2916,13 @@ fn sketch_modify_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     });
 }
 
-/// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
+/// Eintrag „Skizze erstellen“ im Menü „Erzeugen“ (wie Fusion „Create Sketch“, ohne Untermenü):
+/// derselbe Weg wie Taste und Knopf im Befehlsfeld ([`Action::CreateSketch`]).
 fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
-    let state = &mut ws.active_tab_mut().state;
-    for (label, name, plane) in [
-        (
-            tr!("menu-sketch-xy"),
-            "Sketch on XY plane",
-            StandardPlane::XY,
-        ),
-        (
-            tr!("menu-sketch-xz"),
-            "Sketch on XZ plane",
-            StandardPlane::XZ,
-        ),
-        (
-            tr!("menu-sketch-yz"),
-            "Sketch on YZ plane",
-            StandardPlane::YZ,
-        ),
-    ] {
-        if entry(ui, true, icons::button(Icon::SketchOnPlane, label.as_str())).clicked() {
-            commands::timed(name, || {
-                if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
-                    let _ = state.open_sketch(id);
-                }
-            });
-            ui.close();
-        }
-    }
-    let face = match state.selection {
-        Some(Pick::Face(FaceRef { body, face })) => state
-            .bodies
-            .get(body)
-            .and_then(|b| plane_of_face(&b.solid, face))
-            .map(|_| (body, face)),
-        _ => None,
-    };
-    // Eine gewählte Konstruktionsebene zählt wie eine Fläche (Skizzen 6).
-    let plane = state.selected_plane();
-    // Eine gewählte Grundebene ebenso.
-    let origin = state.selected_origin_plane();
-    // Gesperrt auch, wenn der Körper der Fläche zurückgesetzt ist (Verlaufsleiste).
-    let blocked = state.sketch_on_face_blocked();
-    if entry(
-        ui,
-        blocked.is_none(),
-        icons::button(Icon::SketchOnFace, tr!("menu-sketch-on-face")),
-    )
-    .on_disabled_hover_text(blocked.unwrap_or_default())
-    .clicked()
-    {
-        let made = match (plane, face) {
-            _ if origin.is_some() => origin.and_then(|p| {
-                state
-                    .add_sketch(planora_feature::SketchPlane::Standard(p))
-                    .ok()
-            }),
-            (Some(p), _) => state.new_sketch_on_plane(p).ok(),
-            (None, Some((body, face))) => state.new_sketch_on_face(body, face).ok(),
-            (None, None) => None,
-        };
-        if let Some(id) = made {
-            let _ = state.open_sketch(id);
-        }
+    let label = Action::CreateSketch.label();
+    let keys = keymap::shortcut_hint(&ws.keymap, Action::CreateSketch);
+    if shortcut_button(ui, true, Icon::SketchOnPlane, &label, keys).clicked() {
+        commands::run_action(ws, Action::CreateSketch);
         ui.close();
     }
 }

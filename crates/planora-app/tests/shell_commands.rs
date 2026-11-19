@@ -287,10 +287,11 @@ fn dialogs(app: &mut PlanoraApp) -> String {
 const NONE: &str = "None | None | None";
 
 /// Alle Knöpfe des Befehlsfelds in der Reihenfolge der Anzeige.
-const ALL_LABELS: [&str; 11] = [
+const ALL_LABELS: [&str; 12] = [
     "Vereinigen",
     "Abziehen",
     "Schneiden",
+    "Skizze erstellen",
     "Quader …",
     "Zylinder …",
     "Kugel …",
@@ -906,4 +907,101 @@ fn drag_from_a_button_does_not_rotate_but_the_same_drag_in_free_does() {
     );
     drag(&c, &mut app, mid);
     assert_ne!(cam(&mut app), before, "Ziehen in free dreht");
+}
+
+// ---- Skizze erstellen ---------------------------------------------------------------------------
+
+fn create_sketch_pending(app: &mut PlanoraApp) -> bool {
+    app.ws_mut().active_tab().state.pending_pick == Some(planora_app::state::PendingPick::NewSketch)
+}
+
+#[test]
+fn bottom_bar_shows_create_sketch_first() {
+    let c = context(true);
+    let mut app = app_with(1, false);
+    settle(&c, &mut app, SIZE);
+    let labels: Vec<String> = shell_panels::bottom_buttons(&c)
+        .into_iter()
+        .map(|(l, _)| l)
+        .collect();
+    assert_eq!(
+        labels.get(3).map(String::as_str),
+        Some("Skizze erstellen"),
+        "{labels:?}"
+    );
+    assert_eq!(
+        labels.get(4).map(String::as_str),
+        Some("Quader …"),
+        "{labels:?}"
+    );
+}
+
+#[test]
+fn create_sketch_button_and_menu_start_the_pick() {
+    let c = context(true);
+    let mut app = app_with(1, false);
+    press(&c, &mut app, SIZE, "Skizze erstellen");
+    assert!(
+        create_sketch_pending(&mut app),
+        "Knopf startet den Wahlmodus"
+    );
+
+    let c = context(true);
+    let mut app = app_with(1, false);
+    menu_entry(&c, &mut app, SIZE, "Erzeugen", "Skizze erstellen");
+    assert!(
+        create_sketch_pending(&mut app),
+        "Menü startet den Wahlmodus"
+    );
+}
+
+#[test]
+fn create_menu_has_no_old_sketch_entries() {
+    let c = context(true);
+    let mut app = app_with(1, false);
+    let (shot, _) = settle(&c, &mut app, SIZE);
+    let top = shot
+        .fields(true)
+        .into_iter()
+        .find(|r| (r.top() - SHELL_INSET).abs() < 0.5)
+        .expect("oberes Feld");
+    let m = shot.find(top, "Erzeugen").rect.center();
+    click(&c, &mut app, SIZE, m, false);
+    let (shot, _) = settle(&c, &mut app, SIZE);
+    let texts: Vec<&str> = shot.texts.iter().map(|t| t.text.as_str()).collect();
+    assert!(texts.contains(&"Skizze erstellen"), "{texts:?}");
+    for old in [
+        "Skizze auf XY-Ebene",
+        "Skizze auf XZ-Ebene",
+        "Skizze auf YZ-Ebene",
+        "Skizze auf gewählter Fläche",
+    ] {
+        assert!(!texts.contains(&old), "alter Eintrag {old}");
+    }
+}
+
+#[test]
+fn create_sketch_button_does_nothing_in_read_only_tab() {
+    let c = context(true);
+    let mut app = PlanoraApp::for_tests(read_only_ws());
+    let before = app.ws_mut().active_tab().state.document.features().len();
+    press(&c, &mut app, SIZE, "Skizze erstellen");
+    assert!(!create_sketch_pending(&mut app));
+    let after = app.ws_mut().active_tab().state.document.features().len();
+    assert_eq!(after, before);
+    // Auch die Aktion (Taste) wirkt nicht.
+    planora_app::commands::run_action(app.ws_mut(), planora_app::keymap::Action::CreateSketch);
+    assert!(!create_sketch_pending(&mut app));
+}
+
+#[test]
+fn create_sketch_action_has_no_default_key() {
+    use planora_app::keymap::{Action, Area, Keymap};
+    assert!(Action::ALL.contains(&Action::CreateSketch));
+    assert_eq!(Action::CreateSketch.area(), Area::Model);
+    assert!(Keymap::defaults().bindings(Action::CreateSketch).is_empty());
+    assert_eq!(Action::CreateSketch.label(), "Skizze erstellen");
+    let mut app = app_with(0, false);
+    planora_app::commands::run_action(app.ws_mut(), Action::CreateSketch);
+    assert!(create_sketch_pending(&mut app));
 }

@@ -36,8 +36,6 @@ pub enum Icon {
     Sphere,
     /// Phosphor `pencil-simple-line`.
     SketchOnPlane,
-    /// Phosphor `bounding-box`.
-    SketchOnFace,
     /// Phosphor `arrow-line-up`.
     Extrude,
     /// Phosphor `arrow-arc-right`.
@@ -210,7 +208,6 @@ pub const ALL: &[Icon] = &[
     Icon::Cylinder,
     Icon::Sphere,
     Icon::SketchOnPlane,
-    Icon::SketchOnFace,
     Icon::Extrude,
     Icon::Revolve,
     Icon::Union,
@@ -305,7 +302,6 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Cylinder, '\u{e8fc}', "cylinder"),
     (Icon::Sphere, '\u{ee66}', "sphere"),
     (Icon::SketchOnPlane, '\u{ebc6}', "pencil-simple-line"),
-    (Icon::SketchOnFace, '\u{e6ce}', "bounding-box"),
     (Icon::Extrude, '\u{e066}', "arrow-line-up"),
     (Icon::Revolve, '\u{e016}', "arrow-arc-right"),
     (Icon::Union, '\u{edbe}', "union"),

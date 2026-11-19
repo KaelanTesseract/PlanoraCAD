@@ -177,6 +177,12 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 }
             }
         }
+        Action::CreateSketch => {
+            // Fehler (offene Skizze nicht schließbar, gesperrte Vorauswahl) stehen in `message`.
+            if let Ok(None) = ws.active_tab_mut().state.start_create_sketch() {
+                ws.active_tab_mut().exclude_pick_modes();
+            }
+        }
         Action::Fillet => {
             let state = &mut ws.active_tab_mut().state;
             // Eine Sperre durch einen zurückgesetzten Körper meldet `open_blend` selbst.
