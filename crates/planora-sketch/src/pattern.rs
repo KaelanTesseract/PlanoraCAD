@@ -401,7 +401,7 @@ impl Sketch {
         s.cut_back(mark);
         debug_assert!(
             s.to_data() == self.to_data(),
-            "Arbeitskopie der Vorschau weicht nach dem Zurückschneiden ab"
+            "preview scratch differs from the sketch after cutting back"
         );
         out
     }
