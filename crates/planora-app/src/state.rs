@@ -3380,7 +3380,7 @@ impl AppState {
                 (Some(p), _, _) => self.add_sketch(SketchPlane::Standard(p)),
                 (None, Some(id), _) => self.new_sketch_on_plane(id),
                 (None, None, Some((body, face))) => self.new_sketch_on_face(body, face),
-                (None, None, None) => unreachable!("oben geprüft"),
+                (None, None, None) => unreachable!("checked above"),
             }?;
             self.open_sketch(made)?;
             return Ok(Some(made));
