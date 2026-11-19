@@ -1261,6 +1261,9 @@ fn point_screen(sk: &Sketch, p: PointId, map: &Mapper) -> Option<Pos2> {
 
 /// Strichstärke des Randes einer Konstruktionsebene in der 3D-Ansicht (logische Punkte).
 const PLANE_EDGE_WIDTH: f32 = 1.5;
+/// Randbreite der Ebene unter dem Zeiger oder einer gewählten Ebene: deutlich dicker, damit sie
+/// sich beim Wählen klar abhebt (Dennis' Handtest „Skizze erstellen“).
+const PLANE_EDGE_WIDTH_ACTIVE: f32 = 3.0;
 
 /// Farbe für die Skizzenlinien der GPU (Skizzen 12): sRGB-Werte 0..1 wie die übrige Szene,
 /// Alpha nicht vormultipliziert. Die Pipeline mischt mit `ALPHA_BLENDING`, egui mit
@@ -1332,10 +1335,14 @@ pub fn plane_strokes(state: &AppState, view: &StrokeView, out: &mut Vec<StrokeVe
     }
     let col = colors(state.dark);
     for (plane, lit) in shown_planes(state) {
-        let (fill, edge) = if lit {
-            (col.plane_fill_active, col.plane_edge_active)
+        let (fill, edge, width) = if lit {
+            (
+                col.plane_fill_active,
+                col.plane_edge_active,
+                PLANE_EDGE_WIDTH_ACTIVE,
+            )
         } else {
-            (col.plane_fill, col.plane_edge)
+            (col.plane_fill, col.plane_edge, PLANE_EDGE_WIDTH)
         };
         let [a, b, c, d] = plane.corners();
         push_fill(out, view, &[[a, b, c], [a, c, d]], stroke_rgba(fill));
@@ -1343,7 +1350,7 @@ pub fn plane_strokes(state: &AppState, view: &StrokeView, out: &mut Vec<StrokeVe
             out,
             view,
             &[a, b, c, d, a],
-            PLANE_EDGE_WIDTH * view.pixels_per_point,
+            width * view.pixels_per_point,
             stroke_rgba(edge),
             None,
         );

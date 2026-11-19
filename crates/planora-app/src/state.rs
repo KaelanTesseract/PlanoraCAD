@@ -3379,6 +3379,12 @@ impl AppState {
                 (None, None, Some((body, face))) => self.new_sketch_on_face(body, face),
                 (None, None, None) => unreachable!("checked above"),
             }?;
+            // Die Vorauswahl ist verbraucht (wie Fusion): Nach „Skizze beenden“ ist nichts
+            // gewählt, der nächste Aufruf wählt neu.
+            self.selected_feature = None;
+            self.selected_body = None;
+            self.selected_origin = None;
+            self.set_selection(None);
             self.open_sketch(made)?;
             return Ok(Some(made));
         }

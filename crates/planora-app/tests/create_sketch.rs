@@ -516,3 +516,38 @@ fn tree_hint_names_create_sketch() {
     assert!(planora_i18n::t("tree-no-sketches").contains("Skizze erstellen"));
     assert!(!planora_i18n::t("tree-plane-new-sketch-hint").is_empty());
 }
+
+/// Handtest: Nach „Skizze beenden“ ist die Vorauswahl nicht mehr gewählt, der nächste Aufruf
+/// wählt neu (wie Fusion).
+#[test]
+fn preselection_is_consumed() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(20.0)).unwrap();
+    let face = top_face(&s, 0);
+    s.set_selection(Some(Pick::Face(FaceRef { body: 0, face })));
+    s.start_create_sketch().unwrap().expect("sofort angelegt");
+    s.close_sketch();
+    assert_eq!(s.selection, None);
+    assert_eq!(
+        s.start_create_sketch(),
+        Ok(None),
+        "zweiter Aufruf wählt neu"
+    );
+
+    let mut s = AppState::new();
+    s.select_origin_plane(StandardPlane::XY);
+    s.start_create_sketch().unwrap().expect("sofort angelegt");
+    s.close_sketch();
+    assert_eq!(s.selected_origin_plane(), None);
+}
+
+/// Handtest: Die Ebene unter dem Zeiger hebt sich deutlich ab (Fläche fast doppelt so deckend
+/// wie die übrigen, in beiden Farbschemen).
+#[test]
+fn hovered_plane_stands_out_clearly() {
+    for dark in [true, false] {
+        let col = planora_app::theme::sketch_colors(dark);
+        let (a, b) = (col.plane_fill.a() as u32, col.plane_fill_active.a() as u32);
+        assert!(b * 10 >= a * 25, "dark={dark}: Deckkraft {a} → {b}");
+    }
+}
