@@ -10,12 +10,13 @@ pub mod check;
 pub mod install;
 mod net;
 mod notes;
+pub mod plugin_source;
 mod release;
 pub mod sha256;
 mod version;
 
 pub use channel::Channel;
-pub use net::get_limited;
+pub use net::{get_limited, get_once};
 pub use notes::{NoteBlock, Span, parse_notes};
 pub use release::{
     AssetRef, LICENSES_NAME, MAX_NOTES_CHARS, MAX_NOTES_RELEASES, REPO, Release, ReleaseError,

@@ -48,10 +48,10 @@ fn orte(name: &str, mitgeliefert: &[&str], installiert: &[&str]) -> Places {
         cache: p.cache.clone(),
     };
     for name in mitgeliefert {
-        plugin_places::install(&bundled, &paket(name)).unwrap();
+        plugin_places::install(&bundled, &paket(name), None).unwrap();
     }
     for name in installiert {
-        plugin_places::install(&p, &paket(name)).unwrap();
+        plugin_places::install(&p, &paket(name), None).unwrap();
     }
     std::fs::create_dir_all(&p.user).unwrap();
     p
@@ -207,7 +207,7 @@ fn install_flow_starts_plugin() {
     );
     let seen = bild(&mut h, vec![]);
     assert!(has(&seen, "Keine Plug-ins gefunden."), "{}", join(&seen));
-    klick(&mut h, &seen, "Plug-in installieren…");
+    klick(&mut h, &seen, "Aus Datei…");
     assert_eq!(h.w.chooser_purpose(), Some(ChooserPurpose::Plugin));
     let c = h.w.chooser_mut().unwrap();
     c.dir_text = data_dir().display().to_string();
@@ -352,6 +352,8 @@ fn toggle_off_stops_and_saves() {
         Some(PluginConfig {
             enabled: false,
             rights: BTreeMap::new(),
+            author: Some("Dennis Guse".to_string()),
+            net_hosts: vec!["example.org".to_string()],
         }),
         "gleich gespeichert"
     );
@@ -376,6 +378,8 @@ fn revoke_returns_to_ask() {
         PluginConfig {
             enabled: true,
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
+            author: Some("Dennis Guse".to_string()),
+            net_hosts: vec!["example.org".to_string()],
         },
     );
     let mut h = harness(
@@ -419,6 +423,8 @@ fn denied_right_shown() {
         PluginConfig {
             enabled: true,
             rights: BTreeMap::from([("net".to_string(), "denied".to_string())]),
+            author: Some("Dennis Guse".to_string()),
+            net_hosts: vec!["example.org".to_string()],
         },
     );
     let mut h = harness(
@@ -553,6 +559,8 @@ fn netz_erlaubt() -> Config {
         PluginConfig {
             enabled: true,
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
+            author: Some("Dennis Guse".to_string()),
+            net_hosts: vec!["example.org".to_string()],
         },
     );
     config

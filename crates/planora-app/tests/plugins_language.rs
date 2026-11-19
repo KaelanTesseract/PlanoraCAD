@@ -24,7 +24,7 @@ fn language_switch_reaches_plugins() {
     let file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../planora-plugin-host/tests/data/beispiel-hallo.pcplugin");
     let pkg = Package::read(&std::fs::read(file).unwrap()).unwrap();
-    plugin_places::install(&places, &pkg).unwrap();
+    plugin_places::install(&places, &pkg, None).unwrap();
 
     let mut ws = Workspace::new(None, Config::default());
     let cfg = common::temp_root("planora-plugins-sprache-cfg");

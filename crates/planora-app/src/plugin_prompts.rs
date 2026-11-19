@@ -2,7 +2,8 @@
 //! („Erlauben“, „Nur diesmal“, „Ablehnen“) und die Fehlerleiste oben im Fenster für ausgefallene
 //! Plug-ins. Dazu (Task 7) der Installationsdialog und die kurzen Texte zu Rechten, Herkunft und
 //! Zustand für die Einstellungen. Die Fenster liefern nur die Wahl; was sie bewirkt, entscheidet
-//! [`crate::plugins::Plugins`].
+//! [`crate::plugins::Plugins`]. Task 8: der Aktualisieren-Dialog und in der Fehlerleiste der
+//! Hinweis auf gefundene Updates.
 
 use crate::dialog::{Dialog, DialogSize, escape_pressed};
 use crate::theme;
@@ -11,7 +12,7 @@ use planora_plugin_host::EntryState;
 use planora_plugin_host::licenses::license_ok;
 use planora_plugin_host::manifest::Right;
 use planora_plugin_host::package::{Package, Signature};
-use planora_plugin_host::places::Origin;
+use planora_plugin_host::places::{Origin, Provenance};
 use planora_plugin_host::rights::{Answer, Grant};
 
 /// Speicher, den ein Plug-in ohne Angabe bekommt (MB); nur ein anderer Wert steht im Dialog.
@@ -83,6 +84,15 @@ pub struct BannerLine<'a> {
 pub enum BannerAction {
     Restart(String),
     Close(String),
+    /// „Anzeigen“ im Hinweis auf Updates (öffnet den Abschnitt „Plug-ins“).
+    ShowUpdates,
+    /// „Schließen“ im Hinweis auf Updates.
+    CloseUpdates,
+}
+
+/// Text des Hinweises auf Updates für `count` Plug-ins.
+pub fn updates_text(count: usize) -> String {
+    tr!("plugin-updates-available", count = count)
 }
 
 /// Text einer Zeile der Fehlerleiste.
@@ -95,9 +105,14 @@ pub fn banner_text(name: &str, stopped: bool) -> String {
 }
 
 /// Die Fehlerleiste oben in der Mitte des Fensters: je ausgefallenem Plug-in eine Zeile mit
-/// „Neu starten“ (fehlt, wenn es endgültig aus ist) und „Schließen“.
-pub fn show_banners(ctx: &egui::Context, lines: &[BannerLine<'_>]) -> Option<BannerAction> {
-    if lines.is_empty() {
+/// „Neu starten“ (fehlt, wenn es endgültig aus ist) und „Schließen“; mit `updates` > 0 darüber
+/// der Hinweis „Für N Plug-ins gibt es Updates.“ mit „Anzeigen“ und „Schließen“.
+pub fn show_banners(
+    ctx: &egui::Context,
+    lines: &[BannerLine<'_>],
+    updates: usize,
+) -> Option<BannerAction> {
+    if lines.is_empty() && updates == 0 {
         return None;
     }
     let mut action = None;
@@ -107,6 +122,17 @@ pub fn show_banners(ctx: &egui::Context, lines: &[BannerLine<'_>]) -> Option<Ban
         .movable(false)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
+                if updates > 0 {
+                    ui.horizontal(|ui| {
+                        ui.label(updates_text(updates));
+                        if ui.button(tr!("plugin-updates-show")).clicked() {
+                            action = Some(BannerAction::ShowUpdates);
+                        }
+                        if ui.button(tr!("plugin-banner-close")).clicked() {
+                            action = Some(BannerAction::CloseUpdates);
+                        }
+                    });
+                }
                 for line in lines {
                     ui.horizontal(|ui| {
                         ui.label(banner_text(line.name, line.stopped));
@@ -180,6 +206,8 @@ pub struct InstallOffer {
     /// Je verlangtem Recht, was nach dem Installieren gilt (`None`: wird beim ersten Gebrauch
     /// gefragt); siehe [`Rights::carry_over`](planora_plugin_host::rights::Rights::carry_over).
     pub grants: Vec<(Right, Option<Grant>)>,
+    /// Über den Repo-Link geholt: Link und Tag für `herkunft.json` (aus einer Datei: keine).
+    pub provenance: Option<Provenance>,
 }
 
 /// Zustand eines verlangten Rechts im Installationsdialog („bereits erlaubt“, „abgelehnt“,
@@ -273,6 +301,94 @@ pub fn show_install(
             });
             if choice.is_none() && escape_pressed(ui, true) {
                 choice = Some(InstallChoice::Cancel);
+            }
+        });
+    choice
+}
+
+/// Was der Aktualisieren-Dialog zeigt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateView {
+    /// Anzeigename des Plug-ins.
+    pub name: String,
+    pub from: String,
+    pub to: String,
+    /// Release-Notizen (Markdown).
+    pub notes: String,
+    /// Rechte, die das neue Paket zusätzlich verlangt.
+    pub new_rights: Vec<Right>,
+    /// Rechner aus dem neuen Manifest (für `net`).
+    pub hosts: Vec<String>,
+}
+
+/// Wahl im Aktualisieren-Dialog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateChoice {
+    Update,
+    Cancel,
+}
+
+/// Zeile „Neu verlangte Rechte: …“ (leer: keine Zeile).
+pub fn new_rights_text(rights: &[Right], hosts: &[String]) -> Option<String> {
+    if rights.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = rights.iter().map(|&r| right_name(r, hosts)).collect();
+    Some(tr!("plugin-update-new-rights", rights = names.join(", ")))
+}
+
+/// Der Aktualisieren-Dialog (festes Fenster in der Mitte, Id `"planora_plugin_update"`): alte →
+/// neue Version, die Release-Notizen (zerlegt wie im Update-Dialog des Programms), neu verlangte
+/// Rechte mit dem Hinweis, dass beim ersten Gebrauch gefragt wird; „Aktualisieren“ und
+/// „Abbrechen“ (Esc wirkt wie „Abbrechen“). `locked`: eine Rückfrage ist offen, „Aktualisieren“
+/// ist gesperrt.
+pub fn show_update(ctx: &egui::Context, view: &UpdateView, locked: bool) -> Option<UpdateChoice> {
+    let mut choice = None;
+    Dialog::new(tr!("plugin-update-title"), DialogSize::Prompt)
+        .id(egui::Id::new("planora_plugin_update"))
+        .fixed()
+        .show(ctx, |ui| {
+            let dark = ui.visuals().dark_mode;
+            ui.strong(tr!(
+                "plugin-update-versions",
+                plugin = view.name.as_str(),
+                from = view.from.as_str(),
+                to = view.to.as_str()
+            ));
+            ui.add_space(4.0);
+            let blocks = planora_update::parse_notes(&view.notes);
+            if blocks.is_empty() {
+                ui.weak(tr!("update-no-notes"));
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("planora_plugin_update_notes")
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for block in &blocks {
+                            crate::update_dialog::note_block(ui, block, dark);
+                        }
+                    });
+            }
+            if let Some(text) = new_rights_text(&view.new_rights, &view.hosts) {
+                ui.add_space(6.0);
+                ui.add(egui::Label::new(text).wrap());
+                ui.label(tr!("plugin-install-rights-hint"));
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(!locked, egui::Button::new(tr!("plugin-update-confirm")))
+                    .on_disabled_hover_text(tr!("menu-answer-prompt-first"))
+                    .clicked()
+                {
+                    choice = Some(UpdateChoice::Update);
+                }
+                if ui.button(tr!("common-cancel")).clicked() {
+                    choice = Some(UpdateChoice::Cancel);
+                }
+            });
+            if choice.is_none() && escape_pressed(ui, true) {
+                choice = Some(UpdateChoice::Cancel);
             }
         });
     choice

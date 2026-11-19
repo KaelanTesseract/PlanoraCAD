@@ -56,6 +56,7 @@ pub mod places;
 pub mod plane_dialog;
 pub mod plugin_dialog;
 pub mod plugin_prompts;
+pub mod plugin_repo;
 pub mod plugins;
 pub mod profile_pick;
 pub mod project_actions;

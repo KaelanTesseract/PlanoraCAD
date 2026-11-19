@@ -41,12 +41,21 @@ fn queue_full() -> String {
 }
 
 /// Der zu speichernde Zustand eines Plug-ins: eingeschaltet oder nicht und die dauerhaft
-/// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`). Das Programm bildet
+/// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`), dazu Autor und
+/// Rechner (`net-hosts`) des Manifests, für das die Rechte erteilt wurden. Das Programm bildet
 /// ihn auf `planora_project::config::PluginConfig` ab; der Host kennt die Konfiguration nicht.
+///
+/// Beim Start gelten gespeicherte Rechte nur nach [`Rights::carry_over_from`] gegen das
+/// gefundene Manifest: ein anderer (oder kein gespeicherter) Autor kostet alle, andere Rechner
+/// kosten `net` (etwa nach einem Update über den Installer oder einem von Hand kopierten Ordner).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginState {
     pub enabled: bool,
     pub rights: BTreeMap<String, String>,
+    /// Autor des Manifests beim Speichern; `None`: unbekannt (Rechte werden neu gefragt).
+    pub author: Option<String>,
+    /// Rechner aus `net-hosts` des Manifests beim Speichern.
+    pub net_hosts: Vec<String>,
 }
 
 impl Default for PluginState {
@@ -54,6 +63,8 @@ impl Default for PluginState {
         PluginState {
             enabled: true,
             rights: BTreeMap::new(),
+            author: None,
+            net_hosts: Vec::new(),
         }
     }
 }
@@ -549,12 +560,18 @@ impl PluginHost {
         }
     }
 
-    /// Übernimmt Schalter und Rechte für Eintrag `i` aus `states`.
+    /// Übernimmt Schalter und Rechte für Eintrag `i` aus `states`. Die Rechte nur nach
+    /// [`Rights::carry_over_from`] gegen das aktive Manifest (gespeicherter Autor und Rechner);
+    /// ohne startbaren Fundort keine.
     fn apply_state(&mut self, i: usize, states: &BTreeMap<String, PluginState>) {
         let Some(c) = states.get(&self.entries[i].id) else {
             return;
         };
         self.slots[i].enabled = c.enabled;
+        let Some(manifest) = active_manifest(&self.entries[i]) else {
+            return;
+        };
+        let mut loaded = Rights::default();
         for (id, grant) in &c.rights {
             let answer = match grant.as_str() {
                 "allowed" => Answer::Allow,
@@ -562,8 +579,17 @@ impl PluginHost {
                 _ => continue,
             };
             if let Some(r) = Right::from_id(id) {
-                self.entries[i].rights.answer(r, answer);
+                loaded.answer(r, answer);
             }
+        }
+        let kept = loaded.carry_over_from(c.author.as_deref(), &c.net_hosts, manifest);
+        let kept: Vec<(Right, Grant)> = kept.saved().collect();
+        for (r, g) in kept {
+            let answer = match g {
+                Grant::Allowed => Answer::Allow,
+                Grant::Denied => Answer::Deny,
+            };
+            self.entries[i].rights.answer(r, answer);
         }
     }
 
@@ -590,11 +616,21 @@ impl PluginHost {
                 };
                 rights.insert(r.id().to_string(), g.to_string());
             }
+            // Autor und Rechner des laufenden Manifests (ohne startbaren Fundort die gespeicherten).
+            let (author, net_hosts) = match active_manifest(e) {
+                Some(m) => (Some(m.author.clone()), m.net_hosts.clone()),
+                None => out
+                    .get(&e.id)
+                    .map(|c| (c.author.clone(), c.net_hosts.clone()))
+                    .unwrap_or_default(),
+            };
             let c = PluginState {
                 enabled: s.enabled,
                 rights,
+                author,
+                net_hosts,
             };
-            if c == PluginState::default() {
+            if c.enabled && c.rights.is_empty() {
                 out.remove(&e.id);
             } else {
                 out.insert(e.id.clone(), c);
@@ -826,6 +862,12 @@ impl PluginHost {
         self.running(plugin)
             .and_then(|i| self.slots[i].texts.as_ref())
             .map_or_else(|| key.to_string(), |t| t.text(language, key, &[]))
+    }
+
+    /// Generation der laufenden Instanz von `id` (jeder Start zählt neu); `None`, wenn es nicht
+    /// läuft.
+    pub fn generation(&self, id: &str) -> Option<u64> {
+        self.running(id).map(|i| self.slots[i].generation)
     }
 
     fn index(&self, id: &str) -> Option<usize> {

@@ -22,6 +22,7 @@ fn plugins_roundtrip() {
         PluginConfig {
             enabled: false,
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
+            ..Default::default()
         },
     );
     c.save_to(&p).unwrap();
@@ -79,6 +80,7 @@ fn plugins_lenient() {
         Some(&PluginConfig {
             enabled: false,
             rights: BTreeMap::from([("net".to_string(), "denied".to_string())]),
+            ..Default::default()
         })
     );
     let _ = std::fs::remove_dir_all(p.parent().unwrap());
@@ -109,6 +111,7 @@ fn plugins_bad_right_keeps_enabled() {
         Some(&PluginConfig {
             enabled: false,
             rights: rights(&[("model-read", "allowed")]),
+            ..Default::default()
         }),
         "ein kaputtes Recht kostet nicht den Schalter"
     );
@@ -117,6 +120,7 @@ fn plugins_bad_right_keeps_enabled() {
         Some(&PluginConfig {
             enabled: true,
             rights: rights(&[("net", "denied")]),
+            ..Default::default()
         }),
         "ein kaputter Schalter kostet nicht die Rechte"
     );
@@ -125,8 +129,109 @@ fn plugins_bad_right_keeps_enabled() {
         Some(&PluginConfig {
             enabled: false,
             rights: BTreeMap::new(),
+            ..Default::default()
         })
     );
     assert!(!c.plugins.contains_key("g.h"), "kein Objekt: übergangen");
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+}
+
+#[test]
+fn plugins_author_and_hosts() {
+    let p = temp_file("autor");
+    let mut c = Config::default();
+    c.plugins.insert(
+        "a.b".to_string(),
+        PluginConfig {
+            enabled: true,
+            rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
+            author: Some("Dennis Guse".to_string()),
+            net_hosts: vec!["example.org".to_string()],
+        },
+    );
+    c.plugins.insert(
+        "c.d".to_string(),
+        PluginConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+    c.save_to(&p).unwrap();
+    assert_eq!(Config::read_from(&p).unwrap(), c);
+    let text = std::fs::read_to_string(&p).unwrap();
+    // Leer wird nichts geschrieben: nur einmal `author`, einmal `net_hosts`.
+    assert_eq!(text.matches("author").count(), 1, "{text}");
+    assert_eq!(text.matches("net_hosts").count(), 1, "{text}");
+
+    std::fs::write(
+        &p,
+        r#"{ "plugins": {
+            "a.b": {"rights": {"net": "allowed"}, "author": 5, "net_hosts": "example.org"},
+            "c.d": {"rights": {"net": "allowed"}, "author": "", "net_hosts": ["x.org", 3]},
+            "e.f": {"rights": {"net": "allowed"}, "author": "A", "net_hosts": ["y.org"]}
+        } }"#,
+    )
+    .unwrap();
+    let c = Config::read_from(&p).unwrap();
+    let net = BTreeMap::from([("net".to_string(), "allowed".to_string())]);
+    assert_eq!(
+        c.plugins["a.b"],
+        PluginConfig {
+            rights: net.clone(),
+            ..Default::default()
+        },
+        "falsche Typen: unbekannt, die Rechte bleiben (der Host fragt neu)"
+    );
+    assert_eq!(
+        c.plugins["c.d"],
+        PluginConfig {
+            rights: net.clone(),
+            author: None,
+            net_hosts: vec!["x.org".to_string()],
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        c.plugins["e.f"],
+        PluginConfig {
+            rights: net,
+            author: Some("A".to_string()),
+            net_hosts: vec!["y.org".to_string()],
+            ..Default::default()
+        }
+    );
+    let _ = std::fs::remove_dir_all(p.parent().unwrap());
+}
+
+#[test]
+fn last_plugin_check_lenient() {
+    let p = temp_file("pruefung");
+    let c = Config::default();
+    assert_eq!(c.last_plugin_check, None);
+    c.save_to(&p).unwrap();
+    assert!(
+        !std::fs::read_to_string(&p)
+            .unwrap()
+            .contains("last_plugin_check")
+    );
+    let c = Config {
+        last_plugin_check: Some(1_800_000_000),
+        ..Config::default()
+    };
+    c.save_to(&p).unwrap();
+    assert_eq!(Config::read_from(&p).unwrap(), c);
+    for (text, expected) in [
+        (
+            r#"{"last_plugin_check": "gestern", "language": "en"}"#,
+            None,
+        ),
+        (r#"{"last_plugin_check": -5, "language": "en"}"#, None),
+        (r#"{"last_plugin_check": 42, "language": "en"}"#, Some(42)),
+    ] {
+        std::fs::write(&p, text).unwrap();
+        let c = Config::read_from(&p).unwrap();
+        assert_eq!(c.last_plugin_check, expected, "{text}");
+        assert_eq!(c.language.as_deref(), Some("en"));
+    }
     let _ = std::fs::remove_dir_all(p.parent().unwrap());
 }

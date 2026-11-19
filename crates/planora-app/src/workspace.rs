@@ -1649,7 +1649,10 @@ impl Workspace {
         let language = self.pending_language();
         let length_unit = self.pending_length_unit();
         let sketch_grid = self.pending_sketch_grid();
-        let plugins = self.plugins_pending.then(|| self.config.plugins.clone());
+        // Mit den Plug-ins auch der Zeitpunkt ihrer letzten Prüfung auf Updates.
+        let plugins = self
+            .plugins_pending
+            .then(|| (self.config.plugins.clone(), self.config.last_plugin_check));
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
@@ -1676,8 +1679,9 @@ impl Workspace {
                 c.sketch_grid = grid;
                 c.sketch_snap = snap;
             }
-            if let Some(p) = plugins {
+            if let Some((p, checked)) = plugins {
                 c.plugins = p;
+                c.last_plugin_check = checked;
             }
         });
         match written {

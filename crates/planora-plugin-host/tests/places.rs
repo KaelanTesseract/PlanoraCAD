@@ -59,7 +59,7 @@ fn version_setzen(dir: &Path, version: &str) {
 fn scan_both_origins() {
     let p = orte("beide");
     mitliefern(&p, &paket("beispiel-hallo"));
-    places::install(&p, &paket("test-faelle")).unwrap();
+    places::install(&p, &paket("test-faelle"), None).unwrap();
     let found = places::scan(&p);
     assert_eq!(found.len(), 2, "{found:?}");
     let hallo = found
@@ -83,7 +83,7 @@ fn same_id_higher_version_wins() {
     let p = orte("version");
     let pkg = paket("beispiel-hallo");
     let bundled = mitliefern(&p, &pkg);
-    let user = places::install(&p, &pkg).unwrap();
+    let user = places::install(&p, &pkg, None).unwrap();
     version_setzen(&user, "0.2.0");
 
     let host = PluginHost::new(p.clone());
@@ -143,9 +143,9 @@ fn reste(dir: &Path, prefix: &str) -> Vec<String> {
 fn install_replaces_atomically() {
     let p = orte("ersetzen");
     let pkg = paket("beispiel-hallo");
-    let first = places::install(&p, &pkg).unwrap();
+    let first = places::install(&p, &pkg, None).unwrap();
     std::fs::write(first.join("alt.txt"), "vom ersten Mal").unwrap();
-    let second = places::install(&p, &pkg).unwrap();
+    let second = places::install(&p, &pkg, None).unwrap();
     assert_eq!(first, second);
     assert_eq!(second, p.user.join("planora.beispiel-hallo"));
     assert!(second.join("plugin.toml").is_file());
@@ -170,11 +170,11 @@ fn uninstall_bundled_refused() {
         "Mitgeliefertes bleibt"
     );
 
-    let user = places::install(&p, &paket("test-faelle")).unwrap();
+    let user = places::install(&p, &paket("test-faelle"), None).unwrap();
     places::uninstall(&p, "planora.test-faelle").unwrap();
     assert!(!user.exists());
     // Gibt es beides, entfernt `uninstall` nur das installierte.
-    let user = places::install(&p, &pkg).unwrap();
+    let user = places::install(&p, &pkg, None).unwrap();
     places::uninstall(&p, "planora.beispiel-hallo").unwrap();
     assert!(!user.exists());
     assert!(bundled.join("plugin.toml").is_file());
@@ -340,4 +340,63 @@ fn places_linux_and_windows() {
             .join("planora-cad")
             .join("plugin-cache")
     );
+}
+
+fn herkunft() -> places::Provenance {
+    places::Provenance {
+        link: "https://github.com/a/b".to_string(),
+        tag: "v0.1.0".to_string(),
+    }
+}
+
+#[test]
+fn provenance_roundtrip() {
+    let p = orte("herkunft-hin-zurueck");
+    let dir = p.user.join("x");
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(places::read_provenance(&dir), None);
+    places::write_provenance(&dir, &herkunft()).unwrap();
+    assert!(dir.join("herkunft.json").is_file());
+    assert_eq!(places::read_provenance(&dir), Some(herkunft()));
+    aufraeumen(&p);
+}
+
+#[test]
+fn provenance_lenient() {
+    let p = orte("herkunft-nachsichtig");
+    let dir = places::install(&p, &paket("beispiel-hallo"), None).unwrap();
+    for kaputt in [
+        "{kaputt",
+        "[]",
+        r#"{"link":"https://github.com/a/b"}"#,
+        r#"{"link":5,"tag":"v1"}"#,
+        r#"{"link":"","tag":"v1"}"#,
+    ] {
+        std::fs::write(dir.join("herkunft.json"), kaputt).unwrap();
+        assert_eq!(places::read_provenance(&dir), None, "{kaputt}");
+        // Das Plug-in bleibt startbar.
+        let found = places::scan(&p);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].problem, None, "{kaputt}");
+    }
+    // Weitere Felder stören nicht.
+    std::fs::write(
+        dir.join("herkunft.json"),
+        r#"{"link":"https://github.com/a/b","tag":"v0.1.0","neu":1}"#,
+    )
+    .unwrap();
+    assert_eq!(places::read_provenance(&dir), Some(herkunft()));
+    aufraeumen(&p);
+}
+
+#[test]
+fn install_writes_provenance() {
+    let p = orte("herkunft-installieren");
+    let pkg = paket("beispiel-hallo");
+    let dir = places::install(&p, &pkg, Some(&herkunft())).unwrap();
+    assert_eq!(places::read_provenance(&dir), Some(herkunft()));
+    // Aus einer Datei neu installiert: der Ordner ist neu, ohne Link.
+    let dir = places::install(&p, &pkg, None).unwrap();
+    assert_eq!(places::read_provenance(&dir), None);
+    aufraeumen(&p);
 }

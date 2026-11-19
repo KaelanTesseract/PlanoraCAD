@@ -29,7 +29,7 @@ fn orte(name: &str, pakete: &[&str]) -> Places {
             .join("tests/data")
             .join(format!("{paket}.pcplugin"));
         let pkg = Package::read(&std::fs::read(file).unwrap()).unwrap();
-        places::install(&p, &pkg).unwrap();
+        places::install(&p, &pkg, None).unwrap();
     }
     p
 }
@@ -105,7 +105,7 @@ fn disabled_not_started() {
         HALLO.to_string(),
         PluginState {
             enabled: false,
-            rights: BTreeMap::new(),
+            ..Default::default()
         },
     )]);
     h.start_all(&config);
@@ -335,6 +335,8 @@ fn saved_rights_from_config() {
         PluginState {
             enabled: true,
             rights: BTreeMap::from([("net".to_string(), "denied".to_string())]),
+            author: Some("Dennis Guse".to_string()),
+            net_hosts: vec!["example.org".to_string()],
         },
     )]);
     h.start_all(&config);
@@ -432,12 +434,17 @@ fn rescan_restarts_changed_only() {
     assert!(h.entries().iter().all(|e| e.id != HALLO));
     assert!(h.commands().iter().all(|c| c.plugin != HALLO));
     let file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/beispiel-hallo.pcplugin");
-    places::install(&p, &Package::read(&std::fs::read(file).unwrap()).unwrap()).unwrap();
+    places::install(
+        &p,
+        &Package::read(&std::fs::read(file).unwrap()).unwrap(),
+        None,
+    )
+    .unwrap();
     let aus = BTreeMap::from([(
         HALLO.to_string(),
         PluginState {
             enabled: false,
-            rights: BTreeMap::new(),
+            ..Default::default()
         },
     )]);
     h.rescan(&aus);
@@ -460,6 +467,7 @@ fn mit_netzrecht(name: &str, bundled_too: bool) -> (PluginHost, Places) {
         places::install(
             &bundled,
             &Package::read(&std::fs::read(file).unwrap()).unwrap(),
+            None,
         )
         .unwrap();
     }
@@ -469,6 +477,8 @@ fn mit_netzrecht(name: &str, bundled_too: bool) -> (PluginHost, Places) {
         PluginState {
             enabled: true,
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
+            author: Some("Dennis Guse".to_string()),
+            net_hosts: vec!["example.org".to_string()],
         },
     )]));
     warten(&mut h, FAELLE);
@@ -596,4 +606,73 @@ fn replaced_restarts_same_version() {
         "neue Generation: {g1:?} {g2:?}"
     );
     aufraeumen(&p);
+}
+
+/// Gespeicherte Rechte gelten beim Start nur für dasselbe Plug-in wie beim Erteilen: gleicher
+/// Autor, für `net` dieselben Rechner (Groß- und Kleinschreibung egal); Rechte, die das Manifest
+/// nicht verlangt, fallen weg. Einträge ohne gespeicherten Autor (frühere Stände dieses Zweigs)
+/// gelten als unbekannt: neu fragen.
+#[test]
+fn saved_rights_need_same_author_and_hosts() {
+    let faelle = |author: Option<&str>, hosts: &[&str]| PluginState {
+        enabled: true,
+        rights: BTreeMap::from([
+            ("net".to_string(), "allowed".to_string()),
+            ("model-read".to_string(), "allowed".to_string()),
+        ]),
+        author: author.map(str::to_string),
+        net_hosts: hosts.iter().map(|h| h.to_string()).collect(),
+    };
+    let cases = [
+        (
+            "gleich",
+            faelle(Some("Dennis Guse"), &["example.org"]),
+            Some(Grant::Allowed),
+        ),
+        (
+            "gross",
+            faelle(Some("Dennis Guse"), &["EXAMPLE.org"]),
+            Some(Grant::Allowed),
+        ),
+        ("unbekannt", faelle(None, &["example.org"]), None),
+        (
+            "fremd",
+            faelle(Some("Jemand anderes"), &["example.org"]),
+            None,
+        ),
+        (
+            "rechner",
+            faelle(Some("Dennis Guse"), &["example.com"]),
+            None,
+        ),
+        ("ohne-rechner", faelle(Some("Dennis Guse"), &[]), None),
+    ];
+    for (name, saved, expected) in cases {
+        let p = orte(&format!("autor-{name}"), &["test-faelle"]);
+        let mut h = PluginHost::new(p.clone());
+        h.start_all(&BTreeMap::from([(FAELLE.to_string(), saved)]));
+        warten(&mut h, FAELLE);
+        assert_eq!(net(&h), expected, "{name}");
+        let e = h.entries().iter().find(|e| e.id == FAELLE).unwrap();
+        assert_eq!(
+            e.rights.state(Right::ModelRead),
+            None,
+            "{name}: nicht verlangt"
+        );
+        // Gespeichert wird mit Autor und Rechnern des laufenden Manifests.
+        let states = h.plugin_states();
+        match expected {
+            Some(_) => {
+                let s = &states[FAELLE];
+                assert_eq!(s.author.as_deref(), Some("Dennis Guse"), "{name}");
+                assert_eq!(s.net_hosts, ["example.org"], "{name}");
+                assert_eq!(
+                    s.rights,
+                    BTreeMap::from([("net".to_string(), "allowed".to_string())])
+                );
+            }
+            None => assert!(!states.contains_key(FAELLE), "{name}: {states:?}"),
+        }
+        aufraeumen(&p);
+    }
 }

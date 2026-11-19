@@ -397,10 +397,23 @@ pub const PLUGIN_LIST_MAX_H: f32 = 240.0;
 pub fn plugins_title() -> String {
     tr!("settings-section-plugins")
 }
-/// Knopf „Plug-in installieren…“.
+/// Knopf „Aus Datei…“ (Plug-in aus einer Paketdatei installieren).
 pub fn install_plugin_label() -> String {
-    tr!("plugin-settings-install")
+    tr!("plugin-install-from-file")
 }
+/// Knopf „Nach Updates suchen“ eines Plug-ins mit Repo-Link.
+pub fn check_updates_label() -> String {
+    tr!("plugin-check-updates")
+}
+
+/// Knopf „Aktualisieren auf { $version }“.
+pub fn update_to_label(version: &str) -> String {
+    tr!("plugin-update-to", version = version)
+}
+
+/// Breite des Felds „Repo-Link“ in der Überschrift des Abschnitts „Plug-ins“.
+const LINK_FIELD_W: f32 = 260.0;
+
 /// Knopf „Entfernen“ eines installierten Plug-ins.
 pub fn remove_plugin_label() -> String {
     tr!("plugin-settings-remove")
@@ -431,6 +444,13 @@ enum PluginAction {
     Revoke(String, Right),
     Remove(String),
     Install,
+    /// „Holen“ mit dem Text im Feld „Repo-Link“.
+    Fetch,
+    CancelFetch,
+    /// „Nach Updates suchen“.
+    CheckUpdates,
+    /// „Aktualisieren auf …“ (öffnet den Aktualisieren-Dialog).
+    OpenUpdate(String),
 }
 
 #[derive(Default)]
@@ -678,6 +698,7 @@ impl SettingsWindow {
         let chooser_for = self.chooser_for;
         let scroll_plugins = self.scroll_target == Some(SettingsSection::Plugins);
         let mut plugin_actions: Vec<PluginAction> = Vec::new();
+        let mut link_text = ws.plugins.link_text.clone();
         // Die Auswahl zeichnet oben (rollt) und in der Fußzeile (wählen, abbrechen).
         let chooser = RefCell::new(self.chooser.as_mut());
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
@@ -740,7 +761,13 @@ impl SettingsWindow {
                             );
                         }
                         let plugins_top = ui.cursor().top();
-                        show_plugins(ui, &ws.plugins, choosing, &mut plugin_actions);
+                        show_plugins(
+                            ui,
+                            &ws.plugins,
+                            choosing,
+                            &mut link_text,
+                            &mut plugin_actions,
+                        );
                         // Der Abschnitt kam nach der Bemessung der Tastenkürzel-Tabelle dazu: um
                         // seine Höhe wird sie niedriger (die Liste darin ist begrenzt).
                         let plugins_h = ui.cursor().top() - plugins_top + theme::SPACE_4;
@@ -748,7 +775,7 @@ impl SettingsWindow {
                             && let Some(c) = chooser.borrow_mut().as_mut()
                         {
                             ui.add_space(theme::SPACE_2);
-                            ui.strong(install_plugin_label());
+                            ui.strong(tr!("plugin-settings-install"));
                             body_action = c.show_body(ui, places);
                         }
                         ui.add_space(theme::SPACE_4);
@@ -792,6 +819,7 @@ impl SettingsWindow {
                 self.take_scroll_target();
             }
         }
+        ws.plugins.link_text = link_text;
         if !locked {
             for action in plugin_actions {
                 self.apply_plugin_action(ws, action);
@@ -899,19 +927,29 @@ impl SettingsWindow {
                 ws.prompt = Some(Prompt::RemovePlugin { id, name });
             }
             PluginAction::Install => self.start_choosing_plugin(),
+            PluginAction::Fetch => {
+                let text = ws.plugins.link_text.clone();
+                ws.plugins.install_from_link(&text);
+            }
+            PluginAction::CancelFetch => ws.plugins.cancel_fetch(),
+            PluginAction::CheckUpdates => ws.plugins.check_updates(true),
+            PluginAction::OpenUpdate(id) => ws.plugins.open_update(&id),
         }
     }
 }
 
 /// Abschnitt „Plug-ins“: je Plug-in eine Kopfzeile (Schalter mit Namen, Version, Herkunft,
 /// Zustand), aufklappbar Autor, Lizenz, Beschreibung, Rechte mit „Zurücknehmen“ und bei
-/// installierten „Entfernen“; nicht aktive Fundorte grau darunter. „Plug-in installieren…“
-/// (nicht, solange gewählt, gelesen oder der Dialog gezeigt wird) steht rechts in der
-/// Überschrift, ein Hinweis ([`Plugins::note`]) gleich darunter.
+/// installierten „Entfernen“; nicht aktive Fundorte grau darunter. „Aus Datei…“ und das Feld
+/// „Repo-Link“ mit „Holen“ (nicht, solange gewählt, gelesen, geholt oder der Dialog gezeigt
+/// wird; beim Holen „Wird geholt…“ und „Abbrechen“) stehen rechts in der Überschrift, ein
+/// Hinweis ([`Plugins::note`]) gleich darunter. Plug-ins mit Repo-Link zeigen aufgeklappt
+/// „Quelle: …“, „Nach Updates suchen“ und bei einem geladenen Update „Aktualisieren auf …“.
 fn show_plugins(
     ui: &mut egui::Ui,
     plugins: &Plugins,
     choosing: bool,
+    link: &mut String,
     actions: &mut Vec<PluginAction>,
 ) {
     let dark = ui.visuals().dark_mode;
@@ -919,18 +957,47 @@ fn show_plugins(
     // Knopf und Leer-Hinweis stehen rechts in der Überschrift: der Abschnitt kostet so wenig
     // Höhe vor der Tastenkürzel-Tabelle (auch in schmalen Fenstern bleiben deren Zeilen im Bild).
     let header = theme::section_header(ui, &plugins_title(), theme::SUB_HEADER_H);
-    let busy = choosing || plugins.is_reading() || plugins.install.is_some();
+    let busy =
+        choosing || plugins.is_reading() || plugins.is_fetching() || plugins.install.is_some();
     let enabled = ui.is_enabled();
     let mut header_ui = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(header.rect.shrink2(egui::vec2(theme::SPACE_1, 2.0)))
             .layout(egui::Layout::right_to_left(egui::Align::Center)),
     );
-    if header_ui
-        .add_enabled(enabled && !busy, egui::Button::new(install_plugin_label()))
-        .clicked()
-    {
-        actions.push(PluginAction::Install);
+    if plugins.is_fetching() {
+        if header_ui
+            .add_enabled(enabled, egui::Button::new(tr!("common-cancel")))
+            .clicked()
+        {
+            actions.push(PluginAction::CancelFetch);
+        }
+        header_ui.label(tr!("plugin-install-fetching"));
+    } else {
+        if header_ui
+            .add_enabled(enabled && !busy, egui::Button::new(install_plugin_label()))
+            .clicked()
+        {
+            actions.push(PluginAction::Install);
+        }
+        let fetch = header_ui.add_enabled(
+            enabled && !busy && !link.trim().is_empty(),
+            egui::Button::new(tr!("plugin-install-fetch")),
+        );
+        let entered = {
+            let ui = &mut header_ui;
+            let field = theme::text_field_enabled(
+                ui,
+                enabled && !busy,
+                egui::TextEdit::singleline(link)
+                    .hint_text(tr!("plugin-install-link"))
+                    .desired_width(LINK_FIELD_W),
+            );
+            field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+        };
+        if fetch.clicked() || (entered && !busy && !link.trim().is_empty()) {
+            actions.push(PluginAction::Fetch);
+        }
     }
     if plugins.is_reading() {
         header_ui.label(tr!("plugin-settings-reading"));
@@ -1009,6 +1076,30 @@ fn show_plugins(
                             }
                         });
                     }
+                }
+                if let Some(source) = plugins.source_link(&e.id) {
+                    ui.add(
+                        egui::Label::new(tr!("plugin-install-source", source = source.web_url()))
+                            .wrap(),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                !plugins.is_checking(),
+                                egui::Button::new(check_updates_label()),
+                            )
+                            .clicked()
+                        {
+                            actions.push(PluginAction::CheckUpdates);
+                        }
+                        if let Some(u) = plugins.ready_update(&e.id)
+                            && ui
+                                .button(update_to_label(&u.to.version.to_string()))
+                                .clicked()
+                        {
+                            actions.push(PluginAction::OpenUpdate(e.id.clone()));
+                        }
+                    });
                 }
                 if e.found.iter().any(|g| g.origin == Origin::User)
                     && ui.button(remove_plugin_label()).clicked()

@@ -1,15 +1,20 @@
-//! Echter Abruf der Release-Liste über HTTPS (nur Windows).
+//! Echter Abruf der Release-Liste (nur Windows), Downloads und Anfragen für Plug-ins (Windows
+//! und Unix) über HTTPS.
 //!
-//! Client ist `ureq` mit der TLS-Schicht von Windows (Schannel über `native-tls`); geprüft wird
-//! gegen den Zertifikatsspeicher von Windows. Keine Anmeldung, keine Nutzerdaten: gesendet wird
-//! nur die Anfrage selbst mit der Kennung `PlanoraCAD/<Version>`. Auf anderen Systemen liefert
-//! [`HttpSource`] immer [`NetError::Unsupported`], ohne ins Netz zu gehen.
+//! Client ist `ureq` mit der TLS-Schicht des Systems über `native-tls`: unter Windows Schannel
+//! mit dem Zertifikatsspeicher von Windows, unter Linux das OpenSSL des Systems mit dessen
+//! Stammzertifikaten. Keine Anmeldung, keine Nutzerdaten: gesendet wird nur die Anfrage selbst
+//! mit der Kennung `PlanoraCAD/<Version>`. Die Release-Liste dient nur dem Update des Programms,
+//! und das gibt es nur unter Windows (Installer); außerhalb von Windows liefert [`HttpSource`]
+//! darum immer [`NetError::Unsupported`], ohne ins Netz zu gehen. [`HttpDownloader`],
+//! [`get_limited`] und [`get_once`] gehen auch unter Unix ins Netz.
 
 use std::time::Duration;
 
 use planora_i18n::tr;
 
 use crate::check::{NetError, ReleaseSource};
+use crate::plugin_source::Hop;
 #[cfg(test)]
 use crate::release::REPO;
 use crate::version::Version;
@@ -66,7 +71,7 @@ impl HttpSource {
         let user_agent = format!("PlanoraCAD/{running}");
         HttpSource {
             #[cfg(windows)]
-            agent: windows::agent(&user_agent, crate::install::local_test_url_ok(&url)),
+            agent: tls::agent(&user_agent, crate::install::local_test_url_ok(&url)),
             user_agent,
             url,
         }
@@ -86,7 +91,7 @@ impl HttpSource {
 impl ReleaseSource for HttpSource {
     #[cfg(windows)]
     fn fetch_releases(&self) -> Result<String, NetError> {
-        windows::fetch(&self.agent, &self.url)
+        tls::fetch(&self.agent, &self.url)
     }
 
     #[cfg(not(windows))]
@@ -96,15 +101,15 @@ impl ReleaseSource for HttpSource {
 }
 
 /// Zeitgrenze je Abschnitt eines Downloads (Namensauflösung, Verbindung, Antwortkopf).
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 const DOWNLOAD_STEP_TIMEOUT: Duration = crate::install::STALL_TIMEOUT;
 
 /// Obergrenze für einen ganzen Download samt Weiterleitungen; beendet auch einen hängenden
 /// Lese-Thread, dessen Download schon wegen Stillstand oder Abbruch aufgegeben wurde.
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
-/// Download einer Datei eines Releases über HTTPS (nur Windows, sonst Fehler „nur Windows“).
+/// Download einer Datei eines Releases über HTTPS (Windows und Unix, sonst Fehler „nur Windows“).
 ///
 /// Nur Adressen aus dem Release ([`crate::install::release_url_ok`]); Weiterleitungen folgt der
 /// Client nicht selbst, sondern jede wird geprüft ([`crate::install::redirect_target`]: nur
@@ -112,28 +117,28 @@ const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// [`crate::install::MAX_REDIRECTS`]). Gelesen wird über [`crate::install::copy_limited`] mit
 /// Größen- und Stillstandsgrenze. Wird nur im Programm angelegt, nie in Tests benutzt.
 pub struct HttpDownloader {
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     agent: ureq::Agent,
     /// Client ohne HTTPS-Zwang, nur für die lokale Test-Quelle.
-    #[cfg(all(windows, feature = "update-test-source"))]
+    #[cfg(all(any(windows, unix), feature = "update-test-source"))]
     local_agent: ureq::Agent,
 }
 
 impl HttpDownloader {
     /// Client mit der Kennung `PlanoraCAD/<running>`; verbindet noch nicht.
     pub fn new(running: &Version) -> Self {
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, unix)))]
         let _ = running;
         HttpDownloader {
-            #[cfg(windows)]
-            agent: windows::download_agent(&format!("PlanoraCAD/{running}"), false),
-            #[cfg(all(windows, feature = "update-test-source"))]
-            local_agent: windows::download_agent(&format!("PlanoraCAD/{running}"), true),
+            #[cfg(any(windows, unix))]
+            agent: tls::download_agent(&format!("PlanoraCAD/{running}"), false),
+            #[cfg(all(any(windows, unix), feature = "update-test-source"))]
+            local_agent: tls::download_agent(&format!("PlanoraCAD/{running}"), true),
         }
     }
 
     /// Der Client für `url`: für die lokale Test-Quelle der ohne HTTPS-Zwang, sonst der normale.
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     fn agent_for(&self, url: &str) -> &ureq::Agent {
         #[cfg(feature = "update-test-source")]
         if crate::install::local_test_url_ok(url) {
@@ -156,11 +161,11 @@ impl crate::install::Downloader for HttpDownloader {
         if !release_url_ok(url) {
             return Err(InstallError::Network(tr!("update-detail-foreign-url")));
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, unix))]
         {
-            windows::download(&|u| self.agent_for(u), url, dest, max_bytes, progress)
+            tls::download(&|u| self.agent_for(u), url, dest, max_bytes, progress)
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, unix)))]
         {
             let _ = (dest, max_bytes, progress);
             Err(InstallError::Network(tr!("update-detail-only-windows")))
@@ -171,17 +176,33 @@ impl crate::install::Downloader for HttpDownloader {
 /// Kennung der Anfragen von Plug-ins (wie die des Programms, ohne weitere Angaben).
 const PLUGIN_USER_AGENT: &str = concat!("PlanoraCAD/", env!("CARGO_PKG_VERSION"));
 
-/// Ein GET für ein Plug-in (nur Windows, sonst Fehler „nur Windows“): genau die Adresse `url`,
+/// Ein GET für ein Plug-in (Windows und Unix, sonst Fehler „nur Windows“): genau die Adresse `url`,
 /// nur HTTPS, ohne Weiterleitungen (eine 3xx-Antwort kommt als Antwort zurück), höchstens `max`
 /// Bytes Inhalt, `timeout` für die ganze Anfrage. Jeder Statuscode ist eine Antwort (Status,
 /// Inhalt); ein Fehler ist nur Netz, Zeit oder Größe. Ob die Adresse erlaubt ist, prüft der
 /// Aufrufer (für Plug-ins der Host gegen das Manifest). Wartet: nur in einem Arbeitsthread rufen.
 pub fn get_limited(url: &str, max: u64, timeout: Duration) -> Result<(u16, Vec<u8>), String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     {
-        windows::get_limited(url, max, timeout)
+        tls::get_limited(url, max, timeout)
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = (url, max, timeout);
+        Err(tr!("update-detail-only-windows"))
+    }
+}
+
+/// Eine einzelne Anfrage ohne Weiterleitung für Downloads von Plug-ins (Windows und Unix, sonst
+/// Fehler „nur Windows“): wie [`get_limited`], dazu die Kopfzeile `Location` einer 3xx-Antwort
+/// (deren Inhalt wird nicht gelesen). Weiterleitungen prüft und verfolgt
+/// [`crate::plugin_source::get_following`]. Wartet: nur in einem Arbeitsthread rufen.
+pub fn get_once(url: &str, max: u64, timeout: Duration) -> Result<Hop, String> {
+    #[cfg(any(windows, unix))]
+    {
+        tls::get_once(url, max, timeout)
+    }
+    #[cfg(not(any(windows, unix)))]
     {
         let _ = (url, max, timeout);
         Err(tr!("update-detail-only-windows"))
@@ -190,7 +211,7 @@ pub fn get_limited(url: &str, max: u64, timeout: Duration) -> Result<(u16, Vec<u
 
 /// Fehler zu einem Statuscode, `None` bei Erfolg (2xx). GitHub meldet das Rate-Limit mit 429
 /// oder mit 403 und `x-ratelimit-remaining: 0`.
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 fn status_error(status: u16, ratelimit_remaining: Option<&str>) -> Option<NetError> {
     match status {
         200..=299 => None,
@@ -201,7 +222,7 @@ fn status_error(status: u16, ratelimit_remaining: Option<&str>) -> Option<NetErr
 }
 
 /// Netzfehler zu einem Ein-/Ausgabefehler.
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 fn io_error(e: &std::io::Error) -> NetError {
     use std::io::ErrorKind as K;
     match e.kind() {
@@ -220,14 +241,16 @@ fn io_error(e: &std::io::Error) -> NetError {
     }
 }
 
-#[cfg(windows)]
-mod windows {
+#[cfg(any(windows, unix))]
+mod tls {
     use super::*;
     use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
 
-    /// Client: Schannel mit dem Zertifikatsspeicher von Windows, nur HTTPS, Statuscodes selbst
-    /// auswerten (für das Rate-Limit braucht es die Kopfzeilen). `local`: für die lokale
-    /// Test-Quelle ohne HTTPS-Zwang (nur mit dem Schalter `update-test-source` je `true`).
+    /// Client: TLS des Systems (Schannel bzw. OpenSSL) mit dessen Stammzertifikaten, nur HTTPS,
+    /// Statuscodes selbst auswerten (für das Rate-Limit braucht es die Kopfzeilen). `local`: für
+    /// die lokale Test-Quelle ohne HTTPS-Zwang (nur mit dem Schalter `update-test-source` je
+    /// `true`). Nur unter Windows (die Release-Liste dient nur dem Update des Programms).
+    #[cfg(windows)]
     pub(super) fn agent(user_agent: &str, local: bool) -> ureq::Agent {
         let tls = TlsConfig::builder()
             .provider(TlsProvider::NativeTls)
@@ -247,6 +270,7 @@ mod windows {
             .new_agent()
     }
 
+    #[cfg(windows)]
     pub(super) fn fetch(agent: &ureq::Agent, url: &str) -> Result<String, NetError> {
         let mut response = agent
             .get(url)
@@ -384,6 +408,35 @@ mod windows {
         Ok((status, body))
     }
 
+    pub(super) fn get_once(url: &str, max: u64, timeout: Duration) -> Result<Hop, String> {
+        let text = |e: ureq::Error| net_error(e).to_string();
+        let mut response = plugin_agent(timeout).get(url).call().map_err(text)?;
+        let status = response.status().as_u16();
+        if (300..400).contains(&status) {
+            let location = response
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            return Ok(Hop {
+                status,
+                location,
+                body: Vec::new(),
+            });
+        }
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(max)
+            .read_to_vec()
+            .map_err(text)?;
+        Ok(Hop {
+            status,
+            location: None,
+            body,
+        })
+    }
+
     /// Netzfehler zu einem Fehler von `ureq`.
     pub(super) fn net_error(e: ureq::Error) -> NetError {
         match e {
@@ -411,7 +464,7 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     #[test]
     fn status_codes() {
         assert_eq!(status_error(200, None), None);
@@ -425,7 +478,7 @@ mod tests {
         assert_eq!(status_error(500, None), Some(NetError::Http(500)));
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     #[test]
     fn io_errors() {
         use std::io::{Error, ErrorKind as K};
@@ -443,10 +496,10 @@ mod tests {
         ));
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     #[test]
     fn ureq_errors() {
-        use super::windows::net_error;
+        use super::tls::net_error;
         assert_eq!(
             net_error(ureq::Error::Timeout(ureq::Timeout::Connect)),
             NetError::Timeout
@@ -483,7 +536,7 @@ mod tests {
         assert!(!config.http_status_as_error());
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     #[test]
     fn download_agent_follows_no_redirect_by_itself() {
         // Jede Weiterleitung prüft `install::redirect_target`; folgte der Client selbst, ginge
@@ -503,11 +556,11 @@ mod tests {
         ));
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     #[test]
     fn plugin_agent_follows_no_redirect_and_keeps_limits() {
         // Ein Plug-in darf nur zu Rechnern aus seinem Manifest; eine Weiterleitung ginge woandershin.
-        let a = windows::plugin_agent(Duration::from_secs(30));
+        let a = tls::plugin_agent(Duration::from_secs(30));
         let config = a.config();
         assert_eq!(config.max_redirects(), 0);
         assert!(config.https_only());
@@ -523,5 +576,6 @@ mod tests {
     fn get_limited_refuses_plain_http() {
         // Nur HTTPS (unter Windows lehnt der Client ab, sonst gibt es gar kein Netz).
         assert!(get_limited("http://127.0.0.1:9/", 16, Duration::from_secs(1)).is_err());
+        assert!(get_once("http://127.0.0.1:9/", 16, Duration::from_secs(1)).is_err());
     }
 }

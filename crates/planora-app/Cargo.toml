@@ -34,6 +34,8 @@ planora-exchange.workspace = true
 planora-step.workspace = true
 planora-drawing.workspace = true
 planora-update.workspace = true
+# Versionen der Plug-ins (Updates über den Repo-Link).
+semver.workspace = true
 # Plug-ins (WebAssembly, Plug-ins Etappe 1): Fundorte, Laufzeit, Rechte; eigenes Crate.
 planora-plugin-host.workspace = true
 planora-i18n.workspace = true

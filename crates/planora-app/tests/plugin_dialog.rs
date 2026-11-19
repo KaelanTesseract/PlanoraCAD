@@ -283,7 +283,7 @@ fn orte(name: &str, pakete: &[&str]) -> Places {
             .join("../planora-plugin-host/tests/data")
             .join(format!("{paket}.pcplugin"));
         let pkg = Package::read(&std::fs::read(file).unwrap()).unwrap();
-        plugin_places::install(&p, &pkg).unwrap();
+        plugin_places::install(&p, &pkg, None).unwrap();
     }
     p
 }

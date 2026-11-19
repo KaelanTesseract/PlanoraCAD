@@ -3221,6 +3221,7 @@ dependencies = [
  "planora-text",
  "planora-update",
  "png",
+ "semver",
  "serde_json",
  "skrifa",
  "windows-sys 0.61.2",
@@ -3330,6 +3331,7 @@ dependencies = [
  "planora-plugin-api",
  "semver",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror 2.0.21",
  "tokio",
@@ -3434,6 +3436,7 @@ name = "planora-update"
 version = "0.0.2-dev.2"
 dependencies = [
  "planora-i18n",
+ "semver",
  "serde",
  "serde_json",
  "ureq",

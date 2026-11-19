@@ -867,6 +867,10 @@ impl PlanoraApp {
             ) {
                 self.start_update_check(false);
             }
+            // Plug-ins mit Repo-Link: höchstens einmal am Tag (gespeichert mit dem nächsten Bild).
+            self.ws
+                .plugins
+                .auto_check(&mut self.ws.config, update_check::now_unix());
         }
         if let Some(result) = self.update_checker.poll() {
             self.apply_check_result(result);
@@ -3339,6 +3343,10 @@ impl eframe::App for PlanoraApp {
         prompts::show(&ctx, &mut self.ws);
         // Plug-ins: Ereignisse, Netz-Aufträge, Rechte-Nachfrage und Fehlerleiste.
         crate::plugins::show(&ctx, &mut self.ws);
+        // „Anzeigen“ im Hinweis auf Plug-in-Updates: Einstellungen am Abschnitt „Plug-ins“.
+        if self.ws.plugins.take_show_section() {
+            self.apply_menu_request(&ctx, MenuRequest::Settings(Some(SettingsSection::Plugins)));
+        }
         // Nach allen Feldern und Dialogen (auch abgedockten): deren unverbrauchte Tasten; vor den
         // Schritten für Rückgängig, damit eine Änderung im selben Bild ein Schritt wird.
         self.shortcuts_from_children(&ctx);

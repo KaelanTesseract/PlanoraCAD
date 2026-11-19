@@ -3931,3 +3931,28 @@ plugin-package-read-aborted = Das Lesen wurde abgebrochen.
 plugin-install-right-allowed = bereits erlaubt
 plugin-install-right-denied = abgelehnt
 plugin-install-right-ask = wird beim ersten Gebrauch gefragt
+# Plug-ins Etappe 1, Task 8: Installieren und Aktualisieren über den Repo-Link
+plugin-install-from-file = Aus Datei…
+plugin-install-link = Repo-Link
+plugin-install-fetch = Holen
+plugin-install-fetching = Wird geholt…
+plugin-link-invalid = Das ist kein GitHub-Repo-Link (https://github.com/besitzer/repo).
+plugin-link-no-release = In diesem Repo gibt es kein Release mit einer .pcplugin-Datei.
+plugin-link-mismatch = Das Release { $tag } passt nicht zur Plug-in-Version { $version }.
+plugin-link-checksum = Die Prüfsumme stimmt nicht.
+plugin-link-network = Keine Verbindung zu GitHub: { $detail }
+plugin-link-status = GitHub antwortet mit Status { $status }.
+plugin-link-foreign-id = Das Release { $tag } enthält ein anderes Plug-in ({ $id }).
+plugin-link-package = Das Paket im Release ist unbrauchbar: { $error }
+plugin-check-updates = Nach Updates suchen
+plugin-check-none = Kein Update gefunden.
+plugin-update-to = Aktualisieren auf { $version }
+plugin-updates-available = { $count ->
+    [one] Für 1 Plug-in gibt es ein Update.
+   *[other] Für { $count } Plug-ins gibt es Updates.
+}
+plugin-updates-show = Anzeigen
+plugin-update-title = Plug-in aktualisieren
+plugin-update-versions = { $plugin }: Version { $from } → { $to }
+plugin-update-new-rights = Neu verlangte Rechte: { $rights }
+plugin-update-confirm = Aktualisieren

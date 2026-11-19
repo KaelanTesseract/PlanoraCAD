@@ -211,10 +211,42 @@ pub fn pick_active(found: &[Found]) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
-/// Installiert ein Paket für den Nutzer: entpackt nach `<user>/.tmp-<id>`, schiebt ein altes
+/// Datei mit der Herkunft eines über den Repo-Link installierten Plug-ins.
+const PROVENANCE_FILE: &str = "herkunft.json";
+
+/// Woher ein über den Repo-Link installiertes Plug-in kommt: der Link
+/// (`https://github.com/<besitzer>/<repo>`) und der Tag des installierten Releases. Steht in
+/// `herkunft.json` im Plug-in-Ordner; ohne die Datei wird das Plug-in nie auf Updates geprüft.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Provenance {
+    pub link: String,
+    pub tag: String,
+}
+
+/// Liest `herkunft.json` aus dem Plug-in-Ordner `dir` nachsichtig: fehlt die Datei, ist sie
+/// kaputt oder fehlt ein Text (oder ist leer), gibt es keine Herkunft; weitere Felder werden
+/// übergangen. Das Plug-in selbst bleibt davon unberührt.
+pub fn read_provenance(dir: &Path) -> Option<Provenance> {
+    let text = std::fs::read_to_string(dir.join(PROVENANCE_FILE)).ok()?;
+    let p: Provenance = serde_json::from_str(&text).ok()?;
+    (!p.link.is_empty() && !p.tag.is_empty()).then_some(p)
+}
+
+/// Schreibt `herkunft.json` in den Plug-in-Ordner `dir`.
+pub fn write_provenance(dir: &Path, p: &Provenance) -> io::Result<()> {
+    let text = serde_json::to_string_pretty(p).map_err(io::Error::other)?;
+    std::fs::write(dir.join(PROVENANCE_FILE), text)
+}
+
+/// Installiert ein Paket für den Nutzer: entpackt nach `<user>/.tmp-<id>` (mit `herkunft.json`,
+/// wenn `provenance` gegeben ist; aus einer Datei installiert ohne), schiebt ein altes
 /// `<user>/<id>` nach `.alt-<id>`, benennt dann um und löscht das alte. Scheitert das Umbenennen,
 /// kommt das alte zurück.
-pub fn install(places: &Places, pkg: &Package) -> io::Result<PathBuf> {
+pub fn install(
+    places: &Places,
+    pkg: &Package,
+    provenance: Option<&Provenance>,
+) -> io::Result<PathBuf> {
     let id = &pkg.manifest.id;
     std::fs::create_dir_all(&places.user)?;
     let target = places.user.join(id);
@@ -225,7 +257,10 @@ pub fn install(places: &Places, pkg: &Package) -> io::Result<PathBuf> {
             std::fs::remove_dir_all(leftover)?;
         }
     }
-    if let Err(e) = pkg.unpack_to(&tmp) {
+    let unpacked = pkg
+        .unpack_to(&tmp)
+        .and_then(|()| provenance.map_or(Ok(()), |p| write_provenance(&tmp, p)));
+    if let Err(e) = unpacked {
         let _ = std::fs::remove_dir_all(&tmp);
         return Err(e);
     }

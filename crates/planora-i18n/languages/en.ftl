@@ -3948,3 +3948,28 @@ plugin-package-read-aborted = Reading was aborted.
 plugin-install-right-allowed = already allowed
 plugin-install-right-denied = denied
 plugin-install-right-ask = asked on first use
+# Plug-ins stage 1, task 8: install and update from the repo link
+plugin-install-from-file = From file…
+plugin-install-link = Repo link
+plugin-install-fetch = Fetch
+plugin-install-fetching = Fetching…
+plugin-link-invalid = This is not a GitHub repo link (https://github.com/owner/repo).
+plugin-link-no-release = This repo has no release with a .pcplugin file.
+plugin-link-mismatch = Release { $tag } does not match plug-in version { $version }.
+plugin-link-checksum = The checksum does not match.
+plugin-link-network = No connection to GitHub: { $detail }
+plugin-link-status = GitHub answers with status { $status }.
+plugin-link-foreign-id = Release { $tag } contains a different plug-in ({ $id }).
+plugin-link-package = The package in the release is unusable: { $error }
+plugin-check-updates = Check for updates
+plugin-check-none = No update found.
+plugin-update-to = Update to { $version }
+plugin-updates-available = { $count ->
+    [one] There is an update for 1 plug-in.
+   *[other] There are updates for { $count } plug-ins.
+}
+plugin-updates-show = Show
+plugin-update-title = Update plug-in
+plugin-update-versions = { $plugin }: version { $from } → { $to }
+plugin-update-new-rights = Newly requested rights: { $rights }
+plugin-update-confirm = Update

@@ -40,7 +40,7 @@ fn orte(name: &str, pakete: &[&str]) -> Places {
             .join("../planora-plugin-host/tests/data")
             .join(format!("{paket}.pcplugin"));
         let pkg = Package::read(&std::fs::read(file).unwrap()).unwrap();
-        plugin_places::install(&p, &pkg).unwrap();
+        plugin_places::install(&p, &pkg, None).unwrap();
     }
     p
 }
@@ -433,6 +433,8 @@ fn late_net_result_dropped() {
         PluginConfig {
             enabled: true,
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
+            author: Some("Dennis Guse".to_string()),
+            net_hosts: vec!["example.org".to_string()],
         },
     );
     let (mut ws, ctx) = arbeitsbereich("netz-spaet", &["test-faelle"], config);
@@ -526,6 +528,7 @@ fn persist_writes_plugins_only_when_pending() {
     let eintrag = PluginConfig {
         enabled: false,
         rights: BTreeMap::new(),
+        ..Default::default()
     };
     ws.config
         .plugins

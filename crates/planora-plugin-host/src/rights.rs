@@ -87,14 +87,29 @@ impl Rights {
     /// Kleinschreibung); Rechte, die `new` nicht mehr verlangt, fallen weg. „Nur dieses Mal“
     /// verfällt immer.
     pub fn carry_over(&self, old: Option<&Manifest>, new: &Manifest) -> Rights {
+        match old {
+            Some(old) => self.carry_over_from(Some(&old.author), &old.net_hosts, new),
+            None => Rights::default(),
+        }
+    }
+
+    /// Wie [`Rights::carry_over`], nur mit Autor und Rechnern statt des alten Manifests (so
+    /// stehen sie neben den Rechten in der Konfiguration): ohne Autor (`None`, unbekannt) oder
+    /// mit anderem bleibt nichts.
+    pub fn carry_over_from(
+        &self,
+        old_author: Option<&str>,
+        old_hosts: &[String],
+        new: &Manifest,
+    ) -> Rights {
         let mut out = Rights::default();
-        let Some(old) = old.filter(|o| o.author == new.author) else {
+        if old_author != Some(new.author.as_str()) {
             return out;
+        }
+        let hosts = |list: &[String]| -> BTreeSet<String> {
+            list.iter().map(|h| h.to_ascii_lowercase()).collect()
         };
-        let hosts = |m: &Manifest| -> BTreeSet<String> {
-            m.net_hosts.iter().map(|h| h.to_ascii_lowercase()).collect()
-        };
-        let same_hosts = hosts(old) == hosts(new);
+        let same_hosts = hosts(old_hosts) == hosts(&new.net_hosts);
         for (r, g) in self.saved() {
             if new.rights.contains(&r) && (r != Right::Net || same_hosts) {
                 out.saved.insert(r, g);

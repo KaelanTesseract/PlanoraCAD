@@ -81,6 +81,14 @@ pub struct Config {
         deserialize_with = "lenient_seconds"
     )]
     pub last_update_check: Option<u64>,
+    /// Zeitpunkt der letzten Prüfung der Plug-ins mit Repo-Link auf Updates in Sekunden seit
+    /// 1970 (UTC). Keine ganze Zahl ab 0 → keiner.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_seconds"
+    )]
+    pub last_plugin_check: Option<u64>,
     /// Übersprungene Version als Text („Diese Version überspringen“); geprüft wird erst im
     /// Programm. Kein oder ein leerer Text → keine.
     #[serde(
@@ -187,14 +195,20 @@ pub struct Config {
 }
 
 /// Der gespeicherte Zustand eines Plug-ins: eingeschaltet oder nicht und die dauerhaft
-/// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`). „Nur dieses Mal“
-/// wird nie gespeichert.
+/// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`), dazu Autor und
+/// Rechner (`net-hosts`) des Manifests, für das sie galten (beim Start gelten die Rechte nur für
+/// dasselbe Plug-in; ohne Autor werden sie neu gefragt). „Nur dieses Mal“ wird nie gespeichert.
+/// Leere Felder werden nicht geschrieben.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rights: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub net_hosts: Vec<String>,
 }
 
 impl Default for PluginConfig {
@@ -202,6 +216,8 @@ impl Default for PluginConfig {
         PluginConfig {
             enabled: true,
             rights: BTreeMap::new(),
+            author: None,
+            net_hosts: Vec::new(),
         }
     }
 }
@@ -318,6 +334,7 @@ impl Default for Config {
             update_channel: DEFAULT_UPDATE_CHANNEL.to_string(),
             update_check: true,
             last_update_check: None,
+            last_plugin_check: None,
             skipped_version: None,
             update_pending: None,
             theme: None,
@@ -508,9 +525,10 @@ fn lenient_favorites<'de, D: Deserializer<'de>>(
 }
 
 /// Liest `plugins` nachsichtig: ein falscher Typ ergibt „leer“, ein Eintrag, der kein Objekt ist,
-/// wird übergangen. `enabled` und `rights` werden getrennt gelesen, damit ein kaputter Wert nicht
-/// den anderen kostet: ein `enabled`, das kein Wahrheitswert ist, gilt als eingeschaltet; Rechte
-/// mit einem anderen Wert als `"allowed"`/`"denied"` fallen einzeln weg.
+/// wird übergangen. Die Felder werden getrennt gelesen, damit ein kaputter Wert nicht die anderen
+/// kostet: ein `enabled`, das kein Wahrheitswert ist, gilt als eingeschaltet; Rechte mit einem
+/// anderen Wert als `"allowed"`/`"denied"` fallen einzeln weg; ein `author`, der kein Text ist
+/// (oder leer), gilt als unbekannt; aus `net_hosts` zählen nur die Texte.
 fn lenient_plugins<'de, D: Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<BTreeMap<String, PluginConfig>, D::Error> {
@@ -538,7 +556,30 @@ fn lenient_plugins<'de, D: Deserializer<'de>>(
                         .collect()
                 })
                 .unwrap_or_default();
-            Some((id.clone(), PluginConfig { enabled, rights }))
+            let author = entry
+                .get("author")
+                .and_then(serde_json::Value::as_str)
+                .filter(|a| !a.is_empty())
+                .map(String::from);
+            let net_hosts = entry
+                .get("net_hosts")
+                .and_then(serde_json::Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some((
+                id.clone(),
+                PluginConfig {
+                    enabled,
+                    rights,
+                    author,
+                    net_hosts,
+                },
+            ))
         })
         .collect())
 }
