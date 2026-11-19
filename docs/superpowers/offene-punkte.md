@@ -862,7 +862,7 @@ Stand: 2026-10-16. Zeichnung und Skizze haben den neuen Aufbau mit schwebenden F
 8. Zeichnung, Ansichtsfeld: Ansicht wählen, Maßstab ändern, Verdeckte Kanten, Mittellinien (in der Isometrie gesperrt), Ansicht löschen; ohne gewählte Ansicht der Hinweis „Eine Ansicht auswählen.“
 9. Zeichnung, Hinweisfeld und Blatt: Hinweise zum Werkzeug, Maßhinweise, Meldungen; das weiße Blatt füllt das Fenster und läuft unter die Felder; „Blatt einpassen“ und Zoom zentrieren in der freien Fläche; Maßwerkzeug, Maßvorschlag; Ansicht anklicken und ziehen.
 10. Zeichnung, schreibgeschützt (alte Version öffnen): Hinweis oben, Werkzeugfeld darunter, Maße nicht änderbar.
-11. Skizze, Leiste und Feld: Skizze öffnen (Erzeugen → Skizze auf XY-Ebene); alle 9 Werkzeuge anklicken (Name im Tooltip), Abhängigkeiten setzen, Liste mit Symbolknopf zum Löschen, „anzeigend“.
+11. Skizze, Leiste und Feld: Skizze öffnen (Skizze erstellen → XY-Ebene); alle 9 Werkzeuge anklicken (Name im Tooltip), Abhängigkeiten setzen, Liste mit Symbolknopf zum Löschen, „anzeigend“.
 12. Skizze, Maßeingabe, Spiegeln und Muster: Maß eingeben (das Zahlenfeld hat Fokus, Esc/Enter/Entf wirken nicht auf die Skizze), OK und Abbrechen darunter; Spiegeln und Muster benutzen; der Schalter „Waagerecht/senkrecht erkennen“ (zweizeilig, Beschriftung ok?).
 13. Skizze, Fuß: Status in Farbe (Warnung, Fehler), Werkzeughinweis, „Skizze beenden“ (die Ansicht kommt zurück); der lange Hinweis doppelt?
 14. Eingabe über Feldern: Klick, Ziehen und Mausrad auf Feldern (auch ganz am Rand, innen) bewegen weder Modell noch Blatt noch Skizze; ein im Bereich begonnenes Ziehen läuft über Felder weiter.
@@ -3355,3 +3355,13 @@ Schlussprüfung (Skizzen 12):
 - Schlussprüfung, Rückgängig und Haken (Fusion-Vergleich, offen): Das Umschalten eines Hakens steht im Dokumentverlauf. Bei offener Skizze leitet Strg+Z nur an den Verlauf der Skizze weiter; der Haken wird erst nach dem Beenden der Skizze zurückgenommen. Ob Fusion die Anzeigeschalter bei offener Skizze mit Strg+Z zurücknimmt, ist ungeprüft (Handtest gegen Fusion nötig). Doku und Änderungsliste sagen das jetzt so.
 - Schlussprüfung, Esc und Aufklappfeld: Esc im Hauptfenster schließt das Aufklappfeld auch bei abgedocktem Skizzenfeld und bricht das Werkzeug nicht ab (wie der Klick ins Hauptfenster).
 - Schlussprüfung, Grafikspeicher: Passen die Skizzenlinien nicht in einen Puffer, wird auf das Größtmögliche begrenzt (teilweise gezeichnet) und einmal eine Warnung auf stderr ausgegeben, statt alles wegzulassen.
+
+## Teilprojekt Skizze erstellen (wie Fusion)
+
+Spec `specs/2026-11-19-skizze-erstellen-design.md`, Plan `plans/2026-11-19-skizze-erstellen.md`, Zweig `feature/skizze-erstellen`.
+
+- **Gebaut:** Befehl „Skizze erstellen“ (`Action::CreateSketch`, ohne Vorgabetaste wie Fusion) im Menü „Erzeugen“ und als erstes Symbol der Werkzeugleiste unten; ersetzt „Skizze auf XY-/XZ-/YZ-Ebene“ und „Skizze auf gewählter Fläche“. Vorauswahl (Grundebene, Konstruktionsebene, ebene Fläche) startet sofort, sonst Wahlmodus `PendingPick::NewSketch` (`AppState::start_create_sketch`). Im Wahlmodus (auch „Skizzenebene neu festlegen“) zeigt `origin_plane_rects` alle drei Grundebenen, ohne die Sichtbarkeit im Dokument zu ändern.
+- **Annahme (Vorrang):** Eine nur für den Wahlmodus eingeblendete Grundebene steht hinter jedem anderen Treffer (Fläche, Konstruktionsebene) zurück, damit sie Flächen im Modell nicht verdeckt. Im Handtest gegen Fusion prüfen.
+- **Annahme:** Unpassende Vorauswahl (Kante, Körper, gekrümmte Fläche) wird geleert, dann Wahlmodus. Eine offene Skizze wird vorher geschlossen und bleibt nach Abbruch geschlossen.
+- **Blickrichtung:** XY von oben (Bild-oben +Y), XZ von vorn (+Z oben), YZ von rechts (+Z oben), wie Fusion mit „Z nach oben“; Test `create_sketch_view_direction_like_fusion`.
+- **Handtest:** (1) Leeres Modell, Ursprung ausgeblendet, Symbol unten: drei Ebenen halbdurchsichtig, Hervorhebung unter dem Zeiger. (2) Esc: Ebenen weg, nichts im Baum, Rückgängig unverändert. (3) XY, XZ, YZ je anlegen: Blick von oben, vorn, rechts. (4) Quader, Fläche vorwählen, Symbol: Skizze sofort auf der Fläche. (5) Im Wahlmodus Konstruktionsebene im Baum klicken. (6) Werkzeugleiste bei 1920×1080 ganz sichtbar.
