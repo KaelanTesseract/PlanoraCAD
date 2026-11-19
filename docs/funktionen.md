@@ -41,7 +41,7 @@ Bekannte Grenzen: Bei Körpern aus einfachen Flächen werden Schnitte, die Raumk
 
 ## Skizzen
 
-Über „Erzeugen → Skizze auf XY-/XZ-/YZ-Ebene“ oder „Skizze auf gewählter Fläche“ (ebene Fläche eines Körpers) entsteht eine Skizze. Im Skizzen-Modus schaut die Kamera senkrecht auf die Ebene; eine neue Skizze öffnet sich mittig und herangezoomt auf der Fläche oder Ebene; die Werkzeuge stehen in einer Leiste links, Abhängigkeiten und deren Liste in einem Feld rechts (siehe „Neues Aussehen“).
+„Skizze erstellen“ (erstes Symbol in der Werkzeugleiste unten, Menü „Erzeugen“ oder eine selbst belegte Taste) legt eine Skizze an, wie in Fusion. Ist schon eine Grundebene, Konstruktionsebene oder ebene Fläche gewählt, entsteht die Skizze sofort darauf. Sonst erscheinen die drei Grundebenen halbdurchsichtig, auch wenn „Ursprung“ ausgeblendet ist; ein Klick auf eine Ebene oder ebene Fläche im Bild oder im Baum legt die Skizze an, Esc oder Rechtsklick brechen ohne Rest ab. XY wird von oben gezeigt, XZ von vorn, YZ von rechts. Im Skizzen-Modus schaut die Kamera senkrecht auf die Ebene; eine neue Skizze öffnet sich mittig und herangezoomt auf der Fläche oder Ebene; die Werkzeuge stehen in einer Leiste links, Abhängigkeiten und deren Liste in einem Feld rechts (siehe „Neues Aussehen“).
 
 **Was geht**
 - Zeichnen: Punkt, Linie, Rechteck, Kreis, Bogen, Polygon, Langloch (alle mit mehreren Arten), Ellipse, Ellipsenbogen (entsteht beim Stutzen oder Brechen einer Ellipse), Spline durch Stützpunkte, Spline mit Kontrollpunkten, Kegelschnitt, Text (im Rahmen und auf Pfad); Konstruktionsgeometrie über „Konstruktion umschalten“, Mittellinien; Spiegeln, lineares Muster, rechteckige und kreisförmige Anordnung.
@@ -169,7 +169,7 @@ Die Ebene wird halbdurchsichtig orange gezeichnet, ohne dass Körper sie verdeck
 
 *Auge am Ordner:* Die Ordner „Körper“, „Skizzen“ und „Konstruktion“ haben ein eigenes Auge, das alles darin aus- oder einblendet; die Augen der einzelnen Zeilen bleiben dabei stehen. Das Auge am Ordner „Ursprung“ schaltet die drei Grundebenen: Ist eine an, gehen alle aus, sonst alle an.
 
-*Grundebenen:* Sie sind anfangs ausgeblendet (wie in Fusion). Eingeblendet lassen sie sich in der Ansicht anklicken; im Ordner „Ursprung“ geht das auch ausgeblendet. Mit einer gewählten Grundebene legt „Skizze auf gewählter Fläche“ die Skizze darauf, ebenso „Skizze erstellen“ im Kontextmenü der Zeile. In einem Ebenen-Fenster und bei „Skizzenebene neu festlegen“ übernimmt der Klick die Ebene.
+*Grundebenen:* Sie sind anfangs ausgeblendet (wie in Fusion). Eingeblendet lassen sie sich in der Ansicht anklicken; im Ordner „Ursprung“ geht das auch ausgeblendet. Mit einer gewählten Grundebene legt „Skizze erstellen“ die Skizze darauf, ebenso „Skizze erstellen“ im Kontextmenü der Zeile. In einem Ebenen-Fenster und bei „Skizzenebene neu festlegen“ übernimmt der Klick die Ebene; bei „Skizze erstellen“ und „Skizzenebene neu festlegen“ sind die Grundebenen dafür auch ausgeblendet im Bild zu sehen.
 
 *Datei:* Nur Dateien mit einer Konstruktionsebene, einer Skizze auf einer Ebene, einer Schnitt- oder Silhouettenprojektion oder etwas Aus- oder Eingeblendetem werden im neuen Format 16 gespeichert und lassen sich von älteren Programmversionen nicht öffnen. Alle anderen Dateien bleiben, wie sie waren. Alte Kantenkopien auf Kurven, die es nicht mehr gibt, werden beim Laden verworfen.
 

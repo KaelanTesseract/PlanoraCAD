@@ -850,9 +850,9 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             snap: p.selection,
             guide: p.text_secondary,
             plane_fill: with_alpha(rgb(0xe8963c), 0x38),
-            plane_fill_active: with_alpha(rgb(0xffb766), 0x60),
+            plane_fill_active: with_alpha(rgb(0xffbf73), 0xa0),
             plane_edge: rgb(0xe8963c),
-            plane_edge_active: rgb(0xffc480),
+            plane_edge_active: rgb(0xffe2b8),
         }
     } else {
         SketchColors {
@@ -879,9 +879,9 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             snap: rgb(0xa86a00),
             guide: p.text_tertiary,
             plane_fill: with_alpha(rgb(0xe07b10), 0x30),
-            plane_fill_active: with_alpha(rgb(0xf59a3a), 0x58),
+            plane_fill_active: with_alpha(rgb(0xf59a3a), 0x90),
             plane_edge: rgb(0xd06e00),
-            plane_edge_active: rgb(0xf08a1a),
+            plane_edge_active: rgb(0xa84f00),
         }
     }
 }

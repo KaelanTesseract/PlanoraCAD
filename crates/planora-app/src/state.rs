@@ -190,6 +190,9 @@ pub enum PendingPick {
     /// „Skizzenebene neu festlegen“ für diese Skizze: Grundebene, Konstruktionsebene oder
     /// ebene Fläche wählen.
     SketchPlane(FeatureId),
+    /// „Skizze erstellen“ (wie Fusion „Create Sketch“): Grundebene, Konstruktionsebene oder
+    /// ebene Fläche wählen; der Klick legt die Skizze an und öffnet sie.
+    NewSketch,
 }
 
 /// Alles, was die Oberfläche anzeigt. Enthält keine egui-Typen und ist deshalb testbar.
@@ -2691,11 +2694,14 @@ impl AppState {
     }
 
     /// Die eingeblendeten Grundebenen als Rechtecke im Ursprung, so groß wie
-    /// Konstruktionsebenen ([`AppState::plane_rect_for`]).
+    /// Konstruktionsebenen ([`AppState::plane_rect_for`]). In einem Wahlmodus ohne Fenster
+    /// ([`PendingPick`]: „Skizze erstellen“, „Skizzenebene neu festlegen“) alle drei, auch
+    /// ausgeblendete, wie in Fusion; die Sichtbarkeit im Dokument bleibt dabei unverändert.
     pub fn origin_plane_rects(&self) -> Vec<(StandardPlane, PlaneRect)> {
+        let picking = self.pending_pick.is_some();
         [StandardPlane::XY, StandardPlane::XZ, StandardPlane::YZ]
             .into_iter()
-            .filter(|p| self.is_origin_plane_shown(*p))
+            .filter(|p| picking || self.is_origin_plane_shown(*p))
             .filter_map(|p| {
                 let def = PlaneDef::Offset {
                     base: PlaneBase::Standard(p),
@@ -2760,6 +2766,12 @@ impl AppState {
         let Some((plane, t)) = origin else {
             return hit.map(PlaneClick::View);
         };
+        // Eine nur für den Wahlmodus eingeblendete Grundebene (im Baum ausgeblendet) steht hinter
+        // jedem anderen Treffer zurück: Sie geht durch das Modell und soll Flächen dahinter nicht
+        // verdecken.
+        if hit.is_some() && !self.is_origin_plane_shown(plane) {
+            return hit.map(PlaneClick::View);
+        }
         // Abstand des anderen Treffers; Ecken und Kanten liegen vorn.
         let front = match hit {
             None => None,
@@ -3315,8 +3327,10 @@ impl AppState {
     /// Netz-Körpers) gibt nur eine Meldung; der Modus bleibt.
     pub fn pick_sketch_plane(&mut self, click: crate::plane_dialog::PlaneClick) {
         use crate::plane_dialog::PlaneClick;
-        let Some(PendingPick::SketchPlane(sketch)) = self.pending_pick else {
-            return;
+        let sketch = match self.pending_pick {
+            Some(PendingPick::SketchPlane(sketch)) => sketch,
+            Some(PendingPick::NewSketch) => return self.pick_new_sketch_plane(click),
+            None => return,
         };
         let plane = match click {
             PlaneClick::Standard(p) => SketchPlane::Standard(p),
@@ -3333,6 +3347,97 @@ impl AppState {
         };
         self.cancel_pending_pick();
         let _ = self.redefine_sketch_plane(sketch, plane);
+    }
+
+    /// „Skizze erstellen“ (wie Fusion „Create Sketch“, ein Rückgängig-Schritt). Ist eine
+    /// Grundebene, eine Konstruktionsebene oder eine ebene Fläche gewählt, entsteht die Skizze
+    /// sofort darauf und wird geöffnet (`Ok(Some(id))`). Sonst wird die Auswahl geleert und der
+    /// Wahlmodus [`PendingPick::NewSketch`] beginnt (`Ok(None)`). Eine offene Skizze wird zuerst
+    /// geschlossen; scheitert das oder ist die Vorauswahl gesperrt, kommt der Grund zurück (auch
+    /// in `message`) und es gibt keinen Wahlmodus.
+    pub fn start_create_sketch(&mut self) -> Result<Option<FeatureId>, String> {
+        self.try_close_sketch()?;
+        self.message = None;
+        let origin = self.selected_origin_plane();
+        let plane = self.selected_plane();
+        let face = match self.selection {
+            Some(Pick::Face(FaceRef { body, face })) => self
+                .bodies
+                .get(body)
+                .is_some_and(|b| plane_of_face(&b.solid, face).is_some())
+                .then_some((body, face)),
+            _ => None,
+        };
+        if origin.is_some() || plane.is_some() || face.is_some() {
+            if let Some(why) = self.sketch_on_face_blocked() {
+                return self.fail(why);
+            }
+            self.end_pick_modes();
+            let made = match (origin, plane, face) {
+                (Some(p), _, _) => self.add_sketch(SketchPlane::Standard(p)),
+                (None, Some(id), _) => self.new_sketch_on_plane(id),
+                (None, None, Some((body, face))) => self.new_sketch_on_face(body, face),
+                (None, None, None) => unreachable!("checked above"),
+            }?;
+            // Die Vorauswahl ist verbraucht (wie Fusion): Nach „Skizze beenden“ ist nichts
+            // gewählt, der nächste Aufruf wählt neu.
+            self.selected_feature = None;
+            self.selected_body = None;
+            self.selected_origin = None;
+            self.set_selection(None);
+            self.open_sketch(made)?;
+            return Ok(Some(made));
+        }
+        self.end_pick_modes();
+        self.selected_feature = None;
+        self.selected_body = None;
+        self.selected_origin = None;
+        self.set_selection(None);
+        self.pending_pick = Some(PendingPick::NewSketch);
+        Ok(None)
+    }
+
+    /// Beendet die Klickmodi der Ansicht (Ebenen-Fenster, Kanten markieren, Wahlmodus), bevor
+    /// „Skizze erstellen“ wirkt. Erst nach den Prüfungen, damit ein abgelehnter Aufruf nichts
+    /// ändert.
+    fn end_pick_modes(&mut self) {
+        self.plane_pick = None;
+        self.edge_picking = false;
+        self.clear_edge_marks();
+        self.cancel_pending_pick();
+    }
+
+    /// Ein Klick im Wahlmodus „Skizze erstellen“: Grundebene, Konstruktionsebene oder ebene
+    /// Fläche legt die Skizze an, öffnet sie und beendet den Modus (auch wenn das Dokument
+    /// ablehnt, dann mit Meldung). Eine gekrümmte Fläche (oder eine Fläche eines Netz-Körpers)
+    /// gibt nur eine Meldung; der Modus bleibt.
+    fn pick_new_sketch_plane(&mut self, click: crate::plane_dialog::PlaneClick) {
+        use crate::plane_dialog::PlaneClick;
+        if let PlaneClick::View(Pick::Face(f)) = click
+            && let Err(e) = self.face_ref_for_sketch(f.body, f.face)
+        {
+            self.message = Some(e);
+            return;
+        }
+        let made = match click {
+            PlaneClick::Standard(p) => {
+                self.cancel_pending_pick();
+                self.add_sketch(SketchPlane::Standard(p))
+            }
+            PlaneClick::View(Pick::Plane(id)) => {
+                self.cancel_pending_pick();
+                self.new_sketch_on_plane(id)
+            }
+            PlaneClick::View(Pick::Face(f)) => {
+                self.cancel_pending_pick();
+                self.new_sketch_on_face(f.body, f.face)
+            }
+            // Kanten und Eckpunkte wählt der Filter nicht.
+            PlaneClick::View(_) => return,
+        };
+        if let Ok(id) = made {
+            let _ = self.open_sketch(id);
+        }
     }
 
     /// Verweis auf die ebene Fläche `face` des sichtbaren Körpers `body` für eine Skizze; sonst
