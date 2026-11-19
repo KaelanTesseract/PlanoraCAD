@@ -529,6 +529,13 @@ impl Sketch {
             }
             s.check_types(&c.kind)?;
             if c.alive {
+                // Ein lebendes Glatt (oder eine Tangente am Ende) an einem Punkt, der kein Ende
+                // seiner Kurve ist, kommt nur aus einer von Hand geänderten Datei: Stutzen und
+                // Brechen entfernen es (`settle_constraints`), auch ausgeschaltet oder anzeigend.
+                // Es hätte keine Zeile und ließe sich nicht wieder anlegen.
+                if !s.smooth_ends_hold(&c.kind) {
+                    return Err(bad(tr!("sketch-err-data-smooth-end")));
+                }
                 check_3d_kind(&s, &c.kind)?;
                 if c.extra.is_none() && s.needs_extra(&c.kind) {
                     return Err(bad(tr!("sketch-err-data-constraint-extra")));

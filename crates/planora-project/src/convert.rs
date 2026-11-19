@@ -38,7 +38,7 @@ use planora_feature::{
     SpunSpec, TextFormulas,
 };
 use planora_i18n::{DisplayUnit, tr};
-use planora_kernel::BoolOp;
+use planora_kernel::{BoolOp, Id};
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DQuat, DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::comb::CombSettings;
@@ -47,8 +47,8 @@ use planora_sketch::text::{HAlign, TextId, TextPlacement, VAlign};
 use planora_sketch::text_shape::TextStyle;
 use planora_sketch::{
     ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord,
-    HandleCurvature, LegacyMigration, LineOrPoints, PatternId, PatternRecord, PatternSlot,
-    PieceRef, PointId, PointRecord, ProfileRef, Sketch, SketchData, SplineHandle, TextRecord,
+    HandleCurvature, LegacyMigration, LineOrPoints, PatternRecord, PatternSlot, PieceRef, PointId,
+    PointRecord, ProfileRef, Sketch, SketchData, SplineHandle, TextRecord,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -406,13 +406,21 @@ fn lop_to(l: &LineOrPoints) -> LineOrPointsDto {
     }
 }
 
-fn lop_from(d: &LineOrPointsDto) -> LineOrPoints {
-    match d {
-        LineOrPointsDto::Linie { kurve } => LineOrPoints::Line(CurveId::from_index(*kurve)),
+fn lop_from(d: &LineOrPointsDto) -> std::result::Result<LineOrPoints, String> {
+    let wrong = || tr!("sketch-err-data-constraint-object");
+    Ok(match d {
+        LineOrPointsDto::Linie { kurve } => LineOrPoints::Line(file_id(*kurve, wrong)?),
         LineOrPointsDto::Punkte { a, b } => {
-            LineOrPoints::Points(PointId::from_index(*a), PointId::from_index(*b))
+            LineOrPoints::Points(file_id(*a, wrong)?, file_id(*b, wrong)?)
         }
-    }
+    })
+}
+
+/// Typisierte Id aus einem Index der Datei. Passt er nicht in 32 Bit, ist die Datei beschädigt
+/// (`wrong` nennt den Grund); `from_index` träfe sonst kein oder ein falsches Objekt. Ob das
+/// Objekt da ist, prüft danach `Sketch::from_data`.
+fn file_id<T>(i: usize, wrong: impl Fn() -> String) -> std::result::Result<Id<T>, String> {
+    Id::try_from_index(i).ok_or_else(wrong)
 }
 
 fn curve_to(k: &CurveKind) -> CurveKindDto {
@@ -518,12 +526,14 @@ fn griff_dto(h: &SplineHandle) -> GriffDto {
     }
 }
 
-fn griff_from(d: &GriffDto) -> SplineHandle {
-    let p = PointId::from_index;
-    SplineHandle {
-        at: p(d.an),
-        line: CurveId::from_index(d.linie),
-        tip: p(d.spitze),
+fn griff_from(d: &GriffDto) -> std::result::Result<SplineHandle, String> {
+    let wrong = || tr!("sketch-err-data-handle");
+    let p = |i: usize| -> std::result::Result<PointId, String> { file_id(i, wrong) };
+    let c = |i: usize| -> std::result::Result<CurveId, String> { file_id(i, wrong) };
+    Ok(SplineHandle {
+        at: p(d.an)?,
+        line: c(d.linie)?,
+        tip: p(d.spitze)?,
         curvature: match d.kruemmung {
             GriffKruemmungDto::Form => HandleCurvature::Form,
             GriffKruemmungDto::Gerade => HandleCurvature::Straight,
@@ -532,26 +542,31 @@ fn griff_from(d: &GriffDto) -> SplineHandle {
                 mitte,
                 anderes,
             } => HandleCurvature::Arc {
-                arc: CurveId::from_index(bogen),
-                center: p(mitte),
-                other: p(anderes),
+                arc: c(bogen)?,
+                center: p(mitte)?,
+                other: p(anderes)?,
             },
         },
-    }
+    })
 }
 
 fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
-    let p = PointId::from_index;
+    let p = |i: usize| -> std::result::Result<PointId, String> {
+        file_id(i, || tr!("sketch-err-data-curve-point"))
+    };
     Ok(match d {
-        CurveKindDto::Linie { a, b } => CurveKind::Line { a: p(*a), b: p(*b) },
+        CurveKindDto::Linie { a, b } => CurveKind::Line {
+            a: p(*a)?,
+            b: p(*b)?,
+        },
         CurveKindDto::Kreis { mitte, radius } => CurveKind::Circle {
-            center: p(*mitte),
+            center: p(*mitte)?,
             radius: *radius,
         },
         CurveKindDto::Bogen { mitte, start, ende } => CurveKind::Arc {
-            center: p(*mitte),
-            start: p(*start),
-            end: p(*ende),
+            center: p(*mitte)?,
+            start: p(*start)?,
+            end: p(*ende)?,
         },
         CurveKindDto::Ellipse {
             mitte,
@@ -560,15 +575,21 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             az,
             klein,
         } => CurveKind::Ellipse {
-            center: p(*mitte),
+            center: p(*mitte)?,
             ax: *ax,
             ay: *ay,
             az: *az,
             minor: *klein,
         },
         CurveKindDto::Spline { punkte, griffe } => CurveKind::Spline {
-            points: punkte.iter().map(|i| p(*i)).collect(),
-            handles: griffe.iter().map(griff_from).collect(),
+            points: punkte
+                .iter()
+                .map(|i| p(*i))
+                .collect::<std::result::Result<_, _>>()?,
+            handles: griffe
+                .iter()
+                .map(griff_from)
+                .collect::<std::result::Result<_, _>>()?,
         },
         CurveKindDto::Ellipsenbogen {
             mitte,
@@ -579,20 +600,23 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             start,
             ende,
         } => CurveKind::EllipticArc {
-            center: p(*mitte),
+            center: p(*mitte)?,
             ax: *ax,
             ay: *ay,
             az: *az,
             minor: *klein,
-            start: p(*start),
-            end: p(*ende),
+            start: p(*start)?,
+            end: p(*ende)?,
         },
         CurveKindDto::KontrollSpline {
             punkte,
             grad,
             knoten,
         } => CurveKind::ControlSpline {
-            points: punkte.iter().map(|i| p(*i)).collect(),
+            points: punkte
+                .iter()
+                .map(|i| p(*i))
+                .collect::<std::result::Result<_, _>>()?,
             degree: *grad,
             knots: knoten.clone(),
         },
@@ -602,9 +626,9 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             scheitel,
             rho,
         } => CurveKind::Conic {
-            start: p(*start),
-            end: p(*ende),
-            apex: p(*scheitel),
+            start: p(*start)?,
+            end: p(*ende)?,
+            apex: p(*scheitel)?,
             rho: *rho,
         },
         CurveKindDto::FesterSpline {
@@ -622,8 +646,8 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             }
             let z = |i: usize| hoehen.get(i).copied().unwrap_or(0.0);
             CurveKind::FixedSpline {
-                start: p(*start),
-                end: p(*ende),
+                start: p(*start)?,
+                end: p(*ende)?,
                 curve: Arc::new(
                     NurbsCurve::new(
                         *grad,
@@ -780,56 +804,60 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
     }
 }
 
-fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
+fn constraint_from(d: &ConstraintKindDto) -> std::result::Result<ConstraintKind, String> {
     use ConstraintKind as K;
     use ConstraintKindDto as D;
-    let (p, c) = (PointId::from_index, CurveId::from_index);
-    match d {
-        D::Deckungsgleich { a, b } => K::Coincident(p(*a), p(*b)),
-        D::PunktAufKurve { punkt, kurve } => K::PointOnCurve(p(*punkt), c(*kurve)),
-        D::Waagerecht { ziel } => K::Horizontal(lop_from(ziel)),
-        D::Senkrecht { ziel } => K::Vertical(lop_from(ziel)),
-        D::Parallel { a, b } => K::Parallel(c(*a), c(*b)),
-        D::Rechtwinklig { a, b } => K::Perpendicular(c(*a), c(*b)),
-        D::Tangential { a, b } => K::Tangent(c(*a), c(*b)),
-        D::Gleich { a, b } => K::Equal(c(*a), c(*b)),
-        D::Fest { punkt, x, y } => K::Fixed(p(*punkt), *x, *y),
-        D::Symmetrisch { a, b, achse } => K::Symmetric(p(*a), p(*b), c(*achse)),
-        D::Mittelpunkt { punkt, kurve } => K::Midpoint(p(*punkt), c(*kurve)),
-        D::Abstand { a, b, wert } => K::Distance(p(*a), p(*b), *wert),
+    let wrong = || tr!("sketch-err-data-constraint-object");
+    let p = |i: usize| -> std::result::Result<PointId, String> { file_id(i, wrong) };
+    let c = |i: usize| -> std::result::Result<CurveId, String> { file_id(i, wrong) };
+    Ok(match d {
+        D::Deckungsgleich { a, b } => K::Coincident(p(*a)?, p(*b)?),
+        D::PunktAufKurve { punkt, kurve } => K::PointOnCurve(p(*punkt)?, c(*kurve)?),
+        D::Waagerecht { ziel } => K::Horizontal(lop_from(ziel)?),
+        D::Senkrecht { ziel } => K::Vertical(lop_from(ziel)?),
+        D::Parallel { a, b } => K::Parallel(c(*a)?, c(*b)?),
+        D::Rechtwinklig { a, b } => K::Perpendicular(c(*a)?, c(*b)?),
+        D::Tangential { a, b } => K::Tangent(c(*a)?, c(*b)?),
+        D::Gleich { a, b } => K::Equal(c(*a)?, c(*b)?),
+        D::Fest { punkt, x, y } => K::Fixed(p(*punkt)?, *x, *y),
+        D::Symmetrisch { a, b, achse } => K::Symmetric(p(*a)?, p(*b)?, c(*achse)?),
+        D::Mittelpunkt { punkt, kurve } => K::Midpoint(p(*punkt)?, c(*kurve)?),
+        D::Abstand { a, b, wert } => K::Distance(p(*a)?, p(*b)?, *wert),
         D::AbstandPunktLinie { punkt, kurve, wert } => {
-            K::DistancePointLine(p(*punkt), c(*kurve), *wert)
+            K::DistancePointLine(p(*punkt)?, c(*kurve)?, *wert)
         }
-        D::Radius { kurve, wert } => K::Radius(c(*kurve), *wert),
-        D::Durchmesser { kurve, wert } => K::Diameter(c(*kurve), *wert),
-        D::Winkel { a, b, wert } => K::Angle(c(*a), c(*b), *wert),
-        D::BogenRadius { kurve } => K::ArcRadius(c(*kurve)),
-        D::KruemmungsGriff { kurve, punkt } => K::SplineCurvatureHandle(c(*kurve), p(*punkt)),
-        D::EllipsenbogenEnden { kurve } => K::EllipticArcEnds(c(*kurve)),
-        D::EllipseGross { kurve, wert } => K::EllipseMajor(c(*kurve), *wert),
-        D::EllipseKlein { kurve, wert } => K::EllipseMinor(c(*kurve), *wert),
-        D::EllipseWinkel { kurve, wert } => K::EllipseAngle(c(*kurve), *wert),
-        D::Kollinear { a, b } => K::Collinear(c(*a), c(*b)),
+        D::Radius { kurve, wert } => K::Radius(c(*kurve)?, *wert),
+        D::Durchmesser { kurve, wert } => K::Diameter(c(*kurve)?, *wert),
+        D::Winkel { a, b, wert } => K::Angle(c(*a)?, c(*b)?, *wert),
+        D::BogenRadius { kurve } => K::ArcRadius(c(*kurve)?),
+        D::KruemmungsGriff { kurve, punkt } => K::SplineCurvatureHandle(c(*kurve)?, p(*punkt)?),
+        D::EllipsenbogenEnden { kurve } => K::EllipticArcEnds(c(*kurve)?),
+        D::EllipseGross { kurve, wert } => K::EllipseMajor(c(*kurve)?, *wert),
+        D::EllipseKlein { kurve, wert } => K::EllipseMinor(c(*kurve)?, *wert),
+        D::EllipseWinkel { kurve, wert } => K::EllipseAngle(c(*kurve)?, *wert),
+        D::Kollinear { a, b } => K::Collinear(c(*a)?, c(*b)?),
         D::Glatt {
             a,
             punkt_a,
             b,
             punkt_b,
-        } => K::Smooth(c(*a), p(*punkt_a), c(*b), p(*punkt_b)),
+        } => K::Smooth(c(*a)?, p(*punkt_a)?, c(*b)?, p(*punkt_b)?),
         D::TangenteEnde {
             a,
             punkt_a,
             b,
             punkt_b,
-        } => K::EndTangent(c(*a), p(*punkt_a), c(*b), p(*punkt_b)),
-        D::AbstandWaagerecht { a, b, wert } => K::DistanceX(p(*a), p(*b), *wert),
-        D::AbstandSenkrecht { a, b, wert } => K::DistanceY(p(*a), p(*b), *wert),
+        } => K::EndTangent(c(*a)?, p(*punkt_a)?, c(*b)?, p(*punkt_b)?),
+        D::AbstandWaagerecht { a, b, wert } => K::DistanceX(p(*a)?, p(*b)?, *wert),
+        D::AbstandSenkrecht { a, b, wert } => K::DistanceY(p(*a)?, p(*b)?, *wert),
         D::DurchmesserZurAchse { punkt, kurve, wert } => {
-            K::CenterlineDiameter(p(*punkt), c(*kurve), *wert)
+            K::CenterlineDiameter(p(*punkt)?, c(*kurve)?, *wert)
         }
-        D::LanglochGesamt { a, b, kappe, wert } => K::SlotOverall(p(*a), p(*b), c(*kappe), *wert),
+        D::LanglochGesamt { a, b, kappe, wert } => {
+            K::SlotOverall(p(*a)?, p(*b)?, c(*kappe)?, *wert)
+        }
         D::MusterWert { muster, feld, wert } => K::PatternValue(
-            PatternId::from_index(*muster),
+            file_id(*muster, wrong)?,
             match feld {
                 MusterFeldDto::Anzahl1 => PatternSlot::Count1,
                 MusterFeldDto::Abstand1 => PatternSlot::Spacing1,
@@ -840,17 +868,17 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
             },
             *wert,
         ),
-        D::EntlangZ { ziel } => K::AlongZ(lop_from(ziel)),
-        D::Fest3 { punkt, x, y, z } => K::Fixed3(p(*punkt), *x, *y, *z),
-        D::InEbene { kurve } => K::InPlane(c(*kurve)),
+        D::EntlangZ { ziel } => K::AlongZ(lop_from(ziel)?),
+        D::Fest3 { punkt, x, y, z } => K::Fixed3(p(*punkt)?, *x, *y, *z),
+        D::InEbene { kurve } => K::InPlane(c(*kurve)?),
         D::Ellipsenachsen3 {
             kurve,
             x,
             y,
             z,
             klein,
-        } => K::EllipseAxes3(c(*kurve), *x, *y, *z, *klein),
-    }
+        } => K::EllipseAxes3(c(*kurve)?, *x, *y, *z, *klein),
+    })
 }
 
 fn pattern_to(m: &PatternRecord) -> PatternDto {
@@ -1300,17 +1328,19 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
         constraints: d
             .abhaengigkeiten
             .iter()
-            .map(|c| ConstraintRecord {
-                kind: constraint_from(&c.art),
-                branch: c.zweig,
-                supplement: c.gegenwinkel,
-                driven: c.gesteuert,
-                enabled: c.aktiv,
-                internal: c.intern,
-                extra: c.extra,
-                alive: c.lebt,
+            .map(|c| {
+                Ok(ConstraintRecord {
+                    kind: constraint_from(&c.art).map_err(ctx)?,
+                    branch: c.zweig,
+                    supplement: c.gegenwinkel,
+                    driven: c.gesteuert,
+                    enabled: c.aktiv,
+                    internal: c.intern,
+                    extra: c.extra,
+                    alive: c.lebt,
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
         patterns: patterns_from(origin, feature, d)?,
         texts: texts_from(origin, feature, d)?,
         three_d: d.drei_d,
@@ -1447,7 +1477,9 @@ fn profile_sel_from(
             && u0 < u1
             // Dateien vor der Nachbesserung schrieben einen vollen Umlauf mitunter ein ulp zu lang
             && u1 <= u0 + 1.0 + 1e-9
-            && len >= 0.0;
+            && len >= 0.0
+            // Größer als jede erlaubte Liste: `from_index` träfe sonst keine Kurve.
+            && curve < MAX_LIST;
         if !ok {
             return Err(err(tr!("proj-profile-piece-invalid")));
         }
@@ -2329,8 +2361,8 @@ fn copy_from(origin: &str, name: &str, d: &EdgeCopyDto) -> Result<EdgeCopy> {
         return Err(corrupt());
     };
     let target = match (d.kurve, d.punkt) {
-        (Some(k), None) => CopyTarget::Curve(CurveId::from_index(k)),
-        (None, Some(p)) => CopyTarget::Point(PointId::from_index(p)),
+        (Some(k), None) => CopyTarget::Curve(CurveId::from_index(sketch_index(origin, name, k)?)),
+        (None, Some(p)) => CopyTarget::Point(PointId::from_index(sketch_index(origin, name, p)?)),
         _ => return Err(corrupt()),
     };
     Ok(EdgeCopy {
@@ -2579,7 +2611,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto, dissolved: &mut usize) -> Re
         } => FeatureKind::Revolve {
             sketch: FeatureId(*skizze),
             profiles: profile_sel_from(origin, name, *profil, profile.as_deref())?,
-            axis: CurveId::from_index(*achse),
+            axis: CurveId::from_index(sketch_index(origin, name, *achse)?),
         },
         KindDto::Boolesch {
             ziel,

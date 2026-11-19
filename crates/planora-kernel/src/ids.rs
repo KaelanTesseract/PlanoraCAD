@@ -11,11 +11,24 @@ pub struct Id<T> {
 }
 
 impl<T> Id<T> {
+    /// Id zu `index`. Ein Index über 32 Bit wird nicht abgeschnitten (aus 2³² + 3 würde sonst die
+    /// 3 und träfe ein anderes Objekt), sondern wird zu `u32::MAX`, einer Id, die in keiner Arena
+    /// liegt. Indizes aus Dateien prüft der Aufrufer mit [`Id::try_from_index`] und meldet den
+    /// Fehler.
     pub fn from_index(index: usize) -> Self {
         Self {
-            index: index as u32,
+            index: u32::try_from(index).unwrap_or(u32::MAX),
             marker: PhantomData,
         }
+    }
+
+    /// Id zu `index`, oder `None`, wenn der Index nicht in 32 Bit passt. Für Indizes aus Dateien
+    /// und anderen fremden Quellen: Der Aufrufer meldet den Fehler, statt abzuschneiden.
+    pub fn try_from_index(index: usize) -> Option<Self> {
+        u32::try_from(index).ok().map(|index| Self {
+            index,
+            marker: PhantomData,
+        })
     }
 
     pub fn index(self) -> usize {

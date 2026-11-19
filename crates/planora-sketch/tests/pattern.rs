@@ -781,7 +781,7 @@ fn edge_cases_of_counts_steps_angles_and_suppression() {
     };
     assert_eq!(
         s.pattern_transforms(&parallel),
-        Err(PatternProblem::BadDirection)
+        Err(PatternProblem::ParallelDirections)
     );
     // Ein Exemplar als Vorlage.
     let id = s
