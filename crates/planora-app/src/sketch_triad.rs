@@ -11,7 +11,7 @@ use crate::sketch_view::{Mapper, format_angle, parse_number, sketch3_to_screen};
 use crate::state::AppState;
 use crate::theme::{SketchColors, lighten, with_alpha};
 use crate::viewport;
-use egui::{Color32, FontId, PointerButton, Pos2, Rect, Shape, Stroke, vec2};
+use egui::{Color32, PointerButton, Pos2, Rect, Shape, Stroke, vec2};
 use glam::Vec2;
 use planora_i18n::tr;
 use planora_math::{DQuat, DVec3, Frame};
@@ -48,8 +48,6 @@ const STROKE_PX: (f32, f32) = (2.0, 3.5);
 const KNOB_PX: f32 = 4.0;
 /// Deckkraft der Ebenenquadrate: inaktiv, aktiv, unter dem Zeiger.
 const PLANE_ALPHA: (u8, u8, u8) = (0x30, 0x80, 0xa0);
-/// Schriftgröße des Winkelfelds beim Ziehen.
-const LABEL_SIZE: f32 = 12.0;
 /// Abstand des Winkelfelds vom Zeiger bzw. von der Mitte der Triade.
 const LABEL_GAP: f32 = 18.0;
 /// Breite des Eingabefelds für den Winkel.
@@ -666,6 +664,12 @@ fn menu_id() -> egui::Id {
     egui::Id::new("planora-triad-menu")
 }
 
+/// Lage des Winkelfelds der Triade aus dem letzten Bild, solange es offen ist.
+pub(crate) fn angle_field_rect(ctx: &egui::Context, se: &SketchSession) -> Option<Rect> {
+    se.triad_ui.field_for?;
+    ctx.memory(|m| m.area_rect(field_id()))
+}
+
 fn field_id() -> egui::Id {
     egui::Id::new("planora-triad-angle")
 }
@@ -840,12 +844,16 @@ pub(crate) fn paint(painter: &egui::Painter, rect: Rect, state: &AppState, point
         &col,
     );
     if let Some(d) = drag {
-        let at = pointer.unwrap_or(l.center) + vec2(LABEL_GAP, LABEL_GAP);
         let text = format!("{} {}", d.axis.angle_label(), format_angle(d.angle));
-        let galley = painter.layout_no_wrap(text, FontId::proportional(LABEL_SIZE), col.text);
-        let r = Rect::from_min_size(at, galley.size()).expand(3.0);
-        painter.rect_filled(r, 3.0, col.label_bg);
-        painter.galley(at, galley, col.text);
+        let avoid = crate::sketch_view::input_field_rects(painter.ctx(), se);
+        crate::sketch_view::paint_pointer_label(
+            painter,
+            text,
+            pointer.unwrap_or(l.center),
+            rect,
+            &avoid,
+            &col,
+        );
         return;
     }
     // Achsfang: die Verlängerung der Achse bis über den Zeiger hinaus.

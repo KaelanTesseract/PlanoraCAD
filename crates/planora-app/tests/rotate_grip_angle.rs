@@ -232,3 +232,34 @@ fn tool_change_during_rho_drag_reverts() {
         "kein Schritt"
     );
 }
+
+#[test]
+fn label_avoids_the_input_field_and_stays_in_the_window() {
+    use egui::{Rect, vec2};
+    use planora_app::sketch_view::place_pointer_label;
+    let bounds = Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 800.0));
+    let size = vec2(60.0, 20.0);
+    let overlaps = |p: egui::Pos2, f: Rect| Rect::from_min_size(p, size).intersects(f);
+    // Frei: rechts unten neben dem Zeiger.
+    let pointer = pos2(400.0, 300.0);
+    let at = place_pointer_label(pointer, size, &[], bounds);
+    assert_eq!(at, pointer + vec2(18.0, 18.0));
+    // Ein Eingabefeld genau dort: das Feld weicht aus und deckt es nicht.
+    let field = Rect::from_min_size(pos2(410.0, 310.0), vec2(200.0, 60.0));
+    let at = place_pointer_label(pointer, size, &[field], bounds);
+    assert!(!overlaps(at, field), "{at:?}");
+    assert!(bounds.contains_rect(Rect::from_min_size(at, size)));
+    // Am Fensterrand: bleibt im Fenster, auch mit Feld.
+    for p in [pos2(995.0, 795.0), pos2(2.0, 2.0), pos2(1200.0, -50.0)] {
+        let f = Rect::from_min_size(p + vec2(10.0, 10.0), vec2(300.0, 100.0));
+        let at = place_pointer_label(p, size, &[f], bounds);
+        assert!(
+            bounds.contains_rect(Rect::from_min_size(at, size)),
+            "{p:?} {at:?}"
+        );
+    }
+    let p = pos2(995.0, 795.0);
+    let f = Rect::from_min_size(pos2(900.0, 790.0), vec2(100.0, 10.0));
+    let at = place_pointer_label(p, size, &[f], bounds);
+    assert!(!overlaps(at, f), "{at:?}");
+}

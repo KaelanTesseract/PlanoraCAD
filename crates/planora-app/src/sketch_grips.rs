@@ -720,7 +720,7 @@ impl SketchSession {
     }
 
     /// Die Winkel um X, Y und Z dieses Bilds (gesperrte Felder vor dem Griff).
-    fn angles3(&self) -> (f64, f64, f64) {
+    pub(crate) fn angles3(&self) -> (f64, f64, f64) {
         let (t, input) = (&self.transform, &self.input);
         (
             input.locked(FieldKind::MoveAngleX).unwrap_or(t.angle_x),

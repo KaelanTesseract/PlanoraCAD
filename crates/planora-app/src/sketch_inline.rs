@@ -28,6 +28,15 @@ fn kind_index(kind: FieldKind) -> usize {
     kind as usize
 }
 
+/// Die Rechtecke der Eingabefelder der laufenden Eingabe aus dem letzten Bild.
+pub(crate) fn field_rects(ctx: &egui::Context, se: &SketchSession) -> Vec<egui::Rect> {
+    se.input
+        .fields
+        .iter()
+        .filter_map(|f| ctx.memory(|m| m.area_rect(area_id(f.kind))))
+        .collect()
+}
+
 fn area_id(kind: FieldKind) -> egui::Id {
     egui::Id::new("planora-draw-field-area").with(kind_index(kind))
 }

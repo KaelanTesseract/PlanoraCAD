@@ -895,8 +895,9 @@ impl SketchSession {
     }
 
     /// Wechselt das Werkzeug; ein laufendes Werkzeug wird abgebrochen, ein laufendes Ziehen
-    /// wie mit [`end_drag`](Self::end_drag) beendet, auch ein Griffzug. Nur der erste Zug, der einen
-    /// Griff erst einschaltet, geht ganz zurück: Er bleibt nie halb stehen.
+    /// wie mit [`end_drag`](Self::end_drag) beendet, auch ein Griffzug. Ganz zurück, ohne Schritt,
+    /// geht der erste Zug, der einen Griff erst einschaltet, der Zug am Drehgriff eines Textes und
+    /// der Zug am Rho-Griff: Sie bleiben nie halb stehen.
     pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
         // Auch der Zug am Drehgriff eines Textes und am Rho-Griff geht ganz zurück: Ein Werkzeugwechsel
         // hinterlässt nichts (beide gleich, Skizzen 12 Task 11; Fusion-Verhalten prüft Handtest 3).

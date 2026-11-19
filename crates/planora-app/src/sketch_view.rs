@@ -578,19 +578,22 @@ pub fn format_angle(rad: f64) -> String {
 const ROTATE_LABEL_GAP: f32 = 18.0;
 /// Schriftgröße der Winkelanzeige.
 const ROTATE_LABEL_SIZE: f32 = 12.0;
+/// Rand um den Text der Feldchen am Zeiger.
+const LABEL_PAD: f32 = 3.0;
 
 /// Der Winkel, den ein laufender Drehzug gerade zeigt (Radiant), sonst `None`: Zug am Drehgriff eines
 /// Textes (Winkel des Textes), am Drehring und an den Drehbögen der Triade bei Verschieben/Kopieren
-/// (gedrehter Winkel um die Achse des Griffs).
+/// (gedrehter Winkel um die Achse des Griffs). Bei den Griffen der Triade gilt der Wert dieses
+/// Bilds, ein gesperrtes Feld geht vor dem Griff (`transform_now`, `angles3`).
 pub fn rotate_drag_angle(se: &SketchSession, sk: &Sketch) -> Option<f64> {
     if let Some(grab) = se.curve_drag.as_ref().and_then(|d| d.text_rot) {
         return sk.text_angle(grab.text);
     }
     let grip = se.grip_drag?.grip;
     match grip {
-        Grip::Rotate => Some(se.transform.angle),
-        Grip::RotateX => Some(se.transform.angle_x),
-        Grip::RotateY => Some(se.transform.angle_y),
+        Grip::Rotate => se.transform_now().map(|m| m.angle),
+        Grip::RotateX => Some(se.angles3().0),
+        Grip::RotateY => Some(se.angles3().1),
         _ => None,
     }
 }
@@ -604,22 +607,81 @@ pub fn rotate_angle_label(at: Pos2, angle_rad: f64) -> (Pos2, String) {
     )
 }
 
+/// Obere linke Ecke eines Feldes der Größe `size` am Zeiger `pointer`: Es steht bevorzugt rechts unten
+/// neben dem Zeiger, liegt dort ein Eingabefeld aus `avoid` darunter oder ragt es aus `bounds`, geht
+/// es nach links und nach oben. Es bleibt immer in `bounds`; gibt es keinen freien Platz, gilt die
+/// erste Lage, an den Rand geklemmt.
+pub fn place_pointer_label(pointer: Pos2, size: egui::Vec2, avoid: &[Rect], bounds: Rect) -> Pos2 {
+    let gap = ROTATE_LABEL_GAP;
+    let clamp = |p: Pos2| {
+        let max = (bounds.max - size).max(bounds.min);
+        pos2(
+            p.x.clamp(bounds.min.x, max.x),
+            p.y.clamp(bounds.min.y, max.y),
+        )
+    };
+    let tries = [
+        pointer + vec2(gap, gap),
+        pointer + vec2(-gap - size.x, gap),
+        pointer + vec2(gap, -gap - size.y),
+        pointer + vec2(-gap - size.x, -gap - size.y),
+    ];
+    let free = |p: Pos2| {
+        let r = Rect::from_min_size(p, size).expand(LABEL_PAD);
+        !avoid.iter().any(|a| a.intersects(r))
+    };
+    tries
+        .iter()
+        .map(|&p| clamp(p))
+        .find(|&p| free(p))
+        .unwrap_or_else(|| clamp(tries[0]))
+}
+
+/// Die Rechtecke der Eingabefelder, unter die kein Feld am Zeiger geraten soll: die Felder der
+/// laufenden Eingabe und das Winkelfeld der Triade (Lage aus dem letzten Bild).
+pub(crate) fn input_field_rects(ctx: &egui::Context, se: &SketchSession) -> Vec<Rect> {
+    let mut out = crate::sketch_inline::field_rects(ctx, se);
+    out.extend(crate::sketch_triad::angle_field_rect(ctx, se));
+    out
+}
+
+/// Zeichnet ein Feld mit `text` am Zeiger, so gelegt, dass es kein Eingabefeld deckt und in `bounds`
+/// bleibt ([`place_pointer_label`]). Gemeinsam für die Winkelanzeige und das Winkelfeld der Triade.
+pub(crate) fn paint_pointer_label(
+    painter: &egui::Painter,
+    text: String,
+    pointer: Pos2,
+    bounds: Rect,
+    avoid: &[Rect],
+    col: &theme::SketchColors,
+) {
+    let galley = painter.layout_no_wrap(text, FontId::proportional(ROTATE_LABEL_SIZE), col.text);
+    let size = galley.size();
+    let at = place_pointer_label(
+        pointer,
+        size + vec2(2.0 * LABEL_PAD, 2.0 * LABEL_PAD),
+        avoid,
+        bounds,
+    ) + vec2(LABEL_PAD, LABEL_PAD);
+    let r = Rect::from_min_size(at, size).expand(LABEL_PAD);
+    painter.rect_filled(r, 3.0, col.label_bg);
+    painter.galley(at, galley, col.text);
+}
+
 /// Zeichnet die Winkelanzeige während eines Drehzugs am Zeiger.
 fn paint_rotate_angle(
     painter: &egui::Painter,
     se: &SketchSession,
     sk: &Sketch,
     pointer: Option<Pos2>,
+    rect: Rect,
     col: &theme::SketchColors,
 ) {
     let (Some(angle), Some(p)) = (rotate_drag_angle(se, sk), pointer) else {
         return;
     };
-    let (at, text) = rotate_angle_label(p, angle);
-    let galley = painter.layout_no_wrap(text, FontId::proportional(ROTATE_LABEL_SIZE), col.text);
-    let r = Rect::from_min_size(at, galley.size()).expand(3.0);
-    painter.rect_filled(r, 3.0, col.label_bg);
-    painter.galley(at, galley, col.text);
+    let avoid = input_field_rects(painter.ctx(), se);
+    paint_pointer_label(painter, format_angle(angle), p, rect, &avoid, col);
 }
 
 /// Ist das ein Winkelmaß (Anzeige und Eingabe in Grad)?
@@ -4174,7 +4236,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     crate::sketch_triad::paint(&painter, rect, state, pointer);
 
     // Winkel am Zeiger beim Zug an einem Drehgriff (Text, Drehring und Drehbögen der Triade).
-    paint_rotate_angle(&painter, se, sk, pointer, &col);
+    paint_rotate_angle(&painter, se, sk, pointer, rect, &col);
 
     painter.extend(box_select_shapes(state));
 }
