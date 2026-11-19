@@ -787,9 +787,8 @@ fn undocked_display_menu_opens_by_click_and_by_command_and_closes_with_the_sketc
     );
     rig.settle(3);
     assert!(!planora_app::sketch_panel::display_menu_open(&ctx));
-    // Skizzenende schließt. (Ein Klick auf das Symbol im Kindfenster lässt sich im Harness nicht
-    // prüfen: Der Ziehstreifen der Kopfzeile liegt über dem Symbol und nimmt nach egui-Regeln den
-    // Klick darunter nicht an, ebenso beim Haken „3D-Skizze“; siehe Fix-Bericht.)
+    // Skizzenende schließt. (Klick auf das Symbol im Kindfenster: siehe
+    // `undocked_sketch_header_buttons_take_clicks`.)
     planora_app::commands::run_action(
         rig.app.ws_mut(),
         planora_app::keymap::Action::SketchDisplayMenu,
@@ -835,4 +834,90 @@ fn undocked_display_menu_open_eats_the_click_into_the_drawing() {
     rig.click(pos2(900.0, 300.0));
     assert_eq!(point_count(&mut rig), before, "kein Punkt bei offenem Feld");
     assert!(!planora_app::sketch_panel::display_menu_open(&ctx), "zu");
+}
+
+// ---- Kopfzeile abgedockter Felder: Knöpfe klickbar, Rest zieht das Fenster -------------------
+
+#[test]
+fn undocked_sketch_header_buttons_take_clicks() {
+    let mut rig = detached_sketch_rig();
+    let id = detach::viewport_id(Place::SketchSide);
+    let ctx = rig.screen.ctx.clone();
+    // Symbol „Anzeigeoptionen“ öffnet das Feld.
+    let icon = center_of(&rig.screen.child_seen(id), &glyph(Icon::Display));
+    assert!(!planora_app::sketch_panel::display_menu_open(&ctx));
+    rig.click_child(id, icon, PointerButton::Primary);
+    assert!(
+        planora_app::sketch_panel::display_menu_open(&ctx),
+        "Klick auf „Anzeigeoptionen“ im Kindfenster öffnet das Feld"
+    );
+    // Zweiter Klick schließt es wieder.
+    rig.click_child(id, icon, PointerButton::Primary);
+    assert!(!planora_app::sketch_panel::display_menu_open(&ctx));
+    // Haken „3D-Skizze“ schaltet die Skizze um.
+    assert!(!rig.state().session_sketch().unwrap().three_d);
+    let three_d = center_of(&rig.screen.child_seen(id), "3D-Skizze");
+    rig.click_child(id, three_d, PointerButton::Primary);
+    assert!(
+        rig.state().session_sketch().unwrap().three_d,
+        "Klick auf „3D-Skizze“ im Kindfenster"
+    );
+    // Andocken liegt weiter ganz rechts darüber und dockt an.
+    let dock = center_of(&rig.screen.child_seen(id), &glyph(Icon::Dock));
+    rig.click_child(id, dock, PointerButton::Primary);
+    rig.settle(2);
+    assert!(rig.app.ws_mut().detach.get(Place::SketchSide).is_none());
+}
+
+/// Drückt in der Kopfzeile des Kindfensters `id` an `at` und zieht; `true`, wenn das Fenster
+/// dabei gezogen wird (`StartDrag`).
+fn drag_starts_window(rig: &mut Rig, id: egui::ViewportId, at: Pos2) -> bool {
+    let before = rig.screen.child_commands(id).len();
+    rig.frame_child(id, vec![Event::PointerMoved(at)]);
+    rig.frame_child(id, vec![press_at(at, true)]);
+    rig.frame_child(id, vec![Event::PointerMoved(at + vec2(30.0, 10.0))]);
+    let started =
+        rig.screen.child_commands(id)[before..].contains(&egui::ViewportCommand::StartDrag);
+    rig.frame_child(id, vec![press_at(at + vec2(30.0, 10.0), false)]);
+    rig.settle(2);
+    started
+}
+
+#[test]
+fn undocked_sketch_header_still_drags_the_window() {
+    let mut rig = detached_sketch_rig();
+    let id = detach::viewport_id(Place::SketchSide);
+    let ctx = rig.screen.ctx.clone();
+    let (_, name) = planora_app::sketch_panel::sketch_name_label(&ctx).expect("Name");
+    // Auf dem Namen und auf der freien Fläche zwischen Name und „3D-Skizze“.
+    let three_d = find(&rig.screen.child_seen(id), "3D-Skizze")
+        .expect("3D-Skizze")
+        .rect;
+    // Der Haken beginnt links mit seinem Kästchen (etwa 20 Punkte vor dem Text); die Lücke liegt
+    // mittig zwischen Name und Kästchen, weit genug von beiden (egui gibt das Ziehen sonst dem
+    // nahen Namen, der Text auswählen kann).
+    let gap = pos2((name.max.x + three_d.min.x - 20.0) / 2.0, name.center().y);
+    assert!(
+        gap.x > name.max.x + 8.0 && gap.x < three_d.min.x - 28.0,
+        "Lücke {gap:?} / Name {name:?} / {three_d:?}"
+    );
+    assert!(drag_starts_window(&mut rig, id, gap), "freie Fläche");
+    assert!(drag_starts_window(&mut rig, id, name.center()), "Name");
+    assert!(!planora_app::sketch_panel::display_menu_open(&ctx));
+    assert!(!rig.state().session_sketch().unwrap().three_d);
+}
+
+#[test]
+fn undocked_right_switch_takes_clicks() {
+    let mut rig = Rig::new(&[(Place::Right, window_at(1500.0, 100.0))]);
+    rig.app.shell_mut().set_versions_visible(true);
+    rig.settle(3);
+    let id = detach::viewport_id(Place::Right);
+    let versions = center_of(&rig.screen.child_seen(id), "Versionen");
+    rig.click_child(id, versions, PointerButton::Primary);
+    assert_eq!(
+        rig.app.shell_mut().effective_right_tab(),
+        planora_app::shell::RightTab::Versions,
+        "Umschalter „Versionen“ im Kindfenster"
+    );
 }
