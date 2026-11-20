@@ -1,15 +1,14 @@
-//! Plug-ins Etappe 1, Task 7: Abschnitt „Plug-ins“ in den Einstellungen und der
-//! Installationsdialog. Gezeichnet wird, was die App je Bild zeichnet: Rückfragen, Einstellungen
-//! und die Plug-ins (mit dem Installationsdialog), bei 1920 × 1080.
+//! Plug-ins Etappe 1, Task 7 und Handtest W1/W2: das Fenster „Zusatzmodule“ (Verwaltung der
+//! Plug-ins, früher ein Abschnitt der Einstellungen) und der Installationsdialog. Gezeichnet
+//! wird, was die App je Bild zeichnet: Rückfragen, das Fenster und die Plug-ins (mit dem
+//! Installationsdialog), bei 1920 × 1080.
 
 mod common;
 
 use common::{Seen, collect_seen, find, join};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, vec2};
+use planora_app::addins_window::AddinsWindow;
 use planora_app::plugins::{self, Plugins};
-use planora_app::settings_window::{
-    ChooserPurpose, SettingsSection, SettingsWindow, plugin_details_id,
-};
 use planora_app::workspace::{Prompt, Workspace};
 use planora_app::{fonts, prompts, theme};
 use planora_plugin_host::EntryState;
@@ -69,13 +68,13 @@ fn fresh_ctx() -> egui::Context {
 struct H {
     ws: Workspace,
     ctx: egui::Context,
-    w: SettingsWindow,
+    w: AddinsWindow,
     /// Bildschirmgröße (Vorgabe 1920 × 1080).
     size: egui::Vec2,
 }
 
-/// Arbeitsbereich mit Konfiguration in Temp und gestarteten Plug-ins; Einstellungen offen am
-/// Abschnitt „Plug-ins“.
+/// Arbeitsbereich mit Konfiguration in Temp und gestarteten Plug-ins; das Fenster
+/// „Zusatzmodule“ ist offen.
 fn harness(name: &str, places: Places, config: Config) -> H {
     let mut ws = Workspace::new(None, config);
     let cfg = common::temp_root(&format!("planora-plugin-settings-cfg-{name}"));
@@ -84,8 +83,8 @@ fn harness(name: &str, places: Places, config: Config) -> H {
     ws.plugins = Plugins::new(places, &ws.config);
     ws.plugins.host.set_language("de");
     let ctx = fresh_ctx();
-    let mut w = SettingsWindow::default();
-    w.open_at(false, Some(SettingsSection::Plugins));
+    let mut w = AddinsWindow::default();
+    w.open();
     let mut h = H {
         ws,
         ctx,
@@ -162,20 +161,32 @@ fn klick_at(h: &mut H, at: Pos2) -> Vec<Seen> {
     bild(h, vec![])
 }
 
-fn aufklappen(h: &mut H, id: &str) -> Vec<Seen> {
-    klappen(h, id, true)
+/// Wählt `id` in der Liste (ein Klick auf den Namen): rechts stehen seine Details.
+fn waehlen(h: &mut H, id: &str) -> Vec<Seen> {
+    let name = h.ws.plugins.plugin_name(id);
+    let seen = bild(h, vec![]);
+    let toggle = h.w.last_toggles[id];
+    // Der Name steht in derselben Zeile rechts neben dem Schalter.
+    let at = seen
+        .iter()
+        .find(|s| {
+            s.text == name
+                && s.rect.left() > toggle.right()
+                && (s.rect.center().y - toggle.center().y).abs() < 4.0
+        })
+        .unwrap_or_else(|| panic!("„{name}“ fehlt in der Liste: {}", join(&seen)))
+        .rect
+        .center();
+    klick_at(h, at);
+    assert_eq!(h.w.selected_in(&h.ws.plugins).as_deref(), Some(id));
+    bild(h, vec![])
 }
 
-fn klappen(h: &mut H, id: &str, open: bool) -> Vec<Seen> {
-    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        &h.ctx,
-        plugin_details_id(id),
-        false,
-    );
-    state.set_open(open);
-    state.store(&h.ctx);
+/// Klick auf den Schalter von `id` in der Liste.
+fn schalten(h: &mut H, id: &str) -> Vec<Seen> {
     bild(h, vec![]);
-    bild(h, vec![])
+    let at = h.w.last_toggles[id].center();
+    klick_at(h, at)
 }
 
 fn entry_state(h: &H, id: &str) -> Option<EntryState> {
@@ -208,7 +219,7 @@ fn install_flow_starts_plugin() {
     let seen = bild(&mut h, vec![]);
     assert!(has(&seen, "Keine Plug-ins gefunden."), "{}", join(&seen));
     klick(&mut h, &seen, "Aus Datei…");
-    assert_eq!(h.w.chooser_purpose(), Some(ChooserPurpose::Plugin));
+    assert!(h.w.is_choosing());
     let c = h.w.chooser_mut().unwrap();
     c.dir_text = data_dir().display().to_string();
     assert!(c.go_to_text());
@@ -381,7 +392,7 @@ fn toggle_off_stops_and_saves() {
     assert_eq!(entry_state(&h, FAELLE), Some(EntryState::Running));
     let seen = bild(&mut h, vec![]);
     assert!(has(&seen, "läuft"), "{}", join(&seen));
-    let seen = klick(&mut h, &seen, "Test-Fälle");
+    let seen = schalten(&mut h, FAELLE);
     assert_eq!(entry_state(&h, FAELLE), Some(EntryState::Off));
     assert_eq!(
         gespeichert(&h, FAELLE),
@@ -401,7 +412,7 @@ fn toggle_off_stops_and_saves() {
     };
     assert!(has(&seen, "aus"), "{}", join(&seen));
     // Wieder an: läuft, und der Eintrag (Voreinstellung) fällt aus der Datei.
-    klick(&mut h, &seen, "Test-Fälle");
+    schalten(&mut h, FAELLE);
     warten(&mut h);
     assert_eq!(entry_state(&h, FAELLE), Some(EntryState::Running));
     assert_eq!(gespeichert(&h, FAELLE), None);
@@ -425,7 +436,7 @@ fn revoke_returns_to_ask() {
         orte("zuruecknehmen", &[], &["test-faelle"]),
         config,
     );
-    let seen = aufklappen(&mut h, FAELLE);
+    let seen = waehlen(&mut h, FAELLE);
     for text in [
         "Autor: Dennis Guse",
         "Lizenz: GPL-3.0-only",
@@ -479,7 +490,7 @@ fn denied_right_shown() {
             .find(|e| e.id == FAELLE)
             .unwrap();
     assert_eq!(e.rights.state(Right::Net), Some(Grant::Denied));
-    let seen = aufklappen(&mut h, FAELLE);
+    let seen = waehlen(&mut h, FAELLE);
     assert!(has(&seen, "abgelehnt"), "{}", join(&seen));
 }
 
@@ -488,26 +499,22 @@ fn remove_user_plugin_only() {
     let places = orte("entfernen", &["beispiel-hallo"], &["test-faelle"]);
     let user_dir = places.user.join(FAELLE);
     let mut h = harness("entfernen", places, Config::default());
-    // Nur zwischen den Überschriften „Plug-ins“ und „Projekte“ (die Tastenkürzel-Tabelle hat
-    // eigene „Entfernen“), ganz zu sehen.
+    // Im Fenster, ganz zu sehen.
+    let window = h.w.last_rect.unwrap();
     let removes = |seen: &[Seen]| -> Vec<Rect> {
-        let top = find(seen, "Plug-ins").unwrap().rect.bottom();
-        let bottom = find(seen, "Projekte").unwrap().rect.top();
         seen.iter()
             .filter(|s| {
                 s.text == "Entfernen"
-                    && s.rect.top() > top
-                    && s.rect.bottom() < bottom
+                    && window.contains_rect(s.rect)
                     && s.clip.contains_rect(s.rect)
             })
             .map(|s| s.rect)
             .collect()
     };
-    let seen = aufklappen(&mut h, HALLO);
+    let seen = waehlen(&mut h, HALLO);
     assert!(has(&seen, "Verlangt keine Rechte."), "{}", join(&seen));
     assert!(removes(&seen).is_empty(), "mitgeliefert: {}", join(&seen));
-    klappen(&mut h, HALLO, false);
-    let seen = aufklappen(&mut h, FAELLE);
+    let seen = waehlen(&mut h, FAELLE);
     let found = removes(&seen);
     assert_eq!(found.len(), 1, "installiert: {}", join(&seen));
     let at = found[0].center();
@@ -560,33 +567,113 @@ fn shadowed_entry_shown() {
     }
 }
 
+/// Handtest W1/W2 bei 1920 × 1080: das Fenster steht ganz im Bild unter der Menüleiste, links
+/// die Liste, rechts die Details des gewählten Plug-ins; seine Rechte stehen mit Stand und
+/// „Zurücknehmen“ gleich da, ohne Aufklappen.
 #[test]
-fn opening_at_plugins_scrolls_there() {
-    // Bei 1920 × 1080 steht der Abschnitt ohnehin im Bild; rollen muss das Fenster erst auf einem
-    // kleineren Bildschirm (1366 × 768), wo Darstellung und Updates untereinander stehen.
-    let header_top = |at: Option<SettingsSection>, name: &str| {
-        let mut h = harness(name, orte(name, &[], &[]), Config::default());
-        // Eigener Kontext: kein Rollstand aus den Bildern des Aufbaus.
-        h.ctx = fresh_ctx();
-        h.size = vec2(1366.0, 768.0);
-        h.w.close();
-        h.w.open_at(false, at);
-        for _ in 0..4 {
-            bild(&mut h, vec![]);
-        }
-        assert_eq!(h.w.scroll_target(), None, "abgeholt, sobald hingerollt ist");
-        let seen = bild(&mut h, vec![]);
-        let window = h.w.last_rect.unwrap();
-        let header = find(&seen, "Plug-ins").unwrap_or_else(|| panic!("{}", join(&seen)));
-        (header.rect.top() - window.top(), window)
-    };
-    let (plain, _) = header_top(None, "rollen-ohne");
-    let (scrolled, window) = header_top(Some(SettingsSection::Plugins), "rollen");
-    assert!(
-        scrolled < plain - 100.0,
-        "hingerollt: {scrolled} statt {plain} (Fenster {window:?})"
+fn window_shows_list_and_details_with_rights() {
+    let mut config = Config::default();
+    config.plugins.insert(
+        FAELLE.to_string(),
+        PluginConfig {
+            enabled: true,
+            rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
+            author: Some("Dennis Guse".to_string()),
+            net_hosts: vec!["example.org".to_string()],
+            source: Some("file".to_string()),
+        },
     );
-    assert!(scrolled > 0.0, "im Fenster: {scrolled}");
+    let places = orte("fenster", &["beispiel-hallo"], &["test-faelle"]);
+    let user = places.user.clone();
+    let mut h = harness("fenster", places, config);
+    let seen = bild(&mut h, vec![]);
+    let window = h.w.last_rect.unwrap();
+    let screen = Rect::from_min_size(Pos2::ZERO, h.size);
+    assert!(screen.contains_rect(window), "{window:?}");
+    assert!(
+        window.top() >= theme::HEADER_H,
+        "unter der Menüleiste: {window:?}"
+    );
+    for text in [
+        "Zusatzmodule",
+        "Plug-ins",
+        "Aus Datei…",
+        "Holen",
+        "Schließen",
+    ] {
+        assert!(has(&seen, text), "„{text}“ fehlt: {}", join(&seen));
+    }
+    // Der Ordner der installierten Plug-ins steht da (so fällt ein falscher Ordner auf).
+    let folder = format!(
+        "Installierte Plug-ins liegen in: {}",
+        planora_app::file_chooser::display_path(&user)
+    );
+    assert!(has(&seen, &folder), "{}", join(&seen));
+    // Ohne Wahl das erste der Liste (nach Kennung: Beispiel-Hallo), rechts seine Details.
+    assert_eq!(h.w.selected_in(&h.ws.plugins).as_deref(), Some(HALLO));
+    assert!(has(&seen, "Verlangt keine Rechte."), "{}", join(&seen));
+    // Test-Fälle wählen: Rechte mit Stand und „Zurücknehmen“ sofort sichtbar.
+    let seen = waehlen(&mut h, FAELLE);
+    let toggle = h.w.last_toggles[FAELLE];
+    for text in ["Netz (example.org)", "erlaubt", "Zurücknehmen", "Entfernen"] {
+        let s = find(&seen, text).unwrap_or_else(|| panic!("„{text}“ fehlt: {}", join(&seen)));
+        assert!(window.contains_rect(s.rect), "„{text}“ im Fenster");
+        assert!(s.clip.contains_rect(s.rect), "„{text}“ ganz zu sehen");
+        assert!(
+            s.rect.left() > toggle.right() + 200.0,
+            "„{text}“ rechts der Liste"
+        );
+    }
+    assert!(!has(&seen, "Verlangt keine Rechte."), "{}", join(&seen));
+}
+
+/// Ein Plug-in-Ordner, der da ist, sich aber nicht lesen lässt, steht als Hinweis im Fenster
+/// (sonst hieße es nur „Keine Plug-ins gefunden.“).
+#[test]
+fn unreadable_folder_is_reported() {
+    let places = orte("unlesbar", &[], &[]);
+    std::fs::remove_dir_all(&places.user).unwrap();
+    std::fs::write(&places.user, b"keine Ordner").unwrap();
+    let mut h = harness("unlesbar", places, Config::default());
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Keine Plug-ins gefunden."), "{}", join(&seen));
+    assert!(
+        seen.iter().any(|s| s
+            .text
+            .starts_with("Der Ordner der installierten Plug-ins lässt sich nicht lesen:")),
+        "{}",
+        join(&seen)
+    );
+}
+
+/// Die Einstellungen haben keinen Abschnitt „Plug-ins“ mehr.
+#[test]
+fn settings_have_no_plugin_section() {
+    let mut h = harness(
+        "einstellungen",
+        orte("einstellungen", &[], &["test-faelle"]),
+        Config::default(),
+    );
+    h.w.close();
+    let mut settings = planora_app::settings_window::SettingsWindow::default();
+    settings.open(false);
+    let raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, h.size)),
+        ..Default::default()
+    };
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        let out = h.ctx.run_ui(raw.clone(), |ui| {
+            let ctx = ui.ctx().clone();
+            settings.show_in(&ctx, &mut h.ws);
+        });
+        seen = collect_seen(&out.shapes);
+        out.drop_without_applying_deltas();
+    }
+    assert!(has(&seen, "Tastenkürzel"), "{}", join(&seen));
+    for text in ["Plug-ins", "Test-Fälle", "Aus Datei…", "Repo-Link"] {
+        assert!(!has(&seen, text), "„{text}“: {}", join(&seen));
+    }
 }
 
 // --- Fix-Runde 1: Rechte bei Entfernen und Ersetzen -------------------------------------------
@@ -827,8 +914,7 @@ fn disabled_plugin_survives_remove_and_restart() {
     let places = orte("aus-bleibt", &[], &["beispiel-hallo", "test-faelle"]);
     let mut h = harness("aus-bleibt", places.clone(), Config::default());
     assert_eq!(entry_state(&h, HALLO), Some(EntryState::Running));
-    let seen = bild(&mut h, vec![]);
-    klick(&mut h, &seen, "Beispiel-Hallo");
+    schalten(&mut h, HALLO);
     assert_eq!(entry_state(&h, HALLO), Some(EntryState::Off));
     assert_eq!(
         gespeichert(&h, HALLO).map(|c| c.enabled),
@@ -849,8 +935,8 @@ fn disabled_plugin_survives_remove_and_restart() {
     ws.config_path = config_path;
     ws.plugins = Plugins::new(places, &ws.config);
     ws.plugins.host.set_language("de");
-    let mut w = SettingsWindow::default();
-    w.open_at(false, Some(SettingsSection::Plugins));
+    let mut w = AddinsWindow::default();
+    w.open();
     let mut h = H {
         ws,
         ctx: fresh_ctx(),
@@ -894,8 +980,7 @@ fn disabled_plugin_survives_remove_of_stopped_plugin() {
         h.ws.plugins.restart(FAELLE);
         warten(&mut h);
     }
-    let seen = bild(&mut h, vec![]);
-    klick(&mut h, &seen, "Beispiel-Hallo");
+    schalten(&mut h, HALLO);
     assert_eq!(gespeichert(&h, HALLO).map(|c| c.enabled), Some(false));
     plugins::remove(&mut h.ws, FAELLE);
     warten(&mut h);

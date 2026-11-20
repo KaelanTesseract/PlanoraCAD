@@ -1,6 +1,7 @@
 //! PlanoraCAD – Anwendungslogik und Oberfläche.
 
 pub mod about_dialog;
+pub mod addins_window;
 pub mod app;
 pub mod balloon_browser;
 pub mod balloon_tool;

@@ -9,7 +9,6 @@ use common::{Seen, collect_seen, find, join};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 use planora_app::app::{self, MenuRequest, PlanoraApp};
 use planora_app::plugins::{self, Plugins};
-use planora_app::settings_window::{ChooserPurpose, SettingsSection};
 use planora_app::shell::ShellState;
 use planora_app::workspace::{Prompt, Workspace};
 use planora_app::{fonts, theme};
@@ -498,7 +497,7 @@ fn failure_banner_and_restart() {
 }
 
 #[test]
-fn addins_menu_opens_settings_section() {
+fn addins_menu_opens_addins_window() {
     let (mut ws, ctx) = arbeitsbereich("einstellungen", &[], Config::default());
     let mut shell = ShellState::default();
     let mut got = MenuRequest::None;
@@ -507,20 +506,16 @@ fn addins_menu_opens_settings_section() {
     let seen = menue_klick(&mut ws, &ctx, &mut shell, &seen, "Zusatzmodule", &mut got);
     // Ohne Plug-ins nur der Eintrag „Verwalten …“.
     menue_klick(&mut ws, &ctx, &mut shell, &seen, "Verwalten …", &mut got);
-    assert_eq!(got, MenuRequest::Settings(Some(SettingsSection::Plugins)));
+    assert_eq!(got, MenuRequest::Addins);
 
+    // Ein eigenes Fenster, nicht die Einstellungen (Handtest W1).
     let mut app = PlanoraApp::for_tests(ws);
     app.apply_menu_request(&ctx, got);
+    assert!(app.addins_window().is_open());
+    assert!(!app.settings_window().is_open());
+    // Datei → „Einstellungen …“ öffnet die Einstellungen.
+    app.apply_menu_request(&ctx, MenuRequest::Settings);
     assert!(app.settings_window().is_open());
-    assert_eq!(
-        app.settings_window().scroll_target(),
-        Some(SettingsSection::Plugins)
-    );
-    // Datei → „Einstellungen …“ öffnet ohne Abschnitt.
-    app.settings_window_mut().close();
-    app.apply_menu_request(&ctx, MenuRequest::Settings(None));
-    assert!(app.settings_window().is_open());
-    assert_eq!(app.settings_window().scroll_target(), None);
 }
 
 #[test]
@@ -587,27 +582,24 @@ fn manage_disabled_while_prompt_open() {
 }
 
 #[test]
-fn settings_request_leaves_window_alone_while_prompt_open() {
-    let (ws, ctx) = arbeitsbereich("einstellungen-rueckfrage", &[], Config::default());
+fn addins_request_leaves_window_alone_while_prompt_open() {
+    let (ws, ctx) = arbeitsbereich("zusatzmodule-rueckfrage", &[], Config::default());
     let mut app = PlanoraApp::for_tests(ws);
-    app.apply_menu_request(&ctx, MenuRequest::Settings(None));
-    assert!(app.settings_window().is_open());
-    app.settings_window_mut().start_choosing_plugin();
+    app.apply_menu_request(&ctx, MenuRequest::Addins);
+    assert!(app.addins_window().is_open());
+    app.addins_window_mut().start_choosing();
     app.ws_mut().prompt = Some(Prompt::Notice("offen".to_string()));
-    // Ein schon offenes Fenster bleibt, wie es ist (keine neue Öffnung, kein Rollziel).
-    app.apply_menu_request(&ctx, MenuRequest::Settings(Some(SettingsSection::Plugins)));
-    assert!(app.settings_window().is_open());
-    assert_eq!(
-        app.settings_window().chooser_purpose(),
-        Some(ChooserPurpose::Plugin),
+    // Ein schon offenes Fenster bleibt, wie es ist (keine neue Öffnung).
+    app.apply_menu_request(&ctx, MenuRequest::Addins);
+    assert!(app.addins_window().is_open());
+    assert!(
+        app.addins_window().is_choosing(),
         "die Auswahl bleibt offen"
     );
-    assert_eq!(app.settings_window().scroll_target(), None);
     // Ein geschlossenes öffnet bei offener Rückfrage nicht.
-    app.settings_window_mut().close();
-    app.apply_menu_request(&ctx, MenuRequest::Settings(Some(SettingsSection::Plugins)));
-    assert!(!app.settings_window().is_open());
-    assert_eq!(app.settings_window().scroll_target(), None);
+    app.addins_window_mut().close();
+    app.apply_menu_request(&ctx, MenuRequest::Addins);
+    assert!(!app.addins_window().is_open());
 }
 
 /// Ein fertiges Netz-Ergebnis geht erst beim nächsten `poll` an das Plug-in: das Bild, in dem es

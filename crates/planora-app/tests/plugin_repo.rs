@@ -7,8 +7,8 @@ mod common;
 
 use common::{Seen, collect_seen, find, join};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, vec2};
+use planora_app::addins_window::AddinsWindow;
 use planora_app::plugins::{self, Plugins, check_downloaded};
-use planora_app::settings_window::{SettingsSection, SettingsWindow};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, prompts, theme};
 use planora_plugin_host::EntryState;
@@ -207,7 +207,7 @@ fn fresh_ctx() -> egui::Context {
 struct H {
     ws: Workspace,
     ctx: egui::Context,
-    w: SettingsWindow,
+    w: AddinsWindow,
 }
 
 fn harness(name: &str, places: Places, config: Config) -> H {
@@ -218,8 +218,8 @@ fn harness(name: &str, places: Places, config: Config) -> H {
     ws.plugins = Plugins::new(places, &ws.config);
     ws.plugins.host.set_language("de");
     ws.plugins.repo_fetch = netz;
-    let mut w = SettingsWindow::default();
-    w.open_at(false, Some(SettingsSection::Plugins));
+    let mut w = AddinsWindow::default();
+    w.open();
     let mut h = H {
         ws,
         ctx: fresh_ctx(),
@@ -528,17 +528,11 @@ fn update_dialog_shows_versions_notes_and_new_rights() {
     let seen = warten(&mut h);
     let seen = klick(&mut h, &seen, "Anzeigen");
     assert!(
-        h.ws.plugins.take_show_section(),
-        "„Anzeigen“ öffnet den Abschnitt"
+        h.ws.plugins.take_show_window(),
+        "„Anzeigen“ öffnet das Fenster „Zusatzmodule“"
     );
-    // Aufklappen und „Aktualisieren auf 0.2.0“.
-    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        &h.ctx,
-        planora_app::settings_window::plugin_details_id(HALLO),
-        false,
-    );
-    state.set_open(true);
-    state.store(&h.ctx);
+    // Gewählt (rechts) und „Aktualisieren auf 0.2.0“ gleich zu sehen.
+    h.w.select(HALLO);
     bild(&mut h, vec![]);
     let seen2 = bild(&mut h, vec![]);
     let _ = seen;

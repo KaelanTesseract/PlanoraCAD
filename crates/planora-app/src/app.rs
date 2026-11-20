@@ -1,3 +1,4 @@
+use crate::addins_window::AddinsWindow;
 use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
 use crate::crash::{RunMarker, StartFinding};
@@ -21,7 +22,7 @@ use crate::keymap::{self, Action};
 use crate::plane_dialog::{PlaneCommand, PlaneDialog};
 use crate::project_actions::ProjectsUi;
 use crate::projects_window::{ProjectsEvent, ProjectsWindow};
-use crate::settings_window::{CheckHint, SettingsEvent, SettingsSection, SettingsWindow};
+use crate::settings_window::{CheckHint, SettingsEvent, SettingsWindow};
 use crate::shell::ShellState;
 use crate::sketch_state::Tool;
 use crate::state::{AppState, BodyKind, FontState, SketchRequest, StandardPlane};
@@ -92,15 +93,16 @@ pub fn faq_entry() -> String {
 }
 
 /// Was die Menüs außer ihren eigenen Aktionen verlangen: das Fenster „Projekte“,
-/// „Einstellungen“, „Tastenkürzel“ oder „Rückmeldung“ öffnen (die Fenster gehören der App, nicht
-/// dem Arbeitsbereich).
+/// „Einstellungen“, „Zusatzmodule“, „Tastenkürzel“ oder „Rückmeldung“ öffnen (die Fenster gehören
+/// der App, nicht dem Arbeitsbereich).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MenuRequest {
     #[default]
     None,
     Projects,
-    /// Die Einstellungen, auf Wunsch an einem Abschnitt.
-    Settings(Option<SettingsSection>),
+    Settings,
+    /// Das Fenster „Zusatzmodule“ (Datei → Zusatzmodule → Verwalten …).
+    Addins,
     Shortcuts,
     Feedback,
 }
@@ -133,6 +135,8 @@ pub struct PlanoraApp {
     pub(crate) projects: ProjectsWindow,
     /// Fenster „Einstellungen“.
     pub(crate) settings: SettingsWindow,
+    /// Fenster „Zusatzmodule“ (Verwaltung der Plug-ins, [`crate::addins_window`]).
+    pub(crate) addins: AddinsWindow,
     /// Fenster „Tastenkürzel“ (Übersicht, [`keymap::overview`]).
     pub(crate) overview: OverviewState,
     /// Fenster „Rückmeldung“ ([`feedback_dialog`]).
@@ -408,6 +412,7 @@ impl PlanoraApp {
             shell: ShellState::default(),
             projects: ProjectsWindow::default(),
             settings: SettingsWindow::default(),
+            addins: AddinsWindow::default(),
             overview: OverviewState::default(),
             feedback: FeedbackDialog::default(),
             system_open: Box::new(NoFolderOpen),
@@ -787,6 +792,18 @@ impl PlanoraApp {
         &mut self.settings
     }
 
+    /// Das Fenster „Zusatzmodule“ (für Tests).
+    #[doc(hidden)]
+    pub fn addins_window(&self) -> &AddinsWindow {
+        &self.addins
+    }
+
+    /// Das Fenster „Zusatzmodule“, zum Ändern (für Tests).
+    #[doc(hidden)]
+    pub fn addins_window_mut(&mut self) -> &mut AddinsWindow {
+        &mut self.addins
+    }
+
     /// App ohne Fenster und Renderer für die Oberflächentests; ohne Netz (die Prüfung auf
     /// Updates meldet immer „kein Netz“ und speichert nichts).
     #[doc(hidden)]
@@ -1112,13 +1129,16 @@ impl PlanoraApp {
             MenuRequest::Projects => {
                 open_projects(&mut self.ws, &mut self.projects, &mut self.settings)
             }
-            MenuRequest::Settings(section) => open_settings_at(
-                &mut self.ws,
-                &mut self.projects,
-                &mut self.settings,
-                false,
-                section,
-            ),
+            MenuRequest::Settings => {
+                open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false)
+            }
+            // Wie die Einstellungen nicht bei offener Rückfrage; ein offenes Fenster bleibt, wie
+            // es ist.
+            MenuRequest::Addins => {
+                if self.ws.prompt.is_none() && !self.addins.is_open() {
+                    self.addins.open();
+                }
+            }
             MenuRequest::Shortcuts => open_overview(
                 &mut self.ws,
                 &mut self.projects,
@@ -1761,24 +1781,11 @@ pub fn open_settings(
     settings: &mut SettingsWindow,
     return_to_projects: bool,
 ) {
-    open_settings_at(ws, projects, settings, return_to_projects, None);
-}
-
-/// Wie [`open_settings`], dazu der Abschnitt, zu dem das Fenster rollt (Datei → „Zusatzmodule“
-/// → „Verwalten …“). Öffnet es nicht (offene Rückfrage), bleibt auch ein schon offenes Fenster,
-/// wie es ist.
-pub fn open_settings_at(
-    ws: &mut Workspace,
-    projects: &mut ProjectsWindow,
-    settings: &mut SettingsWindow,
-    return_to_projects: bool,
-    section: Option<SettingsSection>,
-) {
     if ws.prompt.is_some() || !close_file_windows(ws) {
         return;
     }
     close_projects(projects);
-    settings.open_at(return_to_projects, section);
+    settings.open(return_to_projects);
 }
 
 /// Öffnet die Übersicht „Tastenkürzel“ (Menü Ansicht und Taste S) mit aktivem Suchfeld. Sie
@@ -2242,7 +2249,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     .on_disabled_hover_text(tr!("menu-answer-prompt-first"))
     .clicked()
     {
-        request = MenuRequest::Settings(None);
+        request = MenuRequest::Settings;
         ui.close();
     }
     if entry(ui, true, icons::button(Icon::Quit, tr!("menu-file-quit"))).clicked() {
@@ -3309,6 +3316,8 @@ impl eframe::App for PlanoraApp {
 
         show_file_dialogs(&ctx, &mut self.ws);
         show_windows(&ctx, &mut self.ws, &mut self.projects, &mut self.settings);
+        // „Zusatzmodule“ steht für sich (Plug-ins verwalten), neben Projekten und Einstellungen.
+        self.addins.show_in(&ctx, &mut self.ws);
         if self.settings.take_check_request() {
             self.start_update_check(true);
         }
@@ -3345,9 +3354,9 @@ impl eframe::App for PlanoraApp {
         prompts::show(&ctx, &mut self.ws);
         // Plug-ins: Ereignisse, Netz-Aufträge, Rechte-Nachfrage und Fehlerleiste.
         crate::plugins::show(&ctx, &mut self.ws);
-        // „Anzeigen“ im Hinweis auf Plug-in-Updates: Einstellungen am Abschnitt „Plug-ins“.
-        if self.ws.plugins.take_show_section() {
-            self.apply_menu_request(&ctx, MenuRequest::Settings(Some(SettingsSection::Plugins)));
+        // „Anzeigen“ im Hinweis auf Plug-in-Updates: das Fenster „Zusatzmodule“.
+        if self.ws.plugins.take_show_window() {
+            self.apply_menu_request(&ctx, MenuRequest::Addins);
         }
         // Nach allen Feldern und Dialogen (auch abgedockten): deren unverbrauchte Tasten; vor den
         // Schritten für Rückgängig, damit eine Änderung im selben Bild ein Schritt wird.

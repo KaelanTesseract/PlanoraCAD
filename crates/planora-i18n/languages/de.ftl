@@ -3891,7 +3891,12 @@ plugin-url-too-long = die Adresse ist zu lang (höchstens { $max } Bytes)
 plugin-url-no-host = kein Rechnername
 plugin-url-host-not-allowed = Rechner { $host } ist nicht im Manifest freigegeben
 
-## Einstellungen „Plug-ins“ und Installationsdialog (Plug-ins Etappe 1, Task 7)
+## Fenster „Zusatzmodule“ (Verwaltung der Plug-ins) und Installationsdialog (Plug-ins Etappe 1,
+## Task 7 und Handtest)
+addins-title = Zusatzmodule
+addins-folder = Installierte Plug-ins liegen in: { $path }
+addins-folder-unreadable = Der Ordner der installierten Plug-ins lässt sich nicht lesen: { $error }
+addins-details-empty = Links ein Plug-in wählen.
 settings-section-plugins = Plug-ins
 plugin-settings-none = Keine Plug-ins gefunden.
 plugin-settings-install = Plug-in installieren…

@@ -3908,7 +3908,11 @@ plugin-url-too-long = the address is too long (at most { $max } bytes)
 plugin-url-no-host = no host name
 plugin-url-host-not-allowed = host { $host } is not allowed in the manifest
 
-## Settings "Plug-ins" and install dialog (plug-ins stage 1, task 7)
+## Window "Add-Ins" (managing plug-ins) and install dialog (plug-ins stage 1, task 7 and hand test)
+addins-title = Add-Ins
+addins-folder = Installed plug-ins are in: { $path }
+addins-folder-unreadable = The folder of installed plug-ins cannot be read: { $error }
+addins-details-empty = Choose a plug-in on the left.
 settings-section-plugins = Plug-ins
 plugin-settings-none = No plug-ins found.
 plugin-settings-install = Install plug-in…

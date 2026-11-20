@@ -82,6 +82,7 @@ pub const DIALOG_KEYS: &[&str] = &[
     "mesh_import",
     "step_import",
     // Fenster
+    "addins",
     "parameters",
     "projects",
     "settings",

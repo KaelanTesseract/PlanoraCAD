@@ -4,29 +4,22 @@
 //! nächsten Bild, gespeichert sofort), darunter „Updates“ (laufende Version, Update-Kanal,
 //! Suchen beim Start, letzte Prüfung; gespeichert sofort; Knopf „Jetzt nach Updates
 //! suchen“ mit Ergebnis und bei einem Fund „Meldung anzeigen“, die Suche selbst macht die App;
-//! eine übersprungene Version mit „Doch wieder anzeigen“), dann „Plug-ins“ (je Plug-in Schalter,
-//! Zustand und aufklappbar Autor, Lizenz, Rechte mit „Zurücknehmen“ und „Entfernen“; Knopf
-//! „Plug-in installieren…“ mit der Dateiauswahl für `*.pcplugin`), dann „Projekte“ mit dem
+//! eine übersprungene Version mit „Doch wieder anzeigen“), dann „Projekte“ mit dem
 //! Projektverzeichnis und zuletzt „Tastenkürzel“ ([`crate::keymap::settings_ui`]; zuletzt, weil
 //! die lange Tabelle sonst „Projekte“ nach unten schöbe). Gewählt wird über die
 //! Dateiauswahl im Ordner-Modus; der Wechsel wirkt wie [`Workspace::choose_root`] und
 //! [`Workspace::persist_config`] (nur `root` wird geschrieben, Favoriten bleiben). Nichts wird
-//! verschoben, kopiert oder gelöscht.
+//! verschoben, kopiert oder gelöscht. Die Plug-ins verwaltet das Fenster „Zusatzmodule“
+//! ([`crate::addins_window`]).
 
 use crate::dialog::{Dialog, DialogSize, close_label};
 use crate::file_chooser::{self, ChooserAction, FileChooser, display_path};
 use crate::keymap::settings_ui::{self, CaptureState};
 use crate::places::{self, Places};
-use crate::plugin_prompts::{grant_text, origin_text, right_name, state_text};
-use crate::plugins::{self as app_plugins, Plugins, entry_name};
 use crate::theme;
-use crate::workspace::{Prompt, Workspace, root_locked};
+use crate::workspace::{Workspace, root_locked};
 use crate::{local_time, running_version};
 use planora_i18n::{Lang, tr};
-use planora_plugin_host::EntryState;
-use planora_plugin_host::licenses::license_ok;
-use planora_plugin_host::manifest::Right;
-use planora_plugin_host::places::Origin;
 use planora_project::config::{Config, MAX_PANEL_TRANSPARENCY, clamp_panel_transparency};
 use planora_project::library::{DOCUMENT_FILE, DOCUMENT_SUFFIX, PROJECT_FILE};
 use planora_update::{Channel, Version};
@@ -367,105 +360,13 @@ pub enum SettingsEvent {
     Closed { return_to_projects: bool },
 }
 
-/// Ein Abschnitt, an dem das Fenster geöffnet werden kann (Datei → „Zusatzmodule“ →
-/// „Verwalten …“ öffnet am Abschnitt Plug-ins).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SettingsSection {
-    /// Die Plug-ins ([`plugins_title`]).
-    Plugins,
-}
-
-/// Wofür die Dateiauswahl des Fensters gerade wählt.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ChooserPurpose {
-    /// Das Projektverzeichnis (Ordner-Modus, Abschnitt „Projekte“).
-    #[default]
-    Directory,
-    /// Ein Plug-in-Paket `*.pcplugin` (Abschnitt „Plug-ins“).
-    Plugin,
-}
-
-/// So viele Bilder lang rollt das Fenster zum Ziel aus [`SettingsWindow::open_at`] (das erste
-/// Bild eines neu geöffneten Fensters misst nur aus).
-const SCROLL_FRAMES: u8 = 2;
-
-/// Größte Höhe der Liste im Abschnitt „Plug-ins“; darüber rollt sie (der Abschnitt schiebt das
-/// Fenster sonst über die Menüleiste).
-pub const PLUGIN_LIST_MAX_H: f32 = 240.0;
-
-/// Überschrift des Abschnitts „Plug-ins“.
-pub fn plugins_title() -> String {
-    tr!("settings-section-plugins")
-}
-/// Knopf „Aus Datei…“ (Plug-in aus einer Paketdatei installieren).
-pub fn install_plugin_label() -> String {
-    tr!("plugin-install-from-file")
-}
-/// Knopf „Nach Updates suchen“ eines Plug-ins mit Repo-Link.
-pub fn check_updates_label() -> String {
-    tr!("plugin-check-updates")
-}
-
-/// Knopf „Aktualisieren auf { $version }“.
-pub fn update_to_label(version: &str) -> String {
-    tr!("plugin-update-to", version = version)
-}
-
-/// Breite des Felds „Repo-Link“ in der Überschrift des Abschnitts „Plug-ins“.
-const LINK_FIELD_W: f32 = 260.0;
-
-/// Knopf „Entfernen“ eines installierten Plug-ins.
-pub fn remove_plugin_label() -> String {
-    tr!("plugin-settings-remove")
-}
-/// Knopf „Zurücknehmen“ eines entschiedenen Rechts.
-pub fn revoke_label() -> String {
-    tr!("plugin-right-revoke")
-}
-/// Zeile eines nicht aktiven Fundorts: „installiert 0.1.0: überdeckt von Version 0.2.0“.
-pub fn shadowed_text(origin: Origin, version: &str, active: &str) -> String {
-    tr!(
-        "plugin-settings-shadowed",
-        origin = origin_text(origin),
-        version = version,
-        active = active
-    )
-}
-
-/// Id des Aufklapp-Zustands eines Plug-ins im Abschnitt „Plug-ins“ (Tests klappen damit auf).
-pub fn plugin_details_id(plugin: &str) -> egui::Id {
-    egui::Id::new(("planora_plugin_details", plugin))
-}
-
-/// Was im Abschnitt „Plug-ins“ gedrückt wurde (ausgeführt nach dem Zeichnen).
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum PluginAction {
-    Enable(String, bool),
-    Revoke(String, Right),
-    Remove(String),
-    Install,
-    /// „Holen“ mit dem Text im Feld „Repo-Link“.
-    Fetch,
-    CancelFetch,
-    /// „Nach Updates suchen“.
-    CheckUpdates,
-    /// „Aktualisieren auf …“ (öffnet den Aktualisieren-Dialog).
-    OpenUpdate(String),
-}
-
 #[derive(Default)]
 pub struct SettingsWindow {
     open: bool,
-    /// Der Abschnitt, zu dem das Fenster beim Öffnen rollen soll ([`SettingsWindow::open_at`]);
-    /// nach [`SCROLL_FRAMES`] gezeichneten Bildern ist es abgeholt.
-    scroll_target: Option<SettingsSection>,
-    /// Bilder, in denen schon zum Ziel gerollt wurde.
-    scroll_frames: u8,
     /// Beim Schließen wieder das Fenster „Projekte“ öffnen.
     return_to_projects: bool,
-    /// Dateiauswahl, solange gewählt wird (wofür: `chooser_for`).
+    /// Dateiauswahl des Projektverzeichnisses, solange gewählt wird.
     chooser: Option<FileChooser>,
-    chooser_for: ChooserPurpose,
     message: Option<RootMessage>,
     /// Hinweis unter dem Regler (nur [`transparency_not_saved`]).
     appearance_message: Option<RootMessage>,
@@ -495,7 +396,6 @@ impl SettingsWindow {
     /// Öffnet das Fenster; leert Meldung und Auswahl.
     pub fn open(&mut self, return_to_projects: bool) {
         self.open = true;
-        self.scroll_target = None;
         self.return_to_projects = return_to_projects;
         self.chooser = None;
         self.message = None;
@@ -507,23 +407,6 @@ impl SettingsWindow {
             self.check_hint = None;
         }
         self.keys = CaptureState::default();
-    }
-
-    /// Wie [`SettingsWindow::open`], dazu der Abschnitt, zu dem das Fenster rollen soll.
-    pub fn open_at(&mut self, return_to_projects: bool, section: Option<SettingsSection>) {
-        self.open(return_to_projects);
-        self.scroll_target = section;
-        self.scroll_frames = 0;
-    }
-
-    /// Der Abschnitt, zu dem das Fenster rollen soll (noch nicht abgeholt).
-    pub fn scroll_target(&self) -> Option<SettingsSection> {
-        self.scroll_target
-    }
-
-    /// Holt das Rollziel ab (das Zeichnen tut das selbst, sobald hingerollt ist).
-    pub fn take_scroll_target(&mut self) -> Option<SettingsSection> {
-        self.scroll_target.take()
     }
 
     /// Schließt das Fenster; ein laufendes Erfassen einer Taste endet (die Sperre der Kürzel
@@ -557,22 +440,6 @@ impl SettingsWindow {
             }
         };
         self.chooser = Some(FileChooser::folder(dir));
-        self.chooser_for = ChooserPurpose::Directory;
-    }
-
-    /// Öffnet die Auswahl einer Datei `*.pcplugin` (Knopf „Plug-in installieren…“) in
-    /// [`file_chooser::default_dir`]; die gewählte Datei liest [`Plugins::read_package`].
-    pub fn start_choosing_plugin(&mut self) {
-        self.chooser = Some(FileChooser::open(
-            file_chooser::default_dir(),
-            vec!["pcplugin"],
-        ));
-        self.chooser_for = ChooserPurpose::Plugin;
-    }
-
-    /// Wofür die offene Auswahl wählt.
-    pub fn chooser_purpose(&self) -> Option<ChooserPurpose> {
-        self.chooser.as_ref().map(|_| self.chooser_for)
     }
 
     pub fn chooser_mut(&mut self) -> Option<&mut FileChooser> {
@@ -695,10 +562,6 @@ impl SettingsWindow {
         let unit = planora_i18n::current_unit();
         let mut chosen_unit: Option<planora_i18n::DisplayUnit> = None;
         let choosing = self.chooser.is_some();
-        let chooser_for = self.chooser_for;
-        let scroll_plugins = self.scroll_target == Some(SettingsSection::Plugins);
-        let mut plugin_actions: Vec<PluginAction> = Vec::new();
-        let mut link_text = ws.plugins.link_text.clone();
         // Die Auswahl zeichnet oben (rollt) und in der Fußzeile (wählen, abbrechen).
         let chooser = RefCell::new(self.chooser.as_mut());
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
@@ -753,32 +616,6 @@ impl SettingsWindow {
                             updates(ui);
                         }
                         ui.add_space(theme::SPACE_4);
-                        if scroll_plugins {
-                            // Ohne Animation: das Fenster öffnet gleich am Abschnitt.
-                            ui.scroll_to_cursor_animation(
-                                Some(egui::Align::TOP),
-                                egui::style::ScrollAnimation::none(),
-                            );
-                        }
-                        let plugins_top = ui.cursor().top();
-                        show_plugins(
-                            ui,
-                            &ws.plugins,
-                            choosing,
-                            &mut link_text,
-                            &mut plugin_actions,
-                        );
-                        // Der Abschnitt kam nach der Bemessung der Tastenkürzel-Tabelle dazu: um
-                        // seine Höhe wird sie niedriger (die Liste darin ist begrenzt).
-                        let plugins_h = ui.cursor().top() - plugins_top + theme::SPACE_4;
-                        if chooser_for == ChooserPurpose::Plugin
-                            && let Some(c) = chooser.borrow_mut().as_mut()
-                        {
-                            ui.add_space(theme::SPACE_2);
-                            ui.strong(tr!("plugin-settings-install"));
-                            body_action = c.show_body(ui, places);
-                        }
-                        ui.add_space(theme::SPACE_4);
                         theme::section_header(ui, &section_projects(), theme::SUB_HEADER_H);
                         ui.add_space(theme::SPACE_2);
                         ui.strong(directory_label());
@@ -790,15 +627,13 @@ impl SettingsWindow {
                         if let Some(m) = &message {
                             ui.colored_label(m.color(dark), m.text());
                         }
-                        if chooser_for == ChooserPurpose::Directory
-                            && let Some(c) = chooser.borrow_mut().as_mut()
-                        {
+                        if let Some(c) = chooser.borrow_mut().as_mut() {
                             ui.add_space(theme::SPACE_2);
                             ui.strong(choose_heading());
                             body_action = c.show_body(ui, places);
                         }
                         ui.add_space(theme::SPACE_4);
-                        settings_ui::show_reserving(ui, ws, keys, plugins_h);
+                        settings_ui::show(ui, ws, keys);
                     });
                 },
                 |ui| match chooser.borrow_mut().as_mut() {
@@ -813,18 +648,6 @@ impl SettingsWindow {
                 },
             );
         self.last_rect = response.map(|r| r.response.rect);
-        if scroll_plugins {
-            self.scroll_frames += 1;
-            if self.scroll_frames >= SCROLL_FRAMES {
-                self.take_scroll_target();
-            }
-        }
-        ws.plugins.link_text = link_text;
-        if !locked {
-            for action in plugin_actions {
-                self.apply_plugin_action(ws, action);
-            }
-        }
         // Wirkt sofort; gespeichert wird, sobald der Regler losgelassen ist (Tastatur sofort).
         if slid && !locked {
             self.preview_transparency(ws, transparency);
@@ -884,12 +707,8 @@ impl SettingsWindow {
             };
             // Erfolg wie Fehler schließen die Auswahl; ein Fehler bleibt als Meldung stehen.
             self.chooser = None;
-            match (target, chooser_for) {
-                (Some(dir), ChooserPurpose::Directory) => {
-                    self.message = change_root(ws, &dir).err();
-                }
-                (Some(file), ChooserPurpose::Plugin) => ws.plugins.read_package(file),
-                (None, _) => {}
+            if let Some(dir) = target {
+                self.message = change_root(ws, &dir).err();
             }
         }
         if start {
@@ -906,222 +725,6 @@ impl SettingsWindow {
         }
         SettingsEvent::None
     }
-}
-
-impl SettingsWindow {
-    /// Führt eine Handlung aus dem Abschnitt „Plug-ins“ aus; Schalter und „Zurücknehmen“ werden
-    /// gleich gespeichert ([`app_plugins::persist`]), „Entfernen“ fragt erst nach.
-    fn apply_plugin_action(&mut self, ws: &mut Workspace, action: PluginAction) {
-        ws.plugins.note = None;
-        match action {
-            PluginAction::Enable(id, on) => {
-                ws.plugins.set_enabled(&id, on);
-                app_plugins::persist(ws);
-            }
-            PluginAction::Revoke(id, right) => {
-                ws.plugins.host.revoke(&id, right);
-                app_plugins::persist(ws);
-            }
-            PluginAction::Remove(id) => {
-                let name = ws.plugins.plugin_name(&id);
-                ws.prompt = Some(Prompt::RemovePlugin { id, name });
-            }
-            PluginAction::Install => self.start_choosing_plugin(),
-            PluginAction::Fetch => {
-                let text = ws.plugins.link_text.clone();
-                ws.plugins.install_from_link(&text);
-            }
-            PluginAction::CancelFetch => ws.plugins.cancel_fetch(),
-            PluginAction::CheckUpdates => ws.plugins.check_updates(true),
-            PluginAction::OpenUpdate(id) => ws.plugins.open_update(&id),
-        }
-    }
-}
-
-/// Abschnitt „Plug-ins“: je Plug-in eine Kopfzeile (Schalter mit Namen, Version, Herkunft,
-/// Zustand), aufklappbar Autor, Lizenz, Beschreibung, Rechte mit „Zurücknehmen“ und bei
-/// installierten „Entfernen“; nicht aktive Fundorte grau darunter. „Aus Datei…“ und das Feld
-/// „Repo-Link“ mit „Holen“ (nicht, solange gewählt, gelesen, geholt oder der Dialog gezeigt
-/// wird; beim Holen „Wird geholt…“ und „Abbrechen“) stehen rechts in der Überschrift, ein
-/// Hinweis ([`Plugins::note`]) gleich darunter. Plug-ins mit Repo-Link zeigen aufgeklappt
-/// „Quelle: …“, „Nach Updates suchen“ und bei einem geladenen Update „Aktualisieren auf …“.
-fn show_plugins(
-    ui: &mut egui::Ui,
-    plugins: &Plugins,
-    choosing: bool,
-    link: &mut String,
-    actions: &mut Vec<PluginAction>,
-) {
-    let dark = ui.visuals().dark_mode;
-    let entries = plugins.host.entries();
-    // Knopf und Leer-Hinweis stehen rechts in der Überschrift: der Abschnitt kostet so wenig
-    // Höhe vor der Tastenkürzel-Tabelle (auch in schmalen Fenstern bleiben deren Zeilen im Bild).
-    let header = theme::section_header(ui, &plugins_title(), theme::SUB_HEADER_H);
-    let busy =
-        choosing || plugins.is_reading() || plugins.is_fetching() || plugins.install.is_some();
-    let enabled = ui.is_enabled();
-    let mut header_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(header.rect.shrink2(egui::vec2(theme::SPACE_1, 2.0)))
-            .layout(egui::Layout::right_to_left(egui::Align::Center)),
-    );
-    if plugins.is_fetching() {
-        if header_ui
-            .add_enabled(enabled, egui::Button::new(tr!("common-cancel")))
-            .clicked()
-        {
-            actions.push(PluginAction::CancelFetch);
-        }
-        header_ui.label(tr!("plugin-install-fetching"));
-    } else {
-        if header_ui
-            .add_enabled(enabled && !busy, egui::Button::new(install_plugin_label()))
-            .clicked()
-        {
-            actions.push(PluginAction::Install);
-        }
-        let fetch = header_ui.add_enabled(
-            enabled && !busy && !link.trim().is_empty(),
-            egui::Button::new(tr!("plugin-install-fetch")),
-        );
-        let entered = {
-            let ui = &mut header_ui;
-            let field = theme::text_field_enabled(
-                ui,
-                enabled && !busy,
-                egui::TextEdit::singleline(link)
-                    .hint_text(tr!("plugin-install-link"))
-                    .desired_width(LINK_FIELD_W),
-            );
-            field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
-        };
-        if fetch.clicked() || (entered && !busy && !link.trim().is_empty()) {
-            actions.push(PluginAction::Fetch);
-        }
-    }
-    if plugins.is_reading() {
-        header_ui.label(tr!("plugin-settings-reading"));
-    } else if entries.is_empty() {
-        header_ui.weak(tr!("plugin-settings-none"));
-    }
-    if let Some(note) = &plugins.note {
-        ui.colored_label(theme::palette(dark).warning, note.as_str());
-    }
-    if entries.is_empty() {
-        return;
-    }
-    ui.add_space(theme::SPACE_2);
-    let states = plugins.host.plugin_states();
-    let list = egui::ScrollArea::vertical()
-        .id_salt("planora_plugin_list")
-        .max_height(PLUGIN_LIST_MAX_H)
-        .auto_shrink([false, true]);
-    theme::scroll_area(ui, list, |ui| {
-        for e in entries {
-            let Some(shown) = e.active.or((!e.found.is_empty()).then_some(0)) else {
-                continue;
-            };
-            let f = &e.found[shown];
-            let m = &f.manifest;
-            let state = match (&f.problem, e.active) {
-                (Some(problem), None) => tr!("plugin-state-broken", problem = problem.as_str()),
-                _ => state_text(&e.state),
-            };
-            let enabled = states.get(&e.id).is_none_or(|s| s.enabled);
-            let version = m.version.to_string();
-            egui::collapsing_header::CollapsingState::load_with_default_open(
-                ui.ctx(),
-                plugin_details_id(&e.id),
-                false,
-            )
-            .show_header(ui, |ui| {
-                let mut on = enabled;
-                let toggle = ui
-                    .add_enabled(
-                        e.state != EntryState::Stopped,
-                        egui::Checkbox::new(&mut on, entry_name(e)),
-                    )
-                    .on_hover_text(tr!("plugin-settings-enabled-hint"));
-                if toggle.changed() {
-                    actions.push(PluginAction::Enable(e.id.clone(), on));
-                }
-                ui.label(version.as_str());
-                ui.weak(origin_text(f.origin));
-                ui.label(state);
-            })
-            .body(|ui| {
-                ui.label(tr!("plugin-settings-author", author = m.author.as_str()));
-                ui.label(tr!("plugin-settings-license", license = m.license.as_str()));
-                if !license_ok(&m.license) {
-                    ui.colored_label(theme::palette(dark).warning, tr!("plugin-license-unknown"));
-                }
-                if !m.description.is_empty() {
-                    ui.add(egui::Label::new(m.description.as_str()).wrap());
-                }
-                if m.rights.is_empty() {
-                    ui.label(tr!("plugin-settings-no-rights"));
-                } else {
-                    ui.label(tr!("plugin-settings-rights"));
-                    for &r in &m.rights {
-                        let grant = e.rights.state(r);
-                        ui.horizontal(|ui| {
-                            ui.label(right_name(r, &m.net_hosts));
-                            ui.weak(grant_text(grant));
-                            if ui
-                                .add_enabled(grant.is_some(), egui::Button::new(revoke_label()))
-                                .on_hover_text(tr!("plugin-right-revoke-hint"))
-                                .clicked()
-                            {
-                                actions.push(PluginAction::Revoke(e.id.clone(), r));
-                            }
-                        });
-                    }
-                }
-                if let Some(source) = plugins.source_link(&e.id) {
-                    ui.add(
-                        egui::Label::new(tr!("plugin-install-source", source = source.web_url()))
-                            .wrap(),
-                    );
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(
-                                !plugins.is_checking(),
-                                egui::Button::new(check_updates_label()),
-                            )
-                            .clicked()
-                        {
-                            actions.push(PluginAction::CheckUpdates);
-                        }
-                        if let Some(u) = plugins.found_update(&e.id)
-                            && ui
-                                .button(update_to_label(&u.to.version.to_string()))
-                                .clicked()
-                        {
-                            actions.push(PluginAction::OpenUpdate(e.id.clone()));
-                        }
-                    });
-                }
-                if e.found.iter().any(|g| g.origin == Origin::User)
-                    && ui.button(remove_plugin_label()).clicked()
-                {
-                    actions.push(PluginAction::Remove(e.id.clone()));
-                }
-            });
-            if let Some(active) = e.active {
-                for (j, g) in e.found.iter().enumerate() {
-                    if j != active {
-                        ui.indent(("planora_plugin_shadowed", &e.id, j), |ui| {
-                            ui.weak(shadowed_text(
-                                g.origin,
-                                &g.manifest.version.to_string(),
-                                &version,
-                            ));
-                        });
-                    }
-                }
-            }
-        }
-    });
 }
 
 /// Knöpfe und Anzeigen zur Suche im Abschnitt „Updates“ (gedrückt: das jeweilige Feld `true`).

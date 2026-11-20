@@ -1,8 +1,8 @@
 //! Was die Plug-ins vom Nutzer wollen (Plug-ins Etappe 1, Task 5): die Rechte-Nachfrage
 //! („Erlauben“, „Nur diesmal“, „Ablehnen“) und die Fehlerleiste oben im Fenster für ausgefallene
 //! Plug-ins. Dazu (Task 7) der Installationsdialog und die kurzen Texte zu Rechten, Herkunft und
-//! Zustand für die Einstellungen. Die Fenster liefern nur die Wahl; was sie bewirkt, entscheidet
-//! [`crate::plugins::Plugins`]. Task 8: der Aktualisieren-Dialog und in der Fehlerleiste der
+//! Zustand für das Fenster „Zusatzmodule“. Die Fenster liefern nur die Wahl; was sie bewirkt,
+//! entscheidet [`crate::plugins::Plugins`]. Task 8: der Aktualisieren-Dialog und in der Fehlerleiste der
 //! Hinweis auf gefundene Updates.
 
 use crate::dialog::{Dialog, DialogSize, escape_pressed};
@@ -149,7 +149,7 @@ pub fn show_banners(
     action
 }
 
-/// Kurzer Name eines Rechts (Einstellungen, Installationsdialog); `hosts` nur für `net`.
+/// Kurzer Name eines Rechts (Fenster „Zusatzmodule“, Installationsdialog); `hosts` nur für `net`.
 pub fn right_name(right: Right, hosts: &[String]) -> String {
     match right {
         Right::Net => tr!("plugin-right-name-net", hosts = hosts.join(", ")),

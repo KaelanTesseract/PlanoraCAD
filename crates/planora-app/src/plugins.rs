@@ -9,7 +9,8 @@
 //! Die Dialoge der Plug-ins ([`Plugins::dialogs`]) zeichnet [`crate::plugin_dialog`]; ihre
 //! Ereignisse gehen hier an den Host.
 //!
-//! Task 7: Installieren, Entfernen und die Verwaltung in den Einstellungen. Ein Paket wird in
+//! Task 7: Installieren, Entfernen und die Verwaltung (Handtest W1: im eigenen Fenster
+//! „Zusatzmodule“, [`crate::addins_window`]). Ein Paket wird in
 //! einem [`Job`] gelesen (bis 64 MiB samt Entpacken, das soll das Bild nicht anhalten) und dann
 //! als [`InstallOffer`] im Installationsdialog angeboten; der Dialog liest selbst nichts, so kann
 //! ein zweiter Weg (Repo-Link) ihm ebenso ein fertiges Paket geben ([`Plugins::offer_install`]).
@@ -31,7 +32,6 @@ use crate::plugin_prompts::{self, BannerAction, BannerLine, UpdateChoice, Update
 pub use crate::plugin_prompts::{InstallChoice, InstallOffer};
 use crate::plugin_repo::{self, Fetched};
 pub use crate::plugin_repo::{RepoFetch, check_downloaded};
-use crate::settings_window::SettingsSection;
 use crate::theme;
 use crate::workspace::Workspace;
 use planora_i18n::tr;
@@ -136,7 +136,7 @@ pub struct Plugins {
     pub install: Option<InstallOffer>,
     /// Ein Paket wird gerade gelesen ([`Plugins::read_package`]): Paket und Pfad oder ein Fehler.
     reading: Option<Job<Result<(Package, PathBuf), String>>>,
-    /// Hinweis im Abschnitt „Plug-ins“ der Einstellungen (Lesen, Installieren, Entfernen oder
+    /// Hinweis im Fenster „Zusatzmodule“ (Lesen, Installieren, Entfernen oder
     /// Speichern misslang); die nächste Handlung dort leert ihn.
     pub note: Option<String>,
     /// Der Netzweg für Repo-Links (Vorgabe [`default_repo_fetch`]; Tests setzen eine Nachbildung).
@@ -160,9 +160,9 @@ pub struct Plugins {
     /// Der Hinweis „Für N Plug-ins gibt es Updates.“ ist zu zeigen (bis „Anzeigen“ oder
     /// „Schließen“).
     notice: bool,
-    /// „Anzeigen“ gedrückt: das Programm öffnet den Abschnitt „Plug-ins“
-    /// ([`Plugins::take_show_section`]).
-    show_section: bool,
+    /// „Anzeigen“ gedrückt: das Programm öffnet das Fenster „Zusatzmodule“
+    /// ([`Plugins::take_show_window`]).
+    show_window: bool,
     /// Herkunft der vom Nutzer installierten Plug-ins mit `herkunft.json` (Kennung → Herkunft).
     provenance: BTreeMap<String, Provenance>,
     /// `config` wurde außerhalb von [`Plugins::frame`] geändert (Zeitpunkt der Prüfung): beim
@@ -306,7 +306,7 @@ impl Plugins {
             update_packages: BTreeMap::new(),
             update_dialog: None,
             notice: false,
-            show_section: false,
+            show_window: false,
             provenance: BTreeMap::new(),
             config_dirty: false,
         };
@@ -847,8 +847,8 @@ impl Plugins {
     }
 
     /// „Anzeigen“ im Hinweis auf Updates wurde gedrückt (einmal abholen).
-    pub fn take_show_section(&mut self) -> bool {
-        std::mem::take(&mut self.show_section)
+    pub fn take_show_window(&mut self) -> bool {
+        std::mem::take(&mut self.show_window)
     }
 
     /// Vergisst ein Update von `id` (eingespielt, entfernt, keines mehr oder Fehler).
@@ -1088,7 +1088,7 @@ impl Plugins {
             Some(BannerAction::Close(id)) => self.banners.retain(|b| b.plugin != id),
             Some(BannerAction::ShowUpdates) => {
                 self.notice = false;
-                self.show_section = true;
+                self.show_window = true;
                 acted = true;
             }
             Some(BannerAction::CloseUpdates) => self.notice = false,
@@ -1119,8 +1119,8 @@ impl Plugins {
         changed
     }
 
-    /// Untermenü Datei → „Zusatzmodule“: „Verwalten …“ (öffnet die Einstellungen am Abschnitt
-    /// Plug-ins), dann die Befehle aller laufenden Plug-ins nach Plug-in-Name; ein Plug-in mit
+    /// Untermenü Datei → „Zusatzmodule“: „Verwalten …“ (öffnet das Fenster „Zusatzmodule“),
+    /// dann die Befehle aller laufenden Plug-ins nach Plug-in-Name; ein Plug-in mit
     /// mehr als einem Befehl bekommt ein Untermenü. Ein gewählter Befehl läuft sofort.
     /// `manage`: „Verwalten …“ ist wählbar (nicht bei offener Rückfrage, wie „Einstellungen“).
     pub fn addins_menu(&mut self, ui: &mut egui::Ui, manage: bool) -> MenuRequest {
@@ -1130,7 +1130,7 @@ impl Plugins {
             .on_disabled_hover_text(tr!("menu-answer-prompt-first"))
             .clicked()
         {
-            request = MenuRequest::Settings(Some(SettingsSection::Plugins));
+            request = MenuRequest::Addins;
             ui.close();
         }
         // (Name, Plug-in) → (Befehl, Beschriftung).
@@ -1183,8 +1183,8 @@ pub fn show(ctx: &egui::Context, ws: &mut Workspace) {
     }
 }
 
-/// Speichert den Stand der Plug-ins gleich (nach Schalter, Zurücknehmen, Entfernen in den
-/// Einstellungen): `config.plugins` aus dem Host, vormerken, schreiben. Misslingt das Schreiben,
+/// Speichert den Stand der Plug-ins gleich (nach Schalter, Zurücknehmen, Entfernen im Fenster
+/// „Zusatzmodule“): `config.plugins` aus dem Host, vormerken, schreiben. Misslingt das Schreiben,
 /// steht ein Hinweis in [`Plugins::note`] (der Stand gilt für die Sitzung und kommt mit dem
 /// nächsten gelungenen Schreiben in die Datei).
 pub fn persist(ws: &mut Workspace) -> bool {
