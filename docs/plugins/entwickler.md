@@ -146,7 +146,7 @@ Als Vorlage dient `plugins/beispiel-hallo` (ein Befehl „Hallo sagen“, ein Di
    ```
    Heraus kommt `target/wasm32-wasip2/release/mein_plugin.wasm`.
 9. **Paket packen.** Im Repo erledigt das `tools/build-plugins.ps1` (Windows) bzw. `tools/build-plugins.sh` (Ubuntu): Es baut die Beispiele in `plugins/` und packt sie mit `crates/planora-plugin-host/examples/pack.rs` nach `crates/planora-plugin-host/tests/data/`. Für ein eigenes Plug-in packst du `plugin.toml`, die gebaute `.wasm` (als `plugin.wasm`) und den Ordner `languages/` in ein ZIP und nennst es `mein-plugin.pcplugin`.
-10. **Ausprobieren.** In PlanoraCAD unter den Einstellungen „Plug-ins“ den Knopf „Plug-in installieren…“ wählen, dann „Aus Datei…“ und die `.pcplugin`. Rechte und Lizenz werden angezeigt, nach dem Bestätigen erscheint der Befehl unter „Datei → Zusatzmodule“.
+10. **Ausprobieren.** In PlanoraCAD „Datei → Zusatzmodule → Verwalten …“ öffnen, dann „Aus Datei…“ und die `.pcplugin` wählen. Rechte und Lizenz werden angezeigt, nach dem Bestätigen erscheint der Befehl unter „Datei → Zusatzmodule“.
 
 ## Rechte und Anfragen
 
@@ -154,7 +154,7 @@ Es gibt vier Rechte: `net`, `fs-folder`, `model-read`, `model-write`. In Etappe 
 
 - Direkt nach dem Installieren hat ein Plug-in **kein** Recht.
 - Beim ersten Gebrauch fragt das Programm mit „Erlauben“, „Nur diesmal“ oder „Ablehnen“. „Erlauben“ und „Ablehnen“ gelten auf Dauer; „Nur diesmal“ gilt nur für die Anfrage, die gefragt hat (und für Anfragen desselben Rechts, die bis zur Antwort warten), die nächste fragt wieder. Jede Anfrage trägt eine Kennung (`request-id`), die das Plug-in von `rights.request` bzw. `net.get` zurückbekommt; die Antwort kommt später über `on-result` mit derselben Kennung.
-- Der Nutzer kann ein erteiltes Recht in den Einstellungen jederzeit zurücknehmen.
+- Der Nutzer kann ein erteiltes Recht im Fenster „Zusatzmodule“ jederzeit zurücknehmen.
 - Bei einem Update bleiben erteilte Rechte nur erhalten, wenn `author` und die Herkunft gleich bleiben (derselbe Repo-Link, oder beide aus einer Datei, oder beide mitgeliefert); ändert sich `net-hosts`, entfällt das Recht `net` und wird neu gefragt. Fehlt `author`, wird immer neu gefragt.
 - Beim Programmstart gelten gespeicherte Rechte nur, wenn Autor, Herkunft und `net-hosts` zur geladenen `plugin.toml` passen.
 
