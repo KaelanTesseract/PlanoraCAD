@@ -3221,3 +3221,42 @@ Für Dennis, am Rechner mit Fusion zu prüfen. Jeder Punkt ist heute eine Annahm
 13. **DXF-Ausgabe:** Die DXF-Dateien aus dem Handtest 1 (Ordner `handtest1/`, bei Dennis) in Fusion importieren und Größe, Einheit, Ebenen und Lage prüfen.
 14. **Name und Vorgabe:** Der Name „Drehprofil“ und die Toleranzvorgabe 0,01 mm (Bereich 0,0001 bis 10 mm) sind Annahmen.
 15. **Gruppen im Baum:** „Löschen“ im Menü einer Gruppe löst sie nur auf (die Skizzen bleiben); der Standardname ist „Gruppe“ plus kleinste freie Zahl („Gruppe1“); das Auge der Gruppe blendet alle Skizzen darin aus. In Fusion löscht „Löschen“ an einer Zeitleisten-Gruppe die enthaltenen Elemente mit; ob das für Gruppen im Browser auch gilt, ist offen.
+
+## Plug-ins Etappe 1
+Stand nach Task 9; die Abschlussprüfung kann einzelne Punkte noch erledigen. Quelle: Prüfungen der Tasks 2 bis 8; alle Punkte sind klein (Minor) und bewusst aufgeschoben.
+
+**Paket und Laufzeit (Task 2)**
+- Icon-Namen und Sprach-Id beim Auspacken auf sichere Zeichen beschränken; Paket-Test für doppeltes `plugin.wasm`; `miniz_oxide =0.9.1` steht doppelt neben 0.8.9.
+- Der Quell-Hash deckt WIT, `plugins/Cargo.toml`/`.lock` und die Skripte nicht ab und bindet die Bytes der `.pcplugin` nicht; Symlinks im Hash.
+- Sockets explizit verbieten bzw. nicht linken; `ResourceTable` ohne Grenze; `shutdown()` markiert die Instanz nicht als tot; Ausgabe beim Instanziieren geht verloren.
+- `RUSTSEC-2026-0386` (tokio 1.53.2, schon auf master im `Cargo.lock`): begründen oder mit `cargo update -p tokio` aktualisieren.
+- Testlücken: Args/Sockets, `subscribe-instant`, Warten innerhalb der Frist und mehrere kurze Wartezeiten.
+
+**Rechte und Anfragen (Task 3)**
+- Doku zu `Answer::Once` sagt „bis Ende des Aufrufs“ statt „bis Programmende“.
+- `net-hosts` mit Zahlen- oder IP-Form (`127.0.0.1`, `0x7f.1`) ablehnen; fehlende URL-Testfälle; nutzloses `assert_eq!(p.clone(), p)`.
+
+**Installieren und Orte (Task 4)**
+- `install` meldet einen Fehler nach Erfolg, wenn `remove_dir_all(.alt)` scheitert (`places.rs`); SAFETY-Kommentar zum Cache überzeichnet, der Cache wird nie aufgeräumt.
+- Mehrdeutige Befehls-ids beim Präfixvergleich (`lib.rs`); Testlücken (Deaktivieren während Loading, Verweigern bei offenem Netz, Rollback beim Installieren).
+- `rescan` übernimmt Ausfälle und den Zustand Stopped bei einer neuen Version (ein Update sollte frisch starten); `deliver()` und `event()` verwerfen bei voller Warteschlange still.
+- Linux-Lauf der Plug-in-Tests war in Task 4 nicht möglich; in Task 9 unter Ubuntu (WSL) nachgeholt.
+
+**Menü, Meldungen, Nachfrage (Task 5)**
+- Nur die letzte Plug-in-Meldung je Bild wird protokolliert (`plugins.rs`); Reihenfolge von Escape bei der Rechte-Nachfrage.
+- Das Test-Plug-in zählt `on_result` nicht (`late_net_result_dropped` erreicht die Host-Prüfung nicht); drei deutsche `format_err!`-Texte in `runtime.rs`.
+
+**Dialoge (Task 6)**
+- Doppelte oder leere Feld-ids werden nicht abgelehnt (`open_dialog` im Host); NaN/inf als Startwerte; Format für Riesenzahlen; lange Beschriftungen ohne Umbruch; keine Obergrenze für Feldzahl und Stringlänge.
+- Der Ausfall-Test umgeht den UI-Pfad; Schließen mit X ungetestet.
+
+**Einstellungen und Installation (Task 7)**
+- Herabstufen unter die mitgelieferte Version ist irreführend; `replaces` kann veralten; SPDX-ids sind case-sensitiv; `GPL-3.0-or-later` bekommt einen Hinweis.
+- Tests für Deinstallieren im Lauf fehlen; `replaced` startet ein Plug-in im Zustand Loading nicht neu.
+
+**Repo-Link und Updates (Task 8)**
+- Herabstufungs-Rennen in `poll_checks` (Veröffentlichung `<= from` überspringen); Build-Metadaten zählen als höher (`cmp_precedence`).
+- Nur die erste Seite der Veröffentlichungen wird gelesen (`per_page=100`); veralteter Kommentar in `net.rs`.
+- Eine Neuinstallation über den Repo-Link kann still herabstufen (Hinweis nötig).
+- Der Installer muss später `author` und `net_hosts` mitschreiben.
+- Echter GitHub-Zugriff wurde nie von Hand geprüft (Tests laufen offline).

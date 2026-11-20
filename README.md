@@ -43,6 +43,7 @@ PlanoraCAD ist ein freies Programm, mit dem du Bauteile am Computer in 3D konstr
 - [Herunterladen und installieren](#herunterladen-und-installieren)
 - [Unter Ubuntu](#unter-ubuntu)
 - [Updates und Sprache](#updates-und-sprache)
+- [Plug-ins](#plug-ins)
 - [Fehler melden und Wünsche äußern](#fehler-melden-und-wünsche-äußern)
 - [Was noch nicht geht](#was-noch-nicht-geht)
 - [Datenschutz](#datenschutz)
@@ -174,6 +175,10 @@ Unterschiede zu Windows:
 - PlanoraCAD gibt es auf Deutsch und Englisch. Beim ersten Start nimmt es die Sprache von Windows, sonst Englisch.
 - Umstellen: „Datei → Einstellungen …“, Abschnitt „Darstellung“.
 - Du möchtest eine weitere Sprache beisteuern? Die Anleitung (auf Englisch) steht in [docs/uebersetzen.md](docs/uebersetzen.md).
+
+## Plug-ins
+
+PlanoraCAD lässt sich mit Plug-ins erweitern (Windows und Ubuntu). Ein Plug-in ist ein kleines WebAssembly-Programm, das in einer Sandbox läuft und nur darf, was du erlaubst. Du installierst es unter **Datei → Einstellungen … → Plug-ins** aus einer Datei (`.pcplugin`) oder über den GitHub-Link des Entwicklers; die Befehle stehen unter **Datei → Zusatzmodule**. Plug-ins müssen unter einer GPL-3.0-verträglichen Lizenz stehen. Mehr dazu: [Plug-ins benutzen](docs/plug-ins.md) und [Plug-ins entwickeln](docs/plugins/entwickler.md). Die Schnittstelle ist Version 0.x und darf noch brechen. Wer unter Ubuntu selbst baut, braucht dafür zusätzlich `libssl-dev` und `pkg-config`.
 
 ## Fehler melden und Wünsche äußern
 

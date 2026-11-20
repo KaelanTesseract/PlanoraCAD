@@ -676,3 +676,36 @@ fn saved_rights_need_same_author_and_hosts() {
         aufraeumen(&p);
     }
 }
+
+/// Messung für Task 9 (Start der Plug-ins ohne und mit Zwischenspeicher):
+/// `cargo test --release -p planora-plugin-host --test host messung_start -- --ignored --nocapture`.
+/// Kein Test im üblichen Sinn: sie schreibt nur Zeiten nach stderr.
+#[test]
+#[ignore = "Messung, siehe docs/plugins/entwickler.md"]
+fn messung_start() {
+    let leer = orte("messung-leer", &[]);
+    let t = Instant::now();
+    let mut h = PluginHost::new(leer.clone());
+    h.start_all(&BTreeMap::new());
+    let ohne = t.elapsed();
+    drop(h);
+    aufraeumen(&leer);
+
+    let p = orte("messung", &["beispiel-hallo", "test-faelle"]);
+    let mut zeiten = Vec::new();
+    for _ in 0..2 {
+        let t = Instant::now();
+        let mut h = PluginHost::new(p.clone());
+        h.start_all(&BTreeMap::new());
+        for id in [HALLO, FAELLE] {
+            warten(&mut h, id);
+            assert_eq!(state(&h, id), EntryState::Running);
+        }
+        zeiten.push(t.elapsed());
+        drop(h);
+    }
+    aufraeumen(&p);
+    eprintln!("MESSUNG ohne Plug-ins: {ohne:?}");
+    eprintln!("MESSUNG erster Start (Übersetzen): {:?}", zeiten[0]);
+    eprintln!("MESSUNG zweiter Start (Zwischenspeicher): {:?}", zeiten[1]);
+}
