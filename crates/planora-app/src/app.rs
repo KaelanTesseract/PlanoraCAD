@@ -397,6 +397,7 @@ impl PlanoraApp {
         // Der gespeicherte Schalter „Ausführliches Protokoll“ gilt ab dem Start (Umschalten:
         // `Workspace::set_verbose_log`).
         crate::diag::set_verbose(ws.verbose_log());
+        planora_drawing::sheet_info::set_author(ws.drawing_author());
         Self {
             ws,
             shell: ShellState::default(),

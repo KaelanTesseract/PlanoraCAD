@@ -125,25 +125,36 @@ pub struct Stamp {
     pub user: String,
 }
 
+/// Der Name für Zeichnungen aus den Einstellungen (leer, solange keiner eingetragen ist). Der
+/// Anmeldename des Rechners wird nie gelesen: Er soll nicht ungefragt in Dateien landen.
+static AUTHOR: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+/// Setzt den Namen für Zeichnungen (Einstellungen → Projekte), den [`Stamp::now`] einträgt;
+/// bereinigt wie [`clean_user`].
+pub fn set_author(name: &str) {
+    let name = clean_user(name);
+    let mut a = AUTHOR.write().unwrap_or_else(|e| e.into_inner());
+    if *a != name {
+        *a = name;
+    }
+}
+
+/// Der Name für Zeichnungen, den [`Stamp::now`] gerade einträgt.
+pub fn author() -> String {
+    AUTHOR.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 impl Stamp {
-    /// Heutiges Datum (UTC) und angemeldeter Benutzer (leer, wenn unbekannt).
+    /// Heutiges Datum (UTC) und der Name für Zeichnungen aus den Einstellungen ([`set_author`],
+    /// leer, wenn keiner eingetragen ist).
     pub fn now() -> Stamp {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let user = ["USERNAME", "USER"]
-            .iter()
-            .find_map(|k| {
-                std::env::var(k)
-                    .ok()
-                    .map(|v| clean_user(&v))
-                    .filter(|v| !v.is_empty())
-            })
-            .unwrap_or_default();
         Stamp {
             date: utc_date(secs),
-            user,
+            user: author(),
         }
     }
 }

@@ -2,6 +2,12 @@
 
 Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht oben.
 
+## Unveröffentlicht
+
+### Geändert
+
+- „Erstellt“ in den Blattangaben nimmt nicht mehr den Windows-Benutzernamen. Neu gibt es in „Datei → Einstellungen …“ unter „Projekte“ das Feld „Name für Zeichnungen“. Ab Werk ist es leer, und dann bleibt auch „Erstellt“ leer. Zeichnungen, die es schon gibt, behalten ihren Eintrag.
+
 ## 0.0.2-dev.3
 
 ### Neu
