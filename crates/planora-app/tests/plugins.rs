@@ -645,3 +645,41 @@ fn finished_net_result_requests_repaint() {
     bild(&mut ws, &ctx, vec![]);
     assert!(!ws.plugins.host.has_pending(), "zugestellt");
 }
+
+/// Handtest F2: „Zusatzmodule“ und das Untermenü eines Plug-ins mit mehreren Befehlen zeigen
+/// den Pfeil der App (Phosphor-Symbol wie die anderen Untermenüs), nicht egui's `⏵` (das der
+/// Schrift fehlt und als „?“ erschien).
+#[test]
+fn addins_submenus_use_app_arrow() {
+    let (mut ws, ctx) = arbeitsbereich("pfeil", &["test-faelle"], Config::default());
+    let mut shell = ShellState::default();
+    let mut got = MenuRequest::None;
+    let arrow = planora_app::icons::glyph(planora_app::icons::Icon::PathSeparator).to_string();
+    let seen = menue_bild(&mut ws, &ctx, &mut shell, vec![], &mut got);
+    let seen = menue_klick(&mut ws, &ctx, &mut shell, &seen, "Datei", &mut got);
+    assert!(
+        !seen.iter().any(|s| s.text.contains('⏵')),
+        "{}",
+        join(&seen)
+    );
+    let zusatz = find(&seen, "Zusatzmodule").unwrap().rect;
+    assert!(
+        seen.iter()
+            .any(|s| s.text == arrow && (s.rect.center().y - zusatz.center().y).abs() < 4.0),
+        "Pfeil neben „Zusatzmodule“: {}",
+        join(&seen)
+    );
+    let seen = menue_klick(&mut ws, &ctx, &mut shell, &seen, "Zusatzmodule", &mut got);
+    assert!(
+        !seen.iter().any(|s| s.text.contains('⏵')),
+        "{}",
+        join(&seen)
+    );
+    let faelle = find(&seen, "Test-Fälle").unwrap_or_else(|| panic!("{}", join(&seen)));
+    assert!(
+        seen.iter()
+            .any(|s| s.text == arrow && (s.rect.center().y - faelle.rect.center().y).abs() < 4.0),
+        "Pfeil neben „Test-Fälle“: {}",
+        join(&seen)
+    );
+}

@@ -1155,7 +1155,7 @@ impl Plugins {
             if let [only] = commands.as_slice() {
                 entry(ui, only);
             } else {
-                ui.menu_button(name, |ui| {
+                crate::icons::submenu(ui, name.clone(), |ui| {
                     for c in commands {
                         entry(ui, c);
                     }

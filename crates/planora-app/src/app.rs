@@ -2227,7 +2227,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
         ui.close();
     }
     // Plug-ins: „Verwalten …“ und die Befehle der laufenden Plug-ins (crate::plugins).
-    ui.menu_button(tr!("menu-file-addins"), |ui| {
+    icons::submenu(ui, tr!("menu-file-addins"), |ui| {
         let manage = ws.prompt.is_none();
         let r = ws.plugins.addins_menu(ui, manage);
         if r != MenuRequest::None {
