@@ -4,16 +4,23 @@ Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht o
 
 ## 0.0.2-dev.4
 
+### Neu
+
+- „Name für Zeichnungen“: Neues Feld in „Datei → Einstellungen …“ unter „Projekte“. Dieser Name steht in neuen Zeichnungen unter „Erstellt“. Ab Werk ist das Feld leer; der Windows-Benutzername wird nicht mehr genommen. Zeichnungen, die es schon gibt, behalten ihren Eintrag.
+- Absturzbericht: Unter Windows schreibt das Programm jetzt auch bei harten Abstürzen (etwa Zugriffsfehler oder Stapelüberlauf) einen Bericht, nicht nur bei einem Rust-Absturz.
+
 ### Geändert
 
-- Versionen: Der Hauptzweig heißt auf Englisch jetzt „Main“ (wie in Fusion); in den Dateien bleibt er „Haupt“, alte Dateien ändern sich nicht. Ein neuer Zweig darf nicht „Haupt“ oder „Main“ heißen.
-- Absturzbericht: Unter Windows schreibt das Programm jetzt auch bei harten Abstürzen (etwa Zugriffsfehler oder Stapelüberlauf) einen Bericht, nicht nur bei einem Rust-Absturz.
-- Skizze, Rundung: Das Radiusfeld startet wie in Fusion mit einem Radius aus der kürzeren der beiden Kurven. Der Zeiger ändert den Radius nicht mehr; getippt wird wie bisher.
-- Schnittansicht: Ein Klick knapp neben eine Ansicht beginnt die Schnittlinie trotzdem. Ein Klick ins Leere sagt jetzt, dass er in keiner Ansicht liegt.
-- Blattangaben: Die Felder springen nicht mehr nach oben, wenn eine Warnung wie „Eigentümer fehlt“ beim Tippen verschwindet.
-- Skizze: Esc beendet „Projizieren“ samt seiner Meldung „Nichts Neues …“.
-- „Skizze erstellen“: Eine eigene Taste wirkt jetzt auch bei offener Skizze, „Letzten Befehl wiederholen“ kennt den Befehl, offene Fenster für DXF, SVG und Leinwand gehen zu, und der Wahlmodus endet beim Wechsel in die Zeichnung. Eine sichtbare Grundebene geht vor einer, die nur für die Wahl eingeblendet ist.
-- „Erstellt“ in den Blattangaben nimmt nicht mehr den Windows-Benutzernamen. Neu gibt es in „Datei → Einstellungen …“ unter „Projekte“ das Feld „Name für Zeichnungen“. Ab Werk ist es leer, und dann bleibt auch „Erstellt“ leer. Zeichnungen, die es schon gibt, behalten ihren Eintrag.
+- Skizze, Rundung: Das Radiusfeld startet wie in Fusion mit einem Radius aus der kürzeren der beiden Kurven. Die Maus ändert den Radius nicht mehr; getippt wird wie bisher.
+- Versionen: Der Hauptzweig heißt auf Englisch jetzt „Main“ (wie in Fusion). In den Dateien bleibt er „Haupt“, alte Dateien ändern sich nicht. Ein neuer Zweig darf nicht „Haupt“ oder „Main“ heißen.
+- „Skizze erstellen“: Eine eigene Taste wirkt jetzt auch bei offener Skizze (sie wird erst geschlossen), und „Letzten Befehl wiederholen“ kennt den Befehl.
+
+### Behoben
+
+- Blattangaben: Die Felder springen nicht mehr nach oben, wenn eine Warnung wie „Eigentümer fehlt“ beim Tippen verschwindet. Vorher landete der nächste Klick leicht im falschen Feld.
+- Schnittansicht: Ein Klick knapp neben eine Ansicht beginnt die Schnittlinie trotzdem. Ein Klick ins Leere sagt jetzt, dass er in keiner Ansicht liegt, statt „nur aus gerader Ansicht“.
+- Skizze: Esc beendet „Projizieren“ samt seiner Meldung „Nichts Neues …“; vorher blieb sie stehen.
+- „Skizze erstellen“: Offene Fenster für DXF, SVG und Leinwand gehen beim Start zu, der Wahlmodus endet beim Wechsel in die Zeichnung, und eine sichtbare Grundebene geht vor einer, die nur für die Wahl eingeblendet ist.
 
 ## 0.0.2-dev.3
 
