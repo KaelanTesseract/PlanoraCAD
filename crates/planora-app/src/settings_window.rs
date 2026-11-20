@@ -655,9 +655,26 @@ impl SettingsWindow {
                         ui.add_space(theme::SPACE_2);
                         ui.strong(directory_label());
                         ui.add(egui::Label::new(path.as_str()).wrap());
-                        if !choosing && ui.button(change_directory()).clicked() {
-                            start = true;
-                        }
+                        // Knopf und „Name für Zeichnungen“ in einer Zeile, damit das Fenster bei
+                        // untereinander stehenden Spalten nicht höher wird; der Hinweis zum Namen
+                        // steht im Tooltip.
+                        ui.horizontal(|ui| {
+                            if !choosing && ui.button(change_directory()).clicked() {
+                                start = true;
+                            }
+                            ui.add_space(theme::SPACE_6);
+                            ui.strong(author_label());
+                            let r = theme::text_field(
+                                ui,
+                                egui::TextEdit::singleline(&mut author)
+                                    .id_salt("planora_settings_author")
+                                    .char_limit(planora_drawing::sheet_info::MAX_FIELD_CHARS)
+                                    .desired_width(AUTHOR_FIELD_W),
+                            )
+                            .on_hover_text(author_note());
+                            author_changed = r.changed();
+                            author_left = r.lost_focus();
+                        });
                         ui.label(keep_hint());
                         if let Some(m) = &message {
                             ui.colored_label(m.color(dark), m.text());
@@ -667,20 +684,6 @@ impl SettingsWindow {
                             ui.strong(choose_heading());
                             body_action = c.show_body(ui, places);
                         }
-                        ui.add_space(theme::SPACE_2);
-                        ui.horizontal(|ui| {
-                            ui.strong(author_label());
-                            let r = ui.add(
-                                egui::TextEdit::singleline(&mut author)
-                                    .id_salt("planora_settings_author")
-                                    .char_limit(planora_drawing::sheet_info::MAX_FIELD_CHARS)
-                                    .desired_width(AUTHOR_FIELD_W),
-                            );
-                            theme::focus_ring(ui, &r);
-                            author_changed = r.changed();
-                            author_left = r.lost_focus();
-                        });
-                        ui.label(author_note());
                         if let Some(m) = &author_message {
                             ui.colored_label(m.color(dark), m.text());
                         }

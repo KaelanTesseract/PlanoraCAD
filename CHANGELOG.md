@@ -2,7 +2,7 @@
 
 Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht oben.
 
-## Unveröffentlicht
+## 0.0.2-dev.4
 
 ### Geändert
 
