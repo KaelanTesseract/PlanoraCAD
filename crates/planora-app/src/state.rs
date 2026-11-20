@@ -2712,13 +2712,8 @@ impl AppState {
             .collect()
     }
 
-    /// Die vorderste eingeblendete Grundebene unter dem Zeiger und die Strahllänge bis zu ihr
-    /// (wie [`Self::nearest_plane_hit`]).
-    fn nearest_origin_hit(&self, cursor: Vec2, viewport: Vec2) -> Option<(StandardPlane, f64)> {
-        self.nearest_origin_hit_where(cursor, viewport, |_| true)
-    }
-
-    /// Wie [`Self::nearest_origin_hit`], nur unter den Grundebenen, für die `keep` gilt.
+    /// Die vorderste gezeichnete Grundebene unter dem Zeiger, für die `keep` gilt, und die
+    /// Strahllänge bis zu ihr (wie [`Self::nearest_plane_hit`]).
     fn nearest_origin_hit_where(
         &self,
         cursor: Vec2,
