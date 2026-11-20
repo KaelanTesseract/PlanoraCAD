@@ -689,7 +689,7 @@ fn versions_panel_speaks_english() {
         assert_has(
             "Zweig löschen",
             &seen,
-            &["Delete branch \"Haupt\" with all its versions permanently?"],
+            &["Delete branch \"Main\" with all its versions permanently?"],
         );
 
         // Alte Version: Hinweis und Knöpfe.

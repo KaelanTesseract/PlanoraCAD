@@ -3186,6 +3186,7 @@ proj-err-lock-lost = Die Sperre wurde von einem anderen Programm übernommen. Da
 proj-err-needs-branch = Diese Version ist nicht die neueste ihres Zweigs. Bitte einen neuen Zweignamen angeben.
 proj-version-label = Version { $n }
 proj-branch-label = Zweig { $name }
+branch-main = Haupt
 proj-base64-invalid = Die Netzdaten sind keine gültige Base64-Zeichenkette
 proj-name-empty = Der Name darf nicht leer sein.
 proj-name-too-long = Der Name ist zu lang (höchstens { $max } Zeichen).
