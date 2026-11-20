@@ -2160,6 +2160,21 @@ impl Workspace {
         self.save_update_field(|u, c| c.verbose_log = u.verbose)
     }
 
+    /// Name für Zeichnungen (Einstellungen → Projekte), leer, solange keiner eingetragen ist.
+    pub fn drawing_author(&self) -> &str {
+        self.config.drawing_author.as_deref().unwrap_or("")
+    }
+
+    /// Setzt den Namen für Zeichnungen (bereinigt wie im Schriftfeld; leer heißt keiner). Er gilt
+    /// sofort für neue Zeichnungen ([`planora_drawing::sheet_info::set_author`]) und wird
+    /// gespeichert wie ein Update-Feld. `true`, wenn geschrieben wurde.
+    pub fn set_drawing_author(&mut self, name: &str) -> bool {
+        let name = planora_drawing::sheet_info::clean_user(name);
+        planora_drawing::sheet_info::set_author(&name);
+        self.config.drawing_author = (!name.is_empty()).then_some(name);
+        self.save_update_field(|u, c| c.drawing_author = u.author)
+    }
+
     /// Das Fenster des begonnenen Updates, falls gemerkt.
     pub fn pending_window(&self) -> Option<WindowState> {
         self.config.update_pending.as_ref()?.window
@@ -2418,6 +2433,8 @@ struct UpdateSettings {
     /// Ausführliches Protokoll (Einstellungen → Updates); fährt hier mit, damit es auf allen
     /// Schreibwegen mitgeht wie die Update-Felder.
     verbose: bool,
+    /// Name für Zeichnungen (Einstellungen → Projekte); fährt hier mit wie `verbose`.
+    author: Option<String>,
 }
 
 impl UpdateSettings {
@@ -2429,6 +2446,7 @@ impl UpdateSettings {
             skipped: c.skipped_version.clone(),
             pending: c.update_pending.clone(),
             verbose: c.verbose_log,
+            author: c.drawing_author.clone(),
         }
     }
 
@@ -2440,6 +2458,7 @@ impl UpdateSettings {
         c.skipped_version = self.skipped;
         c.update_pending = self.pending;
         c.verbose_log = self.verbose;
+        c.drawing_author = self.author;
     }
 }
 

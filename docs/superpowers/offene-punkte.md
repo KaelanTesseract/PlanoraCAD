@@ -3365,3 +3365,8 @@ Spec `specs/2026-11-19-skizze-erstellen-design.md`, Plan `plans/2026-11-19-skizz
 - **Annahme:** Unpassende Vorauswahl (Kante, Körper, gekrümmte Fläche) wird geleert, dann Wahlmodus. Eine offene Skizze wird vorher geschlossen und bleibt nach Abbruch geschlossen.
 - **Blickrichtung:** XY von oben (Bild-oben +Y), XZ von vorn (+Z oben), YZ von rechts (+Z oben), wie Fusion mit „Z nach oben“; Test `create_sketch_view_direction_like_fusion`.
 - **Handtest:** (1) Leeres Modell, Ursprung ausgeblendet, Symbol unten: drei Ebenen halbdurchsichtig, Hervorhebung unter dem Zeiger. (2) Esc: Ebenen weg, nichts im Baum, Rückgängig unverändert. (3) XY, XZ, YZ je anlegen: Blick von oben, vorn, rechts. (4) Quader, Fläche vorwählen, Symbol: Skizze sofort auf der Fläche. (5) Im Wahlmodus Konstruktionsebene im Baum klicken. (6) Werkzeugleiste bei 1920×1080 ganz sichtbar.
+
+## Funde nach 0.0.2-dev.3 (Doku-Runde)
+
+- **„Erstellt“ ohne Windows-Benutzernamen** (Entscheidung von Dennis am 2026-11-20): Der Entwurf zum Zeichnungsblatt (`specs/2026-10-17-zeichnungsblatt-design.md`, Ersteller) belegte „Erstellt“ mit dem Anmeldenamen vor. Das ist aufgehoben. Die Vorgabe kommt jetzt aus „Einstellungen → Projekte → Name für Zeichnungen“ (`Config::drawing_author`, `sheet_info::set_author`). Ab Werk ist das Feld leer, und der Anmeldename wird nie gelesen. Grund: Der Name landete ungefragt in Dateien, die man weitergibt. Fusion nimmt den Namen des Autodesk-Kontos; ein Konto gibt es hier nicht. Dateien, in denen der Name schon steht, bleiben unverändert (bytegleich).
+- **Format 21 bei einer Quelle hinter der Skizze** ist so gewollt (siehe „Teilprojekt Skizzen 11a“, I-2). Nur der CHANGELOG nannte zu wenig; er ist korrigiert.
