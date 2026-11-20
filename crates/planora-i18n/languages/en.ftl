@@ -1782,6 +1782,7 @@ section-tool-tip = Two clicks in an orthographic view define the section line. T
 section-hint-first = Click the start of the section line in an orthographic view. Esc ends the tool.
 section-hint-second = Click the end of the section line. The line snaps to horizontal or vertical.
 section-not-from-here = A section can only be made from an orthographic view.
+section-not-on-a-view = The click is not on a view. Click the start of the section line in an orthographic view.
 section-too-short = Please click two different points.
 section-full = A sheet can have at most { $max } sections.
 section-nudged = The section plane lay exactly on a face or edge and was moved by 0.001 mm.

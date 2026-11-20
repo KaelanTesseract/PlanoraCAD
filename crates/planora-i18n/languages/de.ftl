@@ -1765,6 +1765,7 @@ section-tool-tip = Zwei Klicks in einer geraden Ansicht legen die Schnittlinie f
 section-hint-first = Anfang der Schnittlinie in einer geraden Ansicht anklicken. Esc beendet.
 section-hint-second = Ende der Schnittlinie anklicken. Die Linie rastet waagerecht oder senkrecht ein.
 section-not-from-here = Ein Schnitt geht nur aus einer geraden Ansicht.
+section-not-on-a-view = Der Klick liegt in keiner Ansicht. Den Anfang der Schnittlinie in einer geraden Ansicht anklicken.
 section-too-short = Bitte zwei verschiedene Punkte anklicken.
 section-full = Es sind höchstens { $max } Schnitte je Blatt möglich.
 section-nudged = Die Schnittebene lag genau auf einer Fläche oder Kante und wurde um 0,001 mm verschoben.

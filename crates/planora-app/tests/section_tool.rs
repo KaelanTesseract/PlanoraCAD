@@ -1642,3 +1642,25 @@ fn new_section_avoids_title_block_and_views() {
         assert_free_spot(&st, d, sec, &format!("Block, waagerecht={hz}"));
     }
 }
+
+#[test]
+fn a_click_just_beside_a_view_starts_there_and_empty_paper_says_so() {
+    // Doku-Runde 0.0.2-dev.3: Ein Klick knapp neben die Ansicht meldete „Ein Schnitt geht nur aus
+    // einer geraden Ansicht“, obwohl die Ansicht gerade ist.
+    let (mut st, _d, front, mut h) = box_front(A3_QUER, BIG);
+    h.click_text(&mut st, &section_tool::tool());
+    assert!(st.section_tool.is_active());
+    let r = h.rect_of(front);
+    // Ein paar Pixel links neben der Hüllbox: Das zählt noch als Klick in die Ansicht.
+    h.click(&mut st, r.left_center() - vec2(6.0, 0.0));
+    assert_eq!(st.section_tool.message(), None);
+    assert_eq!(st.section_tool.start().map(|s| s.0), Some(front));
+    assert!(st.section_tool.cancel());
+    // Weit weg auf leerem Papier: eine eigene Meldung, nicht „nur aus gerader Ansicht“.
+    h.click_at(&mut st, DVec2::new(30.0, 30.0));
+    assert!(st.section_tool.start().is_none());
+    assert_eq!(
+        st.section_tool.message(),
+        Some(section_tool::not_on_a_view().text())
+    );
+}
