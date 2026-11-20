@@ -136,7 +136,7 @@ pub fn tag_version(tag: &str) -> Option<semver::Version> {
 
 /// Liegt `url` genau unter `https://github.com/<owner>/<repo>/releases/download/<tag>/<name>`
 /// (Besitzer und Repo ohne Rücksicht auf Groß- und Kleinschreibung)?
-fn asset_url_ok(link: &RepoLink, tag: &str, name: &str, url: &str) -> bool {
+pub(crate) fn asset_url_ok(link: &RepoLink, tag: &str, name: &str, url: &str) -> bool {
     if name.is_empty() || name.contains(['/', '\\', '?', '#', '@']) || name.contains("..") {
         return false;
     }

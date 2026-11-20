@@ -5,6 +5,7 @@
 //! [`install`]; dort geht nur [`install::HttpDownloader`] ins Netz. Installiert wird vom
 //! Installer selbst, nicht von dieser Bibliothek.
 
+pub mod catalog;
 mod channel;
 pub mod check;
 pub mod install;

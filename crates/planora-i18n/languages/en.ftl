@@ -3987,3 +3987,15 @@ plugin-update-title = Update plug-in
 plugin-update-versions = { $plugin }: version { $from } → { $to }
 plugin-update-new-rights = Newly requested rights: { $rights }
 plugin-update-confirm = Update
+
+# Plug-in catalog
+catalog-release-draft = The catalog release is still a draft.
+catalog-release-no-catalog = The catalog release has no katalog.json file.
+catalog-too-new = The catalog needs a newer version of PlanoraCAD.
+catalog-invalid = The catalog could not be read.
+catalog-skip-not-object = Entry skipped: not an object.
+catalog-skip-no-id = Entry skipped: no id.
+catalog-skip-bad-id = Entry skipped: invalid id "{ $id }".
+catalog-skip-duplicate = Entry skipped: id "{ $id }" appears more than once.
+catalog-skip-bad-repo = Entry "{ $id }" skipped: { $msg }
+catalog-skip-too-many = Further entries skipped: at most { $max } entries.

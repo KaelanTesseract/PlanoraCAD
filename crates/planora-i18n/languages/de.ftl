@@ -3971,3 +3971,15 @@ plugin-update-title = Plug-in aktualisieren
 plugin-update-versions = { $plugin }: Version { $from } → { $to }
 plugin-update-new-rights = Neu verlangte Rechte: { $rights }
 plugin-update-confirm = Aktualisieren
+
+# Plug-in-Katalog
+catalog-release-draft = Der Katalog-Release ist noch ein Entwurf.
+catalog-release-no-catalog = Im Katalog-Release fehlt die Datei katalog.json.
+catalog-too-new = Der Katalog braucht eine neuere PlanoraCAD-Version.
+catalog-invalid = Der Katalog ist nicht lesbar.
+catalog-skip-not-object = Eintrag übergangen: kein Objekt.
+catalog-skip-no-id = Eintrag übergangen: keine Kennung (id).
+catalog-skip-bad-id = Eintrag übergangen: ungültige Kennung „{ $id }“.
+catalog-skip-duplicate = Eintrag übergangen: Kennung „{ $id }“ kommt mehrfach vor.
+catalog-skip-bad-repo = Eintrag „{ $id }“ übergangen: { $msg }
+catalog-skip-too-many = Weitere Einträge übergangen: höchstens { $max } Einträge.
