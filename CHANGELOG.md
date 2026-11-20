@@ -6,6 +6,10 @@ Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht o
 
 ### Geändert
 
+- Skizze, Rundung: Das Radiusfeld startet wie in Fusion mit einem Radius aus der kürzeren der beiden Kurven. Der Zeiger ändert den Radius nicht mehr; getippt wird wie bisher.
+- Schnittansicht: Ein Klick knapp neben eine Ansicht beginnt die Schnittlinie trotzdem. Ein Klick ins Leere sagt jetzt, dass er in keiner Ansicht liegt.
+- Blattangaben: Die Felder springen nicht mehr nach oben, wenn eine Warnung wie „Eigentümer fehlt“ beim Tippen verschwindet.
+- Skizze: Esc beendet „Projizieren“ samt seiner Meldung „Nichts Neues …“.
 - „Erstellt“ in den Blattangaben nimmt nicht mehr den Windows-Benutzernamen. Neu gibt es in „Datei → Einstellungen …“ unter „Projekte“ das Feld „Name für Zeichnungen“. Ab Werk ist es leer, und dann bleibt auch „Erstellt“ leer. Zeichnungen, die es schon gibt, behalten ihren Eintrag.
 
 ## 0.0.2-dev.3

@@ -560,38 +560,47 @@ fn a_click_on_the_shared_point_is_enough_but_not_with_three_curves() {
 }
 
 #[test]
-fn farther_pointer_means_a_larger_arc_without_jumps() {
-    let mut s = corner();
+fn the_radius_starts_from_the_shorter_curve_and_ignores_the_pointer() {
+    // Wie Fusion („a radius value that is proportional to the smaller of the selected objects“;
+    // ändern durch Tippen oder am Griff): Der Startradius kommt aus der kürzeren Kurve, der Zeiger
+    // ändert ihn nicht (Doku-Runde 0.0.2-dev.3: das Feld startete mit einem Wert aus der
+    // Mausposition).
+    let mut s = sketch_with(|sk| {
+        let a = sk.add_point(40.0, 0.0).unwrap();
+        let p = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(0.0, 25.0).unwrap();
+        sk.add_line(a, p).unwrap();
+        sk.add_line(p, b).unwrap();
+    });
     let revision = sketch(&s).revision();
     choose(&mut s, ToolKind::Fillet);
     click(&mut s, v(20.0, 0.0)).unwrap();
     click(&mut s, v(0.0, 20.0)).unwrap();
-    let mut last: Option<(DVec2, f64)> = None;
-    for i in 0..500 {
-        let dist = 0.1 + 0.05 * f64::from(i);
-        // Der Zeiger pendelt um die Winkelhalbierende: nur der Abstand zählt.
-        let angle = 0.8 + 0.6 * (f64::from(i) * 0.37).sin();
-        let at = v(dist * angle.cos(), dist * angle.sin());
+    let want = 25.0 * planora_app::sketch_kinds::FILLET_DEFAULT_SHARE;
+    for at in [v(1.0, 1.0), v(12.0, 9.0), v(30.0, 20.0), v(-5.0, 3.0)] {
         let (se, sk) = s.session_sketch_mut().unwrap();
         se.update_cursor(sk, Some(at), PICK);
         let Some(ShapePlan::Arc(arc)) = se.kind_plan(sk, at) else {
-            panic!("kein Plan bei {dist}");
+            panic!("kein Plan bei {at:?}");
         };
-        assert!((arc.radius() - dist).abs() < 1e-9, "{dist}");
-        assert!(arc.center.x > 0.0 && arc.center.y > 0.0, "{dist}");
-        if let Some((m, r)) = last {
-            assert!(arc.radius() > r, "größer");
-            assert!(arc.center.distance(m) < 0.1, "stetig bei {dist}");
-        }
-        last = Some((arc.center, arc.radius()));
-        let value = se.field_value(sk, F::Radius);
-        assert!((value.unwrap() - dist).abs() < 1e-9);
+        assert!(
+            (arc.radius() - want).abs() < 1e-9,
+            "{at:?}: {}",
+            arc.radius()
+        );
+        let value = se.field_value(sk, F::Radius).unwrap();
+        assert!((value - want).abs() < 1e-9, "Feld bei {at:?}: {value}");
     }
     assert_eq!(
         sketch(&s).revision(),
         revision,
         "die Vorschau ändert nichts"
     );
+    // Ein Klick legt die Rundung mit diesem Radius an, egal wo.
+    click(&mut s, v(30.0, 20.0)).unwrap();
+    let sk = sketch(&s);
+    assert_eq!(arcs(sk).len(), 1);
+    assert!((sk.radius(arcs(sk)[0]).unwrap() - want).abs() < 1e-9);
 }
 
 #[test]
