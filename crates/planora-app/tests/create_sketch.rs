@@ -551,3 +551,34 @@ fn hovered_plane_stands_out_clearly() {
         assert!(b * 10 >= a * 25, "dark={dark}: Deckkraft {a} → {b}");
     }
 }
+
+#[test]
+fn a_shown_origin_plane_behind_a_pick_only_one_wins() {
+    // Rest aus dem Teilprojekt: XZ ist im Baum ausgeblendet und nur für die Wahl eingeblendet, XY
+    // ist sichtbar. Der Strahl trifft erst XZ, dann XY: Die sichtbare Ebene gewinnt, die nur
+    // eingeblendete steht wie hinter Flächen zurück.
+    use planora_app::plane_dialog::PlaneClick;
+    use planora_app::state::PickFilter;
+    let mut s = AppState::new();
+    // Ab Werk ist „Ursprung“ ausgeblendet: nur XY einblenden.
+    s.set_origin_plane_shown(StandardPlane::XY, true);
+    s.set_origin_plane_shown(StandardPlane::XZ, false);
+    s.set_origin_plane_shown(StandardPlane::YZ, false);
+    s.camera.set_viewport(VIEWPORT.x, VIEWPORT.y);
+    s.camera
+        .look_along(glam::Vec3::new(0.0, -1.0, 1.0), glam::Vec3::Z);
+    s.camera.distance = 200.0;
+    s.start_create_sketch().unwrap();
+    let p = screen(&s, glam::Vec3::new(10.0, 10.0, 0.0));
+    let cursor = glam::Vec2::new(p.x, p.y);
+    assert_eq!(
+        s.plane_click_at(cursor, VIEWPORT, PickFilter::BASES),
+        Some(PlaneClick::Standard(StandardPlane::XY))
+    );
+    // Ohne sichtbare Ebene dahinter trifft die nur eingeblendete.
+    s.set_origin_plane_shown(StandardPlane::XY, false);
+    assert_eq!(
+        s.plane_click_at(cursor, VIEWPORT, PickFilter::BASES),
+        Some(PlaneClick::Standard(StandardPlane::XZ))
+    );
+}

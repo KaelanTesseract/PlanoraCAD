@@ -2715,6 +2715,16 @@ impl AppState {
     /// Die vorderste eingeblendete Grundebene unter dem Zeiger und die Strahllänge bis zu ihr
     /// (wie [`Self::nearest_plane_hit`]).
     fn nearest_origin_hit(&self, cursor: Vec2, viewport: Vec2) -> Option<(StandardPlane, f64)> {
+        self.nearest_origin_hit_where(cursor, viewport, |_| true)
+    }
+
+    /// Wie [`Self::nearest_origin_hit`], nur unter den Grundebenen, für die `keep` gilt.
+    fn nearest_origin_hit_where(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+        keep: impl Fn(StandardPlane) -> bool,
+    ) -> Option<(StandardPlane, f64)> {
         let ndc = Vec2::new(
             2.0 * cursor.x / viewport.x - 1.0,
             1.0 - 2.0 * cursor.y / viewport.y,
@@ -2726,6 +2736,7 @@ impl AppState {
         };
         self.origin_plane_rects()
             .into_iter()
+            .filter(|(p, _)| keep(*p))
             .filter_map(|(p, rect)| pick_plane(&ray, &rect).map(|t| (p, t)))
             .min_by(|a, b| a.1.total_cmp(&b.1))
     }
@@ -2759,19 +2770,23 @@ impl AppState {
             return None;
         }
         let hit = self.pick_with(cursor, viewport, filter);
-        let origin = filter
-            .planes
-            .then(|| self.nearest_origin_hit(cursor, viewport))
-            .flatten();
-        let Some((plane, t)) = origin else {
-            return hit.map(PlaneClick::View);
-        };
         // Eine nur für den Wahlmodus eingeblendete Grundebene (im Baum ausgeblendet) steht hinter
-        // jedem anderen Treffer zurück: Sie geht durch das Modell und soll Flächen dahinter nicht
-        // verdecken.
-        if hit.is_some() && !self.is_origin_plane_shown(plane) {
-            return hit.map(PlaneClick::View);
-        }
+        // jedem anderen Treffer zurück, auch hinter einer sichtbaren Grundebene: Sie geht durch
+        // das Modell und soll nichts dahinter verdecken. Sie zählt nur ohne anderen Treffer.
+        let shown = filter
+            .planes
+            .then(|| {
+                self.nearest_origin_hit_where(cursor, viewport, |p| self.is_origin_plane_shown(p))
+            })
+            .flatten();
+        let Some((plane, t)) = shown else {
+            if hit.is_some() || !filter.planes {
+                return hit.map(PlaneClick::View);
+            }
+            return self
+                .nearest_origin_hit_where(cursor, viewport, |p| !self.is_origin_plane_shown(p))
+                .map(|(p, _)| PlaneClick::Standard(p));
+        };
         // Abstand des anderen Treffers; Ecken und Kanten liegen vorn.
         let front = match hit {
             None => None,
@@ -2797,7 +2812,9 @@ impl AppState {
     ) -> Option<f64> {
         use crate::plane_dialog::PlaneClick;
         match click? {
-            PlaneClick::Standard(_) => self.nearest_origin_hit(cursor, viewport).map(|(_, t)| t),
+            PlaneClick::Standard(p) => self
+                .nearest_origin_hit_where(cursor, viewport, |q| q == p)
+                .map(|(_, t)| t),
             PlaneClick::View(Pick::Face(_)) => self
                 .nearest_face_hit(cursor, viewport)
                 .map(|(_, f)| f64::from(f.distance)),
