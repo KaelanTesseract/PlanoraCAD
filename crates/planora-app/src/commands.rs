@@ -178,9 +178,28 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             }
         }
         Action::CreateSketch => {
+            // Die Taste gilt überall außer in der Zeichnung (dort gibt es den Befehl nicht, wie in
+            // Fusion); bei offener Skizze schließt der Befehl sie erst.
+            // Alte Version: gesperrt wie die übrigen Modellbefehle (der Bereich ist „Überall“, die
+            // Sperre oben greift hier nicht).
+            if ws.active_tab().read_only
+                || matches!(
+                    ws.active_tab().state.drawing_ui.area,
+                    crate::drawing_state::WorkArea::Drawing(_)
+                )
+            {
+                return MenuRequest::None;
+            }
             // Fehler (offene Skizze nicht schließbar, gesperrte Vorauswahl) stehen in `message`.
-            if let Ok(None) = ws.active_tab_mut().state.start_create_sketch() {
-                ws.active_tab_mut().exclude_pick_modes();
+            match ws.active_tab_mut().state.start_create_sketch() {
+                // Mit Vorauswahl: die Skizze ist schon da.
+                Ok(Some(_)) => ws.last_command.remember(a),
+                // Wahlmodus: gemerkt, sobald er eine Skizze angelegt hat ([`observe`]).
+                Ok(None) => {
+                    ws.active_tab_mut().exclude_pick_modes();
+                    track(ws, a);
+                }
+                Err(_) => {}
             }
         }
         Action::Fillet => {
@@ -603,6 +622,10 @@ fn window_open(tab: &DocTab, a: Action) -> bool {
     match a {
         Action::ExtrudeSketch => matches!(tab.dialog, Some(CreateDialog::ExtrudeSketch { .. })),
         Action::Fillet => tab.blend_dialog.is_some(),
+        Action::CreateSketch => matches!(
+            tab.state.pending_pick,
+            Some(crate::state::PendingPick::NewSketch)
+        ),
         _ => PlaneCommand::for_action(a).is_some_and(|c| {
             tab.plane_dialog
                 .as_ref()
@@ -616,6 +639,7 @@ fn made_by(a: Action, kind: &FeatureKind) -> bool {
     match a {
         Action::ExtrudeSketch => matches!(kind, FeatureKind::Extrude { .. }),
         Action::Fillet => matches!(kind, FeatureKind::Verrunden { .. }),
+        Action::CreateSketch => matches!(kind, FeatureKind::Sketch(_)),
         _ => match kind {
             FeatureKind::Plane(pf) => {
                 PlaneCommand::for_action(a) == Some(PlaneCommand::of(&pf.def))

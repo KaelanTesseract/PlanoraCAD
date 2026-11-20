@@ -135,7 +135,7 @@ action_table! {
     SketchRedefinePlane, "skizze.ebene_neu", "action-sketch-redefine-plane", Model, [];
     /// Fusion „Skizze erstellen“: mit gewählter Ebene oder ebener Fläche sofort, sonst
     /// Wahlmodus im Bild; ohne Vorgabetaste wie in Fusion, belegbar.
-    CreateSketch, "modell.skizze_erstellen", "action-create-sketch", Model, [];
+    CreateSketch, "modell.skizze_erstellen", "action-create-sketch", All, [];
     // Menü „Einfügen“ (Skizzen 9): ohne Vorgabetaste wie in Fusion, belegbar. DXF und SVG
     // gelten überall (auch in der offenen Skizze, Spec C), die Leinwand nur im Modell.
     /// Fusion „DXF einfügen“.
@@ -350,8 +350,10 @@ impl Action {
     /// eigenem Gedächtnis); nicht Datei, Rückgängig, Ansicht, Sichtbarkeit, Löschen, die
     /// Schalter der Zeichnung und das Wiederholen selbst.
     pub fn repeatable(self) -> bool {
-        matches!(self, Action::ExtrudeSketch | Action::Fillet)
-            || crate::plane_dialog::PlaneCommand::for_action(self).is_some()
+        matches!(
+            self,
+            Action::ExtrudeSketch | Action::Fillet | Action::CreateSketch
+        ) || crate::plane_dialog::PlaneCommand::for_action(self).is_some()
             || self.sketch_tool().is_some()
     }
 

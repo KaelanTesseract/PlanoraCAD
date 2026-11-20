@@ -998,7 +998,7 @@ fn create_sketch_button_does_nothing_in_read_only_tab() {
 fn create_sketch_action_has_no_default_key() {
     use planora_app::keymap::{Action, Area, Keymap};
     assert!(Action::ALL.contains(&Action::CreateSketch));
-    assert_eq!(Action::CreateSketch.area(), Area::Model);
+    assert_eq!(Action::CreateSketch.area(), Area::All);
     assert!(Keymap::defaults().bindings(Action::CreateSketch).is_empty());
     assert_eq!(Action::CreateSketch.label(), "Skizze erstellen");
     let mut app = app_with(0, false);

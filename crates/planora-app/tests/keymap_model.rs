@@ -754,9 +754,9 @@ fn save_undo_navigation_are_not_repeatable() {
     for &a in Action::ALL {
         last.remember(a);
     }
-    // Nur die wiederholbaren zählen; die letzte davon bleibt (Skizzen 6: die letzte ist jetzt
-    // die Tangentialebene des Menüs „Konstruieren“).
-    assert_eq!(last.last(), Some(Action::PlaneTangent));
+    // Nur die wiederholbaren zählen; die letzte davon bleibt (seit „Skizze erstellen“
+    // wiederholbar ist, steht sie in der Tabelle als letzte).
+    assert_eq!(last.last(), Some(Action::CreateSketch));
     for a in [
         Action::New,
         Action::Projects,
@@ -774,7 +774,7 @@ fn save_undo_navigation_are_not_repeatable() {
     ] {
         assert!(!a.repeatable(), "{a:?}");
         last.remember(a);
-        assert_eq!(last.last(), Some(Action::PlaneTangent), "{a:?}");
+        assert_eq!(last.last(), Some(Action::CreateSketch), "{a:?}");
     }
 
     // In der App: Rückgängig über Strg+Z ersetzt den gemerkten Befehl nicht.
