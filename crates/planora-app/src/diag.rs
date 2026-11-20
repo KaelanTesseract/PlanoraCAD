@@ -31,6 +31,9 @@ pub const LOG_NAME: &str = "planora.log";
 const MAX_LINE_CHARS: usize = 2000;
 /// Nach einem Schreibfehler so viele Zeilen überspringen, bevor es erneut versucht wird.
 const RETRY_AFTER: u32 = 50;
+/// … höchstens aber so viele Sekunden: auch eine kurze Sitzung mit wenigen Zeilen kommt in die
+/// Datei, wenn sie nur am Anfang kurz gesperrt war.
+pub const RETRY_SECS: u64 = 5;
 
 /// So viele letzte Schritte hält das Programm im Speicher.
 pub const STEPS: usize = 50;
@@ -72,6 +75,8 @@ pub struct Diag {
     pending: Vec<String>,
     /// So viele Zeilen noch überspringen, bevor erneut geschrieben wird.
     skip: u32,
+    /// Wann das Schreiben zuletzt scheiterte (danach spätestens nach [`RETRY_SECS`] erneut).
+    failed_at: Option<std::time::Instant>,
     /// So viele Zeilen noch nicht drehen (nach einem gescheiterten Drehen; geschrieben wird
     /// weiter in die aktuelle Datei).
     rotate_skip: u32,
@@ -90,6 +95,7 @@ impl Diag {
             dir: None,
             pending: Vec::new(),
             skip: 0,
+            failed_at: None,
             rotate_skip: 0,
             verbose: false,
             file_error: false,
@@ -136,10 +142,33 @@ impl Diag {
         if self.pending.len() > RING_LINES {
             self.pending.remove(0);
         }
-        if self.skip > 0 {
+        let waited = self
+            .failed_at
+            .is_some_and(|t| t.elapsed().as_secs() >= RETRY_SECS);
+        if self.skip > 0 && !waited {
             self.skip -= 1;
             return;
         }
+        self.try_write(&dir);
+    }
+
+    /// Schreibt die vorgemerkten Zeilen jetzt (beim Beenden des Programms), auch während eines
+    /// Wartens nach einem Schreibfehler.
+    pub fn flush(&mut self) {
+        let Some(dir) = self.dir.clone() else { return };
+        if !self.pending.is_empty() {
+            self.try_write(&dir);
+        }
+    }
+
+    /// Für Tests: der letzte Schreibfehler liegt `secs` Sekunden zurück.
+    #[doc(hidden)]
+    pub fn age_failure(&mut self, secs: u64) {
+        let back = std::time::Duration::from_secs(secs);
+        self.failed_at = self.failed_at.map(|t| t.checked_sub(back).unwrap_or(t));
+    }
+
+    fn try_write(&mut self, dir: &Path) {
         let mut data = self.pending.join("\n");
         data.push('\n');
         let path = dir.join(LOG_NAME);
@@ -150,7 +179,7 @@ impl Diag {
             if self.rotate_skip > 0 {
                 self.rotate_skip -= 1;
                 rotate_failed = true;
-            } else if !rotate(&dir) {
+            } else if !rotate(dir) {
                 // Nicht in jeder Zeile neu versuchen; bis dahin wächst die aktuelle Datei etwas
                 // über die Grenze.
                 rotate_failed = true;
@@ -166,11 +195,14 @@ impl Diag {
             Ok(()) => {
                 self.pending.clear();
                 self.file_error = rotate_failed;
+                self.skip = 0;
+                self.failed_at = None;
             }
             Err(_) => {
                 // Später erneut versuchen; die Zeilen bleiben vorgemerkt.
                 self.file_error = true;
                 self.skip = RETRY_AFTER;
+                self.failed_at = Some(std::time::Instant::now());
             }
         }
     }
@@ -333,6 +365,11 @@ pub fn init_global(data_dir: &Path) {
         fresh.write_file(line);
     }
     *g = fresh;
+}
+
+/// Schreibt, was noch nicht in der Datei steht (beim Beenden des Programms).
+pub fn flush() {
+    lock().flush();
 }
 
 pub fn info(msg: &str) {

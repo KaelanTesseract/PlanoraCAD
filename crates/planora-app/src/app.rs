@@ -3127,6 +3127,8 @@ impl eframe::App for PlanoraApp {
         if let Some(marker) = self.run_marker.take() {
             marker.finish();
         }
+        // Was nach einem Schreibfehler noch im Speicher wartet, kommt jetzt in die Datei.
+        crate::diag::flush();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

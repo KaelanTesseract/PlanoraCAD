@@ -818,3 +818,100 @@ fn install_locked_while_prompt_open() {
     warten(&mut h);
     assert_eq!(entry_state(&h, FAELLE), Some(EntryState::Running));
 }
+
+/// Handtest F1: Beispiel-Hallo ausschalten, Test-Fälle entfernen, Programm neu starten (neues
+/// `Plugins::new` auf denselben Ordnern und der geschriebenen Konfiguration). Das ausgeschaltete
+/// Plug-in bleibt in der Liste (Haken aus) und sein Zustand in der Datei.
+#[test]
+fn disabled_plugin_survives_remove_and_restart() {
+    let places = orte("aus-bleibt", &[], &["beispiel-hallo", "test-faelle"]);
+    let mut h = harness("aus-bleibt", places.clone(), Config::default());
+    assert_eq!(entry_state(&h, HALLO), Some(EntryState::Running));
+    let seen = bild(&mut h, vec![]);
+    klick(&mut h, &seen, "Beispiel-Hallo");
+    assert_eq!(entry_state(&h, HALLO), Some(EntryState::Off));
+    assert_eq!(
+        gespeichert(&h, HALLO).map(|c| c.enabled),
+        Some(false),
+        "Ausschalten gleich gespeichert"
+    );
+    plugins::remove(&mut h.ws, FAELLE);
+    warten(&mut h);
+    assert_eq!(
+        gespeichert(&h, HALLO).map(|c| c.enabled),
+        Some(false),
+        "Entfernen eines anderen ändert nichts"
+    );
+    // Neustart: das alte Programm endet, das neue liest Ordner und Datei.
+    let config_path = h.ws.config_path.clone();
+    drop(h);
+    let mut ws = Workspace::new(None, Config::load_from(&config_path));
+    ws.config_path = config_path;
+    ws.plugins = Plugins::new(places, &ws.config);
+    ws.plugins.host.set_language("de");
+    let mut w = SettingsWindow::default();
+    w.open_at(false, Some(SettingsSection::Plugins));
+    let mut h = H {
+        ws,
+        ctx: fresh_ctx(),
+        w,
+        size: vec2(1920.0, 1080.0),
+    };
+    let seen = warten(&mut h);
+    assert_eq!(entry_state(&h, HALLO), Some(EntryState::Off));
+    assert_eq!(entry_state(&h, FAELLE), None);
+    assert!(has(&seen, "Beispiel-Hallo"), "{}", join(&seen));
+    assert!(!has(&seen, "Keine Plug-ins gefunden."), "{}", join(&seen));
+    assert_eq!(gespeichert(&h, HALLO).map(|c| c.enabled), Some(false));
+    // Das Protokoll sagt, wie viele Plug-ins der Start gefunden hat (eine leere Liste fällt so
+    // im Protokoll auf).
+    assert!(
+        planora_app::diag::recent_lines(planora_app::diag::RING_LINES)
+            .iter()
+            .any(|l| l.ends_with("Plug-ins found: 1 (installed: 1, switched off: 1)")),
+        "{:?}",
+        planora_app::diag::recent_lines(20)
+    );
+}
+
+/// Wie [`disabled_plugin_survives_remove_and_restart`], aber wie im Handtest: Test-Fälle ist
+/// vorher dreimal abgestürzt (angehalten), dann erst wird Beispiel-Hallo ausgeschaltet.
+#[test]
+fn disabled_plugin_survives_remove_of_stopped_plugin() {
+    let places = orte("aus-bleibt-2", &[], &["beispiel-hallo", "test-faelle"]);
+    let mut h = harness("aus-bleibt-2", places.clone(), Config::default());
+    for _ in 0..3 {
+        h.ws.plugins.host.run_command(FAELLE, "panik");
+        let start = Instant::now();
+        while !matches!(
+            entry_state(&h, FAELLE),
+            Some(EntryState::Failed(_) | EntryState::Stopped)
+        ) {
+            bild(&mut h, vec![]);
+            assert!(start.elapsed() < Duration::from_secs(60));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        h.ws.plugins.restart(FAELLE);
+        warten(&mut h);
+    }
+    let seen = bild(&mut h, vec![]);
+    klick(&mut h, &seen, "Beispiel-Hallo");
+    assert_eq!(gespeichert(&h, HALLO).map(|c| c.enabled), Some(false));
+    plugins::remove(&mut h.ws, FAELLE);
+    warten(&mut h);
+    assert_eq!(gespeichert(&h, HALLO).map(|c| c.enabled), Some(false));
+    let config_path = h.ws.config_path.clone();
+    drop(h);
+    let mut ws = Workspace::new(None, Config::load_from(&config_path));
+    ws.config_path = config_path;
+    ws.plugins = Plugins::new(places, &ws.config);
+    assert_eq!(
+        ws.plugins
+            .host
+            .entries()
+            .iter()
+            .map(|e| (e.id.clone(), e.state.clone()))
+            .collect::<Vec<_>>(),
+        vec![(HALLO.to_string(), EntryState::Off)]
+    );
+}

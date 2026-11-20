@@ -251,7 +251,22 @@ impl Plugins {
     pub fn new(places: Places, config: &Config) -> Plugins {
         let mut host = PluginHost::new(places);
         host.set_language(planora_i18n::current().id());
-        host.start_all(&states_from_config(config));
+        let states = states_from_config(config);
+        host.start_all(&states);
+        // Ohne Pfade (siehe `diag`): fehlt im Protokoll ein Plug-in, steht hier, was der Start sah.
+        let entries = host.entries();
+        let installed = entries
+            .iter()
+            .filter(|e| e.found.iter().any(|f| f.origin == Origin::User))
+            .count();
+        let off = entries
+            .iter()
+            .filter(|e| states.get(&e.id).is_some_and(|s| !s.enabled))
+            .count();
+        diag::info(&format!(
+            "Plug-ins found: {} (installed: {installed}, switched off: {off})",
+            entries.len()
+        ));
         let mut plugins = Plugins::with_host(host);
         plugins.channel = channel_of(config);
         plugins
