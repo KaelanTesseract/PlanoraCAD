@@ -2235,6 +2235,8 @@ impl SketchSession {
             || matches!(self.tool, Tool::ProjectEdge | Tool::InsertControlPoint)
         {
             self.set_tool(sk, Tool::Select);
+            // Mit dem Befehl geht seine Meldung (etwa „Nichts Neues“ beim Projizieren).
+            self.message = None;
         }
     }
 

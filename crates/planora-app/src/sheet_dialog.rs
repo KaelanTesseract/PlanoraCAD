@@ -151,6 +151,10 @@ pub struct SheetInfoDialog {
     /// Zeilen der Stückliste und ob es Stücklistenblätter gibt, je Stand des Dokuments
     /// (Zustand, Änderungszähler) einmal gerechnet.
     parts_cache: Option<PartsCache>,
+    /// Felder, unter denen schon einmal eine Warnung stand: Ihre Zeile bleibt reserviert, solange
+    /// das Fenster offen ist. Fällt die Warnung beim Tippen weg (etwa „Eigentümer fehlt“),
+    /// verrutschen die Felder darunter nicht, und der nächste Klick trifft das gemeinte Feld.
+    warn_lines: std::collections::HashSet<egui::Id>,
 }
 
 #[derive(Clone, Debug)]
@@ -200,6 +204,7 @@ impl SheetInfoDialog {
             message: None,
             last_rect: None,
             parts_cache: None,
+            warn_lines: Default::default(),
         }
     }
 
@@ -356,6 +361,7 @@ impl SheetInfoDialog {
             message,
             last_rect,
             unit,
+            warn_lines,
             ..
         } = self;
         let response = Dialog::new(title(), DialogSize::Wide)
@@ -392,6 +398,7 @@ impl SheetInfoDialog {
                             for (value, f) in rows {
                                 field_row(
                                     ui,
+                                    warn_lines,
                                     dark,
                                     f,
                                     &title_field_name(f),
@@ -403,6 +410,7 @@ impl SheetInfoDialog {
                             }
                             field_row(
                                 ui,
+                                warn_lines,
                                 dark,
                                 "tolerance",
                                 &tr!("sheet-field-tolerance"),
@@ -458,6 +466,7 @@ impl SheetInfoDialog {
                             for (value, f, max) in rows {
                                 field_row(
                                     ui,
+                                    warn_lines,
                                     dark,
                                     f,
                                     &title_field_name(f),
@@ -769,6 +778,7 @@ pub(crate) fn length_label(text: &str, max: usize) -> String {
 #[allow(clippy::too_many_arguments)]
 fn field_row(
     ui: &mut egui::Ui,
+    warn_lines: &mut std::collections::HashSet<egui::Id>,
     dark: bool,
     key: impl std::hash::Hash + std::fmt::Debug,
     label: &str,
@@ -779,6 +789,7 @@ fn field_row(
 ) {
     field_row_with(
         ui,
+        warn_lines,
         dark,
         ("planora-sheet-field", key),
         label,
@@ -794,6 +805,7 @@ fn field_row(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn field_row_with(
     ui: &mut egui::Ui,
+    warn_lines: &mut std::collections::HashSet<egui::Id>,
     dark: bool,
     id: impl std::hash::Hash + std::fmt::Debug,
     label: &str,
@@ -808,6 +820,7 @@ pub(crate) fn field_row_with(
         FieldValue::Auto => String::new(),
     };
     let custom = matches!(value, FieldValue::Text(_));
+    let line_id = egui::Id::new(("planora-sheet-warn-line", &id));
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
             theme::text_field(
@@ -833,6 +846,11 @@ pub(crate) fn field_row_with(
                 warning_color(dark)
             };
             ui.colored_label(color, &message);
+            warn_lines.insert(line_id);
+        } else if warn_lines.contains(&line_id) {
+            // Die Zeile bleibt frei stehen (siehe `SheetInfoDialog::warn_lines`).
+            let h = ui.text_style_height(&egui::TextStyle::Body);
+            ui.allocate_space(egui::vec2(0.0, h));
         }
     });
     *value = FieldValue::from_input(&text);
