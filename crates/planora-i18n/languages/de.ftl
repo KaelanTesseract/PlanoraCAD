@@ -3985,3 +3985,5 @@ catalog-skip-bad-repo = Eintrag „{ $id }“ übergangen: { $msg }
 catalog-skip-too-many = Weitere Einträge übergangen: höchstens { $max } Einträge.
 catalog-load-failed = Der Katalog konnte nicht geladen werden.
 catalog-too-large = Die Datei katalog.json ist zu groß.
+catalog-stale-offline = Offline – gezeigt wird der zuletzt geladene Stand.
+catalog-stale-invalid = Der neue Katalog ist fehlerhaft – gezeigt wird der zuletzt geladene Stand.

@@ -1044,7 +1044,7 @@ impl Plugins {
         self.poll_fetching();
         acted |= was_fetching && !self.is_fetching();
         acted |= self.poll_checks();
-        acted |= self.catalog.poll(crate::update_check::now_unix());
+        acted |= self.catalog.poll();
         if let Some(offer) = &self.install
             && let Some(choice) = plugin_prompts::show_install(ctx, offer, prompt_open)
         {

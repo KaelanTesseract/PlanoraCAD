@@ -1,21 +1,24 @@
 //! Plug-in-Katalog (Task 2): die Liste aus dem festen Katalog-Repo holen, ihren Zustand halten
 //! und den letzten erfolgreichen Stand im Benutzer-Cacheordner (`plugin-cache/katalog/`)
-//! ablegen. Das Holen läuft in einem [`Job`]; der Netzweg wird übergeben (in Tests eine
-//! Nachbildung).
+//! ablegen. Holen und Schreiben des Zwischenspeichers laufen in einem [`Job`]; der Netzweg wird
+//! übergeben (in Tests eine Nachbildung).
 //!
 //! Ablauf: neuestes Release (≤ [`MAX_RELEASES_BYTES`], 30 s) → [`parse_latest_release`] →
 //! `katalog.json` (≤ [`MAX_CATALOG_BYTES`]; laut Release größer ⇒ gar nicht laden) →
 //! [`parse_catalog`] → nur die Symbole, die ein Eintrag nennt und die im Release liegen (je ≤
-//! [`MAX_SYMBOL_BYTES`]). Ein Symbol, das sich nicht laden lässt, fehlt nur (Standardsymbol).
+//! [`MAX_SYMBOL_BYTES`]). Lässt sich ein Symbol nicht laden, bleibt ein schon vorhandenes mit
+//! demselben Namen; sonst fehlt es (Standardsymbol).
 //!
 //! Zwischenspeicher: `katalog.json` (wie geladen), `stand.json` ([`CacheIndex`]) und je Symbol
 //! eine Datei mit dem SHA-256 seines Namens als Namen – nie der Name aus dem Katalog. Jede Datei
 //! wird atomar geschrieben (Zwischendatei, dann umbenennen); `stand.json` zuletzt, mit der
-//! Prüfsumme der `katalog.json`, damit ein halber Stand als kaputt erkannt wird.
+//! Prüfsumme der `katalog.json`, damit ein halber Stand als kaputt erkannt wird. Gelesen wird
+//! beim Start mit festen Größengrenzen; zu große Dateien gelten als kaputt.
 
 use crate::diag;
 use crate::jobs::{Job, Poll};
 use crate::plugin_repo::{self, RepoFetch};
+use planora_exchange::Progress;
 use planora_i18n::tr;
 use planora_project::fsutil::atomic_write_unique;
 use planora_update::catalog::{
@@ -26,33 +29,56 @@ use planora_update::plugin_source::{MAX_RELEASES_BYTES, REQUEST_TIMEOUT};
 use planora_update::sha256::hex_digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 /// Name der Liste im Zwischenspeicher.
 const CATALOG_FILE: &str = "katalog.json";
 /// Name des Verzeichnisses im Zwischenspeicher ([`CacheIndex`]).
 const INDEX_FILE: &str = "stand.json";
+/// Größtes `stand.json`, das gelesen wird (Bytes).
+pub const MAX_INDEX_BYTES: u64 = 64 << 10;
 /// Ohne `force` wird frühestens so lange nach dem letzten Versuch erneut geholt (Sekunden).
 pub const RETRY_SECS: u64 = 600;
+/// Zwischendateien (`*.tmp`), die mindestens so alt sind, gelten als übrig geblieben.
+const STALE_TMP_AGE: Duration = Duration::from_secs(600);
 /// Höchstens so viele übergangene Einträge kommen einzeln ins Protokoll.
 const MAX_SKIP_LINES: usize = 20;
 /// Höchstlänge eines Grundes im Protokoll (Zeichen).
 const MAX_REASON_CHARS: usize = 200;
 
-/// Zustand des Katalogs.
+/// Warum ein gezeigter Stand nicht der neueste ist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleReason {
+    /// Das letzte Holen scheiterte am Netz (keine Verbindung, Zeitgrenze, Status).
+    Offline,
+    /// Das letzte Holen lieferte einen fehlerhaften Katalog oder Release.
+    Invalid,
+}
+
+impl StaleReason {
+    /// Hinweis für die Oberfläche.
+    pub fn text(self) -> String {
+        match self {
+            StaleReason::Offline => tr!("catalog-stale-offline"),
+            StaleReason::Invalid => tr!("catalog-stale-invalid"),
+        }
+    }
+}
+
+/// Zustand des Katalogs. Ob gerade geholt wird, sagt [`Catalog::is_loading`]; der Zustand bleibt
+/// solange der letzte.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CatalogState {
     /// Noch nie geladen und kein (lesbarer) Zwischenspeicher.
     Never,
-    /// Wird gerade geholt.
-    Loading,
     /// Ein Stand: frisch geholt oder aus dem Zwischenspeicher. `symbols`: Symbolname aus dem
     /// Katalog → Inhalt (PNG oder SVG, ungeprüft). `fetched_at`: Zeitpunkt des Holens (Sekunden
-    /// seit 1970). `offline`: das letzte Holen misslang, gezeigt wird dieser ältere Stand.
+    /// seit 1970). `stale`: das letzte Holen misslang (warum), gezeigt wird dieser ältere Stand.
     Ready {
         entries: Vec<CatalogEntry>,
         symbols: BTreeMap<String, Vec<u8>>,
         fetched_at: u64,
-        offline: bool,
+        stale: Option<StaleReason>,
     },
     /// Der Katalog hat ein neueres Format, als dieses Programm kennt.
     TooNew(u32),
@@ -63,15 +89,15 @@ pub enum CatalogState {
 /// Ergebnis eines Holens aus dem Arbeitsthread.
 enum Outcome {
     Loaded {
-        /// `katalog.json` wie geladen (für den Zwischenspeicher).
-        text: String,
         entries: Vec<CatalogEntry>,
         symbols: BTreeMap<String, Vec<u8>>,
         /// Gründe für übergangene Einträge.
         skipped: Vec<String>,
+        /// Der Zwischenspeicher ließ sich nicht schreiben (Grund).
+        cache_error: Option<String>,
     },
     TooNew(u32),
-    Failed(String),
+    Failed(String, StaleReason),
 }
 
 /// Der Katalog: Zustand, laufendes Holen und Zwischenspeicher.
@@ -81,30 +107,31 @@ pub struct Catalog {
     /// [`Plugins::empty`]: crate::plugins::Plugins::empty
     dir: PathBuf,
     state: CatalogState,
-    /// Der Stand vor dem laufenden Holen (für „offline“, falls es misslingt).
-    previous: Option<CatalogState>,
-    job: Option<Job<Outcome>>,
+    /// Das laufende Holen und sein Zeitpunkt (wird zu `fetched_at`).
+    job: Option<(Job<Outcome>, u64)>,
     /// Zeitpunkt des letzten Versuchs (Sekunden seit 1970).
     last_attempt: Option<u64>,
 }
 
 impl Catalog {
-    /// Liest den Zwischenspeicher in `cache_dir`; fehlt er oder ist er kaputt ⇒ [`CatalogState::Never`].
+    /// Liest den Zwischenspeicher in `cache_dir` (mit Größengrenzen); fehlt er oder ist er
+    /// kaputt ⇒ [`CatalogState::Never`].
     pub fn new(cache_dir: PathBuf) -> Catalog {
         let state = read_cache(&cache_dir).unwrap_or(CatalogState::Never);
         Catalog {
             dir: cache_dir,
             state,
-            previous: None,
             job: None,
             last_attempt: None,
         }
     }
 
+    /// Der letzte Zustand (auch während des Holens).
     pub fn state(&self) -> &CatalogState {
         &self.state
     }
 
+    /// Wird gerade geholt?
     pub fn is_loading(&self) -> bool {
         self.job.is_some()
     }
@@ -114,135 +141,162 @@ impl Catalog {
         !self.dir.as_os_str().is_empty()
     }
 
-    /// Zeitpunkt des gezeigten (oder während des Holens des vorigen) Stands, falls es einen gibt.
+    /// Zeitpunkt des gezeigten Stands, falls es einen gibt.
     pub fn fetched_at(&self) -> Option<u64> {
-        let state = match &self.state {
-            CatalogState::Loading | CatalogState::TooNew(_) | CatalogState::Failed(_) => {
-                self.previous.as_ref()?
-            }
-            s => s,
-        };
-        match state {
+        match &self.state {
             CatalogState::Ready { fetched_at, .. } => Some(*fetched_at),
             _ => None,
         }
     }
 
-    /// Startet das Holen, wenn `force` oder der letzte Versuch mindestens [`RETRY_SECS`] her ist,
-    /// und nicht schon geholt wird.
+    /// Startet das Holen, wenn `force` oder der letzte Versuch mindestens [`RETRY_SECS`] her ist
+    /// (ein Versuch „in der Zukunft“, etwa nach Zurückstellen der Uhr, zählt nicht), und nicht
+    /// schon geholt wird.
     pub fn request(&mut self, fetch: RepoFetch, now: u64, force: bool) {
         if self.job.is_some() {
             return;
         }
         let recent = self
             .last_attempt
-            .is_some_and(|t| now.saturating_sub(t) < RETRY_SECS);
+            .is_some_and(|t| t <= now && now - t < RETRY_SECS);
         if recent && !force {
             return;
         }
         self.last_attempt = Some(now);
-        let old = std::mem::replace(&mut self.state, CatalogState::Loading);
-        if matches!(old, CatalogState::Ready { .. }) {
-            self.previous = Some(old);
-        }
-        self.job = Some(Job::spawn(move |_| load(fetch)));
+        let old = match &self.state {
+            CatalogState::Ready { symbols, .. } => symbols.clone(),
+            _ => BTreeMap::new(),
+        };
+        let dir = self.dir.clone();
+        let job = Job::spawn(move |progress| load(fetch, &dir, now, &old, progress));
+        self.job = Some((job, now));
     }
 
     /// Holt das Ergebnis ab, falls fertig; `true`, wenn sich der Zustand geändert hat.
-    pub fn poll(&mut self, now: u64) -> bool {
-        self.take(now, false)
+    pub fn poll(&mut self) -> bool {
+        self.take(false)
     }
 
     /// Wie [`Catalog::poll`], wartet aber auf das Ergebnis (Tests und Abläufe ohne Fenster).
-    pub fn wait(&mut self, now: u64) -> bool {
-        self.take(now, true)
+    pub fn wait(&mut self) -> bool {
+        self.take(true)
     }
 
-    fn take(&mut self, now: u64, block: bool) -> bool {
-        let Some(job) = &self.job else {
+    fn take(&mut self, block: bool) -> bool {
+        let Some((job, started)) = &self.job else {
             return false;
         };
+        let started = *started;
         let outcome = match job.fetch(block) {
             Poll::Pending => return false,
             Poll::Ready(o) => o,
-            Poll::Lost => Outcome::Failed(tr!("catalog-load-failed")),
+            Poll::Lost => Outcome::Failed(tr!("catalog-load-failed"), StaleReason::Offline),
         };
         self.job = None;
         match outcome {
             Outcome::Loaded {
-                text,
                 entries,
                 symbols,
                 skipped,
+                cache_error,
             } => {
                 log_skipped(&skipped);
-                if let Err(e) = write_cache(&self.dir, &text, &symbols, now) {
+                if let Some(e) = cache_error {
                     diag::warn(&format!("Plug-in catalog: cache not written: {e}"));
                 }
-                self.previous = None;
                 self.state = CatalogState::Ready {
                     entries,
                     symbols,
-                    fetched_at: now,
-                    offline: false,
+                    fetched_at: started,
+                    stale: None,
                 };
             }
             Outcome::TooNew(n) => {
                 diag::warn(&format!("Plug-in catalog: format {n} is too new"));
                 self.state = CatalogState::TooNew(n);
             }
-            Outcome::Failed(e) => {
+            Outcome::Failed(e, reason) => {
                 diag::warn(&format!("Plug-in catalog: {}", truncate(&e)));
-                self.state = match self.previous.take() {
-                    Some(CatalogState::Ready {
-                        entries,
-                        symbols,
-                        fetched_at,
-                        ..
-                    }) => CatalogState::Ready {
-                        entries,
-                        symbols,
-                        fetched_at,
-                        offline: true,
-                    },
-                    _ => CatalogState::Failed(e),
-                };
+                match &mut self.state {
+                    CatalogState::Ready { stale, .. } => *stale = Some(reason),
+                    // Ein neueres Format bleibt der bessere Hinweis als ein Netzfehler.
+                    CatalogState::TooNew(_) => {}
+                    other => *other = CatalogState::Failed(e),
+                }
             }
         }
         true
     }
 }
 
-/// Holt Release, Liste und Symbole (im Arbeitsthread).
-fn load(fetch: RepoFetch) -> Outcome {
-    match try_load(fetch) {
-        Ok(o) => o,
-        Err(e) => Outcome::Failed(e),
+/// Holt Release, Liste und Symbole und schreibt den Zwischenspeicher (im Arbeitsthread).
+/// `old`: die Symbole des bisherigen Stands (bleiben, wenn ihr Download misslingt).
+fn load(
+    fetch: RepoFetch,
+    dir: &Path,
+    now: u64,
+    old: &BTreeMap<String, Vec<u8>>,
+    progress: &Progress,
+) -> Outcome {
+    let (text, entries, symbols, skipped) = match fetch_all(fetch, old, progress) {
+        Ok(Fetched::Catalog(t, e, s, k)) => (t, e, s, k),
+        Ok(Fetched::TooNew(n)) => return Outcome::TooNew(n),
+        Err((e, reason)) => return Outcome::Failed(e, reason),
+    };
+    if progress.is_cancelled() {
+        return Outcome::Failed(tr!("catalog-load-failed"), StaleReason::Offline);
+    }
+    let cache_error = write_cache(dir, &text, &symbols, old, now).err();
+    Outcome::Loaded {
+        entries,
+        symbols,
+        skipped,
+        cache_error,
     }
 }
 
-fn try_load(fetch: RepoFetch) -> Result<Outcome, String> {
+/// Was beim Holen herauskam.
+enum Fetched {
+    /// Text, Einträge, Symbole, übergangene Einträge.
+    Catalog(
+        String,
+        Vec<CatalogEntry>,
+        BTreeMap<String, Vec<u8>>,
+        Vec<String>,
+    ),
+    TooNew(u32),
+}
+
+fn fetch_all(
+    fetch: RepoFetch,
+    old: &BTreeMap<String, Vec<u8>>,
+    progress: &Progress,
+) -> Result<Fetched, (String, StaleReason)> {
+    let net = |e| (e, StaleReason::Offline);
+    let bad = |e| (e, StaleReason::Invalid);
     let body = plugin_repo::get(
         fetch,
         &latest_release_url(),
         MAX_RELEASES_BYTES,
         REQUEST_TIMEOUT,
-    )?;
-    let release = parse_latest_release(&String::from_utf8_lossy(&body))?;
+    )
+    .map_err(net)?;
+    let release = parse_latest_release(&String::from_utf8_lossy(&body)).map_err(bad)?;
     if release.catalog.size > MAX_CATALOG_BYTES {
-        return Err(tr!("catalog-too-large"));
+        return Err(bad(tr!("catalog-too-large")));
     }
     let body = plugin_repo::get(
         fetch,
         &release.catalog.url,
         MAX_CATALOG_BYTES,
         REQUEST_TIMEOUT,
-    )?;
-    let text = String::from_utf8(body).map_err(|_| tr!("catalog-invalid"))?;
+    )
+    .map_err(net)?;
+    let text = String::from_utf8(body).map_err(|_| bad(tr!("catalog-invalid")))?;
     let (entries, skipped) = match parse_catalog(&text) {
         Ok(v) => v,
-        Err(CatalogError::TooNew(n)) => return Ok(Outcome::TooNew(n)),
-        Err(CatalogError::Invalid(e)) => return Err(e),
+        Err(CatalogError::TooNew(n)) => return Ok(Fetched::TooNew(n)),
+        Err(CatalogError::Invalid(e)) => return Err(bad(e)),
     };
     let wanted: BTreeSet<&str> = entries.iter().filter_map(|e| e.symbol.as_deref()).collect();
     let mut symbols = BTreeMap::new();
@@ -251,6 +305,9 @@ fn try_load(fetch: RepoFetch) -> Result<Outcome, String> {
         .iter()
         .filter(|a| wanted.contains(a.name.as_str()))
     {
+        if progress.is_cancelled() {
+            return Err(net(tr!("catalog-load-failed")));
+        }
         if symbols.contains_key(&asset.name) {
             continue;
         }
@@ -258,18 +315,18 @@ fn try_load(fetch: RepoFetch) -> Result<Outcome, String> {
             Ok(bytes) => {
                 symbols.insert(asset.name.clone(), bytes);
             }
-            Err(e) => diag::warn(&format!(
-                "Plug-in catalog: symbol not loaded: {}",
-                truncate(&e)
-            )),
+            Err(e) => {
+                diag::warn(&format!(
+                    "Plug-in catalog: symbol not loaded: {}",
+                    truncate(&e)
+                ));
+                if let Some(bytes) = old.get(&asset.name) {
+                    symbols.insert(asset.name.clone(), bytes.clone());
+                }
+            }
         }
     }
-    Ok(Outcome::Loaded {
-        text,
-        entries,
-        symbols,
-        skipped,
-    })
+    Ok(Fetched::Catalog(text, entries, symbols, skipped))
 }
 
 /// `text` auf [`MAX_REASON_CHARS`] Zeichen gekürzt (mit „…“).
@@ -293,13 +350,25 @@ fn log_skipped(skipped: &[String]) {
     }
 }
 
-/// Liest den Stand aus `dir`; `None`, wenn er fehlt, kaputt ist oder nicht zusammenpasst.
+/// Liest `file`, wenn es höchstens `max` Bytes hat.
+fn read_limited(file: &Path, max: u64) -> Option<Vec<u8>> {
+    if std::fs::metadata(file).ok()?.len() > max {
+        return None;
+    }
+    let bytes = std::fs::read(file).ok()?;
+    (bytes.len() as u64 <= max).then_some(bytes)
+}
+
+/// Liest den Stand aus `dir`; `None`, wenn er fehlt, zu groß oder kaputt ist oder nicht
+/// zusammenpasst.
 fn read_cache(dir: &Path) -> Option<CatalogState> {
     if dir.as_os_str().is_empty() {
         return None;
     }
-    let index = CacheIndex::parse(&std::fs::read_to_string(dir.join(INDEX_FILE)).ok()?)?;
-    let text = std::fs::read_to_string(dir.join(CATALOG_FILE)).ok()?;
+    let index = read_limited(&dir.join(INDEX_FILE), MAX_INDEX_BYTES)?;
+    let index = CacheIndex::parse(std::str::from_utf8(&index).ok()?)?;
+    let text = read_limited(&dir.join(CATALOG_FILE), MAX_CATALOG_BYTES)?;
+    let text = String::from_utf8(text).ok()?;
     if hex_digest(text.as_bytes()) != index.catalog_sha256 {
         return None;
     }
@@ -311,13 +380,7 @@ fn read_cache(dir: &Path) -> Option<CatalogState> {
         if !CacheIndex::is_symbol_file(file) || *file != CacheIndex::symbol_file(name) {
             continue;
         }
-        let Ok(meta) = std::fs::metadata(dir.join(file)) else {
-            continue;
-        };
-        if meta.len() > MAX_SYMBOL_BYTES {
-            continue;
-        }
-        if let Ok(bytes) = std::fs::read(dir.join(file)) {
+        if let Some(bytes) = read_limited(&dir.join(file), MAX_SYMBOL_BYTES) {
             symbols.insert(name.clone(), bytes);
         }
     }
@@ -325,22 +388,25 @@ fn read_cache(dir: &Path) -> Option<CatalogState> {
         entries,
         symbols,
         fetched_at: index.fetched_at,
-        offline: false,
+        stale: None,
     })
 }
 
-/// Schreibt den Stand nach `dir` (ohne Ordner nichts): Symbole, Liste, zuletzt `stand.json`;
-/// danach fallen Symboldateien weg, die nicht mehr dazugehören.
+/// Schreibt den Stand nach `dir` (ohne Ordner nichts): Symbole (unveränderte aus `old` nicht
+/// neu), Liste, zuletzt `stand.json`; danach fallen Symboldateien weg, die nicht mehr
+/// dazugehören. Vorher werden übrig gebliebene Zwischendateien weggeräumt.
 fn write_cache(
     dir: &Path,
     text: &str,
     symbols: &BTreeMap<String, Vec<u8>>,
+    old: &BTreeMap<String, Vec<u8>>,
     now: u64,
 ) -> Result<(), String> {
     if dir.as_os_str().is_empty() {
         return Ok(());
     }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    remove_stale_tmp(dir);
     let mut index = CacheIndex {
         fetched_at: now,
         catalog_sha256: hex_digest(text.as_bytes()),
@@ -348,7 +414,12 @@ fn write_cache(
     };
     for (name, bytes) in symbols {
         let file = CacheIndex::symbol_file(name);
-        atomic_write_unique(&dir.join(&file), bytes).map_err(|e| e.to_string())?;
+        let path = dir.join(&file);
+        let unchanged = old.get(name) == Some(bytes)
+            && std::fs::metadata(&path).is_ok_and(|m| m.len() == bytes.len() as u64);
+        if !unchanged {
+            atomic_write_unique(&path, bytes).map_err(|e| e.to_string())?;
+        }
         index.symbols.insert(name.clone(), file);
     }
     atomic_write_unique(&dir.join(CATALOG_FILE), text.as_bytes()).map_err(|e| e.to_string())?;
@@ -364,4 +435,27 @@ fn write_cache(
         }
     }
     Ok(())
+}
+
+/// Löscht `*.tmp` in `dir`, die mindestens [`STALE_TMP_AGE`] alt sind (jüngere könnten gerade
+/// von einem zweiten Programmfenster geschrieben werden).
+fn remove_stale_tmp(dir: &Path) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in read.filter_map(Result::ok) {
+        if !entry.file_name().to_string_lossy().ends_with(".tmp") {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age >= STALE_TMP_AGE);
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }

@@ -4001,3 +4001,5 @@ catalog-skip-bad-repo = Entry "{ $id }" skipped: { $msg }
 catalog-skip-too-many = Further entries skipped: at most { $max } entries.
 catalog-load-failed = The catalog could not be loaded.
 catalog-too-large = The file katalog.json is too large.
+catalog-stale-offline = Offline – showing the last loaded catalog.
+catalog-stale-invalid = The new catalog is faulty – showing the last loaded catalog.
