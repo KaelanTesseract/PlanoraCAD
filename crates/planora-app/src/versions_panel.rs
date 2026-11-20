@@ -340,7 +340,7 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi, head
             "{}{mark}v{}  {}  {}  {}",
             "  ".repeat(r.depth),
             r.number,
-            r.branch,
+            planora_project::docstore::branch_label(&r.branch),
             local_time::local_time_text(&v.time),
             v.comment
         );
@@ -446,7 +446,10 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
         let question = match &p.what {
             Confirm::Version(n) => tr!("versions-confirm-delete-version", n = *n),
             Confirm::Branch(b) => {
-                tr!("versions-confirm-delete-branch", name = b.as_str())
+                tr!(
+                    "versions-confirm-delete-branch",
+                    name = planora_project::docstore::branch_label(b)
+                )
             }
         };
         let mut answer = None;

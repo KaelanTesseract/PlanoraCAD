@@ -6,6 +6,7 @@ Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht o
 
 ### Geändert
 
+- Versionen: Der Hauptzweig heißt auf Englisch jetzt „Main“ (wie in Fusion); in den Dateien bleibt er „Haupt“, alte Dateien ändern sich nicht. Ein neuer Zweig darf nicht „Haupt“ oder „Main“ heißen.
 - Absturzbericht: Unter Windows schreibt das Programm jetzt auch bei harten Abstürzen (etwa Zugriffsfehler oder Stapelüberlauf) einen Bericht, nicht nur bei einem Rust-Absturz.
 - Skizze, Rundung: Das Radiusfeld startet wie in Fusion mit einem Radius aus der kürzeren der beiden Kurven. Der Zeiger ändert den Radius nicht mehr; getippt wird wie bisher.
 - Schnittansicht: Ein Klick knapp neben eine Ansicht beginnt die Schnittlinie trotzdem. Ein Klick ins Leere sagt jetzt, dass er in keiner Ansicht liegt.

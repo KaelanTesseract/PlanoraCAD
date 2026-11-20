@@ -3203,6 +3203,7 @@ proj-err-lock-lost = The lock was taken over by another program. The document wa
 proj-err-needs-branch = This version is not the newest of its branch. Please give a new branch name.
 proj-version-label = Version { $n }
 proj-branch-label = Branch { $name }
+branch-main = Main
 proj-base64-invalid = The mesh data is not a valid Base64 string
 proj-name-empty = The name must not be empty.
 proj-name-too-long = The name is too long (at most { $max } characters).
