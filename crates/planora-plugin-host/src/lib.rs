@@ -299,8 +299,11 @@ struct Mailbox {
     events: Vec<HostEvent>,
     /// Ergebnisse für `on-result`, beim nächsten `poll` zugestellt.
     deliveries: Vec<(u64, RequestResult)>,
-    /// Ungefähre Größe von `events` (höchstens [`MAX_MAILBOX_BYTES`]).
+    /// Ungefähre Größe von `events`; zusammen mit `pending_bytes` höchstens
+    /// [`MAX_MAILBOX_BYTES`].
     bytes: usize,
+    /// Ungefähre Größe der wartenden Anfragen in `asks` und `waiting` (Netz-Adressen).
+    pending_bytes: usize,
     /// Der Hinweis „Postfach voll“ steht schon im Protokoll (einmal je Instanz).
     full_noted: bool,
     /// Die offene Nachfrage je Recht (höchstens eine).
@@ -309,6 +312,14 @@ struct Mailbox {
     waiting: Vec<Pending>,
     /// Netzanfragen, deren Ergebnis noch aussteht.
     net_open: BTreeSet<u64>,
+}
+
+/// Ungefähre Größe einer wartenden Anfrage (Bytes).
+fn pending_size(p: &Pending) -> usize {
+    64 + match p {
+        Pending::Net { url, .. } => url.len(),
+        Pending::AskRight { .. } => 0,
+    }
 }
 
 /// Das Recht, auf das eine offene Anfrage wartet.
@@ -336,6 +347,7 @@ impl Mailbox {
             events: Vec::new(),
             deliveries: Vec::new(),
             bytes: 0,
+            pending_bytes: 0,
             full_noted: false,
             asks: BTreeMap::new(),
             waiting: Vec::new(),
@@ -346,7 +358,12 @@ impl Mailbox {
     /// Passen `size` weitere Bytes noch ins Postfach? Sonst einmal je Instanz ein Hinweis ins
     /// Protokoll (der selbst nicht mitzählt).
     fn fits(&mut self, size: usize) -> bool {
-        if self.bytes.saturating_add(size) <= MAX_MAILBOX_BYTES {
+        if self
+            .bytes
+            .saturating_add(self.pending_bytes)
+            .saturating_add(size)
+            <= MAX_MAILBOX_BYTES
+        {
             return true;
         }
         if !self.full_noted && self.events.len() < MAX_QUEUE {
@@ -435,8 +452,10 @@ impl Mailbox {
     fn ask(&mut self, p: Pending) {
         let right = pending_right(&p);
         let request = pending_request(&p);
+        let size = pending_size(&p);
         if self.asks.contains_key(&right) {
-            if self.waiting.len() < MAX_QUEUE {
+            if self.waiting.len() < MAX_QUEUE && self.fits(size) {
+                self.pending_bytes += size;
                 self.waiting.push(p);
             } else {
                 self.overflow(request);
@@ -449,12 +468,26 @@ impl Mailbox {
             request,
             right,
         };
-        if self.events_full() || !self.fits(event_size(&e)) {
+        if self.events_full() || !self.fits(event_size(&e) + size) {
             self.overflow(request);
             return;
         }
+        self.pending_bytes += size;
         self.asks.insert(right, p);
         self.event(e);
+    }
+
+    /// Nimmt die offene Nachfrage zu `right` und alle Anfragen heraus, die auf sie warten.
+    fn take_pending(&mut self, right: Right) -> Vec<Pending> {
+        let mut done: Vec<Pending> = self.asks.remove(&right).into_iter().collect();
+        let (same, other): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut self.waiting)
+            .into_iter()
+            .partition(|p| pending_right(p) == right);
+        self.waiting = other;
+        done.extend(same);
+        let size: usize = done.iter().map(pending_size).sum();
+        self.pending_bytes = self.pending_bytes.saturating_sub(size);
+        done
     }
 
     /// Erledigt eine Anfrage nach der Entscheidung für ihr Recht.
@@ -1014,14 +1047,7 @@ impl PluginHost {
             self.outbox.push(HostEvent::Changed);
         }
         let allowed = a != Answer::Deny;
-        let mut done = Vec::new();
-        done.extend(mb.asks.remove(&right));
-        let (same, other): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut mb.waiting)
-            .into_iter()
-            .partition(|p| pending_right(p) == right);
-        mb.waiting = other;
-        done.extend(same);
-        for p in done {
+        for p in mb.take_pending(right) {
             mb.resolve(p, allowed);
         }
         self.outbox.extend(mb.take_events());
@@ -1609,6 +1635,34 @@ mod grenzen {
         // Abgeholt ist wieder Platz.
         mb.take_events();
         assert_eq!(mb.bytes, 0);
+    }
+
+    #[test]
+    fn waiting_requests_count_into_mailbox() {
+        let mut mb = mailbox();
+        // Eine offene Nachfrage zu `net`; weitere Netzanfragen warten mit ihrer Adresse.
+        let url = format!("https://example.org/{}", "a".repeat(8 << 10));
+        mb.ask(Pending::Net {
+            request: 1,
+            url: url.clone(),
+        });
+        let mut n = 1;
+        while mb.deliveries.is_empty() {
+            n += 1;
+            assert!(n < 2000, "nie begrenzt");
+            mb.ask(Pending::Net {
+                request: n,
+                url: url.clone(),
+            });
+        }
+        // Die erste, die nicht mehr passt, bekommt `failed`; nichts wartet über der Grenze.
+        assert!(matches!(mb.deliveries[..], [(r, RequestResult::Failed(_))] if r == n));
+        assert!(mb.bytes + mb.pending_bytes <= MAX_MAILBOX_BYTES);
+        assert_eq!(mb.waiting.len() as u64, n - 2);
+        // Beantwortet: der Platz ist wieder frei.
+        let done = mb.take_pending(Right::Net);
+        assert_eq!(done.len() as u64, n - 1);
+        assert_eq!(mb.pending_bytes, 0);
     }
 
     #[test]

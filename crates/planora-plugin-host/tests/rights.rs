@@ -2,7 +2,7 @@
 
 use planora_plugin_host::manifest::{Manifest, Right};
 use planora_plugin_host::rights::{
-    Answer, Grant, Pending, Requests, Rights, Source, check_net_url,
+    Answer, Grant, MAX_URL_LEN, Pending, Requests, Rights, Source, check_net_url,
 };
 use std::collections::BTreeSet;
 
@@ -168,4 +168,16 @@ fn net_url_rules() {
     ] {
         assert!(check_net_url(&m, bad).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn long_urls_rejected() {
+    let m = manifest();
+    let url = |len: usize| {
+        let base = "https://example.org/";
+        format!("{base}{}", "a".repeat(len - base.len()))
+    };
+    assert!(check_net_url(&m, &url(MAX_URL_LEN)).is_ok());
+    let err = check_net_url(&m, &url(MAX_URL_LEN + 1)).unwrap_err();
+    assert!(err.contains("8192"), "{err}");
 }

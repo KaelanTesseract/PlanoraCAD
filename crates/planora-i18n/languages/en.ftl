@@ -3904,6 +3904,7 @@ plugin-url-bad-char = invalid character in the address
 plugin-url-credentials = credentials in the address are not allowed
 plugin-url-ip = IP addresses are not allowed
 plugin-url-port = only port 443 is allowed
+plugin-url-too-long = the address is too long (at most { $max } bytes)
 plugin-url-no-host = no host name
 plugin-url-host-not-allowed = host { $host } is not allowed in the manifest
 

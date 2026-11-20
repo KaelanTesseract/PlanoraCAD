@@ -3887,6 +3887,7 @@ plugin-url-bad-char = ungültiges Zeichen in der Adresse
 plugin-url-credentials = Zugangsdaten in der Adresse sind nicht erlaubt
 plugin-url-ip = IP-Adressen sind nicht erlaubt
 plugin-url-port = nur Port 443 ist erlaubt
+plugin-url-too-long = die Adresse ist zu lang (höchstens { $max } Bytes)
 plugin-url-no-host = kein Rechnername
 plugin-url-host-not-allowed = Rechner { $host } ist nicht im Manifest freigegeben
 

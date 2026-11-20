@@ -153,12 +153,15 @@ fn valid_id(id: &str) -> bool {
 }
 
 /// Nur ein Rechnername: Buchstaben, Ziffern, Punkte, Bindestriche; keine leeren Teile. Keine
-/// Zahlen-Adressen: das letzte Label nicht nur aus Ziffern, kein `0x…` (Hex-Schreibweise einer
-/// IP-Adresse), nicht nur Ziffern und Punkte.
+/// Zahlen-Adressen: das letzte Label weder nur Ziffern noch `0x` mit Hexziffern (Schreibweisen einer
+/// IP-Adresse wie `127.0x1`), nicht nur Ziffern und Punkte.
 fn valid_host(host: &str) -> bool {
-    let digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
-    let numeric = host.rsplit('.').next().is_some_and(digits)
-        || host.to_ascii_lowercase().starts_with("0x")
+    let last = host.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let hex = last
+        .strip_prefix("0x")
+        .is_some_and(|h| h.chars().all(|c| c.is_ascii_hexdigit()));
+    let numeric = last.chars().all(|c| c.is_ascii_digit())
+        || hex
         || host.chars().all(|c| c.is_ascii_digit() || c == '.');
     !numeric
         && !host.is_empty()

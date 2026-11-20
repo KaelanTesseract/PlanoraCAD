@@ -27,7 +27,7 @@ const BEFEHLE: [&str; 11] = [
     "socket",
 ];
 
-/// `dauerlast` läuft: jedes `on-result` rechnet ~150 ms und fragt dann wieder ein Recht an.
+/// `dauerlast` läuft: jedes `on-result` rechnet ~100 ms und fragt dann wieder ein Recht an.
 static DAUERLAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Rechnet ungefähr `ms` Millisekunden (Monotonuhr des Plug-ins).
@@ -137,7 +137,7 @@ impl Guest for Faelle {
 
     fn on_result(_id: u64, _result: RequestResult) {
         if DAUERLAST.load(std::sync::atomic::Ordering::Relaxed) {
-            rechnen(150);
+            rechnen(100);
             rights::request(Right::FsFolder);
         }
     }

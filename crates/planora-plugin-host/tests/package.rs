@@ -75,6 +75,10 @@ fn manifest_rejects() {
         (changed("example.org", "0x7f000001"), "0x7f000001"),
         (changed("example.org", "0X7F.1"), "0X7F.1"),
         (changed("example.org", "example.123"), "example.123"),
+        (changed("example.org", "127.0x1"), "127.0x1"),
+        (changed("example.org", "127.0.0.0x1"), "127.0.0.0x1"),
+        (changed("example.org", "0177.0x1"), "0177.0x1"),
+        (changed("example.org", "example.0X1"), "example.0X1"),
         (format!("{MANIFEST}memory-mb = 0\n"), "memory-mb"),
         (format!("{MANIFEST}memory-mb = 2049\n"), "memory-mb"),
         (changed("GPL-3.0-only", ""), "license"),
@@ -87,6 +91,12 @@ fn manifest_rejects() {
         let msg = err.to_string();
         assert!(!msg.is_empty());
         assert!(msg.contains(hint), "Meldung nennt {hint}: {msg}");
+    }
+    // Rechnernamen mit Ziffern oder `0x` vorn in einem Label bleiben erlaubt.
+    for host in ["example.org", "a1.example.org", "0xdead.example.org"] {
+        let m = Manifest::parse(&changed("example.org", host))
+            .unwrap_or_else(|e| panic!("{host}: {e}"));
+        assert_eq!(m.net_hosts, [host]);
     }
     // Obergrenze gilt, 2048 ist erlaubt.
     let m = Manifest::parse(&format!("{MANIFEST}memory-mb = 2048\n")).unwrap();

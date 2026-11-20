@@ -746,7 +746,7 @@ fn messung_start() {
     eprintln!("MESSUNG zweiter Start (Zwischenspeicher): {:?}", zeiten[1]);
 }
 
-/// Ein Plug-in, das in jedem `on-result` ~150 ms rechnet und neue Arbeit anfordert, hält die
+/// Ein Plug-in, das in jedem `on-result` ~100 ms rechnet und neue Arbeit anfordert, hält die
 /// Oberfläche je Bild höchstens ~200 ms plus eine Frist auf und wird nach drei solchen Bildern
 /// angehalten (ein Ausfall „zu viel Arbeit“).
 #[test]

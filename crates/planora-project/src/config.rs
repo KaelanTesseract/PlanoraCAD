@@ -196,7 +196,7 @@ pub struct Config {
 
 /// Der gespeicherte Zustand eines Plug-ins: eingeschaltet oder nicht und die dauerhaft
 /// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`), dazu Autor und
-// Rechner (`net-hosts`) und Herkunft des Manifests, für das sie galten (beim Start gelten die
+/// Rechner (`net-hosts`) und Herkunft des Manifests, für das sie galten (beim Start gelten die
 /// Rechte nur für dasselbe Plug-in derselben Herkunft; ohne Autor oder Herkunft werden sie neu
 /// gefragt). „Nur dieses Mal“ wird nie gespeichert.
 /// Leere Felder werden nicht geschrieben.

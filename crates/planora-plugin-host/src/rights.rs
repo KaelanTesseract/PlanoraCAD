@@ -179,9 +179,16 @@ pub enum Pending {
     Net { request: u64, url: String },
 }
 
+/// Längste Netz-Adresse, die ein Plug-in abrufen darf (Bytes).
+pub const MAX_URL_LEN: usize = 8 << 10;
+
 /// Prüft eine Netz-Adresse gegen das Manifest: nur `https://`, Host exakt in
-/// `net-hosts` (ohne Groß-/Kleinschreibung), keine Zugangsdaten, Port nur 443.
+/// `net-hosts` (ohne Groß-/Kleinschreibung), keine Zugangsdaten, Port nur 443, höchstens
+/// [`MAX_URL_LEN`] Bytes lang.
 pub fn check_net_url(manifest: &Manifest, url: &str) -> Result<(), String> {
+    if url.len() > MAX_URL_LEN {
+        return Err(tr!("plugin-url-too-long", max = MAX_URL_LEN.to_string()));
+    }
     let (scheme, rest) = url
         .split_once("://")
         .ok_or_else(|| tr!("plugin-url-invalid"))?;
