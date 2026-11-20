@@ -71,13 +71,16 @@ fn windows_expand_archive_reads_it() {
     let out = base.join("Ölwanne Maße.pcad.zip");
     zip_store::write_project_zip(&doc, &out).unwrap();
     let dest = base.join("entpackt");
-    // Pfade über Umgebungsvariablen, damit Umlaute nicht durch die Befehlszeile müssen.
+    // Pfade über Umgebungsvariablen, damit Umlaute nicht durch die Befehlszeile müssen. Der
+    // .NET-Leser, den auch `Expand-Archive` nutzt, direkt mit zwei Argumenten: `Expand-Archive`
+    // selbst scheitert auf dem GitHub-Windows-Bild an einer fehlenden Überladung von
+    // `ExtractToDirectory` (Runner-Fehler, lokal geht es).
     let status = std::process::Command::new("powershell.exe")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "Expand-Archive -LiteralPath $env:PLANORA_ZIP -DestinationPath $env:PLANORA_DEST -ErrorAction Stop",
+            "$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:PLANORA_ZIP, $env:PLANORA_DEST)",
         ])
         .env("PLANORA_ZIP", &out)
         .env("PLANORA_DEST", &dest)
