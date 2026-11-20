@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use planora_i18n::tr;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::plugin_source::{RepoLink, asset_url_ok, parse_repo_link};
@@ -286,4 +286,52 @@ pub fn parse_catalog(json: &str) -> Result<(Vec<CatalogEntry>, Vec<String>), Cat
         skipped.push(tr!("catalog-skip-too-many", max = MAX_ENTRIES));
     }
     Ok((entries, skipped))
+}
+
+/// Verzeichnis des Zwischenspeichers (`stand.json`): wann geholt wurde, die Prüfsumme der
+/// gespeicherten `katalog.json` und welche Datei zu welchem Symbol gehört. Die Dateinamen kommen
+/// nie aus dem Katalog, sondern aus [`CacheIndex::symbol_file`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheIndex {
+    /// Zeitpunkt des Holens (Sekunden seit 1970).
+    pub fetched_at: u64,
+    /// SHA-256 (hex) der gespeicherten `katalog.json`; passt sie nicht, gilt der Stand als kaputt.
+    pub catalog_sha256: String,
+    /// Symbolname aus dem Katalog → Dateiname im Zwischenspeicher.
+    pub symbols: BTreeMap<String, String>,
+}
+
+impl CacheIndex {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default()
+    }
+
+    /// Liest `stand.json`; unlesbar ⇒ `None`.
+    pub fn parse(text: &str) -> Option<CacheIndex> {
+        serde_json::from_str(text).ok()
+    }
+
+    /// Dateiname für das Symbol `name`: SHA-256 des Namens (hex) plus `.svg` oder `.png`.
+    pub fn symbol_file(name: &str) -> String {
+        let ext = if has_ext(name, ".svg") {
+            ".svg"
+        } else {
+            ".png"
+        };
+        format!("{}{ext}", crate::sha256::hex_digest(name.as_bytes()))
+    }
+
+    /// Hat `file` die Form aus [`CacheIndex::symbol_file`] (64 Hex-Zeichen plus `.png`/`.svg`)?
+    pub fn is_symbol_file(file: &str) -> bool {
+        let Some(stem) = file
+            .strip_suffix(".png")
+            .or_else(|| file.strip_suffix(".svg"))
+        else {
+            return false;
+        };
+        stem.len() == 64
+            && stem
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }
 }

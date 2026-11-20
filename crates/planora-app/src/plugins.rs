@@ -26,6 +26,7 @@
 use crate::app::MenuRequest;
 use crate::diag;
 use crate::jobs::{Job, Poll};
+use crate::plugin_catalog::Catalog;
 use crate::plugin_dialog;
 pub use crate::plugin_dialog::OpenPluginDialog;
 use crate::plugin_prompts::{self, BannerAction, BannerLine, UpdateChoice, UpdateView};
@@ -168,6 +169,8 @@ pub struct Plugins {
     /// `config` wurde außerhalb von [`Plugins::frame`] geändert (Zeitpunkt der Prüfung): beim
     /// nächsten Bild speichern.
     config_dirty: bool,
+    /// Der Plug-in-Katalog (Zwischenspeicher in `plugin-cache/katalog/`; ohne Fundorte keiner).
+    pub catalog: Catalog,
 }
 
 impl Default for Plugins {
@@ -249,6 +252,7 @@ impl Plugins {
     /// Plug-ins aus den Fundorten `places`; startet alle eingeschalteten im Hintergrund (mit der
     /// Sprache des Programms und dem Stand aus `config.plugins`).
     pub fn new(places: Places, config: &Config) -> Plugins {
+        let catalog_dir = places.cache.join("katalog");
         let mut host = PluginHost::new(places);
         host.set_language(planora_i18n::current().id());
         let states = states_from_config(config);
@@ -269,6 +273,7 @@ impl Plugins {
         ));
         let mut plugins = Plugins::with_host(host);
         plugins.channel = channel_of(config);
+        plugins.catalog = Catalog::new(catalog_dir);
         plugins
     }
 
@@ -309,6 +314,7 @@ impl Plugins {
             show_window: false,
             provenance: BTreeMap::new(),
             config_dirty: false,
+            catalog: Catalog::new(PathBuf::new()),
         };
         plugins.refresh_provenance();
         plugins
@@ -833,7 +839,14 @@ impl Plugins {
     /// Prüft beim Start, wenn `config.update_check` an ist und die letzte Prüfung mindestens
     /// einen Tag her ist ([`due`]), alle Plug-ins mit Link auf Updates und merkt den Zeitpunkt in
     /// `config.last_plugin_check` (gespeichert mit dem nächsten Bild). `true`, wenn geprüft wird.
+    /// Unabhängig davon wird der Katalog geholt, wenn sein Stand mindestens einen Tag alt ist
+    /// (auch ohne installierte Plug-ins; nur mit Zwischenspeicher, also nie in [`Plugins::empty`]).
     pub fn auto_check(&mut self, config: &mut Config, now: u64) -> bool {
+        if self.catalog.has_cache()
+            && due(now, self.catalog.fetched_at(), config.update_check, false)
+        {
+            self.catalog.request(self.repo_fetch, now, false);
+        }
         if self.provenance.is_empty()
             || !due(now, config.last_plugin_check, config.update_check, false)
         {
@@ -1031,6 +1044,7 @@ impl Plugins {
         self.poll_fetching();
         acted |= was_fetching && !self.is_fetching();
         acted |= self.poll_checks();
+        acted |= self.catalog.poll(crate::update_check::now_unix());
         if let Some(offer) = &self.install
             && let Some(choice) = plugin_prompts::show_install(ctx, offer, prompt_open)
         {
@@ -1111,6 +1125,7 @@ impl Plugins {
             || self.is_reading()
             || self.is_fetching()
             || self.is_checking()
+            || self.catalog.is_loading()
         {
             ctx.request_repaint_after(Duration::from_millis(50));
         }

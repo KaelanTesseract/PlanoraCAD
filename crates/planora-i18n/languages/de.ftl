@@ -3983,3 +3983,5 @@ catalog-skip-bad-id = Eintrag übergangen: ungültige Kennung „{ $id }“.
 catalog-skip-duplicate = Eintrag übergangen: Kennung „{ $id }“ kommt mehrfach vor.
 catalog-skip-bad-repo = Eintrag „{ $id }“ übergangen: { $msg }
 catalog-skip-too-many = Weitere Einträge übergangen: höchstens { $max } Einträge.
+catalog-load-failed = Der Katalog konnte nicht geladen werden.
+catalog-too-large = Die Datei katalog.json ist zu groß.

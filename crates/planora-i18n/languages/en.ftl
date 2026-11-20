@@ -3999,3 +3999,5 @@ catalog-skip-bad-id = Entry skipped: invalid id "{ $id }".
 catalog-skip-duplicate = Entry skipped: id "{ $id }" appears more than once.
 catalog-skip-bad-repo = Entry "{ $id }" skipped: { $msg }
 catalog-skip-too-many = Further entries skipped: at most { $max } entries.
+catalog-load-failed = The catalog could not be loaded.
+catalog-too-large = The file katalog.json is too large.

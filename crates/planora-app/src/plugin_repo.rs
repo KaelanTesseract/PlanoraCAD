@@ -39,7 +39,12 @@ fn network(detail: &str) -> String {
 }
 
 /// Lädt `url` (höchstens `max` Bytes, höchstens `timeout`); nur eine Antwort 2xx zählt.
-fn get(fetch: RepoFetch, url: &str, max: u64, timeout: Duration) -> Result<Vec<u8>, String> {
+pub(crate) fn get(
+    fetch: RepoFetch,
+    url: &str,
+    max: u64,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
     let (status, body) = fetch(url, max, timeout).map_err(|e| network(&e))?;
     if !(200..300).contains(&status) {
         return Err(network(&tr!(
