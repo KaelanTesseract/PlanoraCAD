@@ -37,6 +37,7 @@ pub mod finished_cache;
 pub mod fonts;
 pub mod fonts_library;
 pub mod formula_field;
+pub mod hard_crash;
 pub mod history;
 pub mod history_bar;
 pub mod icons;
