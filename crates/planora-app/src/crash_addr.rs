@@ -186,10 +186,43 @@ pub fn capture() -> Option<Addresses> {
 /// Erfasst die Rücksprungadressen der aktuellen Aufrufkette und die Bau-Kennung der eigenen
 /// exe. `None`, wenn das nicht geht (und immer außerhalb von Windows).
 #[cfg(windows)]
-#[allow(unsafe_code)]
 pub fn capture() -> Option<Addresses> {
+    let mut raw = [0usize; MAX_FRAMES];
+    let n = capture_raw(&mut raw);
+    from_raw(&raw[..n])
+}
+
+/// Schreibt die Rücksprungadressen der aktuellen Aufrufkette nach `out` und gibt ihre Zahl
+/// zurück. Ohne Speicher anzufordern und mit wenig Stapel (für den Ausnahmefilter bei harten
+/// Abstürzen, [`crate::hard_crash`]).
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub fn capture_raw(out: &mut [usize; MAX_FRAMES]) -> usize {
     use std::ffi::c_void;
     use windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
+    let mut raw = [std::ptr::null_mut::<c_void>(); MAX_FRAMES];
+    // SAFETY: `raw` bietet Platz für genau `MAX_FRAMES` Zeiger; der Hash wird nicht verlangt.
+    let n = unsafe {
+        RtlCaptureStackBackTrace(0, MAX_FRAMES as u32, raw.as_mut_ptr(), std::ptr::null_mut())
+    } as usize;
+    let n = n.min(MAX_FRAMES);
+    for (o, p) in out.iter_mut().zip(raw.iter()).take(n) {
+        *o = *p as usize;
+    }
+    n
+}
+
+/// Bau-Kennung und Rahmen zu schon erfassten Adressen `raw` (je ein Versatz zum Modul).
+#[cfg(not(windows))]
+pub fn from_raw(_raw: &[usize]) -> Option<Addresses> {
+    None
+}
+
+/// Bau-Kennung und Rahmen zu schon erfassten Adressen `raw` (je ein Versatz zum Modul).
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub fn from_raw(raw: &[usize]) -> Option<Addresses> {
+    use std::ffi::c_void;
     use windows_sys::Win32::System::LibraryLoader::{
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         GetModuleHandleExW, GetModuleHandleW,
@@ -215,14 +248,9 @@ pub fn capture() -> Option<Addresses> {
     let build = pe_build_id(image);
     let module = module_file_name(base as *mut c_void).unwrap_or_else(|| "exe".to_string());
 
-    let mut raw = [std::ptr::null_mut::<c_void>(); MAX_FRAMES];
-    // SAFETY: `raw` bietet Platz für genau `MAX_FRAMES` Zeiger; der Hash wird nicht verlangt.
-    let n = unsafe {
-        RtlCaptureStackBackTrace(0, MAX_FRAMES as u32, raw.as_mut_ptr(), std::ptr::null_mut())
-    } as usize;
     let mut frames = Vec::with_capacity(MAX_FRAMES);
-    for &p in raw.iter().take(n.min(MAX_FRAMES)) {
-        let a = p as usize;
+    for &a in raw.iter().take(MAX_FRAMES) {
+        let p = a as *const c_void;
         if a >= base && a - base < size {
             frames.push(Frame {
                 module: Some(module.clone()),
