@@ -135,3 +135,39 @@ fn create_sketch_closes_the_insert_windows() {
         assert!(tab.state.insert_grips.is_none(), "{open:?}");
     }
 }
+
+#[test]
+fn switching_to_a_drawing_ends_the_pick() {
+    // Rest aus dem Teilprojekt: In der Zeichnung blieb der Hinweis „Ebene oder ebene Fläche
+    // wählen“ in der Statuszeile stehen. Der Wahlmodus gehört zur 3D-Ansicht und endet mit dem
+    // Wechsel, ohne Rest.
+    let mut ws = ws_with_box();
+    let d = ws
+        .active_tab_mut()
+        .state
+        .document
+        .add_drawing(
+            "Blatt 1",
+            planora_drawing::Sheet {
+                paper: planora_drawing::Paper::A4,
+                landscape: true,
+            },
+            planora_drawing::Projection::First,
+        )
+        .unwrap();
+    run_action(&mut ws, Action::CreateSketch);
+    assert_eq!(
+        ws.active_tab().state.pending_pick,
+        Some(PendingPick::NewSketch)
+    );
+    let before = ws.active_tab().state.document.features().len();
+    ws.active_tab_mut().state.drawing_ui.show_drawing(d);
+    observe(&mut ws);
+    let st = &ws.active_tab().state;
+    assert_eq!(st.pending_pick, None);
+    assert_eq!(st.document.features().len(), before, "nichts angelegt");
+    // Zurück im Modell: kein Wahlmodus mehr.
+    ws.active_tab_mut().state.drawing_ui.area = planora_app::drawing_state::WorkArea::Model;
+    observe(&mut ws);
+    assert_eq!(ws.active_tab().state.pending_pick, None);
+}

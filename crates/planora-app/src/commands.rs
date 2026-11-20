@@ -668,6 +668,18 @@ pub(crate) fn track(ws: &mut Workspace, a: Action) {
 /// vergessen. Ein Fenster
 /// in einem anderen Tab wartet, bis der Tab wieder vorn ist; ist der Tab zu, entfällt es.
 pub fn observe(ws: &mut Workspace) {
+    // Ein Wahlmodus der 3D-Ansicht (etwa „Skizze erstellen“) endet, sobald die Zeichnung vorn ist
+    // (Menü, Baum oder neue Zeichnung): Dort gibt es nichts zu wählen, und sein Hinweis stünde
+    // sonst in der Statuszeile.
+    let st = &mut ws.active_tab_mut().state;
+    if st.pending_pick.is_some()
+        && matches!(
+            st.drawing_ui.area,
+            crate::drawing_state::WorkArea::Drawing(_)
+        )
+    {
+        st.cancel_pending_pick();
+    }
     ws.sync_sketch_grid();
     ws.sync_triad_view();
     observe_sketch(ws);
