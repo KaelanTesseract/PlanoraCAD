@@ -467,6 +467,7 @@ fn collect(info: &PanicHookInfo, diag: &Mutex<Diag>) -> ReportInput {
 
 /// Schritte, letzte Protokollzeilen und Dokument aus dem gemeinsamen Protokoll, ohne je zu warten
 /// (für den Bericht bei harten Abstürzen, [`crate::hard_crash`]).
+#[cfg(windows)]
 pub(crate) fn diag_snapshot() -> (Vec<Step>, Vec<String>, Option<PathBuf>) {
     match diag::global().try_lock() {
         Ok(d) => read_diag(&d),
