@@ -7,18 +7,19 @@ mod common;
 
 use common::{Seen, collect_seen, find, join};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, vec2};
-use planora_app::addins_window::AddinsWindow;
+use planora_app::addins_window::{AddinsTab, AddinsWindow};
 use planora_app::plugins::{self, Plugins};
 use planora_app::workspace::{Prompt, Workspace};
 use planora_app::{fonts, prompts, theme};
 use planora_plugin_host::EntryState;
 use planora_plugin_host::manifest::Right;
 use planora_plugin_host::package::{Package, Signature};
-use planora_plugin_host::places::{self as plugin_places, Origin, Places};
+use planora_plugin_host::places::{self as plugin_places, Origin, Places, Provenance};
 use planora_plugin_host::rights::Grant;
 use planora_project::config::{Config, PluginConfig};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 const HALLO: &str = "planora.beispiel-hallo";
@@ -999,4 +1000,597 @@ fn disabled_plugin_survives_remove_of_stopped_plugin() {
             .collect::<Vec<_>>(),
         vec![(HALLO.to_string(), EntryState::Off)]
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Plug-in-Katalog Task 3: der Reiter „Katalog“. Das Netz ist eine Nachbildung (Antworten je
+// Adresse aus einer Tabelle); die Adresse des Katalog-Repos ist fest, darum laufen diese Tests
+// nacheinander (`REIHE`). Zwischenspeicher und Konfiguration liegen in Temp.
+// ---------------------------------------------------------------------------------------------
+
+type Answer = Result<(u16, Vec<u8>), String>;
+
+static REIHE: Mutex<()> = Mutex::new(());
+static NETZ: Mutex<Vec<(String, Answer)>> = Mutex::new(Vec::new());
+static GEFRAGT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Kein Netz: jede Frage scheitert.
+static NETZ_AUS: Mutex<bool> = Mutex::new(false);
+
+const KATALOG_TAG: &str = "katalog-1";
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn antwort(url: &str, a: Answer) {
+    let mut netz = lock(&NETZ);
+    netz.retain(|(u, _)| u != url);
+    netz.push((url.to_string(), a));
+}
+
+fn netz(url: &str, max: u64, _timeout: Duration) -> Answer {
+    lock(&GEFRAGT).push(url.to_string());
+    if *lock(&NETZ_AUS) {
+        return Err("keine Verbindung".to_string());
+    }
+    let found = lock(&NETZ)
+        .iter()
+        .find(|(u, _)| u == url)
+        .map(|(_, a)| a.clone());
+    match found {
+        Some(Ok((_, body))) if body.len() as u64 > max => Err("zu groß".to_string()),
+        Some(a) => a,
+        None => Ok((404, b"Not Found".to_vec())),
+    }
+}
+
+fn gefragt(url: &str) -> usize {
+    lock(&GEFRAGT).iter().filter(|u| u.as_str() == url).count()
+}
+
+/// Sperrt die Reihe und leert die Nachbildung.
+fn netz_anfang() -> MutexGuard<'static, ()> {
+    let g = lock(&REIHE);
+    lock(&NETZ).clear();
+    lock(&GEFRAGT).clear();
+    *lock(&NETZ_AUS) = false;
+    g
+}
+
+fn katalog_asset(name: &str) -> String {
+    format!(
+        "https://github.com/{}/{}/releases/download/{KATALOG_TAG}/{name}",
+        planora_update::catalog::CATALOG_OWNER,
+        planora_update::catalog::CATALOG_REPO
+    )
+}
+
+/// Ein Eintrag der `katalog.json`: Kennung, Name (de), Beschreibung (de), Kategorie, Repo.
+type Eintrag = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    String,
+);
+
+/// Legt ein Katalog-Release mit `text` als `katalog.json` in die Nachbildung.
+fn katalog_text(text: &str) {
+    let release = format!(
+        "{{\"tag_name\":\"{KATALOG_TAG}\",\"draft\":false,\"assets\":[{{\"name\":\"katalog.json\",\
+         \"browser_download_url\":\"{}\",\"size\":{}}}]}}",
+        katalog_asset("katalog.json"),
+        text.len()
+    );
+    antwort(
+        &planora_update::catalog::latest_release_url(),
+        Ok((200, release.into_bytes())),
+    );
+    antwort(
+        &katalog_asset("katalog.json"),
+        Ok((200, text.as_bytes().to_vec())),
+    );
+}
+
+/// Legt ein Katalog-Release mit diesen Einträgen (Format `format`) in die Nachbildung.
+fn katalog_release(format: u32, entries: &[Eintrag]) {
+    let list: Vec<String> = entries
+        .iter()
+        .map(|(id, name, desc, cat, repo)| {
+            format!(
+                "{{\"id\":\"{id}\",\"name\":{{\"de\":\"{name}\",\"en\":\"{name}\"}},\
+                 \"beschreibung\":{{\"de\":\"{desc}\",\"en\":\"{desc}\"}},\
+                 \"kategorie\":\"{cat}\",\"repo\":\"{repo}\"}}"
+            )
+        })
+        .collect();
+    katalog_text(&format!(
+        "{{\"format\":{format},\"eintraege\":[{}]}}",
+        list.join(",")
+    ));
+}
+
+const HALLO_REPO: &str = "https://github.com/KaelanTesseract/PlanoraCAD-Plugin-Hallo";
+
+/// Zwei Einträge: Elektronik-Helfer (elektronik) und Hallo-Beispiel (beispiele).
+fn zwei_eintraege() -> Vec<Eintrag> {
+    vec![
+        (
+            "planora.elektronik-helfer",
+            "Elektronik-Helfer",
+            "Schaltpläne und Bauteile",
+            "elektronik",
+            "https://github.com/jemand/elektronik-helfer".to_string(),
+        ),
+        (
+            HALLO,
+            "Hallo-Beispiel",
+            "Ein kleines Beispiel",
+            "beispiele",
+            HALLO_REPO.to_string(),
+        ),
+    ]
+}
+
+/// Fenster auf dem Reiter „Katalog“ mit der Nachbildung als Netz; wartet, bis nichts mehr lädt.
+fn katalog_harness(name: &str, places: Places) -> H {
+    let mut h = harness(name, places, Config::default());
+    h.ws.plugins.repo_fetch = netz;
+    h.w.open_at(AddinsTab::Catalog);
+    katalog_warten(&mut h);
+    h
+}
+
+/// Bilder, bis weder der Katalog noch ein Holen oder Prüfen läuft (höchstens 60 s).
+fn katalog_warten(h: &mut H) -> Vec<Seen> {
+    let start = Instant::now();
+    loop {
+        bild(h, vec![]);
+        let p = &h.ws.plugins;
+        if !(p.catalog.is_loading() || p.is_fetching() || p.is_checking()) {
+            bild(h, vec![]);
+            return bild(h, vec![]);
+        }
+        assert!(start.elapsed() < Duration::from_secs(60), "lädt zu lange");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn leere_orte(name: &str) -> Places {
+    orte(name, &[], &[])
+}
+
+#[test]
+fn catalog_tab_lists_entries() {
+    let _g = netz_anfang();
+    katalog_release(1, &zwei_eintraege());
+    let mut h = katalog_harness("kat-liste", leere_orte("kat-liste"));
+    let seen = bild(&mut h, vec![]);
+    assert_eq!(h.w.tab(), AddinsTab::Catalog);
+    for text in [
+        "Installiert",
+        "Katalog",
+        "Elektronik-Helfer",
+        "Hallo-Beispiel",
+        "Elektronik",
+        "Beispiele",
+    ] {
+        assert!(has(&seen, text), "„{text}“ fehlt: {}", join(&seen));
+    }
+    // Der Reiter „Installiert“ bringt die bisherige Ansicht zurück.
+    klick(&mut h, &seen, "Installiert");
+    assert_eq!(h.w.tab(), AddinsTab::Installed);
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Keine Plug-ins gefunden."), "{}", join(&seen));
+    assert!(!has(&seen, "Hallo-Beispiel"), "{}", join(&seen));
+}
+
+#[test]
+fn switching_to_catalog_requests_it() {
+    let _g = netz_anfang();
+    katalog_release(1, &zwei_eintraege());
+    let mut h = harness("kat-wechsel", leere_orte("kat-wechsel"), Config::default());
+    h.ws.plugins.repo_fetch = netz;
+    let seen = bild(&mut h, vec![]);
+    assert_eq!(h.w.tab(), AddinsTab::Installed);
+    assert_eq!(gefragt(&planora_update::catalog::latest_release_url()), 0);
+    klick(&mut h, &seen, "Katalog");
+    assert_eq!(h.w.tab(), AddinsTab::Catalog);
+    katalog_warten(&mut h);
+    assert_eq!(gefragt(&planora_update::catalog::latest_release_url()), 1);
+}
+
+#[test]
+fn search_filters() {
+    let _g = netz_anfang();
+    katalog_release(1, &zwei_eintraege());
+    let mut h = katalog_harness("kat-suche", leere_orte("kat-suche"));
+    h.w.set_search("ELEK");
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Elektronik-Helfer"), "{}", join(&seen));
+    assert!(!has(&seen, "Hallo-Beispiel"), "{}", join(&seen));
+    // Auch die Beschreibung zählt, ohne Groß/Klein.
+    h.w.set_search("kleines bei");
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Hallo-Beispiel"), "{}", join(&seen));
+    assert!(!has(&seen, "Elektronik-Helfer"), "{}", join(&seen));
+    h.w.set_search("gibtesnicht");
+    let seen = bild(&mut h, vec![]);
+    assert!(
+        has(&seen, "Keine passenden Plug-ins gefunden."),
+        "{}",
+        join(&seen)
+    );
+}
+
+#[test]
+fn category_filter() {
+    let _g = netz_anfang();
+    katalog_release(1, &zwei_eintraege());
+    let mut h = katalog_harness("kat-kategorie", leere_orte("kat-kategorie"));
+    assert_eq!(h.w.categories(&h.ws.plugins), ["elektronik", "beispiele"]);
+    h.w.set_category(Some("beispiele"));
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Hallo-Beispiel"), "{}", join(&seen));
+    assert!(!has(&seen, "Elektronik-Helfer"), "{}", join(&seen));
+    h.w.set_category(None);
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Elektronik-Helfer"), "{}", join(&seen));
+    assert!(has(&seen, "Hallo-Beispiel"), "{}", join(&seen));
+}
+
+#[test]
+fn unknown_category_is_other() {
+    let _g = netz_anfang();
+    katalog_release(
+        1,
+        &[(
+            "planora.seltsam",
+            "Seltsam",
+            "x",
+            "voellig-unbekannt",
+            "https://github.com/jemand/seltsam".to_string(),
+        )],
+    );
+    let mut h = katalog_harness("kat-sonstiges", leere_orte("kat-sonstiges"));
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Sonstiges"), "{}", join(&seen));
+    assert!(!has(&seen, "voellig-unbekannt"), "{}", join(&seen));
+}
+
+#[test]
+fn details_show_source_and_rights_note() {
+    let _g = netz_anfang();
+    katalog_release(1, &zwei_eintraege());
+    let mut h = katalog_harness("kat-details", leere_orte("kat-details"));
+    h.w.select_catalog(HALLO);
+    let seen = bild(&mut h, vec![]);
+    for text in [
+        "Ein kleines Beispiel",
+        "Kategorie: Beispiele",
+        &format!("Quelle: {HALLO_REPO}"),
+        "Neueste Version: –",
+        "Rechte werden beim Installieren angezeigt",
+        "Installieren",
+    ] {
+        assert!(has(&seen, text), "„{text}“ fehlt: {}", join(&seen));
+    }
+}
+
+#[test]
+fn install_button_starts_link_install() {
+    let _g = netz_anfang();
+    katalog_release(1, &zwei_eintraege());
+    let mut h = katalog_harness("kat-install", leere_orte("kat-install"));
+    h.w.select_catalog(HALLO);
+    let seen = bild(&mut h, vec![]);
+    klick(&mut h, &seen, "Installieren");
+    // Der Abruf läuft für die Adresse des Katalogeintrags.
+    katalog_warten(&mut h);
+    let url = "https://api.github.com/repos/KaelanTesseract/PlanoraCAD-Plugin-Hallo/releases?per_page=100";
+    assert_eq!(gefragt(url), 1, "{:?}", lock(&GEFRAGT));
+}
+
+/// Hallo-Beispiel (0.1.0) ist installiert; `owner` ist sein Repo.
+fn installiert_aus_katalog(name: &str, owner: &str, catalog: bool) -> Places {
+    let p = leere_orte(name);
+    plugin_places::install(
+        &p,
+        &paket("beispiel-hallo"),
+        Some(&Provenance {
+            link: format!("https://github.com/{owner}/hallo"),
+            tag: "v0.1.0".to_string(),
+            catalog,
+        }),
+    )
+    .unwrap();
+    p
+}
+
+fn hallo_eintrag(owner: &str) -> Vec<Eintrag> {
+    vec![(
+        HALLO,
+        "Hallo-Beispiel",
+        "Ein kleines Beispiel",
+        "beispiele",
+        format!("https://github.com/{owner}/hallo"),
+    )]
+}
+
+#[test]
+fn installed_shows_installed() {
+    let _g = netz_anfang();
+    katalog_release(1, &hallo_eintrag("kat-inst"));
+    let mut h = katalog_harness(
+        "kat-installiert",
+        installiert_aus_katalog("kat-installiert", "kat-inst", true),
+    );
+    h.w.select_catalog(HALLO);
+    let seen = bild(&mut h, vec![]);
+    assert!(!has(&seen, "Installieren"), "{}", join(&seen));
+    assert!(
+        !seen.iter().any(|s| s.text.starts_with("Aktualisieren auf")),
+        "{}",
+        join(&seen)
+    );
+    // Der Reiter „Installiert“ und der abgeschaltete Knopf „Installiert“.
+    let n = seen.iter().filter(|s| s.text == "Installiert").count();
+    assert_eq!(n, 2, "{}", join(&seen));
+    // Ein Klick auf den Knopf tut nichts.
+    klick(&mut h, &seen, "Installiert");
+    assert!(!h.ws.plugins.is_fetching());
+    assert_eq!(h.w.tab(), AddinsTab::Catalog);
+}
+
+/// Review Focus 5: ist ein Update gefunden, steht statt „Installiert“ „Aktualisieren auf …“
+/// und der Knopf öffnet den bestehenden Aktualisieren-Dialog.
+#[test]
+fn update_shows_update_button() {
+    let _g = netz_anfang();
+    let owner = "kat-upd";
+    katalog_release(1, &hallo_eintrag(owner));
+    // Ein Release v0.2.0 des Plug-ins in der Nachbildung.
+    let neu = paket_version("0.2.0");
+    let name = "hallo.pcplugin";
+    let pkg_url = format!("https://github.com/{owner}/hallo/releases/download/v0.2.0/{name}");
+    antwort(&pkg_url, Ok((200, neu.clone())));
+    let sum_url = format!("{pkg_url}.sha256");
+    let summe = format!("{}  {name}\n", planora_update::sha256::hex_digest(&neu));
+    antwort(&sum_url, Ok((200, summe.into_bytes())));
+    let json = format!(
+        "[{{\"tag_name\":\"v0.2.0\",\"draft\":false,\"prerelease\":false,\"body\":\"Neu\",\
+         \"assets\":[{{\"name\":\"{name}\",\"browser_download_url\":\"{pkg_url}\",\"size\":{}}},\
+         {{\"name\":\"{name}.sha256\",\"browser_download_url\":\"{sum_url}\",\"size\":80}}]}}]",
+        neu.len()
+    );
+    antwort(
+        &format!("https://api.github.com/repos/{owner}/hallo/releases?per_page=100"),
+        Ok((200, json.into_bytes())),
+    );
+    let mut h = katalog_harness(
+        "kat-update",
+        installiert_aus_katalog("kat-update", owner, true),
+    );
+    h.ws.plugins.check_updates(true);
+    katalog_warten(&mut h);
+    assert_eq!(h.ws.plugins.updates().len(), 1);
+    h.w.select_catalog(HALLO);
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Aktualisieren auf 0.2.0"), "{}", join(&seen));
+    assert!(has(&seen, "Neueste Version: 0.2.0"), "{}", join(&seen));
+    assert!(!has(&seen, "Installieren"), "{}", join(&seen));
+    klick(&mut h, &seen, "Aktualisieren auf 0.2.0");
+    assert_eq!(h.ws.plugins.update_dialog.as_deref(), Some(HALLO));
+}
+
+/// Ein Paket aus dem Wasm von beispiel-hallo mit der Version `version`.
+fn paket_version(version: &str) -> Vec<u8> {
+    let hallo = paket("beispiel-hallo");
+    let toml = format!(
+        "id = \"{HALLO}\"\nname = \"Beispiel-Hallo\"\nversion = \"{version}\"\napi = \"0.1\"\n\
+         author = \"Dennis Guse\"\nlicense = \"GPL-3.0-only\"\ndescription = \"Test\"\n"
+    );
+    let mut zip = planora_exchange::ZipWriter::new(Vec::new());
+    zip.add_entry("plugin.toml", &|w| w.write_all(toml.as_bytes()))
+        .unwrap();
+    zip.add_entry("plugin.wasm", &|w| w.write_all(&hallo.wasm))
+        .unwrap();
+    for (lang, text) in &hallo.languages {
+        zip.add_entry(&format!("languages/{lang}.ftl"), &|w| {
+            w.write_all(text.as_bytes())
+        })
+        .unwrap();
+    }
+    zip.finish().unwrap()
+}
+
+#[test]
+fn failed_shows_retry() {
+    let _g = netz_anfang();
+    // Kein Release in der Nachbildung: 404, kein Zwischenspeicher.
+    let mut h = katalog_harness("kat-fehler", leere_orte("kat-fehler"));
+    let seen = bild(&mut h, vec![]);
+    for text in [
+        "Der Katalog konnte nicht geladen werden",
+        "Erneut versuchen",
+    ] {
+        assert!(has(&seen, text), "„{text}“ fehlt: {}", join(&seen));
+    }
+    let url = planora_update::catalog::latest_release_url();
+    let vorher = gefragt(&url);
+    assert!(vorher >= 1);
+    // „Erneut versuchen“ holt sofort neu (auch innerhalb der Wartezeit); jetzt gibt es ihn.
+    katalog_release(1, &zwei_eintraege());
+    klick(&mut h, &seen, "Erneut versuchen");
+    katalog_warten(&mut h);
+    assert_eq!(gefragt(&url), vorher + 1);
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Hallo-Beispiel"), "{}", join(&seen));
+    assert!(!has(&seen, "Erneut versuchen"), "{}", join(&seen));
+}
+
+#[test]
+fn offline_hint_shown() {
+    let _g = netz_anfang();
+    katalog_release(1, &zwei_eintraege());
+    let mut h = katalog_harness("kat-offline", leere_orte("kat-offline"));
+    let seen = bild(&mut h, vec![]);
+    assert!(
+        !seen.iter().any(|s| s.text.starts_with("offline")),
+        "{}",
+        join(&seen)
+    );
+    let fetched = h.ws.plugins.catalog.fetched_at().unwrap();
+    // Netz weg, neu holen: der alte Stand bleibt, dazu der Hinweis mit dem Datum.
+    *lock(&NETZ_AUS) = true;
+    let spaeter = planora_app::update_check::now_unix() + 3600;
+    h.ws.plugins.catalog.request(netz, spaeter, true);
+    katalog_warten(&mut h);
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Hallo-Beispiel"), "{}", join(&seen));
+    let hinweis = format!(
+        "offline – Stand vom {}",
+        planora_app::local_time::unix_time_text(fetched as i64)
+    );
+    assert!(has(&seen, &hinweis), "„{hinweis}“ fehlt: {}", join(&seen));
+}
+
+#[test]
+fn too_new_hint_shown() {
+    let _g = netz_anfang();
+    katalog_release(99, &zwei_eintraege());
+    let mut h = katalog_harness("kat-zu-neu", leere_orte("kat-zu-neu"));
+    let seen = bild(&mut h, vec![]);
+    assert!(
+        has(&seen, "Der Katalog braucht eine neuere PlanoraCAD-Version."),
+        "{}",
+        join(&seen)
+    );
+    assert!(!has(&seen, "Hallo-Beispiel"), "{}", join(&seen));
+}
+
+#[test]
+fn empty_name_shows_id() {
+    let _g = netz_anfang();
+    katalog_text(
+        "{\"format\":1,\"eintraege\":[{\"id\":\"planora.ohne-namen\",\"name\":{},\
+         \"kategorie\":\"werkzeuge\",\"repo\":\"https://github.com/jemand/ohne-namen\"}]}",
+    );
+    let mut h = katalog_harness("kat-ohne-namen", leere_orte("kat-ohne-namen"));
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "planora.ohne-namen"), "{}", join(&seen));
+}
+
+#[test]
+fn catalog_provenance_shown() {
+    let _g = netz_anfang();
+    let mut h = harness(
+        "kat-herkunft",
+        installiert_aus_katalog("kat-herkunft", "kat-h", true),
+        Config::default(),
+    );
+    let seen = bild(&mut h, vec![]);
+    assert_eq!(h.w.tab(), AddinsTab::Installed);
+    assert!(has(&seen, "aus dem Katalog"), "{}", join(&seen));
+    // Über einen Link installiert: kein Vermerk.
+    let mut h = harness(
+        "kat-herkunft-link",
+        installiert_aus_katalog("kat-herkunft-link", "kat-h", false),
+        Config::default(),
+    );
+    let seen = bild(&mut h, vec![]);
+    assert!(!has(&seen, "aus dem Katalog"), "{}", join(&seen));
+}
+
+#[test]
+fn layout_1920x1080_fits() {
+    let _g = netz_anfang();
+    let eintraege: Vec<Eintrag> = (0..30)
+        .map(|i| {
+            let id: &'static str =
+                Box::leak(format!("planora.langer-eintrag-{i}").into_boxed_str());
+            (
+                id,
+                "Ein Plug-in mit einem ziemlich langen Namen für den Katalog",
+                "Eine lange Beschreibung, die über mehrere Zeilen umbrechen muss, damit man sieht, \
+                 dass nichts aus dem Fenster ragt und alles in der Breite des Fensters bleibt.",
+                "elektronik",
+                format!("https://github.com/jemand/langer-eintrag-{i}"),
+            )
+        })
+        .collect();
+    katalog_release(1, &eintraege);
+    let mut h = katalog_harness("kat-layout", leere_orte("kat-layout"));
+    let seen = bild(&mut h, vec![]);
+    let window = h.w.last_rect.unwrap();
+    let screen = Rect::from_min_size(Pos2::ZERO, h.size);
+    assert!(screen.contains_rect(window), "{window:?}");
+    assert!(window.top() >= theme::HEADER_H, "{window:?}");
+    for text in [
+        "Installiert",
+        "Katalog",
+        "Installieren",
+        "Rechte werden beim Installieren angezeigt",
+        "Schließen",
+    ] {
+        let s = find(&seen, text).unwrap_or_else(|| panic!("„{text}“ fehlt: {}", join(&seen)));
+        assert!(window.contains_rect(s.rect), "„{text}“ im Fenster");
+        assert!(s.clip.contains_rect(s.rect), "„{text}“ ganz zu sehen");
+    }
+    // Nichts ragt rechts aus dem Fenster.
+    for s in &seen {
+        if s.clip.intersects(window) && window.intersects(s.rect) {
+            assert!(
+                s.rect.right() <= window.right() + 0.5,
+                "„{}“ ragt rechts heraus",
+                s.text
+            );
+        }
+    }
+}
+
+/// Symbole: ein PNG wird gelesen; SVG, kaputte und zu große Bilder ergeben `None` (dann steht das
+/// Standardsymbol), ein Eintrag mit kaputtem Symbol erscheint trotzdem in der Liste.
+#[test]
+fn symbols_decode_or_fall_back() {
+    use planora_app::addins_window::decode_symbol;
+    let png = planora_app::logo::ICON_64;
+    let image = decode_symbol(png).expect("PNG lesbar");
+    assert_eq!(image.size, [64, 64]);
+    assert!(decode_symbol(b"<svg xmlns='http://www.w3.org/2000/svg'/>").is_none());
+    assert!(decode_symbol(&png[..40]).is_none(), "abgeschnitten");
+    assert!(decode_symbol(b"kein Bild").is_none());
+    // Kopf mit 100000 x 100000 Pixeln: abgelehnt, ohne zu entpacken.
+    let mut riesig = png.to_vec();
+    riesig[16..20].copy_from_slice(&100_000u32.to_be_bytes());
+    riesig[20..24].copy_from_slice(&100_000u32.to_be_bytes());
+    assert!(decode_symbol(&riesig).is_none());
+}
+
+#[test]
+fn broken_symbol_entry_still_listed() {
+    let _g = netz_anfang();
+    let text = "{\"format\":1,\"eintraege\":[{\"id\":\"planora.mit-symbol\",\
+        \"name\":{\"de\":\"Mit Symbol\"},\"kategorie\":\"werkzeuge\",\
+        \"repo\":\"https://github.com/jemand/mit-symbol\",\"symbol\":\"s.png\"}]}";
+    let release = format!(
+        "{{\"tag_name\":\"{KATALOG_TAG}\",\"draft\":false,\"assets\":[\
+         {{\"name\":\"katalog.json\",\"browser_download_url\":\"{}\",\"size\":{}}},\
+         {{\"name\":\"s.png\",\"browser_download_url\":\"{}\",\"size\":9}}]}}",
+        katalog_asset("katalog.json"),
+        text.len(),
+        katalog_asset("s.png")
+    );
+    antwort(
+        &planora_update::catalog::latest_release_url(),
+        Ok((200, release.into_bytes())),
+    );
+    antwort(
+        &katalog_asset("katalog.json"),
+        Ok((200, text.as_bytes().to_vec())),
+    );
+    antwort(&katalog_asset("s.png"), Ok((200, b"kein Bild".to_vec())));
+    let mut h = katalog_harness("kat-symbol", leere_orte("kat-symbol"));
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Mit Symbol"), "{}", join(&seen));
 }

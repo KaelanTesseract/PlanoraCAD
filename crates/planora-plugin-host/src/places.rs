@@ -242,6 +242,24 @@ const PROVENANCE_FILE: &str = "herkunft.json";
 pub struct Provenance {
     pub link: String,
     pub tag: String,
+    /// Aus dem Plug-in-Katalog installiert (nur dann steht das Feld in der Datei; ein fehlender
+    /// oder unlesbarer Wert gilt als falsch).
+    #[serde(
+        default,
+        skip_serializing_if = "is_false",
+        deserialize_with = "lenient_bool"
+    )]
+    pub catalog: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Liest einen Wahrheitswert nachsichtig: alles außer `true` gilt als falsch.
+fn lenient_bool<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    let v = <serde_json::Value as serde::Deserialize>::deserialize(d)?;
+    Ok(v.as_bool().unwrap_or(false))
 }
 
 /// Liest `herkunft.json` aus dem Plug-in-Ordner `dir` nachsichtig: fehlt die Datei, ist sie
@@ -511,6 +529,7 @@ mod tests {
         let prov = Provenance {
             link: "https://github.com/a/b".into(),
             tag: "v0.1.0".into(),
+            catalog: false,
         };
         let dir = install_with(&p, &pkg, Some(&prov), &fail).unwrap();
         assert_eq!(read_provenance(&dir), Some(prov));

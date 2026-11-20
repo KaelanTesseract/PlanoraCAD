@@ -9,19 +9,28 @@
 //! Repo-Link, „Entfernen“ bei installierten und nicht aktive Fundorte grau darunter.
 //! Schalter und „Zurücknehmen“ werden gleich gespeichert ([`app_plugins::persist`]),
 //! „Entfernen“ fragt erst nach.
+//!
+//! Oben zwei Reiter: „Installiert“ (die Ansicht oben) und „Katalog“ (Plug-in-Katalog, siehe
+//! [`crate::plugin_catalog`]): Suchfeld und Kategorie, links die Liste mit Symbol, Name und
+//! Kategorie, rechts die Details mit „Installieren“, „Installiert“ bzw. „Aktualisieren auf …“.
+//! Der Wechsel auf „Katalog“ holt den Katalog (nicht öfter als dessen Wartezeit erlaubt).
 
 use crate::dialog::{Dialog, DialogSize, close_label};
 use crate::file_chooser::{self, ChooserAction, FileChooser, display_path};
+use crate::local_time::unix_time_text;
 use crate::places::Places;
+use crate::plugin_catalog::{CatalogState, StaleReason};
 use crate::plugin_prompts::{grant_text, origin_text, right_name, state_text};
 use crate::plugins::{self as app_plugins, Plugins, entry_name};
 use crate::theme;
+use crate::update_check::now_unix;
 use crate::workspace::{Prompt, Workspace};
 use planora_i18n::tr;
 use planora_plugin_host::licenses::license_ok;
 use planora_plugin_host::manifest::Right;
 use planora_plugin_host::places::Origin;
 use planora_plugin_host::{EntryState, PluginEntry};
+use planora_update::catalog::{CatalogEntry, MAX_SYMBOL_BYTES};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
@@ -63,6 +72,16 @@ pub fn shadowed_text(origin: Origin, version: &str, active: &str) -> String {
     )
 }
 
+/// Die Reiter des Fensters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AddinsTab {
+    /// Die installierten Plug-ins (Liste und Details).
+    #[default]
+    Installed,
+    /// Der Plug-in-Katalog.
+    Catalog,
+}
+
 /// Id des Fensters (auch abgedockt).
 const WINDOW_ID: &str = "planora_addins_window";
 /// Breite der Liste links.
@@ -87,6 +106,14 @@ enum Action {
     CheckUpdates,
     /// „Aktualisieren auf …“ (öffnet den Aktualisieren-Dialog).
     OpenUpdate(String),
+    /// Reiter gewechselt.
+    Tab(AddinsTab),
+    /// Eintrag des Katalogs gewählt.
+    CatalogSelect(String),
+    /// „Installieren“ eines Katalogeintrags (Kennung).
+    CatalogInstall(String),
+    /// „Erneut versuchen“: den Katalog sofort neu holen.
+    CatalogRetry,
 }
 
 /// Zustand des Fensters (gehört der App wie die Einstellungen).
@@ -97,6 +124,17 @@ pub struct AddinsWindow {
     selected: Option<String>,
     /// Dateiauswahl für `*.pcplugin`, solange gewählt wird.
     chooser: Option<FileChooser>,
+    /// Der gezeigte Reiter.
+    tab: AddinsTab,
+    /// Der Katalog wurde seit dem Öffnen bzw. Wechseln des Reiters schon angefordert.
+    catalog_requested: bool,
+    /// Suchtext im Katalog.
+    search: String,
+    /// Gewählte Kategorie im Katalog (Schlüssel, siehe [`AddinsWindow::categories`]); `None` ist
+    /// „Alle“.
+    category: Option<String>,
+    /// Der gewählte Eintrag im Katalog (Kennung); fehlt er in der Liste, gilt der erste.
+    catalog_selected: Option<String>,
     /// Rechteck des Fensters im letzten Bild (Layouttests).
     pub last_rect: Option<egui::Rect>,
     /// Rechteck des Schalters je Plug-in im letzten Bild (Tests klicken darauf).
@@ -106,8 +144,51 @@ pub struct AddinsWindow {
 impl AddinsWindow {
     /// Öffnet das Fenster; eine offene Auswahl geht zu.
     pub fn open(&mut self) {
+        self.open_at(AddinsTab::Installed);
+    }
+
+    /// Öffnet das Fenster auf dem Reiter `tab`; „Katalog“ holt den Katalog.
+    pub fn open_at(&mut self, tab: AddinsTab) {
         self.open = true;
         self.chooser = None;
+        self.tab = tab;
+        self.catalog_requested = false;
+    }
+
+    /// Der gezeigte Reiter.
+    pub fn tab(&self) -> AddinsTab {
+        self.tab
+    }
+
+    /// Setzt den Suchtext des Katalogs.
+    pub fn set_search(&mut self, text: &str) {
+        self.search = text.to_string();
+    }
+
+    /// Wählt die Kategorie des Katalogs (`None`: „Alle“; `Some("")`: „Sonstiges“).
+    pub fn set_category(&mut self, category: Option<&str>) {
+        self.category = category.map(str::to_string);
+    }
+
+    /// Wählt den Eintrag `id` im Katalog.
+    pub fn select_catalog(&mut self, id: &str) {
+        self.catalog_selected = Some(id.to_string());
+    }
+
+    /// Die Kategorien, die im Katalog vorkommen (in der Reihenfolge des ersten Auftretens); ein
+    /// leerer Schlüssel steht für „Sonstiges“ (keine oder unbekannte Kategorie).
+    pub fn categories(&self, plugins: &Plugins) -> Vec<String> {
+        let CatalogState::Ready { entries, .. } = plugins.catalog.state() else {
+            return Vec::new();
+        };
+        let mut keys: Vec<String> = Vec::new();
+        for e in entries {
+            let key = category_key(&e.category);
+            if !keys.iter().any(|k| k == key) {
+                keys.push(key.to_string());
+            }
+        }
+        keys
     }
 
     pub fn close(&mut self) {
@@ -172,8 +253,17 @@ impl AddinsWindow {
             self.last_rect = None;
             return;
         }
+        if self.tab == AddinsTab::Catalog && !self.catalog_requested {
+            self.catalog_requested = true;
+            let fetch = ws.plugins.repo_fetch;
+            ws.plugins.catalog.request(fetch, now_unix(), false);
+        }
         let locked = ws.prompt.is_some();
         let (mut open, mut close) = (true, false);
+        let tab = self.tab;
+        let mut search = self.search.clone();
+        let mut category = self.category.clone();
+        let catalog_selected = self.catalog_selected.clone();
         let selected = self.selected_in(&ws.plugins);
         let mut link_text = ws.plugins.link_text.clone();
         let choosing = self.chooser.is_some();
@@ -193,6 +283,17 @@ impl AddinsWindow {
                     let mut actions = Vec::new();
                     toggles.clear();
                     ui.add_enabled_ui(!locked, |ui| {
+                        show_tabs(ui, tab, &mut actions);
+                        ui.add_space(theme::SPACE_2);
+                        if tab == AddinsTab::Catalog {
+                            let mut view = CatalogView {
+                                search: &mut search,
+                                category: &mut category,
+                                selected: catalog_selected.as_deref(),
+                            };
+                            show_catalog(ui, &ws.plugins, &mut view, &mut actions);
+                            return;
+                        }
                         show_toolbar(ui, &ws.plugins, choosing, &mut link_text, &mut actions);
                         show_notes(ui, &ws.plugins, &folder);
                         ui.add_space(theme::SPACE_2);
@@ -238,6 +339,8 @@ impl AddinsWindow {
             }
         };
         ws.plugins.link_text = link_text;
+        self.search = search;
+        self.category = category;
         if !locked {
             for action in actions {
                 self.apply(ws, action);
@@ -287,6 +390,28 @@ impl AddinsWindow {
             Action::CancelFetch => ws.plugins.cancel_fetch(),
             Action::CheckUpdates => ws.plugins.check_updates(true),
             Action::OpenUpdate(id) => ws.plugins.open_update(&id),
+            Action::Tab(tab) => {
+                self.tab = tab;
+                self.catalog_requested = false;
+                // Eine offene Dateiauswahl gehört zum Reiter „Installiert“.
+                self.chooser = None;
+            }
+            Action::CatalogSelect(id) => self.catalog_selected = Some(id),
+            Action::CatalogInstall(id) => {
+                let entry = match ws.plugins.catalog.state() {
+                    CatalogState::Ready { entries, .. } => {
+                        entries.iter().find(|e| e.id == id).cloned()
+                    }
+                    _ => None,
+                };
+                if let Some(entry) = entry {
+                    ws.plugins.install_from_catalog(&entry);
+                }
+            }
+            Action::CatalogRetry => {
+                let fetch = ws.plugins.repo_fetch;
+                ws.plugins.catalog.request(fetch, now_unix(), true);
+            }
         }
     }
 }
@@ -362,12 +487,18 @@ fn show_toolbar(
     });
 }
 
-/// Hinweis ([`Plugins::note`]), ein unlesbarer Ordner und der Ordner der installierten Plug-ins.
-fn show_notes(ui: &mut egui::Ui, plugins: &Plugins, folder: &Folder) {
+/// Der Hinweis [`Plugins::note`] (Fehler beim Holen und Installieren), falls es einen gibt.
+fn show_note(ui: &mut egui::Ui, plugins: &Plugins) {
     let warning = theme::palette(ui.visuals().dark_mode).warning;
     if let Some(note) = &plugins.note {
         ui.add(egui::Label::new(egui::RichText::new(note.as_str()).color(warning)).wrap());
     }
+}
+
+/// Hinweis ([`Plugins::note`]), ein unlesbarer Ordner und der Ordner der installierten Plug-ins.
+fn show_notes(ui: &mut egui::Ui, plugins: &Plugins, folder: &Folder) {
+    let warning = theme::palette(ui.visuals().dark_mode).warning;
+    show_note(ui, plugins);
     if let Some(problem) = &folder.problem {
         ui.add(
             egui::Label::new(
@@ -495,6 +626,9 @@ fn show_details(
                 ui.horizontal(|ui| {
                     ui.label(version.as_str());
                     ui.weak(origin_text(f.origin));
+                    if f.provenance.as_ref().is_some_and(|p| p.catalog) {
+                        ui.weak(tr!("addins-from-catalog"));
+                    }
                     ui.label(entry_state_text(e));
                 });
                 ui.label(tr!("plugin-settings-author", author = m.author.as_str()));
@@ -570,4 +704,435 @@ fn show_details(
             });
         },
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reiter „Katalog“
+// ---------------------------------------------------------------------------------------------
+
+/// Kantenlänge des Symbols in der Liste (Punkte).
+const SYMBOL_SIZE: f32 = 24.0;
+/// Größte Kantenlänge eines Symbols in Pixeln; größere Bilder gelten als unbrauchbar.
+const SYMBOL_MAX_PIXELS: u32 = 2048;
+/// Die Kategorien, für die das Programm eine Übersetzung kennt (alles andere ist „Sonstiges“).
+const KNOWN_CATEGORIES: [&str; 4] = ["elektronik", "import-export", "werkzeuge", "beispiele"];
+/// Breite des Suchfelds.
+const SEARCH_FIELD_W: f32 = 320.0;
+
+/// Der Schlüssel einer Kategorie: sie selbst, wenn sie bekannt ist, sonst leer („Sonstiges“).
+fn category_key(category: &str) -> &str {
+    KNOWN_CATEGORIES
+        .iter()
+        .find(|k| **k == category)
+        .copied()
+        .unwrap_or("")
+}
+
+/// Anzeigetext einer Kategorie (nach [`category_key`]).
+fn category_text(key: &str) -> String {
+    match key {
+        "elektronik" => tr!("catalog-category-elektronik"),
+        "import-export" => tr!("catalog-category-import-export"),
+        "werkzeuge" => tr!("catalog-category-werkzeuge"),
+        "beispiele" => tr!("catalog-category-beispiele"),
+        _ => tr!("catalog-category-other"),
+    }
+}
+
+/// Der Name eines Katalogeintrags in `lang`; ohne Namen die Kennung.
+fn catalog_name(e: &CatalogEntry, lang: &str) -> String {
+    let name = e.name_in(lang).trim();
+    if name.is_empty() {
+        e.id.clone()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Passt der Eintrag zu Suchtext (Name und Beschreibung, ohne Groß/Klein) und Kategorie?
+fn matches(e: &CatalogEntry, lang: &str, search: &str, category: Option<&str>) -> bool {
+    if category.is_some_and(|c| c != category_key(&e.category)) {
+        return false;
+    }
+    let needle = search.trim().to_lowercase();
+    needle.is_empty()
+        || catalog_name(e, lang).to_lowercase().contains(&needle)
+        || e.description_in(lang).to_lowercase().contains(&needle)
+}
+
+/// Was der Katalog-Reiter vom Fenster braucht: Suchtext und Kategorie (veränderbar) und die Wahl.
+struct CatalogView<'a> {
+    search: &'a mut String,
+    category: &'a mut Option<String>,
+    selected: Option<&'a str>,
+}
+
+/// Die Reiter „Installiert“ und „Katalog“.
+fn show_tabs(ui: &mut egui::Ui, tab: AddinsTab, actions: &mut Vec<Action>) {
+    ui.horizontal(|ui| {
+        for (this, label) in [
+            (AddinsTab::Installed, tr!("addins-tab-installed")),
+            (AddinsTab::Catalog, tr!("addins-tab-catalog")),
+        ] {
+            if ui
+                .add(egui::Button::selectable(tab == this, label))
+                .clicked()
+                && tab != this
+            {
+                actions.push(Action::Tab(this));
+            }
+        }
+    });
+}
+
+/// Der Reiter „Katalog“: Suche und Kategorie, Hinweise zum Stand, darunter je nach Zustand die
+/// Liste mit den Details oder die Meldung.
+fn show_catalog(
+    ui: &mut egui::Ui,
+    plugins: &Plugins,
+    view: &mut CatalogView<'_>,
+    actions: &mut Vec<Action>,
+) {
+    let dark = ui.visuals().dark_mode;
+    let warning = theme::palette(dark).warning;
+    let enabled = ui.is_enabled();
+    show_note(ui, plugins);
+    let state = plugins.catalog.state();
+    if matches!(state, CatalogState::Ready { .. }) {
+        show_filters(ui, plugins, view, enabled);
+    }
+    // Hinweise: Stand (offline oder fehlerhaft) und „wird geladen“.
+    if let CatalogState::Ready {
+        fetched_at,
+        stale: Some(reason),
+        ..
+    } = state
+    {
+        let date = unix_time_text(*fetched_at as i64);
+        let text = match reason {
+            StaleReason::Offline => tr!("catalog-offline-since", datum = date.as_str()),
+            StaleReason::Invalid => format!(
+                "{} {}",
+                reason.text(),
+                tr!("catalog-state-date", datum = date.as_str())
+            ),
+        };
+        ui.add(egui::Label::new(egui::RichText::new(text).color(warning)).wrap());
+    }
+    if plugins.catalog.is_loading() {
+        ui.weak(tr!("catalog-loading"));
+    }
+    ui.add_space(theme::SPACE_1);
+    match state {
+        CatalogState::Never => {
+            if !plugins.catalog.is_loading() {
+                ui.weak(tr!("catalog-loading"));
+            }
+        }
+        CatalogState::Failed(text) => {
+            ui.colored_label(warning, tr!("catalog-failed"));
+            ui.add(egui::Label::new(text.as_str()).wrap());
+            if ui
+                .add_enabled(
+                    enabled && !plugins.catalog.is_loading(),
+                    egui::Button::new(tr!("catalog-retry")),
+                )
+                .clicked()
+            {
+                actions.push(Action::CatalogRetry);
+            }
+        }
+        CatalogState::TooNew(_) => {
+            ui.colored_label(warning, tr!("catalog-too-new"));
+        }
+        CatalogState::Ready {
+            entries, symbols, ..
+        } => {
+            let lang = planora_i18n::current().id().to_string();
+            let shown: Vec<&CatalogEntry> = entries
+                .iter()
+                .filter(|e| matches(e, &lang, view.search, view.category.as_deref()))
+                .collect();
+            let current = view
+                .selected
+                .and_then(|id| shown.iter().find(|e| e.id == id))
+                .or(shown.first())
+                .copied();
+            ui.horizontal_top(|ui| {
+                show_catalog_list(
+                    ui,
+                    &shown,
+                    symbols,
+                    current.map(|e| e.id.as_str()),
+                    entries.is_empty(),
+                    &lang,
+                    actions,
+                );
+                ui.add_space(theme::SPACE_4);
+                show_catalog_details(ui, plugins, current, &lang, actions);
+            });
+        }
+    }
+}
+
+/// Suchfeld und Auswahl der Kategorie.
+fn show_filters(ui: &mut egui::Ui, plugins: &Plugins, view: &mut CatalogView<'_>, enabled: bool) {
+    let keys = match plugins.catalog.state() {
+        CatalogState::Ready { entries, .. } => {
+            let mut keys: Vec<&str> = Vec::new();
+            for e in entries {
+                let key = category_key(&e.category);
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+            keys
+        }
+        _ => Vec::new(),
+    };
+    ui.horizontal(|ui| {
+        theme::text_field_enabled(
+            ui,
+            enabled,
+            egui::TextEdit::singleline(view.search)
+                .hint_text(tr!("catalog-search-hint"))
+                .desired_width(SEARCH_FIELD_W),
+        );
+        ui.add_space(theme::SPACE_2);
+        ui.label(tr!("catalog-category-label"));
+        let current = match view.category.as_deref() {
+            Some(key) => category_text(key),
+            None => tr!("catalog-category-all"),
+        };
+        ui.add_enabled_ui(enabled, |ui| {
+            egui::ComboBox::from_id_salt("planora_catalog_category")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(view.category.is_none(), tr!("catalog-category-all"))
+                        .clicked()
+                    {
+                        *view.category = None;
+                    }
+                    for key in keys {
+                        let on = view.category.as_deref() == Some(key);
+                        if ui.selectable_label(on, category_text(key)).clicked() {
+                            *view.category = Some(key.to_string());
+                        }
+                    }
+                });
+        });
+    });
+}
+
+/// Links die Liste der Katalogeinträge: Symbol, Name (wählt) und Kategorie.
+fn show_catalog_list(
+    ui: &mut egui::Ui,
+    shown: &[&CatalogEntry],
+    symbols: &BTreeMap<String, Vec<u8>>,
+    current: Option<&str>,
+    catalog_empty: bool,
+    lang: &str,
+    actions: &mut Vec<Action>,
+) {
+    let dark = ui.visuals().dark_mode;
+    ui.allocate_ui_with_layout(
+        egui::vec2(LIST_W, BODY_H),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_width(LIST_W);
+            theme::section_header(ui, &list_title(), theme::SUB_HEADER_H);
+            ui.add_space(theme::SPACE_1);
+            if shown.is_empty() {
+                ui.weak(if catalog_empty {
+                    tr!("catalog-empty")
+                } else {
+                    tr!("catalog-no-match")
+                });
+                return;
+            }
+            let list = egui::ScrollArea::vertical()
+                .id_salt("planora_catalog_list")
+                .max_height(BODY_H - theme::SUB_HEADER_H)
+                .auto_shrink([false, true]);
+            theme::scroll_area(ui, list, |ui| {
+                for e in shown {
+                    ui.horizontal(|ui| {
+                        show_symbol(ui, e, symbols);
+                        let name = egui::Button::selectable(
+                            current == Some(e.id.as_str()),
+                            catalog_name(e, lang),
+                        )
+                        .min_size(egui::vec2(ui.available_width() * 0.6, 0.0));
+                        if ui.add(name).clicked() {
+                            actions.push(Action::CatalogSelect(e.id.clone()));
+                        }
+                        ui.label(
+                            egui::RichText::new(category_text(category_key(&e.category)))
+                                .color(theme::palette(dark).text_secondary),
+                        );
+                    });
+                }
+            });
+        },
+    );
+}
+
+/// Rechts die Details des gewählten Katalogeintrags und der Knopf je nach Stand.
+fn show_catalog_details(
+    ui: &mut egui::Ui,
+    plugins: &Plugins,
+    current: Option<&CatalogEntry>,
+    lang: &str,
+    actions: &mut Vec<Action>,
+) {
+    let width = ui.available_width();
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, BODY_H),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_width(width);
+            let Some(e) = current else {
+                theme::section_header(ui, &title(), theme::SUB_HEADER_H);
+                ui.add_space(theme::SPACE_1);
+                ui.weak(tr!("catalog-details-empty"));
+                return;
+            };
+            theme::section_header(ui, &catalog_name(e, lang), theme::SUB_HEADER_H);
+            ui.add_space(theme::SPACE_1);
+            let details = egui::ScrollArea::vertical()
+                .id_salt("planora_catalog_details")
+                .max_height(BODY_H - theme::SUB_HEADER_H)
+                .auto_shrink([false, true]);
+            theme::scroll_area(ui, details, |ui| {
+                let description = e.description_in(lang);
+                if !description.is_empty() {
+                    ui.add(egui::Label::new(description).wrap());
+                }
+                ui.add_space(theme::SPACE_2);
+                ui.label(tr!(
+                    "catalog-detail-category",
+                    category = category_text(category_key(&e.category))
+                ));
+                ui.add(
+                    egui::Label::new(tr!("catalog-detail-source", source = e.repo.web_url()))
+                        .wrap(),
+                );
+                let update = plugins.found_update(&e.id);
+                let latest = update.map_or_else(
+                    || tr!("catalog-version-unknown"),
+                    |u| u.to.version.to_string(),
+                );
+                ui.label(tr!("catalog-detail-latest", version = latest));
+                ui.add(egui::Label::new(tr!("catalog-rights-later")).wrap());
+                ui.add_space(theme::SPACE_2);
+                let installed = plugins
+                    .host
+                    .entries()
+                    .iter()
+                    .any(|p| p.id == e.id && !p.found.is_empty());
+                let busy =
+                    plugins.is_fetching() || plugins.is_reading() || plugins.install.is_some();
+                let enabled = ui.is_enabled();
+                ui.horizontal(|ui| {
+                    if installed && let Some(u) = update {
+                        let label = update_to_label(&u.to.version.to_string());
+                        if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                            actions.push(Action::OpenUpdate(e.id.clone()));
+                        }
+                    } else if installed {
+                        ui.add_enabled(false, egui::Button::new(tr!("catalog-installed")));
+                    } else {
+                        let install = egui::Button::new(tr!("catalog-install"));
+                        if ui.add_enabled(enabled && !busy, install).clicked() {
+                            actions.push(Action::CatalogInstall(e.id.clone()));
+                        }
+                        if plugins.is_fetching() {
+                            ui.label(tr!("plugin-install-fetching"));
+                        }
+                    }
+                });
+            });
+        },
+    );
+}
+
+/// Das Symbol eines Eintrags (24 px) oder, wenn es fehlt oder sich nicht lesen lässt, das
+/// Standardsymbol.
+fn show_symbol(ui: &mut egui::Ui, e: &CatalogEntry, symbols: &BTreeMap<String, Vec<u8>>) {
+    let texture = e
+        .symbol
+        .as_deref()
+        .and_then(|name| symbols.get(name).map(|bytes| (name, bytes)))
+        .and_then(|(name, bytes)| symbol_texture(ui.ctx(), name, bytes));
+    match texture {
+        Some(t) => {
+            ui.add(egui::Image::new(&t).fit_to_exact_size(egui::vec2(SYMBOL_SIZE, SYMBOL_SIZE)));
+        }
+        None => default_symbol(ui),
+    }
+}
+
+/// Das Standardsymbol: ein Baustein (Rechteck mit Zapfen), in der Textfarbe.
+fn default_symbol(ui: &mut egui::Ui) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(SYMBOL_SIZE, SYMBOL_SIZE), egui::Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let color = theme::palette(ui.visuals().dark_mode).text_secondary;
+    let body = rect.shrink2(egui::vec2(3.0, 5.0));
+    ui.painter().rect_stroke(
+        body,
+        3.0,
+        egui::Stroke::new(1.5, color),
+        egui::StrokeKind::Inside,
+    );
+    let knob = egui::Rect::from_center_size(
+        egui::pos2(rect.center().x, body.top() - 1.0),
+        egui::vec2(8.0, 4.0),
+    );
+    ui.painter().rect_filled(knob, 1.0, color);
+}
+
+/// Die Textur eines Symbols, einmal gelesen und im Kontext gemerkt (je Name und Länge); `None`,
+/// wenn sich die Bytes nicht als PNG lesen lassen (auch SVG: ohne Rasterer im Programm, dafür
+/// steht das Standardsymbol) oder das Bild zu groß ist.
+fn symbol_texture(ctx: &egui::Context, name: &str, bytes: &[u8]) -> Option<egui::TextureHandle> {
+    if bytes.len() as u64 > MAX_SYMBOL_BYTES {
+        return None;
+    }
+    let id = egui::Id::new(("planora-katalog-symbol", name, bytes.len()));
+    if let Some(cached) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
+        return cached;
+    }
+    let texture = decode_symbol(bytes).map(|image| {
+        ctx.load_texture(
+            format!("katalog-symbol-{name}"),
+            image,
+            egui::TextureOptions::LINEAR,
+        )
+    });
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    texture
+}
+
+/// Liest ein PNG; Bilder über [`SYMBOL_MAX_PIXELS`] Kantenlänge gelten als unbrauchbar (die
+/// Größe steht im Kopf der Datei, so wird nichts Riesiges entpackt).
+pub fn decode_symbol(bytes: &[u8]) -> Option<egui::ColorImage> {
+    const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    if bytes.len() < 24 || !bytes.starts_with(PNG_MAGIC) {
+        return None;
+    }
+    let dim =
+        |at: usize| u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    let (w, h) = (dim(16), dim(20));
+    if w == 0 || h == 0 || w > SYMBOL_MAX_PIXELS || h > SYMBOL_MAX_PIXELS {
+        return None;
+    }
+    let icon = crate::logo::decode(bytes)?;
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [icon.width as usize, icon.height as usize],
+        &icon.rgba,
+    ))
 }

@@ -193,6 +193,7 @@ fn herkunft(owner: &str, tag: &str) -> Option<Provenance> {
     Some(Provenance {
         link: link(owner),
         tag: tag.to_string(),
+        catalog: false,
     })
 }
 
@@ -357,12 +358,48 @@ fn install_from_link_shows_dialog_then_runs() {
         plugin_places::read_provenance(&user.join(HALLO)),
         Some(Provenance {
             link: link(owner),
-            tag: "v0.1.0".to_string()
+            tag: "v0.1.0".to_string(),
+            catalog: false,
         })
     );
     assert_eq!(
         gefragt(&format!("https://api.github.com/repos/{owner}/")),
         [releases_url(owner)]
+    );
+}
+
+/// Aus dem Katalog installiert: derselbe Weg wie über den Link, in der Herkunft aber vermerkt.
+#[test]
+fn install_from_catalog_marks_provenance() {
+    let owner = "inst-katalog";
+    let bytes = datei("beispiel-hallo");
+    releases(
+        owner,
+        &[release(owner, "v0.1.0", &bytes, richtige_summe(&bytes))],
+    );
+    let mut h = harness("inst-katalog", orte("inst-katalog", &[]), Config::default());
+    let entry = planora_update::catalog::CatalogEntry {
+        id: HALLO.to_string(),
+        name: BTreeMap::new(),
+        description: BTreeMap::new(),
+        category: String::new(),
+        repo: planora_update::plugin_source::parse_repo_link(&link(owner)).unwrap(),
+        symbol: None,
+    };
+    h.ws.plugins.install_from_catalog(&entry);
+    assert!(h.ws.plugins.is_fetching());
+    let seen = warten(&mut h);
+    assert!(h.ws.plugins.install.is_some(), "{}", join(&seen));
+    klick(&mut h, &seen, "Installieren");
+    warten(&mut h);
+    let user = h.ws.plugins.host.places().user.clone();
+    assert_eq!(
+        plugin_places::read_provenance(&user.join(HALLO)),
+        Some(Provenance {
+            link: link(owner),
+            tag: "v0.1.0".to_string(),
+            catalog: true,
+        })
     );
 }
 

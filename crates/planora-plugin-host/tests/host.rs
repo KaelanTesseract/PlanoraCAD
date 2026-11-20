@@ -896,6 +896,7 @@ fn replace_from_other_source_drops_rights() {
         &places::Provenance {
             link: "https://github.com/jemand/faelle".into(),
             tag: "v0.2.0".into(),
+            catalog: false,
         },
     )
     .unwrap();

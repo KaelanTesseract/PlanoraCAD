@@ -346,6 +346,7 @@ fn herkunft() -> places::Provenance {
     places::Provenance {
         link: "https://github.com/a/b".to_string(),
         tag: "v0.1.0".to_string(),
+        catalog: false,
     }
 }
 
@@ -399,4 +400,30 @@ fn install_writes_provenance() {
     let dir = places::install(&p, &pkg, None).unwrap();
     assert_eq!(places::read_provenance(&dir), None);
     aufraeumen(&p);
+}
+
+/// `catalog` kommt in die Datei nur, wenn es wahr ist; ältere Dateien ohne das Feld lesen als falsch.
+#[test]
+fn provenance_catalog_flag() {
+    let p = orte("herkunft-katalog");
+    let dir = p.user.join("x");
+    std::fs::create_dir_all(&dir).unwrap();
+    places::write_provenance(&dir, &herkunft()).unwrap();
+    let text = std::fs::read_to_string(dir.join("herkunft.json")).unwrap();
+    assert!(!text.contains("catalog"), "{text}");
+    let aus_katalog = places::Provenance {
+        catalog: true,
+        ..herkunft()
+    };
+    places::write_provenance(&dir, &aus_katalog).unwrap();
+    let text = std::fs::read_to_string(dir.join("herkunft.json")).unwrap();
+    assert!(text.contains("\"catalog\": true"), "{text}");
+    assert_eq!(places::read_provenance(&dir), Some(aus_katalog));
+    // Nachsichtig: ein kaputter Wert gilt als falsch, die Herkunft bleibt.
+    std::fs::write(
+        dir.join("herkunft.json"),
+        r#"{"link":"https://github.com/a/b","tag":"v0.1.0","catalog":"ja"}"#,
+    )
+    .unwrap();
+    assert_eq!(places::read_provenance(&dir), Some(herkunft()));
 }

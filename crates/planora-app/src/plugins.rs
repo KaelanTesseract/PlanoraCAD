@@ -44,6 +44,7 @@ use planora_plugin_host::runtime::{DialogEvent, HttpResponse, Level, RequestResu
 use planora_plugin_host::{EntryState, HostEvent, PluginEntry, PluginHost, PluginState};
 use planora_project::config::{Config, PluginConfig};
 use planora_update::Channel;
+use planora_update::catalog::CatalogEntry;
 use planora_update::check::due;
 use planora_update::plugin_source::{PluginRelease, RepoLink, is_newer, parse_repo_link};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -171,6 +172,8 @@ pub struct Plugins {
     config_dirty: bool,
     /// Der Plug-in-Katalog (Zwischenspeicher in `plugin-cache/katalog/`; ohne Fundorte keiner).
     pub catalog: Catalog,
+    /// Das laufende „Holen“ geht auf einen Eintrag des Katalogs ([`Plugins::install_from_catalog`]).
+    fetch_from_catalog: bool,
 }
 
 impl Default for Plugins {
@@ -315,6 +318,7 @@ impl Plugins {
             provenance: BTreeMap::new(),
             config_dirty: false,
             catalog: Catalog::new(PathBuf::new()),
+            fetch_from_catalog: false,
         };
         plugins.refresh_provenance();
         plugins
@@ -674,6 +678,18 @@ impl Plugins {
     /// Installationsdialog (Quelle: der Link), ein Fehler steht in [`Plugins::note`]. Ein noch
     /// laufendes Holen wird verworfen.
     pub fn install_from_link(&mut self, text: &str) {
+        self.fetch_from_catalog = false;
+        self.start_fetch(text);
+    }
+
+    /// Wie [`Plugins::install_from_link`] für einen Eintrag des Katalogs: dieselbe Adresse
+    /// (`repo.web_url()`), in der Herkunft aber als „aus dem Katalog“ vermerkt.
+    pub fn install_from_catalog(&mut self, entry: &CatalogEntry) {
+        self.fetch_from_catalog = true;
+        self.start_fetch(&entry.repo.web_url());
+    }
+
+    fn start_fetch(&mut self, text: &str) {
         self.note = None;
         self.install = None;
         self.fetching = None;
@@ -717,6 +733,7 @@ impl Plugins {
                 let provenance = Provenance {
                     link: link.clone(),
                     tag: f.release.tag,
+                    catalog: self.fetch_from_catalog,
                 };
                 self.offer_install_from(f.package, Some(link), Some(provenance));
             }
@@ -812,7 +829,8 @@ impl Plugins {
     /// (dann fällt es weg) oder wenn es misslang (Hinweis in [`Plugins::note`]).
     pub fn apply_update(&mut self, id: &str, config: &mut Config) -> bool {
         self.update_dialog = None;
-        let Some(link) = self.provenance.get(id).map(|p| p.link.clone()) else {
+        let Some((link, catalog)) = self.provenance.get(id).map(|p| (p.link.clone(), p.catalog))
+        else {
             return false;
         };
         let Some(update) = self.ready_update(id).cloned() else {
@@ -832,6 +850,7 @@ impl Plugins {
         let provenance = Provenance {
             link,
             tag: update.to.tag,
+            catalog,
         };
         self.install_package(&package, Some(&provenance), config)
     }
