@@ -1,5 +1,6 @@
 //! Prüf-Plug-in für die Laufzeit: je ein Befehl für einen Grenzfall (Endlosschleife, Speicherhunger,
-//! Absturz, Fehlermeldung, Netz, Rechte, langsamer Dialog, leere Umgebung).
+//! Absturz, Fehlermeldung, Netz, Rechte, langsamer Dialog, leere Umgebung, Dauerlast in `on-result`,
+//! Socket).
 
 wit_bindgen::generate!({
     path: "../../crates/planora-plugin-api/wit",
@@ -12,7 +13,7 @@ use planora::plugin::{net, rights, ui};
 
 struct Faelle;
 
-const BEFEHLE: [&str; 9] = [
+const BEFEHLE: [&str; 11] = [
     "endlos",
     "speicher",
     "panik",
@@ -22,7 +23,21 @@ const BEFEHLE: [&str; 9] = [
     "langsam-dialog",
     "umgebung",
     "schlafen",
+    "dauerlast",
+    "socket",
 ];
+
+/// `dauerlast` läuft: jedes `on-result` rechnet ~150 ms und fragt dann wieder ein Recht an.
+static DAUERLAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Rechnet ungefähr `ms` Millisekunden (Monotonuhr des Plug-ins).
+fn rechnen(ms: u64) {
+    let start = std::time::Instant::now();
+    let mut n: u64 = 0;
+    while start.elapsed() < std::time::Duration::from_millis(ms) {
+        n = std::hint::black_box(n.wrapping_add(1));
+    }
+}
 
 impl Guest for Faelle {
     fn init(_info: HostInfo) -> Result<Registration, String> {
@@ -68,6 +83,22 @@ impl Guest for Faelle {
                 rights::request(Right::Net);
                 Ok(())
             }
+            "dauerlast" => {
+                // Drei Anfragen (ein nicht deklariertes Recht: sofort abgelehnt); jede Antwort
+                // erzeugt in `on-result` neue Arbeit.
+                DAUERLAST.store(true, std::sync::atomic::Ordering::Relaxed);
+                for _ in 0..3 {
+                    rights::request(Right::FsFolder);
+                }
+                Ok(())
+            }
+            "socket" => {
+                // Ein Socket darf es nicht geben: der Versuch muss scheitern.
+                match std::net::TcpStream::connect("127.0.0.1:47613") {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(format!("socket: {e}")),
+                }
+            }
             "langsam-dialog" => ui::open_dialog(&Dialog {
                 id: "langsam".into(),
                 title_key: "langsam-titel".into(),
@@ -104,7 +135,12 @@ impl Guest for Faelle {
         Ok(())
     }
 
-    fn on_result(_id: u64, _result: RequestResult) {}
+    fn on_result(_id: u64, _result: RequestResult) {
+        if DAUERLAST.load(std::sync::atomic::Ordering::Relaxed) {
+            rechnen(150);
+            rights::request(Right::FsFolder);
+        }
+    }
 
     fn shutdown() {}
 }

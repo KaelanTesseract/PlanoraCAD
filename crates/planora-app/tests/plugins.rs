@@ -249,7 +249,7 @@ fn menu_lists_plugin_command() {
 #[test]
 fn plugin_message_in_status_line() {
     let (mut ws, ctx) = arbeitsbereich("meldung", &["test-faelle"], Config::default());
-    ws.plugins.host.run_command("planora.test-faelle.fehler");
+    ws.plugins.host.run_command("planora.test-faelle", "fehler");
     bild(&mut ws, &ctx, vec![]);
     let msg = ws.active_tab().state.message.clone().unwrap_or_default();
     assert!(msg.starts_with("Test-Fälle: "), "{msg}");
@@ -260,7 +260,7 @@ fn plugin_message_in_status_line() {
 #[test]
 fn ask_then_allow_saves_config() {
     let (mut ws, ctx) = arbeitsbereich("erlauben", &["test-faelle"], Config::default());
-    ws.plugins.host.run_command("planora.test-faelle.recht");
+    ws.plugins.host.run_command("planora.test-faelle", "recht");
     let seen = bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.prompts.len(), 1);
     let seen = if find(&seen, "Erlauben").is_some() {
@@ -303,7 +303,7 @@ fn ask_then_allow_saves_config() {
 #[test]
 fn once_not_saved() {
     let (mut ws, ctx) = arbeitsbereich("einmal", &["test-faelle"], Config::default());
-    ws.plugins.host.run_command("planora.test-faelle.recht");
+    ws.plugins.host.run_command("planora.test-faelle", "recht");
     bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.prompts.len(), 1);
     ws.plugins.answer(Answer::Once);
@@ -312,19 +312,19 @@ fn once_not_saved() {
     assert!(!ws.config.plugins.contains_key(FAELLE));
     assert_eq!(gespeichert(&ws), None);
 
-    // In derselben Sitzung ohne neue Nachfrage.
-    ws.plugins.host.run_command("planora.test-faelle.recht");
+    // „Nur diesmal“ galt nur für diese Anfrage: die nächste fragt wieder.
+    ws.plugins.host.run_command("planora.test-faelle", "recht");
     bild(&mut ws, &ctx, vec![]);
     bild(&mut ws, &ctx, vec![]);
-    assert!(ws.plugins.prompts.is_empty());
-    assert_eq!(net_grant(&ws), Some(Grant::Allowed));
+    assert_eq!(ws.plugins.prompts.len(), 1);
+    assert_eq!(net_grant(&ws), None);
 }
 
 #[test]
 fn net_without_right_asks_first() {
     let (mut ws, ctx) = arbeitsbereich("netz-fragt", &["test-faelle"], Config::default());
     ws.plugins.fetch = netz_merken;
-    ws.plugins.host.run_command("planora.test-faelle.netz");
+    ws.plugins.host.run_command("planora.test-faelle", "netz");
     bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.prompts.len(), 1, "erst fragen");
     assert!(ws.plugins.net_jobs.is_empty(), "noch nicht ins Netz");
@@ -351,7 +351,7 @@ fn net_without_right_asks_first() {
 #[test]
 fn net_denied_gives_denied() {
     let (mut ws, ctx) = arbeitsbereich("netz-nein", &["test-faelle"], Config::default());
-    ws.plugins.host.run_command("planora.test-faelle.netz");
+    ws.plugins.host.run_command("planora.test-faelle", "netz");
     let mut seen = bild(&mut ws, &ctx, vec![]);
     if find(&seen, "Ablehnen").is_none() {
         seen = bild(&mut ws, &ctx, vec![]);
@@ -366,7 +366,7 @@ fn net_denied_gives_denied() {
     assert_eq!(gespeichert(&ws).unwrap().rights["net"], "denied");
 
     // Danach ohne Nachfrage abgelehnt, wieder ohne Auftrag.
-    ws.plugins.host.run_command("planora.test-faelle.netz");
+    ws.plugins.host.run_command("planora.test-faelle", "netz");
     bild(&mut ws, &ctx, vec![]);
     assert!(ws.plugins.prompts.is_empty());
     assert!(ws.plugins.net_jobs.is_empty());
@@ -379,7 +379,7 @@ fn escape_answers_only_one_prompt() {
         &["test-faelle", "beispiel-hallo"],
         Config::default(),
     );
-    ws.plugins.host.run_command("planora.test-faelle.recht");
+    ws.plugins.host.run_command("planora.test-faelle", "recht");
     bild(&mut ws, &ctx, vec![]);
     // Eine zweite Nachfrage wartet (von Hand eingereiht: das Beispiel beantragt nichts).
     let mut zweite = ws.plugins.prompts[0].clone();
@@ -397,7 +397,7 @@ fn escape_answers_only_one_prompt() {
 #[test]
 fn late_answer_dropped() {
     let (mut ws, ctx) = arbeitsbereich("spaet", &["test-faelle"], Config::default());
-    ws.plugins.host.run_command("planora.test-faelle.recht");
+    ws.plugins.host.run_command("planora.test-faelle", "recht");
     bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.prompts.len(), 1);
     // Neustart am Host vorbei: die offene Nachfrage gehört zur alten Generation.
@@ -415,7 +415,7 @@ fn late_answer_dropped() {
         None,
         "die neue Instanz ist nicht berechtigt"
     );
-    ws.plugins.host.run_command("planora.test-faelle.recht");
+    ws.plugins.host.run_command("planora.test-faelle", "recht");
     bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.prompts.len(), 1, "die neue Instanz fragt wieder");
 
@@ -435,10 +435,11 @@ fn late_net_result_dropped() {
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
             author: Some("Dennis Guse".to_string()),
             net_hosts: vec!["example.org".to_string()],
+            source: Some("file".to_string()),
         },
     );
     let (mut ws, ctx) = arbeitsbereich("netz-spaet", &["test-faelle"], config);
-    ws.plugins.host.run_command("planora.test-faelle.netz");
+    ws.plugins.host.run_command("planora.test-faelle", "netz");
     bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.net_jobs.len(), 1, "erlaubt: gleich ins Netz");
     // Aus- und wieder eingeschaltet am Host vorbei: das Ergebnis gehört zur alten Generation
@@ -451,7 +452,7 @@ fn late_net_result_dropped() {
     assert!(ws.plugins.banners.is_empty());
 
     // Über `Plugins::set_enabled` fällt ein laufender Auftrag gleich weg.
-    ws.plugins.host.run_command("planora.test-faelle.netz");
+    ws.plugins.host.run_command("planora.test-faelle", "netz");
     bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.net_jobs.len(), 1);
     ws.plugins.set_enabled(FAELLE, false);
@@ -469,7 +470,7 @@ fn failure_banner_and_restart() {
     let (mut ws, ctx) = arbeitsbereich("ausfall", &["test-faelle"], Config::default());
     let failed = "Das Plug-in Test-Fälle wurde wegen eines Fehlers angehalten.";
     for runde in 1..=2 {
-        ws.plugins.host.run_command("planora.test-faelle.panik");
+        ws.plugins.host.run_command("planora.test-faelle", "panik");
         let mut seen = bild(&mut ws, &ctx, vec![]);
         if find(&seen, failed).is_none() {
             seen = bild(&mut ws, &ctx, vec![]);
@@ -483,7 +484,7 @@ fn failure_banner_and_restart() {
         assert_eq!(state(&ws, FAELLE), EntryState::Running, "Runde {runde}");
     }
     // Der dritte Ausfall: bleibt aus, kein „Neu starten“.
-    ws.plugins.host.run_command("planora.test-faelle.panik");
+    ws.plugins.host.run_command("planora.test-faelle", "panik");
     let mut seen = bild(&mut ws, &ctx, vec![]);
     let stopped = "Das Plug-in Test-Fälle bleibt bis zum Neustart des Programms aus.";
     if find(&seen, stopped).is_none() {
@@ -607,4 +608,40 @@ fn settings_request_leaves_window_alone_while_prompt_open() {
     app.apply_menu_request(&ctx, MenuRequest::Settings(Some(SettingsSection::Plugins)));
     assert!(!app.settings_window().is_open());
     assert_eq!(app.settings_window().scroll_target(), None);
+}
+
+/// Ein fertiges Netz-Ergebnis geht erst beim nächsten `poll` an das Plug-in: das Bild, in dem es
+/// ankommt, verlangt deshalb gleich ein weiteres (sonst wartete es im Leerlauf bis zur nächsten
+/// Eingabe).
+#[test]
+fn finished_net_result_requests_repaint() {
+    let (mut ws, ctx) = arbeitsbereich("netz-neuzeichnen", &["test-faelle"], Config::default());
+    ws.plugins.host.run_command("planora.test-faelle", "netz");
+    bild(&mut ws, &ctx, vec![]);
+    ws.plugins.answer(Answer::Allow);
+    bild(&mut ws, &ctx, vec![]);
+    assert_eq!(ws.plugins.net_jobs.len(), 1);
+    let start = Instant::now();
+    loop {
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0))),
+            ..Default::default()
+        };
+        let out = ctx.run_ui(raw, |ui| plugins::show(ui.ctx(), &mut ws));
+        let delay = out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        out.drop_without_applying_deltas();
+        if ws.plugins.net_jobs.is_empty() {
+            // In diesem Bild kam das Ergebnis an; es wartet im Postfach auf das nächste `poll`.
+            assert!(ws.plugins.host.has_pending());
+            assert!(delay <= Duration::from_millis(50), "{delay:?}");
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "Netz-Auftrag endet nicht"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    bild(&mut ws, &ctx, vec![]);
+    assert!(!ws.plugins.host.has_pending(), "zugestellt");
 }

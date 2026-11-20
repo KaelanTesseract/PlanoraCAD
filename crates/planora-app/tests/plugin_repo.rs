@@ -32,6 +32,8 @@ type Answer = Result<(u16, Vec<u8>), String>;
 /// Antworten der Nachbildung (Adresse → Antwort) und die gefragten Adressen.
 static NETZ: Mutex<Vec<(String, Answer)>> = Mutex::new(Vec::new());
 static GEFRAGT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Die Zeitgrenze je gefragter Adresse.
+static ZEITEN: Mutex<Vec<(String, Duration)>> = Mutex::new(Vec::new());
 
 fn antwort(url: &str, a: Answer) {
     let mut netz = NETZ.lock().unwrap();
@@ -40,8 +42,9 @@ fn antwort(url: &str, a: Answer) {
 }
 
 /// Die Nachbildung des Netzwegs (nach allen Weiterleitungen): Antwort aus der Tabelle, sonst 404.
-fn netz(url: &str, max: u64) -> Answer {
+fn netz(url: &str, max: u64, timeout: Duration) -> Answer {
     GEFRAGT.lock().unwrap().push(url.to_string());
+    ZEITEN.lock().unwrap().push((url.to_string(), timeout));
     let found = NETZ
         .lock()
         .unwrap()
@@ -55,7 +58,26 @@ fn netz(url: &str, max: u64) -> Answer {
     }
 }
 
+/// Wie [`netz`], ein Paket aber erst nach einer halben Sekunde (so ist „Wird geholt…“ zu sehen).
+fn netz_langsam(url: &str, max: u64, timeout: Duration) -> Answer {
+    if url.ends_with(".pcplugin") {
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    netz(url, max, timeout)
+}
+
 /// Die gefragten Adressen, die mit `prefix` beginnen.
+/// Die Zeitgrenzen, mit denen genau `url` gefragt wurde.
+fn zeiten(url: &str) -> Vec<Duration> {
+    ZEITEN
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(u, _)| u == url)
+        .map(|(_, t)| *t)
+        .collect()
+}
+
 fn gefragt(prefix: &str) -> Vec<String> {
     GEFRAGT
         .lock()
@@ -110,7 +132,7 @@ fn link(owner: &str) -> String {
 }
 
 fn releases_url(owner: &str) -> String {
-    format!("https://api.github.com/repos/{owner}/hallo/releases")
+    format!("https://api.github.com/repos/{owner}/hallo/releases?per_page=100")
 }
 
 fn asset_url(owner: &str, tag: &str, name: &str) -> String {
@@ -415,6 +437,7 @@ fn installiert_010(name: &str, owner: &str) -> H {
             rights: BTreeMap::from([("model-read".to_string(), "allowed".to_string())]),
             author: Some("Dennis Guse".to_string()),
             net_hosts: Vec::new(),
+            source: Some(link(owner)),
         },
     );
     let h = harness(
@@ -444,11 +467,26 @@ fn update_found_and_applied() {
     assert_eq!(updates[0].id, HALLO);
     assert_eq!(updates[0].from.to_string(), "0.1.0");
     assert_eq!(updates[0].to.version.to_string(), "0.2.0");
-    assert_eq!(updates[0].new_rights, BTreeSet::from([Right::Net]));
     assert!(
         has(&seen, "Für 1 Plug-in gibt es ein Update."),
         "{}",
         join(&seen)
+    );
+    // Die Prüfung holt nur die Release-Liste (30 s); das Paket erst mit „Aktualisieren“.
+    let pkg_url = asset_url(owner, "v0.2.0", "hallo.pcplugin");
+    assert!(gefragt(&pkg_url).is_empty(), "Paket schon geladen");
+    assert_eq!(zeiten(&releases_url(owner)), [Duration::from_secs(30)]);
+    assert!(h.ws.plugins.ready_update(HALLO).is_none());
+    assert!(
+        !h.ws.plugins.apply_update(HALLO, &mut h.ws.config),
+        "ohne Paket"
+    );
+    h.ws.plugins.open_update(HALLO);
+    warten(&mut h);
+    assert_eq!(zeiten(&pkg_url), [Duration::from_secs(300)], "Paket: 5 min");
+    assert_eq!(
+        h.ws.plugins.updates()[0].new_rights,
+        BTreeSet::from([Right::Net])
     );
     assert!(h.ws.plugins.apply_update(HALLO, &mut h.ws.config));
     // Gleich danach (vor dem nächsten Bild) steht der neue Stand in der Konfiguration.
@@ -485,6 +523,7 @@ fn update_dialog_shows_versions_notes_and_new_rights() {
     let neu = paket_bauen(HALLO, "0.2.0", &["model-read", "net"]);
     releases(owner, &[release(owner, "v0.2.0", &neu, None)]);
     let mut h = installiert_010("upd-dialog", owner);
+    h.ws.plugins.repo_fetch = netz_langsam;
     h.ws.plugins.check_updates(true);
     let seen = warten(&mut h);
     let seen = klick(&mut h, &seen, "Anzeigen");
@@ -514,6 +553,17 @@ fn update_dialog_shows_versions_notes_and_new_rights() {
         join(&seen2)
     );
     let seen = klick(&mut h, &seen2, "Aktualisieren auf 0.2.0");
+    // Erst jetzt wird das Paket geholt; solange nur die Versionen.
+    for text in [
+        "Plug-in aktualisieren",
+        "Beispiel-Hallo: Version 0.1.0 → 0.2.0",
+        "Wird geholt…",
+    ] {
+        assert!(has(&seen, text), "„{text}“ fehlt: {}", join(&seen));
+    }
+    assert!(!has(&seen, "Neu in v0.2.0"));
+    let seen = warten(&mut h);
+    assert!(!has(&seen, "Wird geholt…"));
     for text in [
         "Plug-in aktualisieren",
         "Beispiel-Hallo: Version 0.1.0 → 0.2.0",
@@ -543,12 +593,16 @@ fn no_downgrade_and_no_foreign_id() {
     warten(&mut h);
     assert!(h.ws.plugins.updates().is_empty(), "keine ältere Version");
     assert_eq!(h.ws.plugins.note.as_deref(), Some("Kein Update gefunden."));
-    // Ein Release mit einem anderen Plug-in: beim Aktualisieren abgelehnt.
+    // Ein Release mit einem anderen Plug-in: beim Holen des Pakets („Aktualisieren“) abgelehnt.
     let fremd = paket_bauen("planora.fremd", "0.2.0", &["model-read"]);
     releases(owner, &[release(owner, "v0.2.0", &fremd, None)]);
     h.ws.plugins.check_updates(true);
     warten(&mut h);
+    assert_eq!(h.ws.plugins.updates().len(), 1);
+    h.ws.plugins.open_update(HALLO);
+    warten(&mut h);
     assert!(h.ws.plugins.updates().is_empty());
+    assert_eq!(h.ws.plugins.update_dialog, None);
     assert_eq!(
         h.ws.plugins.note.as_deref(),
         Some("Das Release v0.2.0 enthält ein anderes Plug-in (planora.fremd).")
@@ -561,6 +615,43 @@ fn no_downgrade_and_no_foreign_id() {
             .iter()
             .all(|e| e.id != "planora.fremd")
     );
+}
+
+/// Ein Update, das beim Abholen oder Einspielen nicht mehr höher ist als die installierte
+/// Version (inzwischen anders installiert), fällt weg: kein Herabstufen.
+#[test]
+fn no_downgrade_through_race() {
+    let owner = "upd-rennen";
+    let neu = paket_bauen(HALLO, "0.2.0", &["model-read"]);
+    releases(owner, &[release(owner, "v0.2.0", &neu, None)]);
+    let mut h = installiert_010("upd-rennen", owner);
+    // Während die Prüfung läuft, wird 0.2.0 aus einer Datei installiert.
+    h.ws.plugins.check_updates(false);
+    let places = h.ws.plugins.host.places().clone();
+    plugin_places::install(&places, &Package::read(&neu).unwrap(), None).unwrap();
+    h.ws.plugins.host.rescan(&BTreeMap::new());
+    warten(&mut h);
+    assert_eq!(active_version(&h, HALLO).as_deref(), Some("0.2.0"));
+    assert!(h.ws.plugins.updates().is_empty(), "beim Abholen verworfen");
+
+    // Gefunden und geladen, dann 0.3.0 von Hand installiert: das Einspielen stuft nicht herab.
+    let owner = "upd-rennen2";
+    releases(owner, &[release(owner, "v0.2.0", &neu, None)]);
+    let mut h = installiert_010("upd-rennen2", owner);
+    h.ws.plugins.check_updates(false);
+    warten(&mut h);
+    h.ws.plugins.open_update(HALLO);
+    warten(&mut h);
+    assert!(h.ws.plugins.ready_update(HALLO).is_some());
+    let places = h.ws.plugins.host.places().clone();
+    let drei = paket_bauen(HALLO, "0.3.0", &["model-read"]);
+    plugin_places::install(&places, &Package::read(&drei).unwrap(), None).unwrap();
+    h.ws.plugins.host.rescan(&BTreeMap::new());
+    warten(&mut h);
+    assert!(!h.ws.plugins.apply_update(HALLO, &mut h.ws.config));
+    assert!(h.ws.plugins.updates().is_empty());
+    warten(&mut h);
+    assert_eq!(active_version(&h, HALLO).as_deref(), Some("0.3.0"));
 }
 
 #[test]

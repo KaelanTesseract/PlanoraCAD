@@ -6,6 +6,7 @@
 
 use crate::manifest::Manifest;
 use crate::package::{MAX_WASM, Package};
+use crate::rights::Source;
 use crate::runtime::{Component, Engine, PluginError};
 use planora_i18n::tr;
 use sha2::{Digest, Sha256};
@@ -94,6 +95,21 @@ pub struct Found {
     pub origin: Origin,
     pub manifest: Manifest,
     pub problem: Option<String>,
+    /// `herkunft.json` eines vom Nutzer installierten Ordners (beim Durchsuchen gelesen; so bleibt
+    /// die Herkunft des vorigen Stands bekannt, auch wenn der Ordner inzwischen ersetzt ist).
+    pub provenance: Option<Provenance>,
+}
+
+impl Found {
+    /// Die Herkunft für [`Rights::carry_over`](crate::rights::Rights::carry_over): mitgeliefert,
+    /// über einen Repo-Link oder aus einer Datei installiert.
+    pub fn source(&self) -> Source {
+        match (self.origin, &self.provenance) {
+            (Origin::Bundled, _) => Source::Bundled,
+            (Origin::User, Some(p)) => Source::link(&p.link),
+            (Origin::User, None) => Source::File,
+        }
+    }
 }
 
 const MANIFEST_FILE: &str = "plugin.toml";
@@ -126,6 +142,7 @@ fn examine(dir: &Path, origin: Origin) -> Found {
         origin,
         manifest: placeholder(&dir_name),
         problem: Some(problem),
+        provenance: None,
     };
     let text = match std::fs::read_to_string(dir.join(MANIFEST_FILE)) {
         Ok(t) => t,
@@ -157,6 +174,10 @@ fn examine(dir: &Path, origin: Origin) -> Found {
         origin,
         manifest,
         problem,
+        provenance: match origin {
+            Origin::User => read_provenance(dir),
+            Origin::Bundled => None,
+        },
     }
 }
 
@@ -241,11 +262,29 @@ pub fn write_provenance(dir: &Path, p: &Provenance) -> io::Result<()> {
 /// Installiert ein Paket für den Nutzer: entpackt nach `<user>/.tmp-<id>` (mit `herkunft.json`,
 /// wenn `provenance` gegeben ist; aus einer Datei installiert ohne), schiebt ein altes
 /// `<user>/<id>` nach `.alt-<id>`, benennt dann um und löscht das alte. Scheitert das Umbenennen,
-/// kommt das alte zurück.
+/// kommt das alte zurück. Lässt sich das alte danach nicht löschen, gilt die Installation trotzdem
+/// als gelungen: `.alt-<id>` bleibt liegen (siehe [`stale_old`], das Programm protokolliert es),
+/// die nächste Installation räumt es weg.
 pub fn install(
     places: &Places,
     pkg: &Package,
     provenance: Option<&Provenance>,
+) -> io::Result<PathBuf> {
+    install_with(places, pkg, provenance, &|d| std::fs::remove_dir_all(d))
+}
+
+/// Der liegen gebliebene alte Ordner `.alt-<id>` einer Installation, falls es ihn gibt.
+pub fn stale_old(places: &Places, id: &str) -> Option<PathBuf> {
+    let old = places.user.join(format!(".alt-{id}"));
+    old.exists().then_some(old)
+}
+
+/// [`install`] mit einstellbarem Löschen des alten Ordners (für den Test, in dem es misslingt).
+fn install_with(
+    places: &Places,
+    pkg: &Package,
+    provenance: Option<&Provenance>,
+    remove_old: &dyn Fn(&Path) -> io::Result<()>,
 ) -> io::Result<PathBuf> {
     let id = &pkg.manifest.id;
     std::fs::create_dir_all(&places.user)?;
@@ -277,7 +316,8 @@ pub fn install(
         return Err(e);
     }
     if had_old {
-        std::fs::remove_dir_all(&old)?;
+        // Das neue ist schon an seinem Platz: ein Fehler beim Aufräumen macht es nicht ungültig.
+        let _ = remove_old(&old);
     }
     Ok(target)
 }
@@ -383,6 +423,43 @@ pub fn load_component(
     Ok(component)
 }
 
+/// Räumt den Zwischenspeicher `cache` auf: löscht jede Datei `<schlüssel>.cwasm`, die zu keinem
+/// `plugin.wasm` der Plug-in-Ordner `dirs` gehört. Verglichen wird der SHA-256 des Codes (erster
+/// Teil des Schlüssels); mit `engine` der ganze Schlüssel, so fallen auch Einträge einer anderen
+/// wasmtime-Version oder Einstellung weg. Fehler werden übergangen (dann bleibt der Eintrag).
+/// Liest alle `plugin.wasm`: nur in einem Hintergrund-Thread rufen.
+pub fn prune_cache(engine: Option<&Engine>, cache: &Path, dirs: &[PathBuf]) {
+    let Ok(read) = std::fs::read_dir(cache) else {
+        return;
+    };
+    let mut keep = std::collections::BTreeSet::new();
+    for dir in dirs {
+        let Ok(wasm) = std::fs::read(dir.join(WASM_FILE)) else {
+            continue;
+        };
+        keep.insert(match engine {
+            Some(e) => cache_key(e.wasmtime(), &wasm),
+            None => hex(&Sha256::digest(&wasm)),
+        });
+    }
+    for entry in read.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(key) = name.strip_suffix(".cwasm") else {
+            continue;
+        };
+        if key.starts_with('.') {
+            continue;
+        }
+        let wanted = match engine {
+            Some(_) => keep.contains(key),
+            None => key.split('-').next().is_some_and(|sha| keep.contains(sha)),
+        };
+        if !wanted {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Schreibt `bytes` über eine Temp-Datei im selben Ordner und benennt sie dann um.
 fn write_atomic(file: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = file.parent().unwrap_or(Path::new("."));
@@ -401,4 +478,46 @@ fn write_atomic(file: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paket() -> Package {
+        let file = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/data/beispiel-hallo.pcplugin"
+        );
+        Package::read(&std::fs::read(file).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn failed_cleanup_still_installs() {
+        let root = std::env::temp_dir().join(format!(
+            "planora-plugin-places-aufraeumen-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let p = Places {
+            bundled: Vec::new(),
+            user: root.join("benutzer"),
+            cache: root.join("cache"),
+        };
+        let pkg = paket();
+        install(&p, &pkg, None).unwrap();
+        let fail = |_: &Path| -> io::Result<()> { Err(io::Error::other("gesperrt")) };
+        // Das alte lässt sich nicht löschen: trotzdem installiert, das neue liegt am Platz.
+        let prov = Provenance {
+            link: "https://github.com/a/b".into(),
+            tag: "v0.1.0".into(),
+        };
+        let dir = install_with(&p, &pkg, Some(&prov), &fail).unwrap();
+        assert_eq!(read_provenance(&dir), Some(prov));
+        assert!(stale_old(&p, &pkg.manifest.id).is_some());
+        // Die nächste Installation räumt es weg.
+        install(&p, &pkg, None).unwrap();
+        assert_eq!(stale_old(&p, &pkg.manifest.id), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

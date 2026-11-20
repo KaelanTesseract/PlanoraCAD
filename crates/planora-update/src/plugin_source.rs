@@ -22,8 +22,10 @@ use crate::release::AssetRef;
 pub const MAX_RELEASES_BYTES: u64 = 4 << 20;
 /// Größte angenommene Prüfsummendatei (Bytes).
 pub const MAX_CHECKSUM_BYTES: u64 = 64 << 10;
-/// Zeitgrenze je Anfrage (je Weiterleitung neu).
+/// Zeitgrenze für die Release-Liste und die Prüfsummendatei (samt Weiterleitungen).
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Zeitgrenze für das Paket (samt Weiterleitungen; ein Paket hat bis zu 64 MiB).
+pub const PACKAGE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Endung der Paketdatei im Release.
 pub const PACKAGE_SUFFIX: &str = ".pcplugin";
 
@@ -35,10 +37,10 @@ pub struct RepoLink {
 }
 
 impl RepoLink {
-    /// Adresse der Release-Liste.
+    /// Adresse der Release-Liste (nur die erste Seite, mit bis zu 100 Releases).
     pub fn releases_url(&self) -> String {
         format!(
-            "https://api.github.com/repos/{}/{}/releases",
+            "https://api.github.com/repos/{}/{}/releases?per_page=100",
             self.owner, self.repo
         )
     }
@@ -232,7 +234,14 @@ pub fn channel_includes(channel: Channel, v: &semver::Version) -> bool {
     }
 }
 
-/// Das neueste Release im Kanal, das höher ist als `installed` (ohne: das neueste im Kanal).
+/// Ist `v` nach semver-Vorrang höher als `installed`? Build-Metadaten (`+…`) zählen nicht:
+/// `1.0.0+b` ist nicht höher als `1.0.0`.
+pub fn is_newer(v: &semver::Version, installed: &semver::Version) -> bool {
+    v.cmp_precedence(installed) == std::cmp::Ordering::Greater
+}
+
+/// Das neueste Release im Kanal, das höher ist als `installed` (ohne: das neueste im Kanal);
+/// verglichen nach semver-Vorrang ([`is_newer`]).
 pub fn pick_plugin_release<'a>(
     releases: &'a [PluginRelease],
     installed: Option<&semver::Version>,
@@ -241,8 +250,8 @@ pub fn pick_plugin_release<'a>(
     releases
         .iter()
         .filter(|r| channel_includes(channel, &r.version))
-        .filter(|r| installed.is_none_or(|i| r.version > *i))
-        .max_by(|a, b| a.version.cmp(&b.version))
+        .filter(|r| installed.is_none_or(|i| is_newer(&r.version, i)))
+        .max_by(|a, b| a.version.cmp_precedence(&b.version))
 }
 
 /// Erlaubte Rechner für Plug-in-Downloads: die aus [`crate::install::redirect_target`] und
@@ -297,10 +306,16 @@ pub fn get_following(
     Err(tr!("update-detail-too-many-redirects"))
 }
 
-/// [`get_following`] über das echte Netz ([`crate::net::get_once`], je Anfrage
-/// [`REQUEST_TIMEOUT`]). Wartet: nur in einem Arbeitsthread rufen.
-pub fn download(url: &str, max: u64) -> Result<(u16, Vec<u8>), String> {
+/// [`get_following`] über das echte Netz ([`crate::net::get_once`]) mit der Zeitgrenze `total` für
+/// alles zusammen (jede Weiterleitung bekommt nur den Rest; [`REQUEST_TIMEOUT`] für die
+/// Release-Liste, [`PACKAGE_TIMEOUT`] für ein Paket). Wartet: nur in einem Arbeitsthread rufen.
+pub fn download(url: &str, max: u64, total: Duration) -> Result<(u16, Vec<u8>), String> {
+    let deadline = std::time::Instant::now() + total;
     get_following(url, max, &mut |u, m| {
-        crate::net::get_once(u, m, REQUEST_TIMEOUT)
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(tr!("update-net-timeout"));
+        }
+        crate::net::get_once(u, m, left)
     })
 }

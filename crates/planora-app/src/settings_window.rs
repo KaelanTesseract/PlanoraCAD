@@ -1092,7 +1092,7 @@ fn show_plugins(
                         {
                             actions.push(PluginAction::CheckUpdates);
                         }
-                        if let Some(u) = plugins.ready_update(&e.id)
+                        if let Some(u) = plugins.found_update(&e.id)
                             && ui
                                 .button(update_to_label(&u.to.version.to_string()))
                                 .clicked()

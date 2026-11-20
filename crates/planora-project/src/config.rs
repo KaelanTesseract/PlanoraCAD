@@ -196,8 +196,9 @@ pub struct Config {
 
 /// Der gespeicherte Zustand eines Plug-ins: eingeschaltet oder nicht und die dauerhaft
 /// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`), dazu Autor und
-/// Rechner (`net-hosts`) des Manifests, für das sie galten (beim Start gelten die Rechte nur für
-/// dasselbe Plug-in; ohne Autor werden sie neu gefragt). „Nur dieses Mal“ wird nie gespeichert.
+// Rechner (`net-hosts`) und Herkunft des Manifests, für das sie galten (beim Start gelten die
+/// Rechte nur für dasselbe Plug-in derselben Herkunft; ohne Autor oder Herkunft werden sie neu
+/// gefragt). „Nur dieses Mal“ wird nie gespeichert.
 /// Leere Felder werden nicht geschrieben.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginConfig {
@@ -209,6 +210,10 @@ pub struct PluginConfig {
     pub author: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub net_hosts: Vec<String>,
+    /// Herkunft des Plug-ins beim Speichern: `"bundled"`, `"file"` oder der Repo-Link (Rechte
+    /// gelten nur für dieselbe Herkunft; ohne werden sie neu gefragt).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 impl Default for PluginConfig {
@@ -218,6 +223,7 @@ impl Default for PluginConfig {
             rights: BTreeMap::new(),
             author: None,
             net_hosts: Vec::new(),
+            source: None,
         }
     }
 }
@@ -571,6 +577,11 @@ fn lenient_plugins<'de, D: Deserializer<'de>>(
                         .collect()
                 })
                 .unwrap_or_default();
+            let source = entry
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
             Some((
                 id.clone(),
                 PluginConfig {
@@ -578,6 +589,7 @@ fn lenient_plugins<'de, D: Deserializer<'de>>(
                     rights,
                     author,
                     net_hosts,
+                    source,
                 },
             ))
         })

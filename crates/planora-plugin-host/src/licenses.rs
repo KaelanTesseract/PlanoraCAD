@@ -16,12 +16,13 @@ pub const GPL_COMPATIBLE: &[&str] = &[
     "CC0-1.0",
     "BSL-1.0",
     "GPL-3.0-only",
+    "GPL-3.0-or-later",
 ];
 
 /// Ob der SPDX-Ausdruck `spdx` GPL-verträglich ist: bei `OR` genügt eine verträgliche Seite,
 /// bei `AND` müssen alle verträglich sein (`AND` bindet stärker, Klammern gehen vor). `A WITH B`
-/// gilt nur, wenn genau diese Form in [`GPL_COMPATIBLE`] steht. Ein leerer oder nicht lesbarer
-/// Ausdruck ist nicht verträglich.
+/// gilt nur, wenn genau diese Form in [`GPL_COMPATIBLE`] steht. Kennungen zählen ohne Rücksicht
+/// auf Groß- und Kleinschreibung. Ein leerer oder nicht lesbarer Ausdruck ist nicht verträglich.
 pub fn license_ok(spdx: &str) -> bool {
     let spaced = spdx.replace('(', " ( ").replace(')', " ) ");
     let tokens: Vec<&str> = spaced.split_whitespace().collect();
@@ -74,9 +75,14 @@ fn parse_term(tokens: &[&str], pos: &mut usize) -> Option<bool> {
         }
         *pos += 2;
         let full = format!("{token} WITH {exception}");
-        return Some(GPL_COMPATIBLE.contains(&full.as_str()));
+        return Some(compatible(&full));
     }
-    Some(GPL_COMPATIBLE.contains(&token))
+    Some(compatible(token))
+}
+
+/// Steht `id` in [`GPL_COMPATIBLE`] (SPDX-Kennungen ohne Rücksicht auf Groß- und Kleinschreibung)?
+fn compatible(id: &str) -> bool {
+    GPL_COMPATIBLE.iter().any(|l| l.eq_ignore_ascii_case(id))
 }
 
 #[cfg(test)]
@@ -113,5 +119,10 @@ mod tests {
         assert!(!license_ok("MIT OR"));
         assert!(!license_ok("(MIT"));
         assert!(!license_ok("MIT ISC"));
+        // SPDX-Kennungen ohne Rücksicht auf Groß- und Kleinschreibung; GPL-3.0-or-later passt.
+        assert!(license_ok("mit"));
+        assert!(license_ok("gpl-3.0-ONLY"));
+        assert!(license_ok("GPL-3.0-or-later"));
+        assert!(license_ok("apache-2.0 WITH llvm-exception"));
     }
 }

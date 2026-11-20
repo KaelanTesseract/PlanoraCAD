@@ -2,7 +2,8 @@
 //! Grenzen.
 //!
 //! Abschottung: Das Plug-in sieht nur die Schnittstellen aus `plugin.wit` und ein leeres WASI (keine
-//! Ordner, keine Umgebungsvariablen, kein Netz, Wanduhr fest auf 0, Monotonuhr auf 1 ms gerundet).
+//! Ordner, keine Umgebungsvariablen, kein Netz und keine Sockets, Wanduhr fest auf 0, Monotonuhr auf
+//! 1 ms gerundet; höchstens [`MAX_RESOURCES`] Ressourcen).
 //! Jeder Aufruf hat eine Frist (Epochen-Unterbrechung im 10-ms-Takt), der Arbeitsspeicher ist begrenzt.
 //! Nach einem Ausfall (Absturz, Frist, Speichergrenze) wird die Instanz nicht mehr ausgeführt.
 
@@ -336,6 +337,18 @@ fn clock_with_deadline(linker: &mut Linker<State>) -> wasmtime::Result<()> {
     Ok(())
 }
 
+/// Höchstzahl der Einträge in der Ressourcentabelle einer Instanz (Streams, Wartezeiten, …). Eine
+/// Rust-Komponente braucht wenige; ein Plug-in, das in einer Schleife Ressourcen anlegt, ohne sie
+/// freizugeben, bekommt danach einen Fehler und bricht mit einem Trap ab (ein Ausfall).
+const MAX_RESOURCES: usize = 4096;
+
+/// Eine leere Ressourcentabelle mit [`MAX_RESOURCES`] als Obergrenze.
+fn resource_table() -> ResourceTable {
+    let mut table = ResourceTable::new();
+    table.set_max_capacity(MAX_RESOURCES);
+    table
+}
+
 /// Der Zustand eines Plug-ins im `Store`.
 struct State {
     host: Box<dyn HostCalls>,
@@ -527,11 +540,16 @@ impl Engine {
             .stderr(stderr.clone())
             .wall_clock(FesteWanduhr)
             .monotonic_clock(GrobeMonotonuhr(start))
+            // Keine Sockets und keine Namensauflösung (wasi:sockets): `create-tcp-socket` und
+            // `create-udp-socket` geben `access-denied` zurück, ohne ein OS-Socket anzulegen.
+            .allow_tcp(false)
+            .allow_udp(false)
+            .allow_ip_name_lookup(false)
             .build();
         let state = State {
             host,
             wasi,
-            table: ResourceTable::new(),
+            table: resource_table(),
             limits: Grenzen::new(manifest.memory_mb),
             start,
             deadline: start + TICK * CallKind::Command.ticks() as u32,
@@ -694,6 +712,16 @@ mod tests {
             classify(&format_err!("egal"), g.oom),
             PluginError::OutOfMemory
         );
+    }
+
+    #[test]
+    fn resource_table_is_capped() {
+        let mut t = resource_table();
+        assert_eq!(t.max_capacity(), MAX_RESOURCES);
+        for _ in 0..MAX_RESOURCES {
+            t.push(0u8).unwrap();
+        }
+        assert!(t.push(0u8).is_err(), "voll: ein Fehler, der zum Trap wird");
     }
 
     #[test]

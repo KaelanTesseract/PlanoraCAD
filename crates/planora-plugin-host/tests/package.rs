@@ -69,6 +69,12 @@ fn manifest_rejects() {
         (changed("rights = [\"net\"]", "rights = []"), "net-hosts"),
         (changed("example.org", "https://x.org"), "x.org"),
         (changed("example.org", "x.org/a"), "x.org/a"),
+        // Zahlen- und Hex-Adressen sind keine Rechnernamen.
+        (changed("example.org", "127.0.0.1"), "127.0.0.1"),
+        (changed("example.org", "2130706433"), "2130706433"),
+        (changed("example.org", "0x7f000001"), "0x7f000001"),
+        (changed("example.org", "0X7F.1"), "0X7F.1"),
+        (changed("example.org", "example.123"), "example.123"),
         (format!("{MANIFEST}memory-mb = 0\n"), "memory-mb"),
         (format!("{MANIFEST}memory-mb = 2049\n"), "memory-mb"),
         (changed("GPL-3.0-only", ""), "license"),

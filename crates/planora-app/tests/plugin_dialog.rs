@@ -243,12 +243,16 @@ fn reopen_keeps_values() {
 
     // Über die Plug-ins: `open-dialog` mit derselben id ersetzt die Felder und behält den Wert.
     let (mut ws, ctx) = arbeitsbereich("wieder", &["beispiel-hallo"]);
-    ws.plugins.host.run_command("planora.beispiel-hallo.hallo");
+    ws.plugins
+        .host
+        .run_command("planora.beispiel-hallo", "hallo");
     bild(&mut ws, &ctx, vec![]);
     ws.plugins.dialogs[0]
         .values
         .insert("name".into(), FieldValue::Text("Dennis".into()));
-    ws.plugins.host.run_command("planora.beispiel-hallo.hallo");
+    ws.plugins
+        .host
+        .run_command("planora.beispiel-hallo", "hallo");
     let seen = bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.dialogs.len(), 1, "ersetzt, nicht doppelt");
     assert!(find(&seen, "Dennis").is_some(), "{}", join(&seen));
@@ -257,7 +261,9 @@ fn reopen_keeps_values() {
 #[test]
 fn language_switch_retranslates() {
     let (mut ws, ctx) = arbeitsbereich("sprache", &["beispiel-hallo"]);
-    ws.plugins.host.run_command("planora.beispiel-hallo.hallo");
+    ws.plugins
+        .host
+        .run_command("planora.beispiel-hallo", "hallo");
     let seen = bild(&mut ws, &ctx, vec![]);
     assert!(find(&seen, "Hallo").is_some(), "{}", join(&seen));
     assert!(find(&seen, "Laut").is_some(), "{}", join(&seen));
@@ -338,7 +344,7 @@ fn dialogs_close_on_failure() {
     let edits = ws.active_tab().state.document.edit_count();
     ws.plugins
         .host
-        .run_command("planora.test-faelle.langsam-dialog");
+        .run_command("planora.test-faelle", "langsam-dialog");
     let seen = bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.dialogs.len(), 1);
     assert!(find(&seen, "Langsam").is_some(), "{}", join(&seen));
@@ -367,7 +373,9 @@ fn dialogs_close_on_failure() {
 #[test]
 fn hallo_end_to_end() {
     let (mut ws, ctx) = arbeitsbereich("hallo", &["beispiel-hallo"]);
-    ws.plugins.host.run_command("planora.beispiel-hallo.hallo");
+    ws.plugins
+        .host
+        .run_command("planora.beispiel-hallo", "hallo");
     let seen = bild(&mut ws, &ctx, vec![]);
     assert_eq!(ws.plugins.dialogs.len(), 1);
     assert_eq!(ws.plugins.dialogs[0].plugin, HALLO);

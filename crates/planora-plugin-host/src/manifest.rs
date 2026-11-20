@@ -41,6 +41,13 @@ impl Right {
         .into_iter()
         .find(|r| r.id() == id)
     }
+
+    /// Setzt diese Programmversion das Recht schon um? Nur `net`; die übrigen (`fs-folder`,
+    /// `model-read`, `model-write`) lehnt der Host ohne Nachfrage ab, der Installationsdialog
+    /// zeigt sie als „noch nicht verfügbar“.
+    pub fn available(self) -> bool {
+        self == Right::Net
+    }
 }
 
 /// Warum ein Manifest nicht gelesen wurde (Meldungen in der Sprache des Programms).
@@ -145,9 +152,16 @@ fn valid_id(id: &str) -> bool {
     rest > 0
 }
 
-/// Nur ein Rechnername: Buchstaben, Ziffern, Punkte, Bindestriche; keine leeren Teile.
+/// Nur ein Rechnername: Buchstaben, Ziffern, Punkte, Bindestriche; keine leeren Teile. Keine
+/// Zahlen-Adressen: das letzte Label nicht nur aus Ziffern, kein `0x…` (Hex-Schreibweise einer
+/// IP-Adresse), nicht nur Ziffern und Punkte.
 fn valid_host(host: &str) -> bool {
-    !host.is_empty()
+    let digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+    let numeric = host.rsplit('.').next().is_some_and(digits)
+        || host.to_ascii_lowercase().starts_with("0x")
+        || host.chars().all(|c| c.is_ascii_digit() || c == '.');
+    !numeric
+        && !host.is_empty()
         && host.len() <= 253
         && host
             .split('.')

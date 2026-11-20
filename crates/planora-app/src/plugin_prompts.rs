@@ -220,6 +220,17 @@ pub fn install_grant_text(grant: Option<Grant>) -> String {
     }
 }
 
+/// Was der Installationsdialog zu einem verlangten Recht zeigt: ein Recht, das diese Version noch
+/// nicht umsetzt ([`Right::available`]), als „noch nicht verfügbar“ (es wird ohne Nachfrage
+/// abgelehnt), sonst [`install_grant_text`].
+pub fn install_right_text(right: Right, grant: Option<Grant>) -> String {
+    if right.available() {
+        install_grant_text(grant)
+    } else {
+        tr!("plugin-install-right-unavailable")
+    }
+}
+
 /// Wahl im Installationsdialog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallChoice {
@@ -266,11 +277,15 @@ pub fn show_install(
                     for &(r, grant) in &offer.grants {
                         ui.horizontal(|ui| {
                             ui.label(right_name(r, &m.net_hosts));
-                            ui.weak(install_grant_text(grant));
+                            ui.weak(install_right_text(r, grant));
                         });
                     }
                 });
-                if offer.grants.iter().any(|(_, g)| g.is_none()) {
+                if offer
+                    .grants
+                    .iter()
+                    .any(|(r, g)| r.available() && g.is_none())
+                {
                     ui.label(tr!("plugin-install-rights-hint"));
                 }
             }
@@ -313,6 +328,8 @@ pub struct UpdateView {
     pub name: String,
     pub from: String,
     pub to: String,
+    /// Das Paket wird noch geladen: nur Versionen und „Wird geholt…“, „Aktualisieren“ gesperrt.
+    pub loading: bool,
     /// Release-Notizen (Markdown).
     pub notes: String,
     /// Rechte, die das neue Paket zusätzlich verlangt.
@@ -357,7 +374,12 @@ pub fn show_update(ctx: &egui::Context, view: &UpdateView, locked: bool) -> Opti
             ));
             ui.add_space(4.0);
             let blocks = planora_update::parse_notes(&view.notes);
-            if blocks.is_empty() {
+            if view.loading {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(tr!("plugin-install-fetching"));
+                });
+            } else if blocks.is_empty() {
                 ui.weak(tr!("update-no-notes"));
             } else {
                 egui::ScrollArea::vertical()
@@ -377,8 +399,15 @@ pub fn show_update(ctx: &egui::Context, view: &UpdateView, locked: bool) -> Opti
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(!locked, egui::Button::new(tr!("plugin-update-confirm")))
-                    .on_disabled_hover_text(tr!("menu-answer-prompt-first"))
+                    .add_enabled(
+                        !locked && !view.loading,
+                        egui::Button::new(tr!("plugin-update-confirm")),
+                    )
+                    .on_disabled_hover_text(if view.loading {
+                        tr!("plugin-install-fetching")
+                    } else {
+                        tr!("menu-answer-prompt-first")
+                    })
                     .clicked()
                 {
                     choice = Some(UpdateChoice::Update);

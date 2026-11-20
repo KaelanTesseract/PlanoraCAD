@@ -301,6 +301,42 @@ fn install_shows_license_hint() {
     assert!(!seen.iter().any(|s| s.text.starts_with("Quelle:")));
 }
 
+/// Rechte, die diese Version noch nicht umsetzt, zeigt der Dialog als „noch nicht verfügbar“.
+#[test]
+fn install_shows_unavailable_rights() {
+    let mut h = harness(
+        "nicht-verfuegbar",
+        orte("nicht-verfuegbar", &[], &[]),
+        Config::default(),
+    );
+    let mut pkg = paket("test-faelle");
+    pkg.manifest.rights.insert(Right::ModelRead);
+    h.ws.plugins.offer_install(pkg, None);
+    let seen = bild(&mut h, vec![]);
+    assert!(
+        has(&seen, "in dieser Version noch nicht verfügbar"),
+        "{}",
+        join(&seen)
+    );
+    assert!(
+        has(&seen, "wird beim ersten Gebrauch gefragt"),
+        "{}",
+        join(&seen)
+    );
+    // Nur ein nicht verfügbares Recht: kein Hinweis aufs Nachfragen.
+    let mut pkg = paket("test-faelle");
+    pkg.manifest.rights = [Right::FsFolder].into();
+    pkg.manifest.net_hosts.clear();
+    h.ws.plugins.offer_install(pkg, None);
+    let seen = bild(&mut h, vec![]);
+    assert!(
+        has(&seen, "in dieser Version noch nicht verfügbar"),
+        "{}",
+        join(&seen)
+    );
+    assert!(!has(&seen, "Das Programm fragt beim ersten Gebrauch nach."));
+}
+
 #[test]
 fn install_replace_asks() {
     let places = orte("ersetzen", &[], &["test-faelle"]);
@@ -354,6 +390,7 @@ fn toggle_off_stops_and_saves() {
             rights: BTreeMap::new(),
             author: Some("Dennis Guse".to_string()),
             net_hosts: vec!["example.org".to_string()],
+            source: Some("file".to_string()),
         }),
         "gleich gespeichert"
     );
@@ -380,6 +417,7 @@ fn revoke_returns_to_ask() {
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
             author: Some("Dennis Guse".to_string()),
             net_hosts: vec!["example.org".to_string()],
+            source: Some("file".to_string()),
         },
     );
     let mut h = harness(
@@ -425,6 +463,7 @@ fn denied_right_shown() {
             rights: BTreeMap::from([("net".to_string(), "denied".to_string())]),
             author: Some("Dennis Guse".to_string()),
             net_hosts: vec!["example.org".to_string()],
+            source: Some("file".to_string()),
         },
     );
     let mut h = harness(
@@ -561,6 +600,7 @@ fn netz_erlaubt() -> Config {
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
             author: Some("Dennis Guse".to_string()),
             net_hosts: vec!["example.org".to_string()],
+            source: Some("file".to_string()),
         },
     );
     config

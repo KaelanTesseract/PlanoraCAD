@@ -1,7 +1,9 @@
 //! Rechte und Anfragen mit Kennung (Plug-ins Etappe 1, Task 3).
 
 use planora_plugin_host::manifest::{Manifest, Right};
-use planora_plugin_host::rights::{Answer, Grant, Pending, Requests, Rights, check_net_url};
+use planora_plugin_host::rights::{
+    Answer, Grant, Pending, Requests, Rights, Source, check_net_url,
+};
 use std::collections::BTreeSet;
 
 const MANIFEST: &str = r#"
@@ -21,20 +23,20 @@ fn manifest() -> Manifest {
 }
 
 #[test]
-fn once_lasts_until_reset() {
+fn once_is_not_recorded() {
+    // „Nur diesmal“ erledigt der Host je Anfrage; in den Rechten bleibt nichts davon.
     let mut r = Rights::default();
-    assert_eq!(r.state(Right::Net), None);
     r.answer(Right::Net, Answer::Once);
-    assert_eq!(r.state(Right::Net), Some(Grant::Allowed));
-    r.reset_once();
     assert_eq!(r.state(Right::Net), None);
+    r.answer(Right::Net, Answer::Deny);
+    r.answer(Right::Net, Answer::Once);
+    assert_eq!(r.state(Right::Net), Some(Grant::Denied));
 }
 
 #[test]
 fn allow_is_saved() {
     let mut r = Rights::default();
     r.answer(Right::Net, Answer::Allow);
-    r.reset_once();
     assert_eq!(r.state(Right::Net), Some(Grant::Allowed));
 }
 
@@ -42,27 +44,75 @@ fn allow_is_saved() {
 fn deny_saved() {
     let mut r = Rights::default();
     r.answer(Right::ModelWrite, Answer::Deny);
-    r.reset_once();
     assert_eq!(r.state(Right::ModelWrite), Some(Grant::Denied));
-}
-
-#[test]
-fn once_overrides_saved_deny_only_until_reset() {
-    let mut r = Rights::default();
-    r.answer(Right::Net, Answer::Deny);
-    r.answer(Right::Net, Answer::Once);
-    assert_eq!(r.state(Right::Net), Some(Grant::Allowed));
-    r.reset_once();
-    assert_eq!(r.state(Right::Net), Some(Grant::Denied));
 }
 
 #[test]
 fn revoke_returns_to_ask() {
     let mut r = Rights::default();
     r.answer(Right::Net, Answer::Allow);
-    r.answer(Right::Net, Answer::Once);
     r.revoke(Right::Net);
     assert_eq!(r.state(Right::Net), None);
+}
+
+#[test]
+fn unavailable_rights_denied_without_asking() {
+    // `fs-folder`, `model-read`, `model-write` setzt Etappe 1 noch nicht um: abgelehnt, auch
+    // wenn deklariert und gespeichert erlaubt.
+    let r = Rights::default();
+    let all: BTreeSet<Right> = [
+        Right::Net,
+        Right::FsFolder,
+        Right::ModelRead,
+        Right::ModelWrite,
+    ]
+    .into();
+    for right in [Right::FsFolder, Right::ModelRead, Right::ModelWrite] {
+        assert!(!right.available());
+        assert_eq!(r.decide(&all, right), Some(Grant::Denied));
+        let mut saved = Rights::default();
+        saved.answer(right, Answer::Allow);
+        assert_eq!(saved.decide(&all, right), Some(Grant::Denied));
+    }
+    assert!(Right::Net.available());
+    assert_eq!(r.decide(&all, Right::Net), None);
+}
+
+#[test]
+fn carry_over_needs_same_source() {
+    let m = manifest();
+    let mut r = Rights::default();
+    r.answer(Right::Net, Answer::Allow);
+    let link = Source::link("https://github.com/A/hallo");
+    let same =
+        |old: &Source, new: &Source| r.carry_over(Some((&m, old)), &m, new).state(Right::Net);
+    assert_eq!(
+        same(&Source::Bundled, &Source::Bundled),
+        Some(Grant::Allowed)
+    );
+    assert_eq!(same(&Source::File, &Source::File), Some(Grant::Allowed));
+    assert_eq!(
+        same(&link, &Source::link("https://github.com/a/HALLO")),
+        Some(Grant::Allowed)
+    );
+    // Andere Herkunft: die Rechte fallen.
+    assert_eq!(same(&Source::File, &link), None);
+    assert_eq!(
+        same(&link, &Source::link("https://github.com/b/hallo")),
+        None
+    );
+    assert_eq!(same(&Source::Bundled, &Source::File), None);
+    // Aus der Konfiguration: ohne gespeicherte Herkunft fällt alles.
+    let from = |source: Option<&Source>| {
+        r.carry_over_from(Some("Dennis Guse"), &m.net_hosts, source, &m, &Source::File)
+            .state(Right::Net)
+    };
+    assert_eq!(from(Some(&Source::File)), Some(Grant::Allowed));
+    assert_eq!(from(None), None);
+    // Die Form in der Konfiguration.
+    for s in [Source::Bundled, Source::File, link.clone()] {
+        assert_eq!(Source::from_config(&s.to_config()), s);
+    }
 }
 
 #[test]

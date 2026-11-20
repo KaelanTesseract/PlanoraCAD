@@ -3,23 +3,27 @@
 //! läuft nur im Arbeitsthread eines [`crate::jobs::Job`]; der Netzweg wird übergeben
 //! ([`crate::plugins::Plugins::repo_fetch`], in Tests eine Nachbildung).
 //!
-//! Ablauf: Release-Liste holen → passendes Release wählen → Paket (und gegebenenfalls die
-//! Prüfsummendatei) laden → Prüfsumme prüfen → [`Package::read`] → [`check_downloaded`]. Auf die
-//! Platte kommt dabei nichts; das tut erst „Installieren“ bzw. „Aktualisieren“.
+//! Ablauf: Release-Liste holen (erste Seite, bis zu 100 Releases, 30 s) → passendes Release wählen
+//! → Paket (5 min; gegebenenfalls die Prüfsummendatei, 30 s) laden → Prüfsumme prüfen →
+//! [`Package::read`] → [`check_downloaded`]. Die Prüfung auf Updates holt nur die Release-Liste
+//! ([`check_release`]); das Paket erst, wenn der Nutzer „Aktualisieren“ öffnet ([`fetch_package`]).
+//! Auf die Platte kommt dabei nichts; das tut erst „Installieren“ bzw. „Aktualisieren“.
 
 use planora_i18n::tr;
 use planora_plugin_host::package::{MAX_PACKAGE, Package, PackageError};
 use planora_update::Channel;
 use planora_update::install::checksum_hex;
 use planora_update::plugin_source::{
-    MAX_CHECKSUM_BYTES, MAX_RELEASES_BYTES, PluginRelease, RepoLink, parse_plugin_releases,
-    pick_plugin_release,
+    MAX_CHECKSUM_BYTES, MAX_RELEASES_BYTES, PACKAGE_TIMEOUT, PluginRelease, REQUEST_TIMEOUT,
+    RepoLink, parse_plugin_releases, pick_plugin_release,
 };
 use planora_update::sha256::hex_digest;
+use std::time::Duration;
 
-/// Ein GET mit selbst geprüften Weiterleitungen und Größengrenze: (Status, Inhalt) der letzten
-/// Antwort oder ein Fehlertext ([`planora_update::plugin_source::download`]).
-pub type RepoFetch = fn(&str, u64) -> Result<(u16, Vec<u8>), String>;
+/// Ein GET mit selbst geprüften Weiterleitungen, Größen- und Zeitgrenze (für alles zusammen):
+/// (Status, Inhalt) der letzten Antwort oder ein Fehlertext
+/// ([`planora_update::plugin_source::download`]).
+pub type RepoFetch = fn(&str, u64, Duration) -> Result<(u16, Vec<u8>), String>;
 
 /// Ein geholtes Paket, bereit für den Installationsdialog.
 #[derive(Clone, Debug)]
@@ -34,9 +38,9 @@ fn network(detail: &str) -> String {
     tr!("plugin-link-network", detail = detail)
 }
 
-/// Lädt `url` (höchstens `max` Bytes); nur eine Antwort 2xx zählt.
-fn get(fetch: RepoFetch, url: &str, max: u64) -> Result<Vec<u8>, String> {
-    let (status, body) = fetch(url, max).map_err(|e| network(&e))?;
+/// Lädt `url` (höchstens `max` Bytes, höchstens `timeout`); nur eine Antwort 2xx zählt.
+fn get(fetch: RepoFetch, url: &str, max: u64, timeout: Duration) -> Result<Vec<u8>, String> {
+    let (status, body) = fetch(url, max, timeout).map_err(|e| network(&e))?;
     if !(200..300).contains(&status) {
         return Err(network(&tr!(
             "plugin-link-status",
@@ -48,7 +52,12 @@ fn get(fetch: RepoFetch, url: &str, max: u64) -> Result<Vec<u8>, String> {
 
 /// Die Releases des Repos mit genau einem Paket.
 pub fn fetch_releases(fetch: RepoFetch, link: &RepoLink) -> Result<Vec<PluginRelease>, String> {
-    let body = get(fetch, &link.releases_url(), MAX_RELEASES_BYTES)?;
+    let body = get(
+        fetch,
+        &link.releases_url(),
+        MAX_RELEASES_BYTES,
+        REQUEST_TIMEOUT,
+    )?;
     let text = String::from_utf8_lossy(&body);
     parse_plugin_releases(&text, link).map_err(|e| network(&e))
 }
@@ -91,9 +100,9 @@ pub fn fetch_package(
     if release.package.size > MAX_PACKAGE {
         return Err(unusable(PackageError::TooLarge.to_string()));
     }
-    let data = get(fetch, &release.package.url, MAX_PACKAGE)?;
+    let data = get(fetch, &release.package.url, MAX_PACKAGE, PACKAGE_TIMEOUT)?;
     if let Some(sum) = &release.sha256 {
-        let text = get(fetch, &sum.url, MAX_CHECKSUM_BYTES)?;
+        let text = get(fetch, &sum.url, MAX_CHECKSUM_BYTES, REQUEST_TIMEOUT)?;
         let expected = checksum_hex(&String::from_utf8_lossy(&text), &release.package.name)
             .map_err(|_| tr!("plugin-link-checksum"))?;
         if hex_digest(&data) != expected {

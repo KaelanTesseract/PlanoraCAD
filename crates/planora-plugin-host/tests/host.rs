@@ -136,7 +136,7 @@ fn disabled_not_started() {
 fn failure_counts_and_stops() {
     let (mut h, p) = gestartet("stopp", &["test-faelle"]);
     for n in 1..=3u8 {
-        h.run_command("planora.test-faelle.panik");
+        h.run_command("planora.test-faelle", "panik");
         h.poll();
         assert_eq!(failures(&h, FAELLE), n);
         if n < 3 {
@@ -170,7 +170,7 @@ fn failure_counts_and_stops() {
 #[test]
 fn failure_event_once_per_failure() {
     let (mut h, p) = gestartet("ereignis", &["test-faelle"]);
-    h.run_command("planora.test-faelle.panik");
+    h.run_command("planora.test-faelle", "panik");
     let events = h.poll();
     assert_eq!(ausfaelle(&events), 1, "{events:?}");
     let Some(HostEvent::Failed { plugin, reason }) = events
@@ -183,14 +183,14 @@ fn failure_event_once_per_failure() {
     assert!(!reason.is_empty());
     assert_eq!(ausfaelle(&h.poll()), 0);
     // Weitere Befehle an das ausgefallene Plug-in tun nichts.
-    h.run_command("planora.test-faelle.panik");
+    h.run_command("planora.test-faelle", "panik");
     assert_eq!(ausfaelle(&h.poll()), 0);
     assert_eq!(failures(&h, FAELLE), 1);
 
     // Ein Fehler, den das Plug-in selbst meldet, ist kein Ausfall, sondern eine Meldung.
     h.restart(FAELLE);
     warten(&mut h, FAELLE);
-    h.run_command("planora.test-faelle.fehler");
+    h.run_command("planora.test-faelle", "fehler");
     let events = h.poll();
     assert_eq!(ausfaelle(&events), 0);
     assert!(events.iter().any(
@@ -235,12 +235,12 @@ fn nets(events: &[HostEvent]) -> Vec<(u64, String, u64)> {
 #[test]
 fn restart_resets_instance() {
     let (mut h, p) = gestartet("neustart", &["test-faelle"]);
-    h.run_command("planora.test-faelle.recht");
+    h.run_command("planora.test-faelle", "recht");
     let first = asks(&h.poll());
     assert_eq!(first.len(), 1);
     let (_, _, g1) = first[0];
 
-    h.run_command("planora.test-faelle.panik");
+    h.run_command("planora.test-faelle", "panik");
     h.poll();
     h.restart(FAELLE);
     warten(&mut h, FAELLE);
@@ -251,7 +251,7 @@ fn restart_resets_instance() {
             .any(|c| c.full_id == "planora.test-faelle.panik")
     );
 
-    h.run_command("planora.test-faelle.recht");
+    h.run_command("planora.test-faelle", "recht");
     let second = asks(&h.poll());
     assert_eq!(second.len(), 1, "die neue Instanz fragt wieder");
     let (req2, _, g2) = second[0];
@@ -277,8 +277,8 @@ fn restart_resets_instance() {
 fn rights_and_net_through_mailbox() {
     let (mut h, p) = gestartet("netz", &["test-faelle"]);
     // Zwei Netzanfragen, solange gefragt wird: nur eine Nachfrage.
-    h.run_command("planora.test-faelle.netz");
-    h.run_command("planora.test-faelle.netz");
+    h.run_command("planora.test-faelle", "netz");
+    h.run_command("planora.test-faelle", "netz");
     let events = h.poll();
     let a = asks(&events);
     assert_eq!(a.len(), 1, "{events:?}");
@@ -311,15 +311,26 @@ fn rights_and_net_through_mailbox() {
     assert!(h.poll().is_empty());
     assert_eq!(state(&h, FAELLE), EntryState::Running);
 
-    // Jetzt ist `net` erlaubt: direkt ins Netz, ohne Nachfrage.
-    h.run_command("planora.test-faelle.netz");
+    // „Nur diesmal“ galt nur für diese Anfragen: die nächste fragt wieder.
+    h.run_command("planora.test-faelle", "netz");
+    let events = h.poll();
+    let a = asks(&events);
+    assert_eq!(a.len(), 1, "{events:?}");
+    assert!(nets(&events).is_empty());
+    h.answer(FAELLE, g, a[0].0, Answer::Allow);
+    let events = h.poll();
+    assert_eq!(nets(&events).len(), 1);
+    assert!(events.iter().any(|e| matches!(e, HostEvent::Changed)));
+
+    // Jetzt ist `net` dauerhaft erlaubt: direkt ins Netz, ohne Nachfrage.
+    h.run_command("planora.test-faelle", "netz");
     let events = h.poll();
     assert!(asks(&events).is_empty());
     assert_eq!(nets(&events).len(), 1);
 
     // Zurückgenommen: es wird wieder gefragt, und die Änderung ist zu speichern.
     h.revoke(FAELLE, Right::Net);
-    h.run_command("planora.test-faelle.netz");
+    h.run_command("planora.test-faelle", "netz");
     let events = h.poll();
     assert!(events.iter().any(|e| matches!(e, HostEvent::Changed)));
     assert_eq!(asks(&events).len(), 1, "{events:?}");
@@ -337,13 +348,14 @@ fn saved_rights_from_config() {
             rights: BTreeMap::from([("net".to_string(), "denied".to_string())]),
             author: Some("Dennis Guse".to_string()),
             net_hosts: vec!["example.org".to_string()],
+            source: Some("file".to_string()),
         },
     )]);
     h.start_all(&config);
     warten(&mut h, FAELLE);
     // Abgelehnt: keine Nachfrage, kein Netz; das Ergebnis geht still an das Plug-in.
-    h.run_command("planora.test-faelle.netz");
-    h.run_command("planora.test-faelle.recht");
+    h.run_command("planora.test-faelle", "netz");
+    h.run_command("planora.test-faelle", "recht");
     let events = h.poll();
     assert!(asks(&events).is_empty(), "{events:?}");
     assert!(nets(&events).is_empty());
@@ -369,9 +381,9 @@ fn instanz_ereignisse(events: &[HostEvent]) -> usize {
 fn events_dropped_after_failure_or_stop() {
     let (mut h, p) = gestartet("verworfen", &["test-faelle"]);
     // Dialog und Nachfrage stehen noch im Ausgang, dann fällt das Plug-in aus.
-    h.run_command("planora.test-faelle.langsam-dialog");
-    h.run_command("planora.test-faelle.recht");
-    h.run_command("planora.test-faelle.panik");
+    h.run_command("planora.test-faelle", "langsam-dialog");
+    h.run_command("planora.test-faelle", "recht");
+    h.run_command("planora.test-faelle", "panik");
     let events = h.poll();
     assert_eq!(instanz_ereignisse(&events), 0, "{events:?}");
     assert_eq!(ausfaelle(&events), 1);
@@ -379,11 +391,11 @@ fn events_dropped_after_failure_or_stop() {
     // Dasselbe beim Neustart und beim Ausschalten.
     h.restart(FAELLE);
     warten(&mut h, FAELLE);
-    h.run_command("planora.test-faelle.recht");
+    h.run_command("planora.test-faelle", "recht");
     h.restart(FAELLE);
     let events = warten(&mut h, FAELLE);
     assert_eq!(instanz_ereignisse(&events), 0, "{events:?}");
-    h.run_command("planora.test-faelle.netz");
+    h.run_command("planora.test-faelle", "netz");
     h.set_enabled(FAELLE, false);
     let events = h.poll();
     assert_eq!(instanz_ereignisse(&events), 0, "{events:?}");
@@ -394,7 +406,7 @@ fn events_dropped_after_failure_or_stop() {
 #[test]
 fn rescan_restarts_changed_only() {
     let (mut h, p) = gestartet("rescan", &["test-faelle", "beispiel-hallo"]);
-    h.run_command("planora.test-faelle.recht");
+    h.run_command("planora.test-faelle", "recht");
     let (_, _, g1) = asks(&h.poll())[0];
 
     // Neuere Version installiert (wie „Plug-in installieren…“ mit einem neueren Paket).
@@ -419,7 +431,7 @@ fn rescan_restarts_changed_only() {
         e.found[e.active.unwrap()].manifest.version.to_string(),
         "0.2.0"
     );
-    h.run_command("planora.test-faelle.recht");
+    h.run_command("planora.test-faelle", "recht");
     let (_, _, g2) = asks(&h.poll())[0];
     assert_ne!(g1, g2, "neue Generation");
     assert!(
@@ -479,6 +491,7 @@ fn mit_netzrecht(name: &str, bundled_too: bool) -> (PluginHost, Places) {
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
             author: Some("Dennis Guse".to_string()),
             net_hosts: vec!["example.org".to_string()],
+            source: Some("file".to_string()),
         },
     )]));
     warten(&mut h, FAELLE);
@@ -573,14 +586,14 @@ fn forget_state_leaves_bundled_copy_without_rights() {
 #[test]
 fn replaced_restarts_same_version() {
     let (mut h, p) = mit_netzrecht("gleiche-version", false);
-    h.run_command("planora.test-faelle.netz");
+    h.run_command("planora.test-faelle", "netz");
     let g1 = h.poll().iter().find_map(|e| match e {
         HostEvent::Net { generation, .. } | HostEvent::Ask { generation, .. } => Some(*generation),
         _ => None,
     });
     let old = {
         let e = h.entries().iter().find(|e| e.id == FAELLE).unwrap();
-        e.found[e.active.unwrap()].manifest.clone()
+        e.found[e.active.unwrap()].clone()
     };
     // Gleiche Version erneut installiert (anderer Autor): rescan lässt es laufen, `replaced`
     // gleicht die Rechte ab und startet neu.
@@ -596,7 +609,7 @@ fn replaced_restarts_same_version() {
     assert_eq!(net(&h), None, "anderer Autor");
     warten(&mut h, FAELLE);
     assert_eq!(state(&h, FAELLE), EntryState::Running);
-    h.run_command("planora.test-faelle.netz");
+    h.run_command("planora.test-faelle", "netz");
     let g2 = h.poll().iter().find_map(|e| match e {
         HostEvent::Net { generation, .. } | HostEvent::Ask { generation, .. } => Some(*generation),
         _ => None,
@@ -614,7 +627,7 @@ fn replaced_restarts_same_version() {
 /// gelten als unbekannt: neu fragen.
 #[test]
 fn saved_rights_need_same_author_and_hosts() {
-    let faelle = |author: Option<&str>, hosts: &[&str]| PluginState {
+    let faelle_von = |author: Option<&str>, hosts: &[&str], source: Option<&str>| PluginState {
         enabled: true,
         rights: BTreeMap::from([
             ("net".to_string(), "allowed".to_string()),
@@ -622,7 +635,9 @@ fn saved_rights_need_same_author_and_hosts() {
         ]),
         author: author.map(str::to_string),
         net_hosts: hosts.iter().map(|h| h.to_string()).collect(),
+        source: source.map(str::to_string),
     };
+    let faelle = |author: Option<&str>, hosts: &[&str]| faelle_von(author, hosts, Some("file"));
     let cases = [
         (
             "gleich",
@@ -646,6 +661,26 @@ fn saved_rights_need_same_author_and_hosts() {
             None,
         ),
         ("ohne-rechner", faelle(Some("Dennis Guse"), &[]), None),
+        // Herkunft: unbekannt (früherer Stand) oder eine andere als die Datei: neu fragen.
+        (
+            "herkunft-fehlt",
+            faelle_von(Some("Dennis Guse"), &["example.org"], None),
+            None,
+        ),
+        (
+            "herkunft-link",
+            faelle_von(
+                Some("Dennis Guse"),
+                &["example.org"],
+                Some("https://github.com/a/b"),
+            ),
+            None,
+        ),
+        (
+            "herkunft-mitgeliefert",
+            faelle_von(Some("Dennis Guse"), &["example.org"], Some("bundled")),
+            None,
+        ),
     ];
     for (name, saved, expected) in cases {
         let p = orte(&format!("autor-{name}"), &["test-faelle"]);
@@ -666,6 +701,7 @@ fn saved_rights_need_same_author_and_hosts() {
                 let s = &states[FAELLE];
                 assert_eq!(s.author.as_deref(), Some("Dennis Guse"), "{name}");
                 assert_eq!(s.net_hosts, ["example.org"], "{name}");
+                assert_eq!(s.source.as_deref(), Some("file"), "{name}");
                 assert_eq!(
                     s.rights,
                     BTreeMap::from([("net".to_string(), "allowed".to_string())])
@@ -708,4 +744,163 @@ fn messung_start() {
     eprintln!("MESSUNG ohne Plug-ins: {ohne:?}");
     eprintln!("MESSUNG erster Start (Übersetzen): {:?}", zeiten[0]);
     eprintln!("MESSUNG zweiter Start (Zwischenspeicher): {:?}", zeiten[1]);
+}
+
+/// Ein Plug-in, das in jedem `on-result` ~150 ms rechnet und neue Arbeit anfordert, hält die
+/// Oberfläche je Bild höchstens ~200 ms plus eine Frist auf und wird nach drei solchen Bildern
+/// angehalten (ein Ausfall „zu viel Arbeit“).
+#[test]
+fn endless_work_in_on_result_is_stopped() {
+    let (mut h, p) = gestartet("dauerlast", &["test-faelle"]);
+    h.run_command(FAELLE, "dauerlast");
+    let mut events = Vec::new();
+    let mut bilder = 0;
+    while matches!(state(&h, FAELLE), EntryState::Running) {
+        bilder += 1;
+        assert!(bilder <= 10, "nicht angehalten");
+        let t = Instant::now();
+        events.extend(h.poll());
+        let dauer = t.elapsed();
+        // Budget 200 ms, eine angefangene Zustellung darf bis zu ihrer Frist (200 ms) laufen.
+        assert!(
+            dauer < Duration::from_millis(700),
+            "Bild {bilder}: {dauer:?}"
+        );
+    }
+    assert_eq!(bilder, 3, "drei Bilder hintereinander über dem Budget");
+    let reason = planora_i18n::tr!("plugin-too-much-work");
+    assert_eq!(state(&h, FAELLE), EntryState::Failed(reason.clone()));
+    assert!(events.iter().any(
+        |e| matches!(e, HostEvent::Failed { plugin, reason: r } if plugin == FAELLE && *r == reason)
+    ));
+    assert_eq!(failures(&h, FAELLE), 1);
+    aufraeumen(&p);
+}
+
+/// WASI-Sockets sind aus: der Versuch scheitert als Fehler des Plug-ins (kein Ausfall), und es
+/// kommt keine Verbindung an.
+#[test]
+fn sockets_are_refused() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:47613").ok();
+    if let Some(l) = &listener {
+        l.set_nonblocking(true).unwrap();
+    }
+    let (mut h, p) = gestartet("socket", &["test-faelle"]);
+    h.run_command(FAELLE, "socket");
+    let events = h.poll();
+    let text = events
+        .iter()
+        .find_map(|e| match e {
+            HostEvent::Message { plugin, text, .. } if plugin == FAELLE => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("keine Fehlermeldung: {events:?}"));
+    assert!(text.starts_with("socket: "), "{text}");
+    assert_eq!(state(&h, FAELLE), EntryState::Running);
+    if let Some(l) = &listener {
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(l.accept().is_err(), "eine Verbindung kam an");
+    }
+    aufraeumen(&p);
+}
+
+/// Ein neuer Stand (andere Version) beginnt ohne Ausfälle, auch ein angehaltenes Plug-in.
+#[test]
+fn new_version_resets_failures() {
+    let (mut h, p) = gestartet("ausfaelle-neu", &["test-faelle"]);
+    for _ in 0..3 {
+        h.run_command(FAELLE, "panik");
+        h.poll();
+        h.restart(FAELLE);
+        warten(&mut h, FAELLE);
+    }
+    assert_eq!(state(&h, FAELLE), EntryState::Stopped);
+    // Gleicher Stand: bleibt angehalten.
+    h.rescan(&BTreeMap::new());
+    assert_eq!(state(&h, FAELLE), EntryState::Stopped);
+    manifest_aendern(&p, "version = \"0.1.0\"", "version = \"0.2.0\"");
+    h.rescan(&BTreeMap::new());
+    warten(&mut h, FAELLE);
+    assert_eq!(state(&h, FAELLE), EntryState::Running);
+    assert_eq!(failures(&h, FAELLE), 0);
+    aufraeumen(&p);
+}
+
+/// Die Laufzeit (mit Epochen-Takt) entsteht erst mit dem ersten Plug-in.
+#[test]
+fn runtime_only_with_plugins() {
+    let leer = orte("ohne-laufzeit", &[]);
+    let mut h = PluginHost::new(leer.clone());
+    h.start_all(&BTreeMap::new());
+    h.poll();
+    assert!(!h.runtime_started());
+    aufraeumen(&leer);
+
+    let p = orte("mit-laufzeit", &["beispiel-hallo"]);
+    let mut h = PluginHost::new(p.clone());
+    assert!(!h.runtime_started());
+    h.start_all(&BTreeMap::new());
+    assert!(h.runtime_started());
+    warten(&mut h, HALLO);
+    aufraeumen(&p);
+}
+
+/// Beim Start fallen Einträge des Zwischenspeichers weg, die keinem gefundenen Plug-in gehören.
+#[test]
+fn cache_pruned_at_start() {
+    let p = orte("cache-aufraeumen", &["beispiel-hallo"]);
+    let mut h = PluginHost::new(p.clone());
+    h.start_all(&BTreeMap::new());
+    warten(&mut h, HALLO);
+    drop(h);
+    let eintraege = |p: &Places| -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(&p.cache)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".cwasm"))
+            .collect();
+        v.sort();
+        v
+    };
+    let eigen = eintraege(&p);
+    assert_eq!(eigen.len(), 1, "{eigen:?}");
+    let fremd = p
+        .cache
+        .join(format!("{}-0011223344556677.cwasm", "ab".repeat(32)));
+    std::fs::write(&fremd, b"alt").unwrap();
+    let mut h = PluginHost::new(p.clone());
+    h.start_all(&BTreeMap::new());
+    warten(&mut h, HALLO);
+    let start = Instant::now();
+    while fremd.exists() {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "nicht aufgeräumt"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(eintraege(&p), eigen, "der eigene Eintrag bleibt");
+    drop(h);
+    aufraeumen(&p);
+}
+
+/// Rechte gehen beim Ersetzen nur auf ein Plug-in derselben Herkunft über: aus einer Datei
+/// installiert, dann über einen Repo-Link ersetzt (`herkunft.json`), fällt `net`.
+#[test]
+fn replace_from_other_source_drops_rights() {
+    let (mut h, p) = mit_netzrecht("ersetzen-herkunft", false);
+    manifest_aendern(&p, "version = \"0.1.0\"", "version = \"0.2.0\"");
+    places::write_provenance(
+        &p.user.join(FAELLE),
+        &places::Provenance {
+            link: "https://github.com/jemand/faelle".into(),
+            tag: "v0.2.0".into(),
+        },
+    )
+    .unwrap();
+    h.rescan(&BTreeMap::new());
+    warten(&mut h, FAELLE);
+    assert_eq!(net(&h), None, "andere Herkunft");
+    aufraeumen(&p);
 }

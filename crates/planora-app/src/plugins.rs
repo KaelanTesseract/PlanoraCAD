@@ -18,8 +18,9 @@
 //! Paket in einem [`Job`] ([`crate::plugin_repo`]) und zeigt dann denselben Installationsdialog;
 //! installiert wird erst mit „Installieren“, samt `herkunft.json`. Plug-ins mit Herkunft (nur vom
 //! Nutzer installierte, nie mitgelieferte) werden auf Updates geprüft ([`Plugins::check_updates`],
-//! beim Start täglich über [`Plugins::auto_check`]); ein gefundenes Update wird gleich geladen,
-//! damit der Aktualisieren-Dialog die neu verlangten Rechte zeigen kann.
+//! beim Start täglich über [`Plugins::auto_check`]); die Prüfung holt nur die Release-Liste. Das
+//! Paket eines Updates wird erst geladen, wenn der Nutzer „Aktualisieren“ öffnet
+//! ([`Plugins::open_update`]); dann zeigt der Dialog die neu verlangten Rechte.
 
 use crate::app::MenuRequest;
 use crate::diag;
@@ -37,13 +38,13 @@ use planora_i18n::tr;
 use planora_plugin_host::manifest::Right;
 use planora_plugin_host::package::{MAX_PACKAGE, Package, PackageError};
 use planora_plugin_host::places::{self as plugin_places, Origin, Places, Provenance};
-use planora_plugin_host::rights::{Answer, Rights};
+use planora_plugin_host::rights::{Answer, Rights, Source};
 use planora_plugin_host::runtime::{DialogEvent, HttpResponse, Level, RequestResult};
 use planora_plugin_host::{EntryState, HostEvent, PluginEntry, PluginHost, PluginState};
 use planora_project::config::{Config, PluginConfig};
 use planora_update::Channel;
 use planora_update::check::due;
-use planora_update::plugin_source::{PluginRelease, RepoLink, parse_repo_link};
+use planora_update::plugin_source::{PluginRelease, RepoLink, is_newer, parse_repo_link};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -64,9 +65,13 @@ pub fn default_fetch(url: &str) -> Result<(u16, Vec<u8>), String> {
 }
 
 /// Der echte Netzweg für Repo-Links: [`planora_update::plugin_source::download`] (jede
-/// Weiterleitung geprüft, höchstens fünf, je Anfrage 30 s).
-pub fn default_repo_fetch(url: &str, max: u64) -> Result<(u16, Vec<u8>), String> {
-    planora_update::plugin_source::download(url, max)
+/// Weiterleitung geprüft, höchstens fünf, `timeout` für alles zusammen).
+pub fn default_repo_fetch(
+    url: &str,
+    max: u64,
+    timeout: Duration,
+) -> Result<(u16, Vec<u8>), String> {
+    planora_update::plugin_source::download(url, max, timeout)
 }
 
 /// Ein gefundenes Update eines Plug-ins mit Repo-Link.
@@ -184,6 +189,7 @@ pub fn states_from_config(config: &Config) -> BTreeMap<String, PluginState> {
                     rights: c.rights.clone(),
                     author: c.author.clone(),
                     net_hosts: c.net_hosts.clone(),
+                    source: c.source.clone(),
                 },
             )
         })
@@ -203,6 +209,7 @@ pub fn write_states(host: &PluginHost, config: &mut Config) {
                     rights: s.rights,
                     author: s.author,
                     net_hosts: s.net_hosts,
+                    source: s.source,
                 },
             )
         })
@@ -518,8 +525,23 @@ impl Plugins {
     /// die Anzeige (Pfad der Datei, später der Repo-Link). Gibt es die Kennung schon, fragt der
     /// Dialog nach dem Ersetzen (mit der Version des laufenden, sonst des ersten Fundorts).
     /// Je verlangtem Recht steht im Dialog, was nach dem Installieren gilt
-    /// ([`Rights::carry_over`] gegen das laufende Manifest; neu installiert: nichts).
+    /// ([`Rights::carry_over`] gegen den laufenden Fundort; neu installiert: nichts). Aus einer
+    /// Datei (ohne Herkunft); über den Repo-Link siehe [`Plugins::offer_install_from`].
     pub fn offer_install(&mut self, package: Package, source: Option<String>) {
+        self.offer_install_from(package, source, None);
+    }
+
+    /// Wie [`Plugins::offer_install`], mit der Herkunft `provenance` (über den Repo-Link geholt):
+    /// Rechte bleiben nur bei gleicher Herkunft ([`Source`]).
+    pub fn offer_install_from(
+        &mut self,
+        package: Package,
+        source: Option<String>,
+        provenance: Option<Provenance>,
+    ) {
+        let new_source = provenance
+            .as_ref()
+            .map_or(Source::File, |p| Source::link(&p.link));
         let existing = self
             .entry(&package.manifest.id)
             .filter(|e| !e.found.is_empty());
@@ -528,8 +550,14 @@ impl Plugins {
             e.found[i].manifest.version.to_string()
         });
         let carried = existing.map_or_else(Rights::default, |e| {
-            e.rights
-                .carry_over(e.active.map(|a| &e.found[a].manifest), &package.manifest)
+            let old = e
+                .active
+                .map(|a| (&e.found[a].manifest, e.found[a].source()));
+            e.rights.carry_over(
+                old.as_ref().map(|(m, s)| (*m, s)),
+                &package.manifest,
+                &new_source,
+            )
         });
         let grants = package
             .manifest
@@ -542,7 +570,7 @@ impl Plugins {
             source,
             replaces,
             grants,
-            provenance: None,
+            provenance,
         });
     }
 
@@ -572,11 +600,18 @@ impl Plugins {
         self.note = None;
         let id = package.manifest.id.clone();
         let existing = self.entry(&id).filter(|e| !e.found.is_empty());
-        let old = existing.and_then(|e| e.active.map(|a| e.found[a].manifest.clone()));
+        let old = existing.and_then(|e| e.active.map(|a| e.found[a].clone()));
         let fresh = existing.is_none();
         if let Err(e) = plugin_places::install(self.host.places(), package, provenance) {
             self.note = Some(tr!("plugin-install-failed", error = e.to_string()));
             return false;
+        }
+        // Ein alter Ordner, der sich nicht löschen ließ, kostet die Installation nicht.
+        if let Some(left) = plugin_places::stale_old(self.host.places(), &id) {
+            diag::warn(&format!(
+                "Plug-in {id}: old folder could not be removed: {}",
+                left.display()
+            ));
         }
         if fresh {
             config.plugins.remove(&id);
@@ -658,13 +693,11 @@ impl Plugins {
         match result {
             Ok(f) => {
                 let link = f.link.web_url();
-                self.offer_install(f.package, Some(link.clone()));
-                if let Some(offer) = &mut self.install {
-                    offer.provenance = Some(Provenance {
-                        link,
-                        tag: f.release.tag,
-                    });
-                }
+                let provenance = Provenance {
+                    link: link.clone(),
+                    tag: f.release.tag,
+                };
+                self.offer_install_from(f.package, Some(link), Some(provenance));
             }
             Err(e) => self.note = Some(e),
         }
@@ -726,17 +759,36 @@ impl Plugins {
         self.updates.iter().find(|u| u.id == id)
     }
 
-    /// Öffnet den Aktualisieren-Dialog für `id` (nur mit geladenem Paket).
+    /// Das gefundene Update von `id` (auch, wenn sein Paket noch nicht geladen ist).
+    pub fn found_update(&self, id: &str) -> Option<&PluginUpdate> {
+        self.updates.iter().find(|u| u.id == id)
+    }
+
+    /// Öffnet den Aktualisieren-Dialog für ein gefundenes Update von `id`. Erst jetzt wird sein
+    /// Paket geladen (der Dialog zeigt solange „Wird geholt…“); ist es schon da, gleich mit
+    /// Notizen und neuen Rechten.
     pub fn open_update(&mut self, id: &str) {
-        if self.ready_update(id).is_some() {
-            self.update_dialog = Some(id.to_string());
+        let Some(update) = self.found_update(id).cloned() else {
+            return;
+        };
+        self.update_dialog = Some(id.to_string());
+        let loading = self.downloads.iter().any(|(i, _)| i == id);
+        if self.update_packages.contains_key(id) || loading {
+            return;
         }
+        let fetch = self.repo_fetch;
+        let installed = id.to_string();
+        let release = update.to;
+        let job =
+            Job::spawn(move |_| plugin_repo::fetch_package(fetch, &release, Some(&installed)));
+        self.downloads.push((id.to_string(), job));
     }
 
     /// Spielt das geladene Update von `id` ein (wie „Installieren“ beim Ersetzen: gleicher Autor
-    /// behält die Rechte nach [`Rights::carry_over`], neue Rechte werden beim ersten Gebrauch
-    /// gefragt; es startet neu) und schreibt den Stand nach `config.plugins`. `false` ohne
-    /// geladenes Update oder wenn es misslang (Hinweis in [`Plugins::note`]).
+    /// und gleiche Herkunft behalten die Rechte nach [`Rights::carry_over`], neue Rechte werden
+    /// beim ersten Gebrauch gefragt; es startet neu) und schreibt den Stand nach `config.plugins`.
+    /// `false` ohne geladenes Update, wenn es nicht mehr höher ist als die installierte Version
+    /// (dann fällt es weg) oder wenn es misslang (Hinweis in [`Plugins::note`]).
     pub fn apply_update(&mut self, id: &str, config: &mut Config) -> bool {
         self.update_dialog = None;
         let Some(link) = self.provenance.get(id).map(|p| p.link.clone()) else {
@@ -745,6 +797,14 @@ impl Plugins {
         let Some(update) = self.ready_update(id).cloned() else {
             return false;
         };
+        // Inzwischen gleich alt oder neuer installiert (etwa über eine Datei): kein Herabstufen.
+        if !self
+            .installed_version(id)
+            .is_some_and(|v| is_newer(&update.to.version, &v))
+        {
+            self.drop_update(id);
+            return false;
+        }
         let Some(package) = self.update_packages.remove(id) else {
             return false;
         };
@@ -794,8 +854,10 @@ impl Plugins {
         }
     }
 
-    /// Holt fertige Prüfungen und Downloads ab; ein gefundenes Update wird gleich geladen.
-    /// `true`, wenn etwas fertig wurde.
+    /// Holt fertige Prüfungen (nur die Release-Liste) und Downloads (erst nach „Aktualisieren“
+    /// geöffnet) ab. Ein Update zählt nur, wenn es nach semver-Vorrang höher ist als die gerade
+    /// installierte Version (beim Abholen erneut geprüft: inzwischen kann eine andere installiert
+    /// sein). `true`, wenn etwas fertig wurde.
     fn poll_checks(&mut self) -> bool {
         let mut acted = false;
         let mut i = 0;
@@ -816,18 +878,16 @@ impl Plugins {
                     let Some(from) = self.installed_version(&id) else {
                         continue;
                     };
+                    if !is_newer(&release.version, &from) {
+                        continue;
+                    }
                     self.updates.push(PluginUpdate {
-                        id: id.clone(),
+                        id,
                         from,
-                        to: release.clone(),
+                        to: release,
                         new_rights: BTreeSet::new(),
                     });
-                    let fetch = self.repo_fetch;
-                    let installed = id.clone();
-                    let job = Job::spawn(move |_| {
-                        plugin_repo::fetch_package(fetch, &release, Some(&installed))
-                    });
-                    self.downloads.push((id, job));
+                    self.notice = true;
                 }
                 Ok(None) => {}
                 Err(e) => self.report(&id, e),
@@ -854,16 +914,16 @@ impl Plugins {
                     if let Some(u) = self.updates.iter_mut().find(|u| u.id == id) {
                         u.new_rights = pkg.manifest.rights.difference(&old).copied().collect();
                         self.update_packages.insert(id, pkg);
-                        self.notice = true;
                     }
                 }
                 Err(e) => {
+                    // Vom Nutzer angestoßen: der Fehler steht im Abschnitt „Plug-ins“.
                     self.drop_update(&id);
-                    self.report(&id, e);
+                    self.note = Some(e);
                 }
             }
         }
-        if self.manual_check && !self.is_checking() {
+        if self.manual_check && self.checks.is_empty() {
             self.manual_check = false;
             if self.updates.is_empty() && self.note.is_none() {
                 self.note = Some(tr!("plugin-check-none"));
@@ -872,17 +932,19 @@ impl Plugins {
         acted
     }
 
-    /// Was der Aktualisieren-Dialog für `id` zeigt (ohne geladenes Update nichts).
+    /// Was der Aktualisieren-Dialog für `id` zeigt (ohne gefundenes Update nichts). Solange das
+    /// Paket noch geladen wird, nur die Versionen und „Wird geholt…“.
     fn update_view(&self, id: &str) -> Option<UpdateView> {
-        let u = self.ready_update(id)?;
-        let pkg = self.update_packages.get(id)?;
+        let u = self.found_update(id)?;
+        let pkg = self.update_packages.get(id);
         Some(UpdateView {
             name: self.plugin_name(id),
             from: u.from.to_string(),
             to: u.to.version.to_string(),
-            notes: u.to.notes.clone(),
+            loading: pkg.is_none(),
+            notes: pkg.map_or_else(String::new, |_| u.to.notes.clone()),
             new_rights: u.new_rights.iter().copied().collect(),
-            hosts: pkg.manifest.net_hosts.clone(),
+            hosts: pkg.map_or_else(Vec::new, |p| p.manifest.net_hosts.clone()),
         })
     }
 
@@ -1002,11 +1064,7 @@ impl Plugins {
                 stopped: b.stopped,
             })
             .collect();
-        let ready = if self.notice {
-            self.update_packages.len()
-        } else {
-            0
-        };
+        let ready = if self.notice { self.updates.len() } else { 0 };
         match plugin_prompts::show_banners(ctx, &lines, ready) {
             Some(BannerAction::Restart(id)) => {
                 self.restart(&id);
@@ -1030,8 +1088,11 @@ impl Plugins {
             .entries()
             .iter()
             .any(|e| e.state == EntryState::Loading);
+        // Auch fertige Ergebnisse, die erst beim nächsten `poll` an das Plug-in gehen (sonst warteten
+        // sie im Leerlauf bis zur nächsten Eingabe).
         if loading
             || !self.net_jobs.is_empty()
+            || self.host.has_pending()
             || self.is_reading()
             || self.is_fetching()
             || self.is_checking()
@@ -1057,21 +1118,22 @@ impl Plugins {
             request = MenuRequest::Settings(Some(SettingsSection::Plugins));
             ui.close();
         }
+        // (Name, Plug-in) → (Befehl, Beschriftung).
         let mut groups: BTreeMap<(String, String), Vec<(String, String)>> = BTreeMap::new();
         for c in self.host.commands() {
             groups
                 .entry((self.plugin_name(&c.plugin), c.plugin))
                 .or_default()
-                .push((c.full_id, c.label));
+                .push((c.command, c.label));
         }
         if !groups.is_empty() {
             ui.separator();
         }
         let mut run = None;
-        for ((name, _), commands) in &groups {
-            let mut entry = |ui: &mut egui::Ui, (full_id, label): &(String, String)| {
+        for ((name, plugin), commands) in &groups {
+            let mut entry = |ui: &mut egui::Ui, (command, label): &(String, String)| {
                 if theme::entry(ui, true, egui::Button::new(label)).clicked() {
-                    run = Some(full_id.clone());
+                    run = Some((plugin.clone(), command.clone()));
                     ui.close();
                 }
             };
@@ -1085,8 +1147,8 @@ impl Plugins {
                 });
             }
         }
-        if let Some(id) = run {
-            self.host.run_command(&id);
+        if let Some((plugin, command)) = run {
+            self.host.run_command(&plugin, &command);
         }
         request
     }

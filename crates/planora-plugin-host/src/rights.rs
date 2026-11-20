@@ -16,94 +16,132 @@ pub enum Grant {
 pub enum Answer {
     /// Dauerhaft erlauben.
     Allow,
-    /// Nur bis zum Ende des Aufrufs erlauben.
+    /// Nur die eine Anfrage erlauben, die nachgefragt hat (und die bis dahin wartenden Anfragen
+    /// desselben Rechts); die nächste fragt wieder. Wird nicht in [`Rights`] vermerkt.
     Once,
     /// Dauerhaft ablehnen.
     Deny,
 }
 
-/// Gespeicherte und einmalige Entscheidungen eines Plug-ins.
+/// Woher ein Plug-in kommt: Rechte gehen beim Ersetzen nur auf eines derselben Herkunft über.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// Mitgeliefert (mit dem Programm installiert).
+    Bundled,
+    /// Vom Nutzer aus einer Datei installiert (ohne `herkunft.json`).
+    File,
+    /// Über einen Repo-Link installiert (der Link aus `herkunft.json`, klein geschrieben).
+    Link(String),
+}
+
+impl Source {
+    /// Eine Herkunft über einen Repo-Link (Groß- und Kleinschreibung zählt nicht).
+    pub fn link(link: &str) -> Source {
+        Source::Link(link.to_ascii_lowercase())
+    }
+
+    /// Die Form in der Konfiguration: `"bundled"`, `"file"` oder der Link.
+    pub fn to_config(&self) -> String {
+        match self {
+            Source::Bundled => "bundled".to_string(),
+            Source::File => "file".to_string(),
+            Source::Link(l) => l.clone(),
+        }
+    }
+
+    /// Liest die Form aus [`Source::to_config`].
+    pub fn from_config(text: &str) -> Source {
+        match text {
+            "bundled" => Source::Bundled,
+            "file" => Source::File,
+            link => Source::link(link),
+        }
+    }
+}
+
+/// Die dauerhaften Entscheidungen eines Plug-ins („Nur dieses Mal“ gehört nicht dazu, das
+/// erledigt der Host je Anfrage).
 #[derive(Clone, Debug, Default)]
 pub struct Rights {
     saved: BTreeMap<Right, Grant>,
-    once: BTreeSet<Right>,
 }
 
 impl Rights {
-    /// Aktuelle Entscheidung; `None` heißt: nachfragen. "Einmal" zählt als erlaubt.
+    /// Aktuelle Entscheidung; `None` heißt: nachfragen.
     pub fn state(&self, r: Right) -> Option<Grant> {
-        if self.once.contains(&r) {
-            return Some(Grant::Allowed);
-        }
         self.saved.get(&r).copied()
     }
 
-    /// Entscheidung unter Beachtung des Manifests: ein nicht deklariertes Recht
-    /// wird immer abgelehnt, ohne Nachfrage.
+    /// Entscheidung unter Beachtung des Manifests: ein nicht deklariertes Recht und eines, das
+    /// diese Programmversion noch nicht umsetzt ([`Right::available`]), wird immer abgelehnt,
+    /// ohne Nachfrage.
     pub fn decide(&self, declared: &BTreeSet<Right>, r: Right) -> Option<Grant> {
-        if !declared.contains(&r) {
+        if !declared.contains(&r) || !r.available() {
             return Some(Grant::Denied);
         }
         self.state(r)
     }
 
-    /// Antwort des Nutzers festhalten.
+    /// Antwort des Nutzers festhalten (`Once` ändert nichts, siehe [`Answer::Once`]).
     pub fn answer(&mut self, r: Right, a: Answer) {
         match a {
             Answer::Allow => {
-                self.once.remove(&r);
                 self.saved.insert(r, Grant::Allowed);
             }
             Answer::Deny => {
-                self.once.remove(&r);
                 self.saved.insert(r, Grant::Denied);
             }
-            Answer::Once => {
-                self.once.insert(r);
-            }
+            Answer::Once => {}
         }
     }
 
     /// Entscheidung zurücknehmen: es wird wieder nachgefragt.
     pub fn revoke(&mut self, r: Right) {
         self.saved.remove(&r);
-        self.once.remove(&r);
     }
 
-    /// Die dauerhaft beantworteten Rechte (zum Speichern; „Nur dieses Mal“ gehört nicht dazu).
+    /// Die dauerhaft beantworteten Rechte (zum Speichern).
     pub fn saved(&self) -> impl Iterator<Item = (Right, Grant)> + '_ {
         self.saved.iter().map(|(r, g)| (*r, *g))
     }
 
-    /// Alle "Einmal"-Erlaubnisse verfallen lassen.
-    pub fn reset_once(&mut self) {
-        self.once.clear();
-    }
-
     /// Was von den dauerhaften Entscheidungen bleibt, wenn das Plug-in mit dem Manifest `old`
-    /// durch eines mit `new` ersetzt wird (die Pakete sind nicht signiert, die Kennung allein
-    /// sagt nicht, wer es ist): nichts ohne altes Manifest oder bei anderem `author`; `net` fällt
-    /// weg, wenn sich die Rechner in `net-hosts` geändert haben (ohne Rücksicht auf Groß- und
-    /// Kleinschreibung); Rechte, die `new` nicht mehr verlangt, fallen weg. „Nur dieses Mal“
-    /// verfällt immer.
-    pub fn carry_over(&self, old: Option<&Manifest>, new: &Manifest) -> Rights {
+    /// (Herkunft `old_source`) durch eines mit `new` (Herkunft `new_source`) ersetzt wird (die
+    /// Pakete sind nicht signiert, die Kennung allein sagt nicht, wer es ist): nichts ohne altes
+    /// Manifest, bei anderem `author` oder anderer Herkunft ([`Source`]); `net` fällt weg, wenn
+    /// sich die Rechner in `net-hosts` geändert haben (ohne Rücksicht auf Groß- und
+    /// Kleinschreibung); Rechte, die `new` nicht mehr verlangt, fallen weg.
+    pub fn carry_over(
+        &self,
+        old: Option<(&Manifest, &Source)>,
+        new: &Manifest,
+        new_source: &Source,
+    ) -> Rights {
         match old {
-            Some(old) => self.carry_over_from(Some(&old.author), &old.net_hosts, new),
+            Some((old, source)) => self.carry_over_from(
+                Some(&old.author),
+                &old.net_hosts,
+                Some(source),
+                new,
+                new_source,
+            ),
             None => Rights::default(),
         }
     }
 
-    /// Wie [`Rights::carry_over`], nur mit Autor und Rechnern statt des alten Manifests (so
-    /// stehen sie neben den Rechten in der Konfiguration): ohne Autor (`None`, unbekannt) oder
-    /// mit anderem bleibt nichts.
+    /// Wie [`Rights::carry_over`], nur mit Autor, Rechnern und Herkunft statt des alten
+    /// Manifests (so stehen sie neben den Rechten in der Konfiguration): ohne Autor oder
+    /// Herkunft (`None`, unbekannt) oder mit anderen bleibt nichts.
     pub fn carry_over_from(
         &self,
         old_author: Option<&str>,
         old_hosts: &[String],
+        old_source: Option<&Source>,
         new: &Manifest,
+        new_source: &Source,
     ) -> Rights {
         let mut out = Rights::default();
-        if old_author != Some(new.author.as_str()) {
+        if old_author != Some(new.author.as_str()) || old_source != Some(new_source) {
             return out;
         }
         let hosts = |list: &[String]| -> BTreeSet<String> {

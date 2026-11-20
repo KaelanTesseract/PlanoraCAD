@@ -4,7 +4,7 @@
 
 use planora_update::Channel;
 use planora_update::plugin_source::{
-    Hop, PluginRelease, RepoLink, get_following, parse_plugin_releases, parse_repo_link,
+    Hop, PluginRelease, RepoLink, get_following, is_newer, parse_plugin_releases, parse_repo_link,
     pick_plugin_release, redirect_target,
 };
 use semver::Version;
@@ -32,7 +32,7 @@ fn link_forms() {
     assert_eq!(l, link("Besitzer-1", "mein_plugin.x"));
     assert_eq!(
         l.releases_url(),
-        "https://api.github.com/repos/Besitzer-1/mein_plugin.x/releases"
+        "https://api.github.com/repos/Besitzer-1/mein_plugin.x/releases?per_page=100"
     );
     assert_eq!(l.web_url(), "https://github.com/Besitzer-1/mein_plugin.x");
 }
@@ -232,6 +232,15 @@ fn pick_respects_channel_and_installed() {
     let newest = vec![rel("0.1.0"), rel("0.2.0")];
     let installed = Version::parse("0.2.0").unwrap();
     assert!(pick_plugin_release(&newest, Some(&installed), Channel::Stable).is_none());
+    // Build-Metadaten zählen nicht: 0.2.0+b ist kein Update von 0.2.0.
+    let build = vec![rel("0.2.0+b")];
+    assert!(pick_plugin_release(&build, Some(&installed), Channel::Stable).is_none());
+    assert!(!is_newer(&Version::parse("0.2.0+b").unwrap(), &installed));
+    assert!(is_newer(&Version::parse("0.2.1").unwrap(), &installed));
+    assert!(!is_newer(
+        &Version::parse("0.2.0-rc.1").unwrap(),
+        &installed
+    ));
 }
 
 #[test]

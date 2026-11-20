@@ -19,10 +19,10 @@ pub mod texts;
 use manifest::{Manifest, Right};
 use places::{Found, Places};
 use planora_i18n::tr;
-use rights::{Answer, Grant, Pending, Requests, Rights, check_net_url};
+use rights::{Answer, Grant, Pending, Requests, Rights, Source, check_net_url};
 use runtime::{
-    Command, Dialog, DialogEvent, Engine, HostCalls, HostInfo, Instance, Level, PluginError,
-    Registration, RequestResult,
+    Command, Dialog, DialogEvent, Engine, FieldKind, HostCalls, HostInfo, Instance, Level,
+    PluginError, Registration, RequestResult,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -35,19 +35,151 @@ const MAX_FAILURES: u8 = 3;
 /// Mehr Ereignisse oder Ergebnisse als das nimmt das Postfach einer Instanz zwischen zwei
 /// Abholungen nicht an (ein Plug-in könnte sonst in einer Schleife den Speicher füllen).
 const MAX_QUEUE: usize = 1024;
+/// So viele Bytes (ungefähr: Texte, Dialoge, Adressen) nehmen die Ereignisse im Postfach einer
+/// Instanz höchstens auf; was darüber hinausgeht, wird verworfen (einmal mit einem
+/// Protokoll-Hinweis). Ergebnisse zählen nicht mit: Netz-Antworten sind schon durch [`MAX_NET`]
+/// gleichzeitige Anfragen und die Größengrenze des Programms begrenzt, die übrigen sind klein.
+const MAX_MAILBOX_BYTES: usize = 8 << 20;
+/// Höchstens so viele Netzanfragen eines Plug-ins laufen gleichzeitig.
+const MAX_NET: usize = 4;
+/// Längster Text einer Meldung oder eines Protokolleintrags (Bytes); länger wird gekürzt.
+const MAX_TEXT: usize = 4 << 10;
+/// Höchstzahl der Felder eines Dialogs.
+const MAX_FIELDS: usize = 200;
+/// Längste Zeichenkette in einem Dialog (Kennungen, Schlüssel, Textwerte; Bytes).
+const MAX_DIALOG_STRING: usize = 1 << 10;
+/// Höchstzahl der Befehle, die ein Plug-in in `init` anmeldet.
+const MAX_COMMANDS: usize = 100;
+/// Längste Zeichenkette eines Befehls (Kennung, Schlüssel, Symbol, Kürzel; Bytes).
+const MAX_COMMAND_STRING: usize = 256;
+/// Zeit je Plug-in und [`PluginHost::poll`] für alle Zustellungen (`on-result`) zusammen.
+const POLL_BUDGET: std::time::Duration = std::time::Duration::from_millis(200);
+/// Höchstens so viele Zustellungen je Plug-in und `poll`.
+const MAX_DELIVERIES_PER_POLL: usize = 16;
+/// Reicht das Budget in so vielen Bildern hintereinander nicht, zählt das als Ausfall.
+const MAX_OVERLOADED_POLLS: u8 = 3;
+
 /// Ergebnis einer Anfrage, die das volle Postfach nicht mehr annimmt.
 fn queue_full() -> String {
     tr!("plugin-queue-full")
 }
 
+/// Kürzt `text` auf höchstens [`MAX_TEXT`] Bytes (an einer Zeichengrenze, mit „…“ am Ende).
+fn clip(text: &str) -> String {
+    if text.len() <= MAX_TEXT {
+        return text.to_string();
+    }
+    let ellipsis = '\u{2026}';
+    let mut end = MAX_TEXT - ellipsis.len_utf8();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = text[..end].to_string();
+    out.push(ellipsis);
+    out
+}
+
+/// Ungefähre Größe eines Ereignisses im Postfach (Bytes).
+fn event_size(e: &HostEvent) -> usize {
+    const BASE: usize = 64;
+    BASE + match e {
+        HostEvent::Message { text, .. } | HostEvent::Log { text, .. } => text.len(),
+        HostEvent::OpenDialog { dialog, .. } => {
+            dialog.id.len()
+                + dialog.title_key.len()
+                + dialog
+                    .fields
+                    .iter()
+                    .map(|f| BASE + f.id.len() + f.label_key.len() + field_text(&f.kind).len())
+                    .sum::<usize>()
+        }
+        HostEvent::CloseDialog { id, .. } => id.len(),
+        HostEvent::Net { url, .. } => url.len(),
+        HostEvent::Failed { reason, .. } => reason.len(),
+        HostEvent::Ask { .. } | HostEvent::Changed => 0,
+    }
+}
+
+/// Der Text eines Textfelds (sonst leer).
+fn field_text(kind: &FieldKind) -> &str {
+    match kind {
+        FieldKind::Text(t) => t,
+        _ => "",
+    }
+}
+
+/// Prüft einen Dialog eines Plug-ins: höchstens [`MAX_FIELDS`] Felder, jede Zeichenkette
+/// höchstens [`MAX_DIALOG_STRING`] Bytes, Feld-Kennungen nicht leer und nicht doppelt.
+fn check_dialog(d: &Dialog) -> Result<(), String> {
+    if d.fields.len() > MAX_FIELDS {
+        return Err(tr!(
+            "plugin-dialog-too-many-fields",
+            max = MAX_FIELDS.to_string()
+        ));
+    }
+    let too_long = [d.id.as_str(), d.title_key.as_str()]
+        .into_iter()
+        .chain(
+            d.fields
+                .iter()
+                .flat_map(|f| [f.id.as_str(), f.label_key.as_str(), field_text(&f.kind)]),
+        )
+        .any(|s| s.len() > MAX_DIALOG_STRING);
+    if too_long {
+        return Err(tr!(
+            "plugin-dialog-string-too-long",
+            max = MAX_DIALOG_STRING.to_string()
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    for f in &d.fields {
+        if f.id.is_empty() {
+            return Err(tr!("plugin-dialog-empty-field-id"));
+        }
+        if !ids.insert(f.id.as_str()) {
+            return Err(tr!("plugin-dialog-duplicate-field-id", id = f.id.as_str()));
+        }
+    }
+    Ok(())
+}
+
+/// Prüft die Anmeldung aus `init`: höchstens [`MAX_COMMANDS`] Befehle, jede Zeichenkette
+/// höchstens [`MAX_COMMAND_STRING`] Bytes.
+fn check_registration(r: &Registration) -> Result<(), PluginError> {
+    if r.commands.len() > MAX_COMMANDS {
+        return Err(PluginError::Load(tr!(
+            "plugin-too-many-commands",
+            max = MAX_COMMANDS.to_string()
+        )));
+    }
+    let too_long = r.commands.iter().any(|c| {
+        [
+            Some(&c.id),
+            Some(&c.label_key),
+            c.icon.as_ref(),
+            c.shortcut.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|s| s.len() > MAX_COMMAND_STRING)
+    });
+    if too_long {
+        return Err(PluginError::Load(tr!(
+            "plugin-command-string-too-long",
+            max = MAX_COMMAND_STRING.to_string()
+        )));
+    }
+    Ok(())
+}
+
 /// Der zu speichernde Zustand eines Plug-ins: eingeschaltet oder nicht und die dauerhaft
 /// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`), dazu Autor und
-/// Rechner (`net-hosts`) des Manifests, für das die Rechte erteilt wurden. Das Programm bildet
+/// Rechner (`net-hosts`) und Herkunft des Manifests, für das die Rechte erteilt wurden. Das Programm bildet
 /// ihn auf `planora_project::config::PluginConfig` ab; der Host kennt die Konfiguration nicht.
 ///
 /// Beim Start gelten gespeicherte Rechte nur nach [`Rights::carry_over_from`] gegen das
-/// gefundene Manifest: ein anderer (oder kein gespeicherter) Autor kostet alle, andere Rechner
-/// kosten `net` (etwa nach einem Update über den Installer oder einem von Hand kopierten Ordner).
+/// gefundene Manifest: ein anderer (oder kein gespeicherter) Autor oder eine andere Herkunft kostet
+/// alle, andere Rechner kosten `net` (etwa nach einem Update über den Installer oder einem von Hand kopierten Ordner).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginState {
     pub enabled: bool,
@@ -56,6 +188,9 @@ pub struct PluginState {
     pub author: Option<String>,
     /// Rechner aus `net-hosts` des Manifests beim Speichern.
     pub net_hosts: Vec<String>,
+    /// Herkunft beim Speichern ([`Source::to_config`]); `None`: unbekannt (Rechte werden neu
+    /// gefragt).
+    pub source: Option<String>,
 }
 
 impl Default for PluginState {
@@ -65,6 +200,7 @@ impl Default for PluginState {
             rights: BTreeMap::new(),
             author: None,
             net_hosts: Vec::new(),
+            source: None,
         }
     }
 }
@@ -101,8 +237,11 @@ pub struct PluginEntry {
 /// Ein Befehl eines laufenden Plug-ins (für das Menü).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginCommand {
-    /// `"<plugin-id>.<befehl-id>"`.
+    /// `"<plugin-id>.<befehl-id>"` (nur zur Anzeige und als Schlüssel; ausgeführt wird mit
+    /// [`PluginHost::run_command`] über `plugin` und `command`).
     pub full_id: String,
+    /// Die Kennung des Befehls im Plug-in.
+    pub command: String,
     /// Die Beschriftung in der eingestellten Sprache.
     pub label: String,
     /// Die Kennung des Plug-ins.
@@ -160,6 +299,10 @@ struct Mailbox {
     events: Vec<HostEvent>,
     /// Ergebnisse für `on-result`, beim nächsten `poll` zugestellt.
     deliveries: Vec<(u64, RequestResult)>,
+    /// Ungefähre Größe von `events` (höchstens [`MAX_MAILBOX_BYTES`]).
+    bytes: usize,
+    /// Der Hinweis „Postfach voll“ steht schon im Protokoll (einmal je Instanz).
+    full_noted: bool,
     /// Die offene Nachfrage je Recht (höchstens eine).
     asks: BTreeMap<Right, Pending>,
     /// Anfragen, die auf die offene Nachfrage ihres Rechts warten.
@@ -183,8 +326,47 @@ fn pending_request(p: &Pending) -> u64 {
 }
 
 impl Mailbox {
+    fn new(plugin: String, generation: u64, manifest: Manifest, rights: Rights) -> Mailbox {
+        Mailbox {
+            plugin,
+            generation,
+            manifest,
+            rights,
+            requests: Requests::default(),
+            events: Vec::new(),
+            deliveries: Vec::new(),
+            bytes: 0,
+            full_noted: false,
+            asks: BTreeMap::new(),
+            waiting: Vec::new(),
+            net_open: BTreeSet::new(),
+        }
+    }
+
+    /// Passen `size` weitere Bytes noch ins Postfach? Sonst einmal je Instanz ein Hinweis ins
+    /// Protokoll (der selbst nicht mitzählt).
+    fn fits(&mut self, size: usize) -> bool {
+        if self.bytes.saturating_add(size) <= MAX_MAILBOX_BYTES {
+            return true;
+        }
+        if !self.full_noted && self.events.len() < MAX_QUEUE {
+            self.full_noted = true;
+            self.events.push(HostEvent::Log {
+                plugin: self.plugin.clone(),
+                level: Level::Warning,
+                text: format!(
+                    "mailbox over {} MiB, entries dropped",
+                    MAX_MAILBOX_BYTES >> 20
+                ),
+            });
+        }
+        false
+    }
+
     fn event(&mut self, e: HostEvent) {
-        if self.events.len() < MAX_QUEUE {
+        let size = event_size(&e);
+        if self.events.len() < MAX_QUEUE && self.fits(size) {
+            self.bytes += size;
             self.events.push(e);
         }
     }
@@ -193,6 +375,26 @@ impl Mailbox {
         if self.deliveries.len() < MAX_QUEUE {
             self.deliveries.push((request, r));
         }
+    }
+
+    /// Nimmt alle Ereignisse heraus.
+    fn take_events(&mut self) -> Vec<HostEvent> {
+        let events = std::mem::take(&mut self.events);
+        self.bytes = self
+            .bytes
+            .saturating_sub(events.iter().map(event_size).sum());
+        events
+    }
+
+    /// Nimmt alle Ergebnisse heraus.
+    fn take_deliveries(&mut self) -> Vec<(u64, RequestResult)> {
+        std::mem::take(&mut self.deliveries)
+    }
+
+    /// Legt nicht zugestellte Ergebnisse vor die inzwischen neu angefallenen zurück.
+    fn requeue(&mut self, rest: Vec<(u64, RequestResult)>) {
+        let newer = std::mem::replace(&mut self.deliveries, rest);
+        self.deliveries.extend(newer);
     }
 
     /// Ist das Ereignis-Postfach voll?
@@ -207,17 +409,25 @@ impl Mailbox {
     }
 
     fn net(&mut self, request: u64, url: String) {
-        if self.events_full() || self.net_open.len() >= MAX_QUEUE {
-            self.overflow(request);
+        if self.net_open.len() >= MAX_NET {
+            self.deliver(
+                request,
+                RequestResult::Failed(tr!("plugin-net-too-many", max = MAX_NET.to_string())),
+            );
             return;
         }
-        self.net_open.insert(request);
         let e = HostEvent::Net {
             plugin: self.plugin.clone(),
             generation: self.generation,
             request,
             url,
         };
+        let size = event_size(&e);
+        if self.events_full() || !self.fits(size) {
+            self.overflow(request);
+            return;
+        }
+        self.net_open.insert(request);
         self.event(e);
     }
 
@@ -233,16 +443,16 @@ impl Mailbox {
             }
             return;
         }
-        if self.events_full() {
-            self.overflow(request);
-            return;
-        }
         let e = HostEvent::Ask {
             plugin: self.plugin.clone(),
             generation: self.generation,
             request,
             right,
         };
+        if self.events_full() || !self.fits(event_size(&e)) {
+            self.overflow(request);
+            return;
+        }
         self.asks.insert(right, p);
         self.event(e);
     }
@@ -277,7 +487,7 @@ fn right_from_wit(r: runtime::Right) -> Right {
     }
 }
 
-/// Die Host-Aufrufe einer Instanz: tragen nur ins Postfach ein.
+/// Die Host-Aufrufe einer Instanz: tragen nur ins Postfach ein (Texte gekürzt, Dialoge geprüft).
 struct Recorder(Arc<Mutex<Mailbox>>);
 
 impl HostCalls for Recorder {
@@ -287,7 +497,7 @@ impl HostCalls for Recorder {
         mb.event(HostEvent::Log {
             plugin,
             level,
-            text: text.to_string(),
+            text: clip(text),
         });
     }
 
@@ -297,11 +507,12 @@ impl HostCalls for Recorder {
         mb.event(HostEvent::Message {
             plugin,
             level,
-            text: text.to_string(),
+            text: clip(text),
         });
     }
 
     fn open_dialog(&mut self, d: Dialog) -> Result<(), String> {
+        check_dialog(&d)?;
         let mut mb = lock(&self.0);
         let plugin = mb.plugin.clone();
         mb.event(HostEvent::OpenDialog { plugin, dialog: d });
@@ -369,6 +580,8 @@ struct Slot {
     mailbox: Option<Arc<Mutex<Mailbox>>>,
     commands: Vec<Command>,
     texts: Option<PluginTexts>,
+    /// So viele `poll` hintereinander reichte das Zustell-Budget nicht ([`MAX_OVERLOADED_POLLS`]).
+    overloaded: u8,
 }
 
 impl Slot {
@@ -412,12 +625,24 @@ fn scan_entries(places: &Places) -> Vec<PluginEntry> {
         .collect()
 }
 
-/// Woran `rescan` erkennt, ob ein Plug-in gleich blieb: Ordner und Version des aktiven Fundorts.
-/// Das Manifest des laufenden Fundorts.
-fn active_manifest(e: &PluginEntry) -> Option<&Manifest> {
-    e.active.map(|a| &e.found[a].manifest)
+/// Der Eintrag, dessen Plug-in `plugin` läuft und den Befehl `command` angemeldet hat.
+fn command_target(
+    entries: &[PluginEntry],
+    slots: &[Slot],
+    plugin: &str,
+    command: &str,
+) -> Option<usize> {
+    let i = entries.iter().position(|e| e.id == plugin)?;
+    (entries[i].state == EntryState::Running && slots[i].commands.iter().any(|c| c.id == command))
+        .then_some(i)
 }
 
+/// Der laufende Fundort.
+fn active_found(e: &PluginEntry) -> Option<&Found> {
+    e.active.map(|a| &e.found[a])
+}
+
+/// Woran `rescan` erkennt, ob ein Plug-in gleich blieb: Ordner und Version des aktiven Fundorts.
 fn active_key(e: &PluginEntry) -> Option<(PathBuf, semver::Version)> {
     e.active
         .map(|a| (e.found[a].dir.clone(), e.found[a].manifest.version.clone()))
@@ -426,7 +651,8 @@ fn active_key(e: &PluginEntry) -> Option<(PathBuf, semver::Version)> {
 /// Alle Plug-ins des Programms: Fundorte, Zustand, Instanzen und das Ereignis-Postfach.
 pub struct PluginHost {
     places: Places,
-    engine: Result<Arc<Engine>, String>,
+    /// Die Laufzeit samt Epochen-Takt; erst angelegt, wenn das erste Plug-in startet.
+    engine: Option<Result<Arc<Engine>, String>>,
     entries: Vec<PluginEntry>,
     slots: Vec<Slot>,
     /// Der Stand aus der Konfiguration (auch für Plug-ins, die gerade nicht gefunden werden).
@@ -439,15 +665,15 @@ pub struct PluginHost {
 }
 
 impl PluginHost {
-    /// Durchsucht die Fundorte und richtet die Laufzeit ein; gestartet wird erst mit
-    /// [`start_all`](Self::start_all).
+    /// Durchsucht die Fundorte; die Laufzeit (mit ihrem Epochen-Takt) entsteht erst, wenn das erste
+    /// Plug-in startet ([`start_all`](Self::start_all)).
     pub fn new(places: Places) -> PluginHost {
         let entries = scan_entries(&places);
         let slots = entries.iter().map(|_| Slot::new()).collect();
         let (tx, rx) = std::sync::mpsc::channel();
         PluginHost {
             places,
-            engine: Engine::new().map(Arc::new).map_err(|e| e.to_string()),
+            engine: None,
             entries,
             slots,
             base: BTreeMap::new(),
@@ -475,7 +701,8 @@ impl PluginHost {
     }
 
     /// Übernimmt den gespeicherten Zustand und startet alle eingeschalteten Plug-ins im
-    /// Hintergrund.
+    /// Hintergrund. Danach räumt ein Hintergrund-Thread den Zwischenspeicher auf
+    /// ([`places::prune_cache`]: Einträge, die keinem gefundenen Plug-in mehr gehören).
     pub fn start_all(&mut self, states: &BTreeMap<String, PluginState>) {
         self.base = states.clone();
         for i in 0..self.entries.len() {
@@ -484,14 +711,51 @@ impl PluginHost {
                 self.start(i);
             }
         }
+        self.prune_cache();
+    }
+
+    /// Startet [`places::prune_cache`] im Hintergrund (mit der Laufzeit, falls schon eine läuft).
+    fn prune_cache(&self) {
+        let engine = match &self.engine {
+            Some(Ok(e)) => Some(Arc::clone(e)),
+            _ => None,
+        };
+        let cache = self.places.cache.clone();
+        let dirs: Vec<PathBuf> = self
+            .entries
+            .iter()
+            .flat_map(|e| e.found.iter().map(|f| f.dir.clone()))
+            .collect();
+        let _ = std::thread::Builder::new()
+            .name("plugin-cache-cleanup".into())
+            .spawn(move || places::prune_cache(engine.as_deref(), &cache, &dirs));
+    }
+
+    /// Läuft die Laufzeit (und mit ihr der Epochen-Takt)? Erst, seit ein Plug-in gestartet wurde.
+    pub fn runtime_started(&self) -> bool {
+        matches!(self.engine, Some(Ok(_)))
+    }
+
+    /// Warten Ergebnisse auf die Zustellung beim nächsten [`poll`](Self::poll)? Dann muss das
+    /// Programm bald wieder zeichnen, auch wenn sonst nichts geschieht.
+    pub fn has_pending(&self) -> bool {
+        !self.outbox.is_empty()
+            || self.slots.iter().any(|s| {
+                s.instance.is_some()
+                    && s.mailbox
+                        .as_ref()
+                        .is_some_and(|mb| !lock(mb).deliveries.is_empty())
+            })
     }
 
     /// Durchsucht die Fundorte neu (nach Installieren oder Entfernen). Plug-ins, deren aktiver
     /// Ordner gleich blieb (Ordner und Version), laufen weiter; geänderte werden beendet und neu
     /// gestartet (neue Generation), verschwundene beendet, neue mit `states` übernommen und,
-    /// wenn eingeschaltet, gestartet. Schalter und Ausfallzähler schon bekannter Plug-ins
-    /// bleiben, wie sie in dieser Sitzung sind; ihre Rechte auch, solange der aktive Ordner
-    /// gleich blieb, sonst nur nach [`Rights::carry_over`] (gleicher Autor, gleiche Rechner).
+    /// wenn eingeschaltet, gestartet. Schalter schon bekannter Plug-ins bleiben, wie sie in dieser
+    /// Sitzung sind; Ausfallzähler und Rechte auch, solange der aktive Ordner gleich blieb. Sonst
+    /// beginnt der Ausfallzähler bei null (auch ein angehaltenes Plug-in startet wieder), und die
+    /// Rechte bleiben nur nach [`Rights::carry_over`] (gleicher Autor, gleiche Herkunft, gleiche
+    /// Rechner).
     pub fn rescan(&mut self, states: &BTreeMap<String, PluginState>) {
         // Den Stand dieser Sitzung behalten, auch für Plug-ins, die gleich verschwinden.
         let mut base = self.plugin_states();
@@ -521,21 +785,21 @@ impl PluginHost {
             match old.remove(&entry.id) {
                 Some((before, slot)) => {
                     let unchanged = active_key(&before) == active_key(&entry);
-                    entry.rights = match (unchanged, active_manifest(&entry)) {
-                        (false, Some(new)) => {
-                            before.rights.carry_over(active_manifest(&before), new)
-                        }
+                    let old = active_found(&before).map(|f| (&f.manifest, f.source()));
+                    entry.rights = match (unchanged, active_found(&entry)) {
+                        (false, Some(new)) => before.rights.carry_over(
+                            old.as_ref().map(|(m, s)| (*m, s)),
+                            &new.manifest,
+                            &new.source(),
+                        ),
                         _ => before.rights,
                     };
-                    entry.failures = before.failures;
                     if unchanged {
+                        entry.failures = before.failures;
                         entry.state = before.state;
                     } else if entry.active.is_some() {
-                        entry.state = if entry.failures >= MAX_FAILURES {
-                            EntryState::Stopped
-                        } else {
-                            EntryState::Off
-                        };
+                        // Ein anderer Stand (Ordner oder Version) beginnt ohne Ausfälle.
+                        entry.state = EntryState::Off;
                         if slot.enabled {
                             to_start.push(i);
                         }
@@ -561,14 +825,15 @@ impl PluginHost {
     }
 
     /// Übernimmt Schalter und Rechte für Eintrag `i` aus `states`. Die Rechte nur nach
-    /// [`Rights::carry_over_from`] gegen das aktive Manifest (gespeicherter Autor und Rechner);
+    /// [`Rights::carry_over_from`] gegen den aktiven Fundort (gespeicherter Autor, Rechner und
+    /// Herkunft);
     /// ohne startbaren Fundort keine.
     fn apply_state(&mut self, i: usize, states: &BTreeMap<String, PluginState>) {
         let Some(c) = states.get(&self.entries[i].id) else {
             return;
         };
         self.slots[i].enabled = c.enabled;
-        let Some(manifest) = active_manifest(&self.entries[i]) else {
+        let Some(found) = active_found(&self.entries[i]) else {
             return;
         };
         let mut loaded = Rights::default();
@@ -582,7 +847,14 @@ impl PluginHost {
                 loaded.answer(r, answer);
             }
         }
-        let kept = loaded.carry_over_from(c.author.as_deref(), &c.net_hosts, manifest);
+        let saved_source = c.source.as_deref().map(Source::from_config);
+        let kept = loaded.carry_over_from(
+            c.author.as_deref(),
+            &c.net_hosts,
+            saved_source.as_ref(),
+            &found.manifest,
+            &found.source(),
+        );
         let kept: Vec<(Right, Grant)> = kept.saved().collect();
         for (r, g) in kept {
             let answer = match g {
@@ -616,12 +888,16 @@ impl PluginHost {
                 };
                 rights.insert(r.id().to_string(), g.to_string());
             }
-            // Autor und Rechner des laufenden Manifests (ohne startbaren Fundort die gespeicherten).
-            let (author, net_hosts) = match active_manifest(e) {
-                Some(m) => (Some(m.author.clone()), m.net_hosts.clone()),
+            // Autor, Rechner und Herkunft des laufenden Fundorts (ohne startbaren die gespeicherten).
+            let (author, net_hosts, source) = match active_found(e) {
+                Some(f) => (
+                    Some(f.manifest.author.clone()),
+                    f.manifest.net_hosts.clone(),
+                    Some(f.source().to_config()),
+                ),
                 None => out
                     .get(&e.id)
-                    .map(|c| (c.author.clone(), c.net_hosts.clone()))
+                    .map(|c| (c.author.clone(), c.net_hosts.clone(), c.source.clone()))
                     .unwrap_or_default(),
             };
             let c = PluginState {
@@ -629,6 +905,7 @@ impl PluginHost {
                 rights,
                 author,
                 net_hosts,
+                source,
             };
             if c.enabled && c.rights.is_empty() {
                 out.remove(&e.id);
@@ -641,6 +918,11 @@ impl PluginHost {
 
     /// Holt fertig gestartete Instanzen ab, stellt wartende Ergebnisse zu (`on-result`, Frist:
     /// Oberfläche) und gibt alle angefallenen Ereignisse zurück.
+    ///
+    /// Je Plug-in gilt ein Budget: höchstens [`MAX_DELIVERIES_PER_POLL`] Zustellungen und
+    /// zusammen [`POLL_BUDGET`] (eine angefangene Zustellung läuft bis zu ihrer Frist); der Rest
+    /// kommt beim nächsten `poll`. Bleibt in [`MAX_OVERLOADED_POLLS`] Aufrufen hintereinander
+    /// Arbeit liegen, weil die Zeit nicht reichte, fällt das Plug-in aus („zu viel Arbeit“).
     pub fn poll(&mut self) -> Vec<HostEvent> {
         while let Ok(loaded) = self.rx.try_recv() {
             self.finish_start(loaded);
@@ -653,25 +935,46 @@ impl PluginHost {
                 continue;
             }
             // Nur was jetzt da ist; was dabei neu anfällt, kommt beim nächsten `poll`.
-            let due = std::mem::take(&mut lock(&mb).deliveries);
-            for (request, result) in due {
+            let mut due = lock(&mb).take_deliveries().into_iter();
+            let start = std::time::Instant::now();
+            let mut delivered = 0;
+            let mut alive = true;
+            for (request, result) in due.by_ref() {
                 if !self.call(i, |inst| inst.on_result(request, result)) {
+                    alive = false;
                     break;
                 }
+                delivered += 1;
+                if delivered >= MAX_DELIVERIES_PER_POLL || start.elapsed() >= POLL_BUDGET {
+                    break;
+                }
+            }
+            if !alive {
+                continue;
+            }
+            let mut mb = lock(&mb);
+            mb.requeue(due.collect());
+            let overloaded = start.elapsed() >= POLL_BUDGET && !mb.deliveries.is_empty();
+            drop(mb);
+            let slot = &mut self.slots[i];
+            slot.overloaded = if overloaded {
+                slot.overloaded.saturating_add(1)
+            } else {
+                0
+            };
+            if slot.overloaded >= MAX_OVERLOADED_POLLS {
+                self.fail(i, tr!("plugin-too-much-work"));
             }
         }
         std::mem::take(&mut self.outbox)
     }
 
-    /// Führt einen Befehl `"<plugin-id>.<befehl-id>"` eines laufenden Plug-ins aus.
-    pub fn run_command(&mut self, full_id: &str) {
-        let found = self.entries.iter().enumerate().find_map(|(i, e)| {
-            let rest = full_id.strip_prefix(e.id.as_str())?.strip_prefix('.')?;
-            (e.state == EntryState::Running && self.slots[i].commands.iter().any(|c| c.id == rest))
-                .then(|| (i, rest.to_string()))
-        });
-        if let Some((i, cmd)) = found {
-            self.call(i, |inst| inst.run_command(&cmd));
+    /// Führt den Befehl `command` des laufenden Plug-ins `plugin` aus (beide Kennungen werden
+    /// genau verglichen; eine Kennung mit Punkten lässt sich so nicht mit einer anderen
+    /// verwechseln).
+    pub fn run_command(&mut self, plugin: &str, command: &str) {
+        if let Some(i) = command_target(&self.entries, &self.slots, plugin, command) {
+            self.call(i, |inst| inst.run_command(command));
         }
     }
 
@@ -683,7 +986,9 @@ impl PluginHost {
     }
 
     /// Die Antwort des Nutzers auf eine Nachfrage ([`HostEvent::Ask`]). Gehört sie zu einer
-    /// anderen Generation oder ist sie unbekannt, wird sie still verworfen.
+    /// anderen Generation oder ist sie unbekannt, wird sie still verworfen. Sie gilt für die
+    /// nachfragende Anfrage und die bis dahin wartenden desselben Rechts; „Nur diesmal“
+    /// ([`Answer::Once`]) wird nicht vermerkt, die nächste Anfrage fragt wieder.
     pub fn answer(&mut self, plugin: &str, generation: u64, request: u64, a: Answer) {
         let Some(i) = self.running(plugin) else {
             return;
@@ -719,10 +1024,10 @@ impl PluginHost {
         for p in done {
             mb.resolve(p, allowed);
         }
-        self.outbox.append(&mut mb.events);
+        self.outbox.extend(mb.take_events());
     }
 
-    /// Nimmt die Entscheidung über ein Recht zurück (auch „Nur dieses Mal“): beim nächsten Antrag
+    /// Nimmt die dauerhafte Entscheidung über ein Recht zurück: beim nächsten Antrag
     /// wird wieder gefragt. Meldet [`HostEvent::Changed`].
     pub fn revoke(&mut self, id: &str, right: Right) {
         let Some(i) = self.index(id) else {
@@ -752,19 +1057,25 @@ impl PluginHost {
     }
 
     /// Nach dem Ersetzen von `id` (Installieren über ein vorhandenes, nach [`rescan`]): die
-    /// Rechte nach [`Rights::carry_over`] gegen das vorige Manifest `old` abgleichen und das
+    /// Rechte nach [`Rights::carry_over`] gegen den vorigen Fundort `old` (Manifest und Herkunft,
+    /// vor dem Installieren gemerkt) abgleichen und das
     /// Plug-in neu starten, damit der neue Code läuft, auch bei gleicher Version (die `rescan`
     /// weiterlaufen lässt). Lädt es schon neu, bleibt es dabei. Meldet [`HostEvent::Changed`].
     ///
     /// [`rescan`]: Self::rescan
-    pub fn replaced(&mut self, id: &str, old: Option<&Manifest>) {
+    pub fn replaced(&mut self, id: &str, old: Option<&Found>) {
         let Some(i) = self.index(id) else {
             return;
         };
-        let Some(new) = active_manifest(&self.entries[i]).cloned() else {
+        let Some(new) = active_found(&self.entries[i]).cloned() else {
             return;
         };
-        let rights = self.entries[i].rights.carry_over(old, &new);
+        let old = old.map(|f| (&f.manifest, f.source()));
+        let rights = self.entries[i].rights.carry_over(
+            old.as_ref().map(|(m, s)| (*m, s)),
+            &new.manifest,
+            &new.source(),
+        );
         if let Some(mb) = &self.slots[i].mailbox {
             lock(mb).rights = rights.clone();
         }
@@ -847,6 +1158,7 @@ impl PluginHost {
                 );
                 out.push(PluginCommand {
                     full_id: format!("{}.{}", e.id, c.id),
+                    command: c.id.clone(),
                     label,
                     plugin: e.id.clone(),
                 });
@@ -889,7 +1201,7 @@ impl PluginHost {
         }
         if let Some(mb) = slot.mailbox.take() {
             // Protokoll aus `shutdown` noch weitergeben, alles andere verfällt.
-            let events = std::mem::take(&mut lock(&mb).events);
+            let events = lock(&mb).take_events();
             self.outbox.extend(
                 events
                     .into_iter()
@@ -911,7 +1223,10 @@ impl PluginHost {
         let Some(active) = self.entries[i].active else {
             return;
         };
-        let engine = match &self.engine {
+        let engine = self
+            .engine
+            .get_or_insert_with(|| Engine::new().map(Arc::new).map_err(|e| e.to_string()));
+        let engine = match engine {
             Ok(e) => Arc::clone(e),
             Err(reason) => {
                 let reason = reason.clone();
@@ -928,20 +1243,15 @@ impl PluginHost {
         let found = &self.entries[i].found[active];
         let manifest = found.manifest.clone();
         let dir: PathBuf = found.dir.clone();
-        let mailbox = Arc::new(Mutex::new(Mailbox {
-            plugin: self.entries[i].id.clone(),
+        let mailbox = Arc::new(Mutex::new(Mailbox::new(
+            self.entries[i].id.clone(),
             generation,
-            manifest: manifest.clone(),
-            rights: self.entries[i].rights.clone(),
-            requests: Requests::default(),
-            events: Vec::new(),
-            deliveries: Vec::new(),
-            asks: BTreeMap::new(),
-            waiting: Vec::new(),
-            net_open: BTreeSet::new(),
-        }));
+            manifest.clone(),
+            self.entries[i].rights.clone(),
+        )));
         let slot = &mut self.slots[i];
         slot.generation = generation;
+        slot.overloaded = 0;
         slot.mailbox = Some(Arc::clone(&mailbox));
         self.entries[i].state = EntryState::Loading;
 
@@ -1044,7 +1354,7 @@ impl PluginHost {
     /// Holt die Ereignisse aus dem Postfach von Eintrag `i`.
     fn drain(&mut self, i: usize) {
         if let Some(mb) = &self.slots[i].mailbox {
-            self.outbox.append(&mut lock(mb).events);
+            self.outbox.extend(lock(mb).take_events());
         }
     }
 
@@ -1107,6 +1417,10 @@ fn start_instance(
         Box::new(Recorder(mailbox)),
     )?;
     let registration = instance.init(info)?;
+    if let Err(e) = check_registration(&registration) {
+        instance.shutdown();
+        return Err(e);
+    }
     Ok((instance, registration, PluginTexts::new(&languages)))
 }
 
@@ -1114,24 +1428,13 @@ fn start_instance(
 mod tests {
     use super::*;
 
-    fn mailbox() -> Mailbox {
+    pub(super) fn mailbox() -> Mailbox {
         let manifest = Manifest::parse(
             "id = \"a.b\"\nname = \"A\"\nversion = \"0.1.0\"\napi = \"0.1\"\nauthor = \"x\"\n\
              license = \"MIT\"\ndescription = \"d\"\nrights = [\"net\"]\nnet-hosts = [\"example.org\"]\n",
         )
         .unwrap();
-        Mailbox {
-            plugin: "a.b".into(),
-            generation: 1,
-            manifest,
-            rights: Rights::default(),
-            requests: Requests::default(),
-            events: Vec::new(),
-            deliveries: Vec::new(),
-            asks: BTreeMap::new(),
-            waiting: Vec::new(),
-            net_open: BTreeSet::new(),
-        }
+        Mailbox::new("a.b".into(), 1, manifest, Rights::default())
     }
 
     fn voll() -> RequestResult {
@@ -1174,5 +1477,176 @@ mod tests {
         });
         assert_eq!(mb.waiting.len(), MAX_QUEUE);
         assert_eq!(mb.deliveries, vec![(2, voll())]);
+    }
+}
+
+#[cfg(test)]
+mod grenzen {
+    use super::tests::mailbox;
+    use super::*;
+    use crate::runtime::Field;
+
+    #[test]
+    fn long_texts_are_clipped() {
+        assert_eq!(clip("kurz"), "kurz");
+        let long = "ä".repeat(MAX_TEXT);
+        let c = clip(&long);
+        assert!(c.len() <= MAX_TEXT, "{}", c.len());
+        assert!(c.ends_with('\u{2026}'));
+        let mut r = Recorder(Arc::new(Mutex::new(mailbox())));
+        r.message(Level::Info, &"x".repeat(100_000));
+        r.log(Level::Info, &"y".repeat(100_000));
+        let mb = lock(&r.0);
+        for e in &mb.events {
+            match e {
+                HostEvent::Message { text, .. } | HostEvent::Log { text, .. } => {
+                    assert!(text.len() <= MAX_TEXT)
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    fn feld(id: &str) -> Field {
+        Field {
+            id: id.into(),
+            label_key: "k".into(),
+            kind: FieldKind::Text("t".into()),
+        }
+    }
+
+    fn dialog(fields: Vec<Field>) -> Dialog {
+        Dialog {
+            id: "d".into(),
+            title_key: "t".into(),
+            fields,
+        }
+    }
+
+    #[test]
+    fn dialogs_are_checked() {
+        assert!(check_dialog(&dialog(vec![feld("a"), feld("b")])).is_ok());
+        assert!(check_dialog(&dialog(vec![feld("a"), feld("a")])).is_err());
+        assert!(check_dialog(&dialog(vec![feld("")])).is_err());
+        let viele = (0..=MAX_FIELDS).map(|n| feld(&n.to_string())).collect();
+        assert!(check_dialog(&dialog(viele)).is_err());
+        let genug = (0..MAX_FIELDS).map(|n| feld(&n.to_string())).collect();
+        assert!(check_dialog(&dialog(genug)).is_ok());
+        let mut lang = feld("a");
+        lang.kind = FieldKind::Text("x".repeat(MAX_DIALOG_STRING + 1));
+        assert!(check_dialog(&dialog(vec![lang])).is_err());
+        let mut d = dialog(vec![]);
+        d.title_key = "x".repeat(MAX_DIALOG_STRING + 1);
+        assert!(check_dialog(&d).is_err());
+        // Über den Host-Aufruf: `open-dialog` gibt den Fehler zurück, nichts landet im Postfach.
+        let mut r = Recorder(Arc::new(Mutex::new(mailbox())));
+        assert!(r.open_dialog(dialog(vec![feld("a"), feld("a")])).is_err());
+        assert!(lock(&r.0).events.is_empty());
+    }
+
+    fn befehl(id: &str) -> Command {
+        Command {
+            id: id.into(),
+            label_key: "k".into(),
+            icon: None,
+            shortcut: None,
+        }
+    }
+
+    #[test]
+    fn registration_is_checked() {
+        let ok = Registration {
+            commands: (0..MAX_COMMANDS).map(|n| befehl(&n.to_string())).collect(),
+        };
+        assert!(check_registration(&ok).is_ok());
+        let viele = Registration {
+            commands: (0..=MAX_COMMANDS).map(|n| befehl(&n.to_string())).collect(),
+        };
+        assert!(check_registration(&viele).is_err());
+        let mut lang = befehl("a");
+        lang.shortcut = Some("x".repeat(MAX_COMMAND_STRING + 1));
+        assert!(
+            check_registration(&Registration {
+                commands: vec![lang]
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn mailbox_is_capped_in_bytes() {
+        let mut mb = mailbox();
+        // Direkt ins Postfach (ohne Kürzen): 1024 × 16 KiB wären 16 MiB.
+        let big = "x".repeat(16 << 10);
+        for _ in 0..MAX_QUEUE {
+            mb.event(HostEvent::Message {
+                plugin: "a.b".into(),
+                level: Level::Info,
+                text: big.clone(),
+            });
+        }
+        // Über 8 MiB: verworfen, genau ein Hinweis.
+        let hinweise = mb
+            .events
+            .iter()
+            .filter(|e| matches!(e, HostEvent::Log { .. }))
+            .count();
+        assert_eq!(hinweise, 1);
+        assert!(mb.bytes <= MAX_MAILBOX_BYTES);
+        assert!(
+            mb.events.len() < MAX_QUEUE,
+            "nach Bytes begrenzt, nicht nach Zahl"
+        );
+        // Ein großes Netz-Ergebnis zählt nicht mit (begrenzt durch MAX_NET und das Programm).
+        mb.deliver(
+            7,
+            RequestResult::Http(runtime::HttpResponse {
+                status: 200,
+                body: vec![0; 16 << 20],
+            }),
+        );
+        assert!(matches!(mb.deliveries[..], [(7, RequestResult::Http(_))]));
+        // Abgeholt ist wieder Platz.
+        mb.take_events();
+        assert_eq!(mb.bytes, 0);
+    }
+
+    #[test]
+    fn at_most_four_net_requests() {
+        let mut mb = mailbox();
+        for n in 1..=(MAX_NET as u64 + 2) {
+            mb.net(n, "https://example.org/".into());
+        }
+        assert_eq!(mb.net_open.len(), MAX_NET);
+        let failed: Vec<u64> = mb
+            .deliveries
+            .iter()
+            .filter(|(_, r)| matches!(r, RequestResult::Failed(_)))
+            .map(|(n, _)| *n)
+            .collect();
+        assert_eq!(failed, vec![MAX_NET as u64 + 1, MAX_NET as u64 + 2]);
+    }
+
+    #[test]
+    fn commands_matched_exactly() {
+        // `a.b` mit Befehl `c.x` und `a.b.c` mit Befehl `x` ergeben beide „a.b.c.x“.
+        let entry = |id: &str| PluginEntry {
+            id: id.into(),
+            found: Vec::new(),
+            active: None,
+            state: EntryState::Running,
+            rights: Rights::default(),
+            failures: 0,
+        };
+        let slot = |cmd: &str| Slot {
+            commands: vec![befehl(cmd)],
+            ..Slot::new()
+        };
+        let entries = vec![entry("a.b"), entry("a.b.c")];
+        let slots = vec![slot("c.x"), slot("x")];
+        assert_eq!(command_target(&entries, &slots, "a.b.c", "x"), Some(1));
+        assert_eq!(command_target(&entries, &slots, "a.b", "c.x"), Some(0));
+        assert_eq!(command_target(&entries, &slots, "a.b", "x"), None);
+        assert_eq!(command_target(&entries, &slots, "a", "b.c.x"), None);
     }
 }

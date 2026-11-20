@@ -22,6 +22,8 @@ fn plugins_roundtrip() {
         PluginConfig {
             enabled: false,
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
+            author: Some("Dennis Guse".to_string()),
+            source: Some("https://github.com/a/b".to_string()),
             ..Default::default()
         },
     );
@@ -147,6 +149,7 @@ fn plugins_author_and_hosts() {
             rights: BTreeMap::from([("net".to_string(), "allowed".to_string())]),
             author: Some("Dennis Guse".to_string()),
             net_hosts: vec!["example.org".to_string()],
+            source: Some("file".to_string()),
         },
     );
     c.plugins.insert(
