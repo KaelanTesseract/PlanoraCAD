@@ -72,7 +72,7 @@ Liegt als Release-Datei im **neuesten Release** des Katalog-Repos (nicht im Haup
 - Beim ersten Start (Feld false) nach dem Startbildschirm ein Hinweis im Stil der bestehenden Hinweise: „Es gibt Zusatzmodule für PlanoraCAD, z. B. Elektronik. Jetzt ansehen?“ – „Katalog öffnen“ (öffnet Fenster „Zusatzmodule“ am Reiter Katalog) / „Später“. Beide setzen das Feld auf true. Nach einem Update aus einer älteren Version gilt das auch als erster Start (Feld fehlt).
 
 ### Feste Adresse
-- Konstante im Code (`planora-update`): Besitzer und Name des Katalog-Repos. **Offen:** den Namen liefert die Session „PlanoraCAD Plugin-Pläne“, sobald das Repo angelegt ist. Nicht in den Einstellungen änderbar.
+- Konstante im Code (`planora-update`): Katalog-Repo **`KaelanTesseract/PlanoraCAD-Plugins`** (angelegt von der Session „PlanoraCAD Plugin-Pläne“, 2026-11-20; erstes Release `katalog-1` mit einem Eintrag `planora.beispiel-hallo`). Erstes Plug-in-Repo: `KaelanTesseract/PlanoraCAD-Plugin-Hallo`, Release `v0.1.0`. Nicht in den Einstellungen änderbar.
 
 ## Nicht-Ziele
 - Kein Hochladen oder Einreichen von Plug-ins aus dem Programm.
