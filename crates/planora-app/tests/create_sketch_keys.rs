@@ -108,3 +108,30 @@ fn repeat_last_knows_create_sketch() {
     assert_eq!(sketches(&ws), 1);
     assert_eq!(ws.last_command.last(), Some(Action::CreateSketch));
 }
+
+#[test]
+fn create_sketch_closes_the_insert_windows() {
+    // Rest aus dem Teilprojekt: DXF-, SVG- und Leinwand-Fenster wählen selbst Ebenen; mit dem
+    // Wahlmodus von „Skizze erstellen“ gehen sie zu (wie die Ebenen-Fenster), ohne Rest.
+    for open in [Action::InsertDxf, Action::InsertSvg, Action::InsertCanvas] {
+        let mut ws = ws_with_box();
+        run_action(&mut ws, open);
+        let tab = ws.active_tab();
+        assert!(
+            tab.dxf_dialog.is_some() || tab.svg_dialog.is_some() || tab.canvas_dialog.is_some(),
+            "{open:?} offen"
+        );
+        run_action(&mut ws, Action::CreateSketch);
+        let tab = ws.active_tab();
+        assert_eq!(
+            tab.state.pending_pick,
+            Some(PendingPick::NewSketch),
+            "{open:?}"
+        );
+        assert!(tab.dxf_dialog.is_none(), "{open:?}");
+        assert!(tab.svg_dialog.is_none(), "{open:?}");
+        assert!(tab.canvas_dialog.is_none(), "{open:?}");
+        assert!(tab.state.canvas_preview.is_none(), "{open:?}");
+        assert!(tab.state.insert_grips.is_none(), "{open:?}");
+    }
+}
