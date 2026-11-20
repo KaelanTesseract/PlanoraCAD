@@ -1,6 +1,6 @@
 # Plug-ins für PlanoraCAD entwickeln
 
-> **Lizenz zuerst:** Plug-ins müssen unter einer GPL-3.0-verträglichen Lizenz stehen (zum Beispiel `GPL-3.0-only`, `GPL-3.0-or-later`, `MIT`, `Apache-2.0`). Beim Installieren prüft das Programm die Angabe `license` in der `plugin.toml` und weist unbekannte oder unverträgliche Lizenzen zurück.
+> **Lizenz zuerst:** Plug-ins müssen unter einer GPL-3.0-verträglichen Lizenz stehen (zum Beispiel `GPL-3.0-only`, `GPL-3.0-or-later`, `MIT`, `Apache-2.0`). Beim Installieren prüft das Programm die Angabe `license` in der `plugin.toml` (SPDX-Kennungen ohne Rücksicht auf Groß- und Kleinschreibung) und zeigt bei unbekannten oder unverträglichen Lizenzen einen deutlichen Hinweis.
 
 Ein Plug-in ist ein kleines WebAssembly-Programm (eine WASM-Komponente), das PlanoraCAD in einer Sandbox ausführt. Es kann Befehle ins Menü „Datei → Zusatzmodule“ legen, Dialoge öffnen, Meldungen zeigen und mit Erlaubnis des Nutzers Webseiten abrufen. Es sieht nur, was die Schnittstelle ihm gibt.
 
@@ -57,7 +57,7 @@ description = "Beispiel-Plug-in: öffnet einen Dialog und sagt Hallo."
 | `author` | nein | Name des Autors; ändert er sich bei einem Update, fragt das Programm Rechte neu ab |
 | `description` | nein | Kurzbeschreibung |
 | `rights` | nein | Liste aus `net`, `fs-folder`, `model-read`, `model-write` |
-| `net-hosts` | nur mit `net` | Rechnernamen, die das Plug-in abrufen darf (nur der Name, ohne `https://`, Pfad oder Port) |
+| `net-hosts` | nur mit `net` | Rechnernamen, die das Plug-in abrufen darf (nur der Name, ohne `https://`, Pfad oder Port; keine IP-Adressen, auch nicht als Zahl wie `2130706433` oder `0x7f000001`) |
 | `memory-mb` | nein | Arbeitsspeicher für das ganze Plug-in, 1 bis 2048, Standard 512 |
 
 `net` ohne `net-hosts` und `net-hosts` ohne `net` werden abgelehnt. Die Rechte hier beschreiben, was das Plug-in braucht; erteilt werden sie erst vom Nutzer (siehe unten).
@@ -86,11 +86,11 @@ Anfragen des Plug-ins blockieren das Programm nicht: Sie werden eingereiht und s
 
 Als Vorlage dient `plugins/beispiel-hallo` (ein Befehl „Hallo sagen“, ein Dialog mit Name und „laut“, eine Meldung).
 
-1. **Rust und das Ziel installieren.**
+1. **Rust und das Ziel installieren.** Du brauchst Rust 1.85 oder neuer (das Beispiel nutzt Edition 2024; `rustc --version` zeigt die Version, `rustup update` bringt sie auf Stand).
    ```
    rustup target add wasm32-wasip2
    ```
-2. **Projekt anlegen.**
+2. **Projekt anlegen**, und zwar außerhalb des PlanoraCAD-Repos: Liegt der Ordner darin, hält Cargo ihn für einen Teil des Repo-Workspace und baut ihn nicht für sich (die Beispiele unter `plugins/` haben dafür ihren eigenen Workspace).
    ```
    cargo new --lib mein-plugin
    ```
@@ -110,15 +110,24 @@ Als Vorlage dient `plugins/beispiel-hallo` (ein Befehl „Hallo sagen“, ein Di
    wit-bindgen = { version = "0.63", default-features = false, features = ["macros", "realloc"] }
    ```
 4. **WIT-Datei bereitstellen.** Kopiere `crates/planora-plugin-api/wit/plugin.wit` nach `wit/plugin.wit` in dein Projekt, in der Version, für die du baust.
-5. **`src/lib.rs` schreiben.** `wit_bindgen::generate!` erzeugt die Bindungen, dann setzt ein Typ `Guest` um:
+5. **`src/lib.rs` schreiben.** `wit_bindgen::generate!` erzeugt die Bindungen aus der WIT-Datei, dann setzt ein Typ `Guest` um. `generate_all` lässt wit-bindgen auch Bindungen für Schnittstellen aus anderen WIT-Paketen erzeugen, die eine Welt einbindet (ohne die Angabe müsste jede davon unter `with` stehen, sonst bricht der Bau ab). `plugin.wit` braucht heute keine fremden Pakete; die Angabe schadet nicht und hält dein Plug-in baubar, falls eine spätere Version der Schnittstelle etwa WASI-Typen einbindet. Die Typen der Schnittstelle liegen unter `planora::plugin::…`:
    ```rust
    wit_bindgen::generate!({ path: "wit", world: "plugin", generate_all });
+
+   use planora::plugin::types::Command;
 
    struct Mein;
 
    impl Guest for Mein {
        fn init(_info: HostInfo) -> Result<Registration, String> {
-           Ok(Registration { commands: vec![/* Befehle */] })
+           Ok(Registration {
+               commands: vec![Command {
+                   id: "hallo".into(),              // Kennung, kommt in run_command zurück
+                   label_key: "hallo-befehl".into(), // Schlüssel in languages/*.ftl
+                   icon: None,
+                   shortcut: None,
+               }],
+           })
        }
        fn run_command(_id: String) -> Result<(), String> { Ok(()) }
        fn handle_dialog(_id: String, _event: DialogEvent) -> Result<(), String> { Ok(()) }
@@ -141,13 +150,13 @@ Als Vorlage dient `plugins/beispiel-hallo` (ein Befehl „Hallo sagen“, ein Di
 
 ## Rechte und Anfragen
 
-Es gibt vier Rechte: `net`, `fs-folder`, `model-read`, `model-write`. In Etappe 1 ist nur `net` mit Funktion hinterlegt (`net.get`); die übrigen drei sind für spätere Etappen vorgesehen. Ein Recht muss in der `plugin.toml` stehen und wird dann vom Nutzer erteilt:
+Es gibt vier Rechte: `net`, `fs-folder`, `model-read`, `model-write`. In Etappe 1 ist nur `net` mit Funktion hinterlegt (`net.get`); die übrigen drei sind für spätere Etappen vorgesehen: `rights.request` beantwortet sie ohne Nachfrage mit `denied`, und der Installationsdialog zeigt sie als „in dieser Version noch nicht verfügbar“. Ein Recht muss in der `plugin.toml` stehen und wird dann vom Nutzer erteilt:
 
 - Direkt nach dem Installieren hat ein Plug-in **kein** Recht.
-- Beim ersten Gebrauch fragt das Programm mit „Erlauben“, „Nur diesmal“ oder „Ablehnen“. Jede Anfrage trägt eine Kennung (`request-id`), die das Plug-in von `rights.request` bzw. `net.get` zurückbekommt; die Antwort kommt später über `on-result` mit derselben Kennung.
+- Beim ersten Gebrauch fragt das Programm mit „Erlauben“, „Nur diesmal“ oder „Ablehnen“. „Erlauben“ und „Ablehnen“ gelten auf Dauer; „Nur diesmal“ gilt nur für die Anfrage, die gefragt hat (und für Anfragen desselben Rechts, die bis zur Antwort warten), die nächste fragt wieder. Jede Anfrage trägt eine Kennung (`request-id`), die das Plug-in von `rights.request` bzw. `net.get` zurückbekommt; die Antwort kommt später über `on-result` mit derselben Kennung.
 - Der Nutzer kann ein erteiltes Recht in den Einstellungen jederzeit zurücknehmen.
-- Bei einem Update bleiben erteilte Rechte nur erhalten, wenn `author` gleich bleibt; ändert sich `net-hosts`, entfällt das Recht `net` und wird neu gefragt. Fehlt `author`, wird immer neu gefragt.
-- Beim Programmstart gelten gespeicherte Rechte nur, wenn Autor und `net-hosts` zur geladenen `plugin.toml` passen.
+- Bei einem Update bleiben erteilte Rechte nur erhalten, wenn `author` und die Herkunft gleich bleiben (derselbe Repo-Link, oder beide aus einer Datei, oder beide mitgeliefert); ändert sich `net-hosts`, entfällt das Recht `net` und wird neu gefragt. Fehlt `author`, wird immer neu gefragt.
+- Beim Programmstart gelten gespeicherte Rechte nur, wenn Autor, Herkunft und `net-hosts` zur geladenen `plugin.toml` passen.
 
 `net.get` erlaubt nur `https`, Port 443, keine Zugangsdaten in der Adresse, keine IP-Adressen und nur Rechner aus `net-hosts`. Weiterleitungen werden Schritt für Schritt geprüft.
 
@@ -160,9 +169,17 @@ Es gibt vier Rechte: `net`, `fs-folder`, `model-read`, `model-write`. In Etappe 
 | Arbeitsspeicher je Plug-in (alle Speicher und Tabellen zusammen) | `memory-mb`, Standard 512 MB, höchstens 2048 MB |
 | Instanzen, Speicher, Tabellen je Plug-in | höchstens 32, 8, 8 |
 | Ausgabe (stdout/stderr), die zwischen zwei Aufrufen gemerkt wird | 64 KiB |
-| Warteschlange je Plug-in | 1024 Einträge |
+| Warteschlange je Plug-in | 1024 Einträge, Ereignisse (Meldungen, Dialoge, Anfragen) zusammen höchstens 8 MiB; darüber wird verworfen (mit einem Hinweis im Protokoll) |
+| Meldung oder Protokolleintrag | 4 KiB, länger wird mit „…“ gekürzt |
+| Dialog (`open-dialog`) | höchstens 200 Felder, jede Zeichenkette (Kennung, Schlüssel, Textwert) höchstens 1 KiB, Feld-Kennungen nicht leer und nicht doppelt; sonst gibt `open-dialog` einen Fehler zurück |
+| Befehle aus `init` | höchstens 100, jede Zeichenkette höchstens 256 Bytes; sonst startet das Plug-in nicht |
+| Gleichzeitige Netzanfragen (`net.get`) | 4; weitere bekommen sofort `failed` |
+| Ressourcen (WASI-Streams, Wartezeiten) | höchstens 4096 gleichzeitig |
+| Zustellungen (`on-result`) je Bild | höchstens 16 und zusammen 200 ms; der Rest kommt im nächsten Bild |
 
-Wer die Frist reißt, abstürzt oder den Speicher sprengt, wird angehalten; das Programm zeigt „Das Plug-in ist abgestürzt“ bzw. die Ursache und bietet „Neu starten“ an. Nach drei Ausfällen in einer Sitzung bleibt das Plug-in bis zum Neustart des Programms aus.
+Wer die Frist reißt, abstürzt oder den Speicher sprengt, wird angehalten; das Programm zeigt „Das Plug-in ist abgestürzt“ bzw. die Ursache und bietet „Neu starten“ an. Reicht das Budget für Zustellungen in drei Bildern hintereinander nicht (etwa weil `on-result` jedes Mal neue Arbeit anfordert), zählt das ebenfalls als Ausfall („zu viel Arbeit“). Nach drei Ausfällen in einer Sitzung bleibt das Plug-in bis zum Neustart des Programms aus; eine neue Version beginnt wieder bei null.
+
+WASI-Sockets (`wasi:sockets`) und Namensauflösung sind abgeschaltet: Netz gibt es nur über `net.get`.
 
 ## Installieren, Repo-Link und Updates
 
@@ -170,9 +187,9 @@ Wer die Frist reißt, abstürzt oder den Speicher sprengt, wird angehalten; das 
 - **Repo-Link** (Feld im selben Dialog, Knopf „Holen“): ein GitHub-Link der Form `github.com/<Besitzer>/<Repo>`, mit oder ohne `https://`, ohne Port oder Abfrage. Das Programm sucht in den Veröffentlichungen (Releases) des Repos:
   - Eine Veröffentlichung enthält **genau eine** `.pcplugin` und optional dazu `<Paket>.sha256` mit der Prüfsumme. Zwei Prüfsummen oder eine Prüfsumme von fremder Adresse lassen die Veröffentlichung ausfallen.
   - Der **Tag ist die Version**, zum Beispiel `v1.2.0` oder `1.2.0`. Entwürfe und Tags ohne Versionsangabe werden übersprungen.
-  - Kanal nach dem Zusatz: ohne Zusatz stabil, `beta…` oder `rc…` Beta, alles andere Entwicklerkanal. Angeboten werden nur Versionen, die höher sind als die installierte.
-- Das Programm sucht beim Start nach Updates für Plug-ins, die über einen Repo-Link installiert wurden. Gibt es neuere Versionen, erscheint ein Hinweis; das Paket selbst wird erst beim Öffnen von „Aktualisieren“ geladen (höchstens 64 MiB, 5 Minuten insgesamt).
-- Beim Ersetzen durch eine neue Version bleiben Rechte nur bei gleichem Autor und gleichen Rechnern erhalten (siehe oben).
+  - Kanal nach dem Zusatz: ohne Zusatz stabil, `beta…` oder `rc…` Beta, alles andere Entwicklerkanal. Angeboten werden nur Versionen, die nach SemVer-Vorrang höher sind als die installierte (Build-Metadaten wie `+abc` zählen nicht); das gilt auch noch beim Einspielen. Gelesen wird die erste Seite der Release-Liste (bis zu 100 Veröffentlichungen).
+- Das Programm sucht beim Start (höchstens einmal am Tag) nach Updates für Plug-ins, die über einen Repo-Link installiert wurden, und holt dabei nur die Release-Liste (30 Sekunden). Gibt es neuere Versionen, erscheint ein Hinweis; das Paket selbst wird erst beim Öffnen von „Aktualisieren“ geladen (höchstens 64 MiB, 5 Minuten insgesamt); bis dahin zeigt der Dialog „Wird geholt…“.
+- Beim Ersetzen durch eine neue Version bleiben Rechte nur bei gleichem Autor, gleicher Herkunft und gleichen Rechnern erhalten (siehe oben).
 
 ## Andere Sprachen (ungetestet)
 

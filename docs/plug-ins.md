@@ -31,15 +31,15 @@ Die Befehle eines Plug-ins stehen unter **Datei → Zusatzmodule**. Plug-ins öf
 
 ## Rechte
 
-Ein neu installiertes Plug-in darf nichts. Braucht es ein Recht, zum Beispiel den Zugriff auf eine Webseite, fragt PlanoraCAD im Moment des ersten Gebrauchs: **Erlauben**, **Nur diesmal** oder **Ablehnen**. Unter **Datei → Einstellungen … → Plug-ins** siehst du bei jedem Plug-in, welche Rechte es hat, und kannst sie mit **Zurücknehmen** wieder entziehen.
+Ein neu installiertes Plug-in darf nichts. Braucht es ein Recht, zum Beispiel den Zugriff auf eine Webseite, fragt PlanoraCAD im Moment des ersten Gebrauchs: **Erlauben** (gilt auf Dauer), **Nur diesmal** (gilt nur für diese eine Anfrage; beim nächsten Mal fragt PlanoraCAD wieder) oder **Ablehnen** (gilt auf Dauer). Die Rechte „Ordner“, „Modell lesen“ und „Modell ändern“ gibt es in dieser Version noch nicht; der Installationsdialog zeigt sie als „in dieser Version noch nicht verfügbar“, und ein Plug-in bekommt sie nicht. Unter **Datei → Einstellungen … → Plug-ins** siehst du bei jedem Plug-in, welche Rechte es hat, und kannst sie mit **Zurücknehmen** wieder entziehen.
 
 ## Updates
 
-Für Plug-ins, die du über einen Repo-Link installiert hast, sucht PlanoraCAD beim Start nach neuen Versionen. Gibt es welche, erscheint ein Hinweis mit **Anzeigen**. In den Einstellungen findest du bei dem Plug-in **Nach Updates suchen** und **Aktualisieren auf …**. Deine Rechte bleiben erhalten, solange Autor und die erlaubten Internet-Adressen gleich bleiben; sonst fragt PlanoraCAD neu.
+Für Plug-ins, die du über einen Repo-Link installiert hast, sucht PlanoraCAD beim Start (höchstens einmal am Tag) nach neuen Versionen; dabei holt es nur die Liste der Veröffentlichungen. Gibt es welche, erscheint ein Hinweis mit **Anzeigen**. In den Einstellungen findest du bei dem Plug-in **Nach Updates suchen** und **Aktualisieren auf …**. Erst wenn du **Aktualisieren auf …** wählst, lädt PlanoraCAD das neue Paket („Wird geholt …“) und zeigt dann die Änderungen und neu verlangte Rechte. Deine Rechte bleiben erhalten, solange Autor, Herkunft (derselbe Repo-Link) und die erlaubten Internet-Adressen gleich bleiben; sonst fragt PlanoraCAD neu. Eine ältere oder gleiche Version spielt PlanoraCAD nie als Update ein.
 
 ## Wenn ein Plug-in ausfällt
 
-Hängt ein Plug-in, braucht es zu lange oder zu viel Speicher, hält PlanoraCAD es an und zeigt eine Meldung. PlanoraCAD selbst läuft weiter. Mit **Neu starten** startest du das Plug-in wieder. Fällt es mehrmals aus, bleibt es bis zum nächsten Programmstart aus.
+Hängt ein Plug-in, braucht es zu lange oder zu viel Speicher oder hält es die Oberfläche mehrere Bilder hintereinander mit zu viel Arbeit auf, hält PlanoraCAD es an und zeigt eine Meldung. PlanoraCAD selbst läuft weiter. Mit **Neu starten** startest du das Plug-in wieder. Fällt es mehrmals aus, bleibt es bis zum nächsten Programmstart aus.
 
 ## Plug-in entfernen
 

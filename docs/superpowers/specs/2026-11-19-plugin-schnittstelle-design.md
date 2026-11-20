@@ -87,7 +87,7 @@ Grenzen beim Lesen wie bei Projektdateien (Größe, Anzahl Einträge, keine Pfad
 - **Vom Nutzer:** `%APPDATA%\PlanoraCAD\plugins\<id>\` bzw. `~/.local/share/planoracad/plugins/<id>/`. „Plug-in installieren…“ entpackt die Datei dorthin.
 - Gleiche `id` in beiden: das höhere `version` gewinnt, die Verwaltung zeigt beide.
 - Zustand (an/aus, erteilte Rechte) in der Programmkonfiguration (`planora-project/src/config.rs`), pro `id`.
-- Übersetzter Maschinencode wird zwischengespeichert (wasmtime-Cache im Benutzer-Cacheordner), damit der Start schnell bleibt. **Vorschlag (Claude):** Plug-ins laden beim Start im Hintergrund; ihre Menüeinträge erscheinen, sobald sie bereit sind.
+- Übersetzter Maschinencode wird zwischengespeichert (eigener Zwischenspeicher im Benutzer-Cacheordner, siehe Rahmenbedingungen), damit der Start schnell bleibt. **Vorschlag (Claude):** Plug-ins laden beim Start im Hintergrund; ihre Menüeinträge erscheinen, sobald sie bereit sind.
 
 ### Laufzeit und Abschottung
 
@@ -171,7 +171,7 @@ Jede Etappe endet mit Handtest (vorher Dennis fragen), Gesamtprüfung, Vault-Not
 - Alles in Deutsch, Meldungen und Texte über `planora-i18n` (de/en).
 - Plattformen Windows und Ubuntu; Ubuntu-Pfade wie oben.
 - **cargo-deny:** wasmtime und Abhängigkeiten (Lizenzen Apache-2.0 WITH LLVM-exception ist schon erlaubt; neue Lizenzen einzeln prüfen), `wit-bindgen` nur in SDK/Beispielen. Kein Autodesk-Material.
-- Platz auf D: knapp: volle Testläufe mit `CARGO_INCREMENTAL=0` und `CARGO_PROFILE_DEV_DEBUG=0`; wasmtime nur mit den nötigen Features (`cranelift`, `component-model`, `cache`, ohne `wat`-Parser im Programm, nur in Tests).
+- Platz auf D: knapp: volle Testläufe mit `CARGO_INCREMENTAL=0` und `CARGO_PROFILE_DEV_DEBUG=0`; wasmtime nur mit den nötigen Features (`cranelift`, `component-model`, `runtime`, `parallel-compilation`; ohne `wat`-Parser im Programm, nur in Tests). **Abweichung (Etappe 1):** statt des wasmtime-Features `cache` gibt es einen eigenen Zwischenspeicher (`places::load_component`: `<cache>/<SHA-256 des Codes>-<Verträglichkeits-Hash der Engine>.cwasm`, atomar geschrieben, ganz gelesen statt eingeblendet); das spart die Abhängigkeiten des Features. Einträge, die keinem gefundenen Plug-in mehr gehören (oder einer anderen wasmtime-Version), löscht das Programm beim Start im Hintergrund (`places::prune_cache`).
 - Installer: `plugins/`-Ordner im Programm vorgesehen; die Komponente „Elektronik“ kommt in Vorhaben 3.
 
 ## Zweig
