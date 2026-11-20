@@ -555,9 +555,13 @@ impl DocTab {
     /// beim Bearbeiten): Sie wählen sonst in derselben Ansicht. Wer eines dieser Fenster öffnet,
     /// beendet umgekehrt den Wahlmodus.
     pub fn exclude_pick_modes(&mut self) {
-        if self.state.calibrate.is_some() {
-            // „Kalibrieren“ klickt auf die Leinwand selbst: Fenster mit Vorschau und Griffen in
-            // der Ansicht schließen ebenso.
+        let new_sketch = matches!(
+            self.state.pending_pick,
+            Some(crate::state::PendingPick::NewSketch)
+        );
+        if self.state.calibrate.is_some() || new_sketch {
+            // „Kalibrieren“ klickt auf die Leinwand selbst, „Skizze erstellen“ wählt eine Ebene
+            // im Bild: Fenster mit Vorschau und Griffen in der Ansicht schließen ebenso.
             if self.dxf_dialog.take().is_some() {
                 DxfDialog::finish(&mut self.state);
             }
