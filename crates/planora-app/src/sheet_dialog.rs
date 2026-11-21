@@ -324,6 +324,8 @@ impl SheetInfoDialog {
         let main = main_scale(&drawing);
         let (auto, actual) = self.texts(&mut drawing, &sheet_ctx, main);
         let (parts_rows, has_sheets) = self.parts_rows(state);
+        // Ausgeblendete Körper fehlen in der Stückliste; das Fenster sagt es (Wunsch von Dennis).
+        let parts_hidden = state.document.parts_hidden_count();
         // Blattgeometrie dieses Entwurfs (mit seinem Schalter der Stückliste): Zellbreiten,
         // Hinweisfeld und Stückliste für die Warnungen.
         let parts_space = drawing_view::parts_space_for(&drawing, parts_rows.len(), false);
@@ -654,6 +656,9 @@ impl SheetInfoDialog {
                         &layout,
                         has_sheets,
                     );
+                    if parts_hidden > 0 {
+                        ui.weak(crate::msg!("drawing-parts-hidden", n = parts_hidden).text());
+                    }
                 },
                 // ---- Knöpfe (Fußzeile: immer zu sehen, auch bei langer Stückliste) ----
                 |ui| {

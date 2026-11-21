@@ -1601,6 +1601,10 @@ drawing-lost-tip = Das Maß hat seinen Bezug verloren.
 drawing-parent-missing = Die Ausgangsansicht lässt sich nicht zeichnen.
 drawing-none-open = Es ist keine Zeichnung geöffnet.
 drawing-no-views-on-parts-sheet = Auf dem Stücklistenblatt gibt es keine Ansichten.
+drawing-parts-hidden = { $n ->
+    [one] 1 ausgeblendeter Körper ist nicht in der Stückliste.
+   *[other] { $n } ausgeblendete Körper sind nicht in der Stückliste.
+}
 drawing-view-front = Vorne
 drawing-view-back = Hinten
 drawing-view-left = Links

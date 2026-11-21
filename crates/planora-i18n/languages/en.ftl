@@ -1618,6 +1618,10 @@ drawing-lost-tip = The dimension has lost its reference.
 drawing-parent-missing = The source view cannot be drawn.
 drawing-none-open = No drawing is open.
 drawing-no-views-on-parts-sheet = There are no views on the parts list sheet.
+drawing-parts-hidden = { $n ->
+    [one] 1 hidden body is not in the parts list.
+   *[other] { $n } hidden bodies are not in the parts list.
+}
 drawing-view-front = Front
 drawing-view-back = Back
 drawing-view-left = Left

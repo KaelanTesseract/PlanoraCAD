@@ -84,10 +84,15 @@ impl Document {
     }
 
     /// Die Zeilen der Stückliste: sichtbare Körper (ohne Netz-Körper und Unterdrückte), nach
-    /// Anzeigename in der Reihenfolge der ersten Fundstelle zusammengefasst.
+    /// Anzeigename in der Reihenfolge der ersten Fundstelle zusammengefasst. Mit dem Auge
+    /// ausgeblendete Körper zählen nicht ([`Document::body_shown`]); wie viele das sind, sagt
+    /// [`Document::parts_hidden_count`].
     pub fn parts_rows(&self) -> Vec<PartsRow> {
         let mut rows: Vec<PartsRow> = Vec::new();
         for v in self.visible_bodies() {
+            if !self.body_shown(v.body) {
+                continue;
+            }
             let name = self.body_display_name(v.body).unwrap_or(v.name);
             let key = self.body_key(v.body);
             match rows.iter_mut().find(|r| r.name == name) {
@@ -104,6 +109,15 @@ impl Document {
             }
         }
         rows
+    }
+
+    /// Zahl der Körper, die nur wegen ihres Auges (oder des Ordners „Körper“) nicht in der
+    /// Stückliste stehen; die App nennt sie in einem Hinweis.
+    pub fn parts_hidden_count(&self) -> usize {
+        self.visible_bodies()
+            .iter()
+            .filter(|v| !self.body_shown(v.body))
+            .count()
     }
 
     /// Texte der Stückliste (Pos., Benennung, Menge, Werkstoff, Bemerkung) mit den
