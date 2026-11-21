@@ -121,8 +121,8 @@ fn esc() -> Event {
 
 fn offset_rig() -> Rig {
     let mut d = PlaneDialog::new(PlaneCommand::Offset);
-    let mut s = AppState::new();
-    assert!(d.take_click(&mut s, PlaneClick::Standard(StandardPlane::XY)));
+    let s = AppState::new();
+    assert!(d.take_click(&s, PlaneClick::Standard(StandardPlane::XY)));
     Rig::new(d)
 }
 
