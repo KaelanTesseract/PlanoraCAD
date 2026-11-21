@@ -34,7 +34,7 @@
 PlanoraCAD is a free program for designing parts in 3D on your computer: brackets, housings, spare parts or parts for 3D printing. You draw a sketch with dimensions, turn it into a solid and derive a technical drawing from it. Every step is recorded. If you change a dimension later, the program recalculates everything that builds on it.
 
 > [!NOTE]
-> **Early test version.** The current version is `0.0.2-dev.3` (developer channel). Windows (64-bit) gets a ready-made installer; on Ubuntu you build the program yourself. It is meant for trying out, not yet for everyday work. Expect bugs and keep extra copies of important projects. All [feedback](#reporting-bugs-and-wishes) is welcome.
+> **Early test version.** The current version is `0.0.2-dev.4` (developer channel). Windows (64-bit) gets a ready-made installer; on Ubuntu you build the program yourself. It is meant for trying out, not yet for everyday work. Expect bugs and keep extra copies of important projects. All [feedback](#reporting-bugs-and-wishes) is welcome.
 
 ## Contents
 
