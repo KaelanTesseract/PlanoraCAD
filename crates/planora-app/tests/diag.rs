@@ -47,8 +47,14 @@ fn lines_go_to_the_file_with_level_and_time() {
     assert_eq!(lines.len(), 3);
     // JJJJ-MM-TTThh:mm:ssZ STUFE Text (UTC)
     let stamp = &lines[0][..20];
-    let t = chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%dT%H:%M:%SZ").unwrap();
-    assert!(t.and_utc().timestamp() > 1_700_000_000);
+    let t = jiff::civil::DateTime::strptime("%Y-%m-%dT%H:%M:%SZ", stamp).unwrap();
+    assert!(
+        t.to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp()
+            .as_second()
+            > 1_700_000_000
+    );
     assert!(lines[0].ends_with("Z INFO Hallo"));
     assert!(lines[1].ends_with(" WARN Achtung"));
     assert!(lines[2].ends_with(" ERROR Kaputt"));

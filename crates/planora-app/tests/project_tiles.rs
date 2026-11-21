@@ -3,7 +3,6 @@
 
 mod common;
 
-use chrono::{Datelike, NaiveDate, TimeZone, Timelike};
 use planora_app::project_tiles::*;
 use planora_exchange::Progress;
 use planora_feature::Document;
@@ -86,15 +85,11 @@ fn tile(kind: TileKind, documents: usize, unreadable: usize, version: Option<u32
 
 /// Erwartete Ortszeit, unabhängig von `local_time` über die Zeitbibliothek gerechnet.
 fn expected_local(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> String {
-    let utc = NaiveDate::from_ymd_opt(y, mo, d)
+    let local = jiff::civil::date(y as i16, mo as i8, d as i8)
+        .at(h as i8, mi as i8, s as i8, 0)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .unwrap()
-        .and_hms_opt(h, mi, s)
-        .unwrap()
-        .and_utc();
-    let local = chrono::Local
-        .timestamp_opt(utc.timestamp(), 0)
-        .single()
-        .unwrap();
+        .with_time_zone(jiff::tz::TimeZone::system());
     format!(
         "{:02}.{:02}.{:04}, {:02}:{:02}",
         local.day(),

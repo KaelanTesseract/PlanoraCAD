@@ -125,7 +125,7 @@ impl Diag {
         }
         let line = format!(
             "{} {} {}",
-            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ"),
+            jiff::Timestamp::now().strftime("%Y-%m-%dT%H:%M:%SZ"),
             level.label(),
             clean(msg)
         );
@@ -218,7 +218,9 @@ impl Diag {
     /// entschärft.
     pub fn step(&mut self, label: &str) {
         let label = clean(label);
-        let time = chrono::Local::now().format("%H:%M:%S").to_string();
+        let time = crate::local_time::now_local()
+            .strftime("%H:%M:%S")
+            .to_string();
         if let Some(last) = self.steps.back_mut()
             && last.1 == label
         {

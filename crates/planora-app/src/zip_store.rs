@@ -194,11 +194,12 @@ impl Writer {
 /// Änderungszeit als MS-DOS-Zeit und -Datum (Ortszeit, 2-Sekunden-Schritte); unbekannt oder
 /// vor 1980: 1.1.1980.
 fn dos_time(t: Option<std::time::SystemTime>) -> (u16, u16) {
-    use chrono::{Datelike, Timelike};
-    let Some(t) = t else {
+    let Some(local) = t
+        .and_then(|t| jiff::Timestamp::try_from(t).ok())
+        .map(|t| t.to_zoned_datetime(jiff::tz::TimeZone::system()))
+    else {
         return (0, (1 << 5) | 1);
     };
-    let local: chrono::DateTime<chrono::Local> = t.into();
     let year = local.year();
     if !(1980..=2107).contains(&year) {
         return (0, (1 << 5) | 1);

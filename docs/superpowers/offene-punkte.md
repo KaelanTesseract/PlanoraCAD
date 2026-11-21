@@ -3439,3 +3439,16 @@ Grenzen und Annahmen:
 - Stückliste: zählt weiter alle Körper, auch ausgeblendete. Maße an Kanten eines ausgeblendeten Körpers verlieren den Bezug, solange er aus ist. **Annahme:** In Fusion verhält es sich ähnlich; nicht geprüft.
 - Enter direkt im Zahlenfeld übernimmt Erzeugen-, Bearbeiten- und Ebenen-Fenster sofort (wie Fusion). Die übrigen Befehlsfenster (etwa „Auf Fläche projizieren“, Krümmung) übernehmen erst mit einem zweiten Enter nach dem Feld; nicht angeglichen.
 - Ebenen-Fenster: Enter übernimmt jetzt auch (vorher nur Esc).
+
+## Bibliotheken (2026-11-21, Zweig `chore/bibliotheken-pruefung`)
+
+Entwurf `specs/2026-11-21-bibliotheken-pruefung-design.md`, Plan `plans/2026-11-21-bibliotheken-pruefung.md`.
+
+- ~~chrono in planora-app~~ erledigt: Die App rechnet mit jiff 1.0.2 (Absturzberichte, Rückmeldungen, Protokoll, Ortszeit, ZIP-Zeiten; Formate gleich). chrono kommt nur noch über `dxf` 0.6.2; die Ausnahme RUSTSEC-2026-0543 bleibt, bis dxf es ablegt.
+- ~~async-executor 1.14.0 (zurückgezogen)~~ erledigt: 1.14.1.
+- ~~`real_step_text_limit` scheitert auch auf master~~ erledigt: Der Test prüfte fest „0.1 MB“, was nur für die kleine Testgrenze stimmt.
+- Neu: wöchentlicher Bericht `.github/workflows/deps-check.yml` (montags 6 Uhr UTC, von Hand startbar), Skript `.github/scripts/deps_report.py`. Bewusste Ausnahme von „CI nur vor einem Release“, weil er nichts baut.
+- **Grenzen:** Der erste Lauf geht erst nach Merge und Push (Zeitpläne gelten nur auf dem Standardzweig). GitHub schaltet Zeitpläne nach 60 Tagen ohne Push ab. „Neue Fassungen direkter Abhängigkeiten“ kommt aus `cargo outdated --root-deps-only`; die Einordnung „großer Sprung“ (andere Hauptversion, bei 0.x andere Nebenversion) ist eine Faustregel. Die Kette einer Wiedervorlage zeigt nur die direkten Abhängigen des betroffenen Pakets. Rot wird der Lauf auch bei „nicht mehr gepflegt“ (so wertet cargo deny ohne eigene Einstellung) und bei Prüffehlern.
+- **jiff statt chrono, Grenzen:** Die Sommerzeit-Regeln kommen aus der eingebauten Zeitzonen-Datenbank von jiff (Update über das Paket), nicht aus Windows; die Windows-Einstellung „Sommerzeit automatisch anpassen: aus“ wird nicht beachtet. Ist die Zeitzone nicht ermittelbar, zeigen Projektkacheln „… UTC“; Dateinamen von Absturzberichten und Rückmeldungen und ZIP-Zeiten nehmen dann still UTC.
+- **Stand des ersten Berichts (lokal, 2026-11-21):** 89 verträgliche Updates offen (`cargo update`), direkte Abhängigkeiten: crc32fast 1.5.2 → 1.5.5, naga 30.0.1 → 30.0.2, skrifa 0.44 → 0.50 (großer Sprung). Nicht in diesem Zweig erledigt; das entscheidet Dennis nach dem Bericht.
+- CHANGELOG-Einträge kommen beim nächsten Release dazu.

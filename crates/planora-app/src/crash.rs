@@ -272,7 +272,7 @@ pub struct ReportInput {
     pub steps: Vec<Step>,
     pub log: Vec<String>,
     pub document: Option<PathBuf>,
-    pub time: chrono::NaiveDateTime,
+    pub time: jiff::civil::DateTime,
 }
 
 /// Der Berichtstext: beim Dokument nur der Dateiname, der Ablauf gekürzt
@@ -286,7 +286,7 @@ pub fn report_text(input: &ReportInput) -> String {
     t.push_str("PlanoraCAD – crash report\n");
     t.push_str(&format!(
         "{TIME_KEY}: {}\n\n",
-        input.time.format(REPORT_TIME_FORMAT)
+        input.time.strftime(REPORT_TIME_FORMAT)
     ));
     t.push_str(&format!("Version: {}\n", input.version));
     t.push_str(&format!("{ERROR_KEY}: {}\n", input.message));
@@ -331,8 +331,8 @@ pub fn report_text(input: &ReportInput) -> String {
 }
 
 /// Dateiname zum Zeitpunkt (Ortszeit), ohne `:`: `absturz-2026-10-26_14-03-22.txt`.
-pub fn report_file_name(t: chrono::NaiveDateTime) -> String {
-    format!("absturz-{}.txt", t.format("%Y-%m-%d_%H-%M-%S"))
+pub fn report_file_name(t: jiff::civil::DateTime) -> String {
+    format!("absturz-{}.txt", t.strftime("%Y-%m-%d_%H-%M-%S"))
 }
 
 /// Schreibt den Bericht in `dir` (wird angelegt), mit `mask` ohne Benutzerordner. Gibt es den
@@ -461,7 +461,7 @@ fn collect(info: &PanicHookInfo, diag: &Mutex<Diag>) -> ReportInput {
         steps,
         log,
         document,
-        time: chrono::Local::now().naive_local(),
+        time: crate::local_time::now_local(),
     }
 }
 
@@ -633,7 +633,7 @@ pub fn start_run(data_dir: &Path, pid: u32) -> (Option<RunMarker>, StartFinding)
     cleanup_reports(&crash_dir.join(SENT_DIR), SystemTime::now());
     crate::feedback::cleanup_feedback_dirs(
         &data_dir.join(crate::feedback::FEEDBACK_DIR),
-        chrono::Local::now().naive_local(),
+        crate::local_time::now_local(),
     );
     let stale = take_stale_markers(data_dir);
     let reports = list_reports(&crash_dir);

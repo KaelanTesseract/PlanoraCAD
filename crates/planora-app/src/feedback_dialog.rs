@@ -642,7 +642,7 @@ impl FeedbackDialog {
         if built.needs_file {
             let written = match self.context.as_ref() {
                 Some(c) => {
-                    let dir = feedback::bundle_dir(&c.data_dir, chrono::Local::now().naive_local());
+                    let dir = feedback::bundle_dir(&c.data_dir, crate::local_time::now_local());
                     feedback::write_bundle(&dir, &report).map(|_| dir)
                 }
                 None => Err(std::io::Error::other("no data folder")),

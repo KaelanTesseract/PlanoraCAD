@@ -1,0 +1,59 @@
+# Wöchentliche Prüfung der fremden Bibliotheken: nur ein Bericht, hier wird nichts geändert.
+#
+# Bewusste Ausnahme von der Regel "CI nur vor einem Release": Dieser Ablauf baut und testet
+# nichts, er liest nur Cargo.lock und plugins/Cargo.lock. Er läuft montags früh und lässt sich
+# von Hand starten (gh workflow run deps-check.yml). Den Bericht schreibt
+# .github/scripts/deps_report.py in die Zusammenfassung des Laufs und in das Issue
+# "Wöchentliche Prüfung der Bibliotheken" (das offene wird jede Woche ersetzt; ist keins offen, kommt
+# ein neues). Eine Sicherheitsmeldung (auch "nicht mehr gepflegt") oder ein Prüffehler macht den
+# Lauf rot; dann schickt GitHub eine E-Mail.
+name: Bibliotheken prüfen
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: deps-check
+  cancel-in-progress: true
+
+jobs:
+  pruefen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Rust installieren
+        run: rustup toolchain install stable --profile minimal
+      - name: Werkzeuge installieren
+        run: cargo install --locked cargo-deny@0.22.0 cargo-outdated@0.19.0
+      - name: Bericht erstellen
+        id: bericht
+        run: |
+          set +e
+          python3 .github/scripts/deps_report.py --issue issue.md > bericht.md
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          cat bericht.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Issue aktualisieren
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Wöchentliche Prüfung der Bibliotheken"
+          [ -s issue.md ] || echo "Der Bericht ließ sich nicht erstellen; siehe Lauf ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}." > issue.md
+          n=$(gh issue list --state open --limit 100 --search "in:title \"$title\"" \
+                --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)
+          if [ -z "$n" ]; then
+            gh issue create --title "$title" --body-file issue.md
+          else
+            gh issue edit "$n" --body-file issue.md
+          fi
+      - name: Ergebnis
+        run: |
+          if [ "${{ steps.bericht.outputs.status }}" != "0" ]; then
+            echo "::error::Sicherheitsmeldung oder Prüffehler, siehe Bericht."
+            exit 1
+          fi

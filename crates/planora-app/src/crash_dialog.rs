@@ -194,15 +194,15 @@ fn summary(text: &str, count: usize) -> Summary {
 /// Die Zeit des Berichts in der Schreibweise der Sprache; eine Zeit, die sich nicht lesen lässt,
 /// steht, wie sie ist.
 fn shown_time(t: &str) -> String {
-    let parsed = chrono::NaiveDateTime::parse_from_str(t, crate::crash::REPORT_TIME_FORMAT)
-        .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%d.%m.%Y, %H:%M:%S"));
+    let parsed = jiff::civil::DateTime::strptime(crate::crash::REPORT_TIME_FORMAT, t)
+        .or_else(|_| jiff::civil::DateTime::strptime("%d.%m.%Y, %H:%M:%S", t));
     match parsed {
         Ok(d) => tr!(
             "crash-summary-date",
-            day = d.format("%d").to_string(),
-            month = d.format("%m").to_string(),
-            year = d.format("%Y").to_string(),
-            time = d.format("%H:%M:%S").to_string()
+            day = d.strftime("%d").to_string(),
+            month = d.strftime("%m").to_string(),
+            year = d.strftime("%Y").to_string(),
+            time = d.strftime("%H:%M:%S").to_string()
         ),
         Err(_) => t.to_string(),
     }

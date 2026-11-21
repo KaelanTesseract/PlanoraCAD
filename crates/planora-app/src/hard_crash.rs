@@ -168,7 +168,7 @@ mod imp {
             steps,
             log,
             document,
-            time: chrono::Local::now().naive_local(),
+            time: crate::local_time::now_local(),
         }
     }
 }

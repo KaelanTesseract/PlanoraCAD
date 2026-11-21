@@ -948,9 +948,9 @@ pub fn full_text(report: &Report) -> String {
 
 /// Neuer Ordner `rueckmeldungen/<Datum_Uhrzeit>` im Datenordner; gibt es ihn schon, mit
 /// `_2`, `_3` … Der Ordner wird nicht angelegt.
-pub fn bundle_dir(data_dir: &Path, now: chrono::NaiveDateTime) -> PathBuf {
+pub fn bundle_dir(data_dir: &Path, now: jiff::civil::DateTime) -> PathBuf {
     let base = data_dir.join(FEEDBACK_DIR);
-    let stamp = now.format("%Y-%m-%d_%H-%M-%S").to_string();
+    let stamp = now.strftime("%Y-%m-%d_%H-%M-%S").to_string();
     let first = base.join(&stamp);
     if !first.exists() {
         return first;
@@ -968,7 +968,7 @@ pub const FEEDBACK_KEEP_MAX: usize = 10;
 
 /// Zeitpunkt aus dem Ordnernamen `<Datum_Uhrzeit>` oder `<Datum_Uhrzeit>_<n>` (siehe
 /// [`bundle_dir`]) samt Zähler; fremde Namen ergeben `None`.
-fn bundle_stamp(name: &str) -> Option<(chrono::NaiveDateTime, u32)> {
+fn bundle_stamp(name: &str) -> Option<(jiff::civil::DateTime, u32)> {
     const SHAPE: &[u8; 19] = b"dddd-dd-dd_dd-dd-dd";
     let b = name.as_bytes();
     if b.len() < 19 {
@@ -991,7 +991,7 @@ fn bundle_stamp(name: &str) -> Option<(chrono::NaiveDateTime, u32)> {
         }
         digits.parse::<u32>().ok().filter(|n| *n >= 2)?
     };
-    let t = chrono::NaiveDateTime::parse_from_str(&name[..19], "%Y-%m-%d_%H-%M-%S").ok()?;
+    let t = jiff::civil::DateTime::strptime("%Y-%m-%d_%H-%M-%S", &name[..19]).ok()?;
     Some((t, n))
 }
 
@@ -999,11 +999,11 @@ fn bundle_stamp(name: &str) -> Option<(chrono::NaiveDateTime, u32)> {
 /// Tage sind, und danach alle bis auf die [`FEEDBACK_KEEP_MAX`] neuesten werden gelöscht. Das
 /// Alter steht im Ordnernamen. Nur eigene Ordner (Namensmuster von [`bundle_dir`]); Dateien und
 /// fremde Ordner bleiben, Fehler werden übergangen.
-pub fn cleanup_feedback_dirs(base: &Path, now: chrono::NaiveDateTime) {
+pub fn cleanup_feedback_dirs(base: &Path, now: jiff::civil::DateTime) {
     let Ok(entries) = std::fs::read_dir(base) else {
         return;
     };
-    let mut own: Vec<((chrono::NaiveDateTime, u32), PathBuf)> = entries
+    let mut own: Vec<((jiff::civil::DateTime, u32), PathBuf)> = entries
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|e| Some((bundle_stamp(e.file_name().to_str()?)?, e.path())))
@@ -1014,9 +1014,9 @@ pub fn cleanup_feedback_dirs(base: &Path, now: chrono::NaiveDateTime) {
         key.0 = key.0.min(now);
     }
     own.sort_by_key(|a| std::cmp::Reverse(a.0));
-    let max_age = chrono::Duration::days(FEEDBACK_KEEP_DAYS);
+    let max_age = jiff::SignedDuration::from_hours(24 * FEEDBACK_KEEP_DAYS);
     for (i, ((time, _), path)) in own.iter().enumerate() {
-        if i >= FEEDBACK_KEEP_MAX || now.signed_duration_since(*time) > max_age {
+        if i >= FEEDBACK_KEEP_MAX || time.duration_until(now) > max_age {
             let _ = std::fs::remove_dir_all(path);
         }
     }
