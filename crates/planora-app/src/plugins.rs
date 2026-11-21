@@ -679,17 +679,19 @@ impl Plugins {
     /// laufendes Holen wird verworfen.
     pub fn install_from_link(&mut self, text: &str) {
         self.fetch_from_catalog = false;
-        self.start_fetch(text);
+        self.start_fetch(text, None);
     }
 
     /// Wie [`Plugins::install_from_link`] für einen Eintrag des Katalogs: dieselbe Adresse
-    /// (`repo.web_url()`), in der Herkunft aber als „aus dem Katalog“ vermerkt.
+    /// (`repo.web_url()`), in der Herkunft aber als „aus dem Katalog“ vermerkt. Das Paket muss
+    /// die Kennung des Eintrags tragen, sonst gibt es nur einen Hinweis.
     pub fn install_from_catalog(&mut self, entry: &CatalogEntry) {
         self.fetch_from_catalog = true;
-        self.start_fetch(&entry.repo.web_url());
+        self.start_fetch(&entry.repo.web_url(), Some(entry.id.clone()));
     }
 
-    fn start_fetch(&mut self, text: &str) {
+    /// `expected_id`: Kennung, die das geholte Paket tragen muss.
+    fn start_fetch(&mut self, text: &str, expected_id: Option<String>) {
         self.note = None;
         self.install = None;
         self.fetching = None;
@@ -702,7 +704,7 @@ impl Plugins {
         };
         let (fetch, channel) = (self.repo_fetch, self.channel);
         self.fetching = Some(Job::spawn(move |_| {
-            plugin_repo::fetch_for_install(fetch, link, channel)
+            plugin_repo::fetch_for_install(fetch, link, channel, expected_id.as_deref())
         }));
     }
 

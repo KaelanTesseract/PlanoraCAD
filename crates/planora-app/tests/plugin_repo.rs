@@ -403,6 +403,40 @@ fn install_from_catalog_marks_provenance() {
     );
 }
 
+/// Der Katalog nennt `planora.elektronik`, das Release enthält aber `foo.bar`: kein Dialog,
+/// nichts installiert, der Fehler steht im Fenster.
+#[test]
+fn install_from_catalog_rejects_foreign_id() {
+    let owner = "inst-katalog-fremd";
+    let bytes = paket_bauen("foo.bar", "0.1.0", &[]);
+    releases(
+        owner,
+        &[release(owner, "v0.1.0", &bytes, richtige_summe(&bytes))],
+    );
+    let mut h = harness(
+        "inst-katalog-fremd",
+        orte("inst-katalog-fremd", &[]),
+        Config::default(),
+    );
+    let entry = planora_update::catalog::CatalogEntry {
+        id: "planora.elektronik".to_string(),
+        name: BTreeMap::new(),
+        description: BTreeMap::new(),
+        category: String::new(),
+        repo: planora_update::plugin_source::parse_repo_link(&link(owner)).unwrap(),
+        symbol: None,
+    };
+    h.ws.plugins.install_from_catalog(&entry);
+    let seen = warten(&mut h);
+    let expected = "Das Release v0.1.0 enthält ein anderes Plug-in (foo.bar).";
+    assert_eq!(h.ws.plugins.note.as_deref(), Some(expected));
+    assert!(has(&seen, expected), "{}", join(&seen));
+    assert!(h.ws.plugins.install.is_none(), "kein Dialog");
+    let user = h.ws.plugins.host.places().user.clone();
+    assert!(!user.join("foo.bar").exists(), "nichts installiert");
+    assert!(!user.join("planora.elektronik").exists(), "nichts installiert");
+}
+
 #[test]
 fn install_from_link_errors() {
     let bytes = datei("beispiel-hallo");

@@ -120,16 +120,18 @@ pub fn fetch_package(
 }
 
 /// Auftrag „Holen“ im Installationsdialog: das neueste Release im Kanal samt geprüftem Paket.
+/// Mit `expected_id` (aus dem Katalog) muss das Paket genau dieses Plug-in sein.
 pub fn fetch_for_install(
     fetch: RepoFetch,
     link: RepoLink,
     channel: Channel,
+    expected_id: Option<&str>,
 ) -> Result<Fetched, String> {
     let releases = fetch_releases(fetch, &link)?;
     let release = pick_plugin_release(&releases, None, channel)
         .cloned()
         .ok_or_else(|| tr!("plugin-link-no-release"))?;
-    let package = fetch_package(fetch, &release, None)?;
+    let package = fetch_package(fetch, &release, expected_id)?;
     Ok(Fetched {
         link,
         release,
