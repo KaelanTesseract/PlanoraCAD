@@ -241,7 +241,9 @@ cargo test --workspace
 cargo deny check
 ```
 
-Unter Ubuntu braucht es zusätzlich die Bibliotheken aus [Unter Ubuntu](#unter-ubuntu) (dieselben wie in `.github/workflows/ci.yml`). Die CI prüft jede Änderung unter Windows und Ubuntu.
+Unter Ubuntu braucht es zusätzlich die Bibliotheken aus [Unter Ubuntu](#unter-ubuntu) (dieselben wie in `.github/workflows/ci.yml`). Vor einem Merge wird lokal unter Windows und Ubuntu geprüft; die CI (`ci.yml`) läuft von Hand vor einem Release.
+
+Jeden Montag prüft `.github/workflows/deps-check.yml` alle fremden Bibliotheken (auch die der Beispiel-Plug-ins): Sicherheitsmeldungen, Lizenzen, neuere Fassungen und die Ausnahmen in `deny.toml`. Der Bericht steht im Issue „Wöchentliche Prüfung der Bibliotheken“; bei einer Sicherheitsmeldung wird der Lauf rot. Geändert wird dabei nichts. Lokal geht dasselbe mit `python .github/scripts/deps_report.py` (braucht `cargo-deny` und `cargo-outdated`).
 
 Den Installer baust du nach `cargo build --release -p planora-app` mit `tools\build-installer.ps1`. Er braucht Inno Setup 6.7 oder neuer für den Installationsteil und bettet ihn in die Oberfläche `planora-setup` ein. Das Ergebnis `planoracad-setup-x64.exe` mit Prüfsumme landet im Ordner `dist`.
 
