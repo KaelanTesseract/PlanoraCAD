@@ -57,7 +57,7 @@ Liegt als Release-Datei im **neuesten Release** des Katalog-Repos (nicht im Haup
 
 ### Fenster „Zusatzmodule“
 - Zwei Reiter: **„Installiert“** (das heutige Fenster) und **„Katalog“**.
-- Katalog: links Liste mit Symbol, Name, Kategorie; oben Suche (Name und Beschreibung, ohne Groß/Klein) und Filter nach Kategorie; rechts Details: Beschreibung, neueste Version aus dem Plug-in-Repo, verlangte Rechte (erst bekannt nach dem Laden des Pakets – bis dahin „wird beim Installieren angezeigt“), Quelle (Repo-Link) und Knopf **„Installieren“** bzw. „Installiert“ / „Aktualisieren auf { $version }“.
+- Katalog: links Liste mit Symbol, Name, Kategorie; oben Suche (Name und Beschreibung, ohne Groß/Klein) und Filter nach Kategorie; rechts Details: Beschreibung, Version (installierte oder gefundene neuere; sonst „–“ – das Holen der neuesten Version beim Öffnen der Details ist offener Punkt), Hinweis „Rechte werden beim Installieren angezeigt“, Quelle (Repo-Link) und Knopf **„Installieren“** bzw. „Installiert“ / „Aktualisieren auf { $version }“.
 - „Installieren“ nutzt den Repo-Link-Weg aus Etappe 1 (Release holen, Prüfungen, Installationsdialog, Rechte); `herkunft.json` bekommt zusätzlich die Kennung `katalog: true` (Vorschlag (Claude)), damit „Installiert“ die Herkunft „aus dem Katalog“ anzeigen kann.
 
 ### Laden und Zwischenspeicher
