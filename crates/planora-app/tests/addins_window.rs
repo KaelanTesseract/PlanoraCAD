@@ -1327,6 +1327,7 @@ fn installed_shows_installed() {
     );
     h.w.select_catalog(HALLO);
     let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Neueste Version: 0.1.0"), "{}", join(&seen));
     assert!(!has(&seen, "Installieren"), "{}", join(&seen));
     assert!(
         !seen.iter().any(|s| s.text.starts_with("Aktualisieren auf")),
@@ -1593,4 +1594,94 @@ fn broken_symbol_entry_still_listed() {
     let mut h = katalog_harness("kat-symbol", leere_orte("kat-symbol"));
     let seen = bild(&mut h, vec![]);
     assert!(has(&seen, "Mit Symbol"), "{}", join(&seen));
+}
+
+/// Fix-Runde 1: Symbole über 256 px Kantenlänge gelten als unbrauchbar (Standardsymbol); der
+/// Kopf wird vorab geprüft.
+#[test]
+fn symbol_size_is_capped() {
+    use planora_app::addins_window::{SYMBOL_MAX_PIXELS, decode_symbol};
+    assert_eq!(SYMBOL_MAX_PIXELS, 256);
+    let png = planora_app::logo::ICON_256;
+    // Das 256-px-Symbol des Programms liegt genau auf der Grenze und wird gelesen.
+    assert_eq!(decode_symbol(png).expect("256 px").size, [256, 256]);
+    let mut breit = png.to_vec();
+    breit[16..20].copy_from_slice(&257u32.to_be_bytes());
+    breit[20..24].copy_from_slice(&1u32.to_be_bytes());
+    assert!(decode_symbol(&breit).is_none(), "257 x 1");
+    let mut hoch = png.to_vec();
+    hoch[16..20].copy_from_slice(&1u32.to_be_bytes());
+    hoch[20..24].copy_from_slice(&257u32.to_be_bytes());
+    assert!(decode_symbol(&hoch).is_none(), "1 x 257");
+}
+
+/// Ein Katalog mit dem Eintrag `id` und dem Symbol `s.png` mit den Bytes `png`.
+fn katalog_mit_symbol(png: &[u8]) {
+    let text = "{\"format\":1,\"eintraege\":[{\"id\":\"planora.mit-symbol\",\
+        \"name\":{\"de\":\"Mit Symbol\"},\"kategorie\":\"werkzeuge\",\
+        \"repo\":\"https://github.com/jemand/mit-symbol\",\"symbol\":\"s.png\"}]}";
+    let release = format!(
+        "{{\"tag_name\":\"{KATALOG_TAG}\",\"draft\":false,\"assets\":[\
+         {{\"name\":\"katalog.json\",\"browser_download_url\":\"{}\",\"size\":{}}},\
+         {{\"name\":\"s.png\",\"browser_download_url\":\"{}\",\"size\":{}}}]}}",
+        katalog_asset("katalog.json"),
+        text.len(),
+        katalog_asset("s.png"),
+        png.len()
+    );
+    antwort(
+        &planora_update::catalog::latest_release_url(),
+        Ok((200, release.into_bytes())),
+    );
+    antwort(
+        &katalog_asset("katalog.json"),
+        Ok((200, text.as_bytes().to_vec())),
+    );
+    antwort(&katalog_asset("s.png"), Ok((200, png.to_vec())));
+}
+
+/// Fix-Runde 1: ein neuer Stand mit gleichem Symbolnamen und gleicher Länge, aber anderem Inhalt
+/// ergibt eine neue Textur (der Zwischenspeicher hängt am Stand, nicht an Name und Länge).
+#[test]
+fn symbol_texture_refreshed_on_new_catalog() {
+    let _g = netz_anfang();
+    let alt = planora_app::logo::ICON_64.to_vec();
+    // Gleicher Name, gleiche Länge (hier dasselbe Bild): maßgeblich ist der neue Stand, nicht
+    // Name und Länge.
+    let neu = alt.clone();
+    katalog_mit_symbol(&alt);
+    let mut h = katalog_harness("kat-textur", leere_orte("kat-textur"));
+    bild(&mut h, vec![]);
+    let erste = h.w.symbol_texture_id("s.png").expect("Textur");
+    // Derselbe Stand: dieselbe Textur.
+    bild(&mut h, vec![]);
+    assert_eq!(h.w.symbol_texture_id("s.png"), Some(erste));
+    // Neuer Stand (anderer Zeitpunkt), gleicher Name, gleiche Länge: neue Textur.
+    katalog_mit_symbol(&neu);
+    let spaeter = planora_app::update_check::now_unix() + 3600;
+    h.ws.plugins.catalog.request(netz, spaeter, true);
+    katalog_warten(&mut h);
+    bild(&mut h, vec![]);
+    let zweite = h.w.symbol_texture_id("s.png").expect("neue Textur");
+    assert_ne!(zweite, erste, "alter Stand bleibt nicht stehen");
+}
+
+/// Fix-Runde 1: eine gewählte Kategorie, die nach dem Neuladen fehlt, wird zu „Alle“.
+#[test]
+fn missing_category_resets_to_all() {
+    let _g = netz_anfang();
+    katalog_release(1, &zwei_eintraege());
+    let mut h = katalog_harness("kat-kat-weg", leere_orte("kat-kat-weg"));
+    h.w.set_category(Some("beispiele"));
+    let seen = bild(&mut h, vec![]);
+    assert!(!has(&seen, "Elektronik-Helfer"), "{}", join(&seen));
+    assert_eq!(h.w.category(), Some("beispiele"));
+    // Der neue Stand kennt nur noch Elektronik.
+    katalog_release(1, &zwei_eintraege()[..1]);
+    let spaeter = planora_app::update_check::now_unix() + 3600;
+    h.ws.plugins.catalog.request(netz, spaeter, true);
+    katalog_warten(&mut h);
+    let seen = bild(&mut h, vec![]);
+    assert_eq!(h.w.category(), None);
+    assert!(has(&seen, "Elektronik-Helfer"), "{}", join(&seen));
 }

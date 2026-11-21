@@ -135,6 +135,8 @@ pub struct AddinsWindow {
     category: Option<String>,
     /// Der gewählte Eintrag im Katalog (Kennung); fehlt er in der Liste, gilt der erste.
     catalog_selected: Option<String>,
+    /// Die gelesenen Symbole des Katalogs (Texturen), je Stand des Katalogs neu aufgebaut.
+    symbols: SymbolCache,
     /// Rechteck des Fensters im letzten Bild (Layouttests).
     pub last_rect: Option<egui::Rect>,
     /// Rechteck des Schalters je Plug-in im letzten Bild (Tests klicken darauf).
@@ -178,17 +180,26 @@ impl AddinsWindow {
     /// Die Kategorien, die im Katalog vorkommen (in der Reihenfolge des ersten Auftretens); ein
     /// leerer Schlüssel steht für „Sonstiges“ (keine oder unbekannte Kategorie).
     pub fn categories(&self, plugins: &Plugins) -> Vec<String> {
-        let CatalogState::Ready { entries, .. } = plugins.catalog.state() else {
-            return Vec::new();
-        };
-        let mut keys: Vec<String> = Vec::new();
-        for e in entries {
-            let key = category_key(&e.category);
-            if !keys.iter().any(|k| k == key) {
-                keys.push(key.to_string());
-            }
+        match plugins.catalog.state() {
+            CatalogState::Ready { entries, .. } => category_keys(entries)
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            _ => Vec::new(),
         }
-        keys
+    }
+
+    /// Die gewählte Kategorie (`None`: „Alle“).
+    pub fn category(&self) -> Option<&str> {
+        self.category.as_deref()
+    }
+
+    /// Die Textur des Symbols `name` im Zwischenspeicher des Fensters (Tests).
+    pub fn symbol_texture_id(&self, name: &str) -> Option<egui::TextureId> {
+        self.symbols
+            .map
+            .get(name)
+            .and_then(|(_, t)| t.as_ref().map(|t| t.id()))
     }
 
     pub fn close(&mut self) {
@@ -260,7 +271,15 @@ impl AddinsWindow {
         }
         let locked = ws.prompt.is_some();
         let (mut open, mut close) = (true, false);
+        // Eine gewählte Kategorie, die der geladene Katalog nicht (mehr) hat, wird zu „Alle“.
+        if let (Some(c), CatalogState::Ready { entries, .. }) =
+            (&self.category, ws.plugins.catalog.state())
+            && !category_keys(entries).contains(&c.as_str())
+        {
+            self.category = None;
+        }
         let tab = self.tab;
+        let mut symbols = std::mem::take(&mut self.symbols);
         let mut search = self.search.clone();
         let mut category = self.category.clone();
         let catalog_selected = self.catalog_selected.clone();
@@ -289,6 +308,7 @@ impl AddinsWindow {
                             let mut view = CatalogView {
                                 search: &mut search,
                                 category: &mut category,
+                                symbols: &mut symbols,
                                 selected: catalog_selected.as_deref(),
                             };
                             show_catalog(ui, &ws.plugins, &mut view, &mut actions);
@@ -328,6 +348,7 @@ impl AddinsWindow {
                 },
             );
         self.last_toggles = toggles;
+        self.symbols = symbols;
         let actions = match response {
             Some(r) => {
                 self.last_rect = Some(r.response.rect);
@@ -712,8 +733,9 @@ fn show_details(
 
 /// Kantenlänge des Symbols in der Liste (Punkte).
 const SYMBOL_SIZE: f32 = 24.0;
-/// Größte Kantenlänge eines Symbols in Pixeln; größere Bilder gelten als unbrauchbar.
-const SYMBOL_MAX_PIXELS: u32 = 2048;
+/// Größte Kantenlänge eines Symbols in Pixeln (es wird mit 24 Punkten gezeigt); größere Bilder
+/// gelten als unbrauchbar (Standardsymbol), so bleibt der Speicher je Symbol klein.
+pub const SYMBOL_MAX_PIXELS: u32 = 256;
 /// Die Kategorien, für die das Programm eine Übersetzung kennt (alles andere ist „Sonstiges“).
 const KNOWN_CATEGORIES: [&str; 4] = ["elektronik", "import-export", "werkzeuge", "beispiele"];
 /// Breite des Suchfelds.
@@ -726,6 +748,19 @@ fn category_key(category: &str) -> &str {
         .find(|k| **k == category)
         .copied()
         .unwrap_or("")
+}
+
+/// Die Kategorie-Schlüssel der Einträge in der Reihenfolge des ersten Auftretens (ohne
+/// Wiederholung); der leere Schlüssel steht für „Sonstiges“.
+fn category_keys(entries: &[CatalogEntry]) -> Vec<&str> {
+    let mut keys: Vec<&str> = Vec::new();
+    for e in entries {
+        let key = category_key(&e.category);
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 /// Anzeigetext einer Kategorie (nach [`category_key`]).
@@ -764,7 +799,26 @@ fn matches(e: &CatalogEntry, lang: &str, search: &str, category: Option<&str>) -
 struct CatalogView<'a> {
     search: &'a mut String,
     category: &'a mut Option<String>,
+    symbols: &'a mut SymbolCache,
     selected: Option<&'a str>,
+}
+
+/// Die Texturen der Symbole eines Stands des Katalogs: Name → (Länge der Bytes, Textur oder
+/// `None` für ein unlesbares Symbol). Ändert sich der Stand (`fetched_at`), wird alles neu
+/// aufgebaut, die alten Texturen fallen weg.
+#[derive(Default)]
+struct SymbolCache {
+    stamp: Option<u64>,
+    map: BTreeMap<String, (usize, Option<egui::TextureHandle>)>,
+}
+
+impl SymbolCache {
+    fn sync(&mut self, stamp: u64) {
+        if self.stamp != Some(stamp) {
+            self.map.clear();
+            self.stamp = Some(stamp);
+        }
+    }
 }
 
 /// Die Reiter „Installiert“ und „Katalog“.
@@ -846,8 +900,12 @@ fn show_catalog(
             ui.colored_label(warning, tr!("catalog-too-new"));
         }
         CatalogState::Ready {
-            entries, symbols, ..
+            entries,
+            symbols,
+            fetched_at,
+            ..
         } => {
+            view.symbols.sync(*fetched_at);
             let lang = planora_i18n::current().id().to_string();
             let shown: Vec<&CatalogEntry> = entries
                 .iter()
@@ -862,7 +920,7 @@ fn show_catalog(
                 show_catalog_list(
                     ui,
                     &shown,
-                    symbols,
+                    (symbols, view.symbols),
                     current.map(|e| e.id.as_str()),
                     entries.is_empty(),
                     &lang,
@@ -878,16 +936,7 @@ fn show_catalog(
 /// Suchfeld und Auswahl der Kategorie.
 fn show_filters(ui: &mut egui::Ui, plugins: &Plugins, view: &mut CatalogView<'_>, enabled: bool) {
     let keys = match plugins.catalog.state() {
-        CatalogState::Ready { entries, .. } => {
-            let mut keys: Vec<&str> = Vec::new();
-            for e in entries {
-                let key = category_key(&e.category);
-                if !keys.contains(&key) {
-                    keys.push(key);
-                }
-            }
-            keys
-        }
+        CatalogState::Ready { entries, .. } => category_keys(entries),
         _ => Vec::new(),
     };
     ui.horizontal(|ui| {
@@ -929,7 +978,7 @@ fn show_filters(ui: &mut egui::Ui, plugins: &Plugins, view: &mut CatalogView<'_>
 fn show_catalog_list(
     ui: &mut egui::Ui,
     shown: &[&CatalogEntry],
-    symbols: &BTreeMap<String, Vec<u8>>,
+    symbols: (&BTreeMap<String, Vec<u8>>, &mut SymbolCache),
     current: Option<&str>,
     catalog_empty: bool,
     lang: &str,
@@ -958,7 +1007,7 @@ fn show_catalog_list(
             theme::scroll_area(ui, list, |ui| {
                 for e in shown {
                     ui.horizontal(|ui| {
-                        show_symbol(ui, e, symbols);
+                        show_symbol(ui, e, symbols.0, symbols.1);
                         let name = egui::Button::selectable(
                             current == Some(e.id.as_str()),
                             catalog_name(e, lang),
@@ -1019,10 +1068,17 @@ fn show_catalog_details(
                         .wrap(),
                 );
                 let update = plugins.found_update(&e.id);
-                let latest = update.map_or_else(
-                    || tr!("catalog-version-unknown"),
-                    |u| u.to.version.to_string(),
-                );
+                // Ohne Update ist die installierte Version die neueste bekannte; nicht installiert „–“.
+                let installed_version = plugins
+                    .host
+                    .entries()
+                    .iter()
+                    .find(|p| p.id == e.id)
+                    .and_then(|p| shown(p).map(|i| p.found[i].manifest.version.to_string()));
+                let latest = update
+                    .map(|u| u.to.version.to_string())
+                    .or(installed_version)
+                    .unwrap_or_else(|| tr!("catalog-version-unknown"));
                 ui.label(tr!("catalog-detail-latest", version = latest));
                 ui.add(egui::Label::new(tr!("catalog-rights-later")).wrap());
                 ui.add_space(theme::SPACE_2);
@@ -1059,12 +1115,17 @@ fn show_catalog_details(
 
 /// Das Symbol eines Eintrags (24 px) oder, wenn es fehlt oder sich nicht lesen lässt, das
 /// Standardsymbol.
-fn show_symbol(ui: &mut egui::Ui, e: &CatalogEntry, symbols: &BTreeMap<String, Vec<u8>>) {
+fn show_symbol(
+    ui: &mut egui::Ui,
+    e: &CatalogEntry,
+    symbols: &BTreeMap<String, Vec<u8>>,
+    cache: &mut SymbolCache,
+) {
     let texture = e
         .symbol
         .as_deref()
         .and_then(|name| symbols.get(name).map(|bytes| (name, bytes)))
-        .and_then(|(name, bytes)| symbol_texture(ui.ctx(), name, bytes));
+        .and_then(|(name, bytes)| symbol_texture(ui.ctx(), cache, name, bytes));
     match texture {
         Some(t) => {
             ui.add(egui::Image::new(&t).fit_to_exact_size(egui::vec2(SYMBOL_SIZE, SYMBOL_SIZE)));
@@ -1095,25 +1156,34 @@ fn default_symbol(ui: &mut egui::Ui) {
     ui.painter().rect_filled(knob, 1.0, color);
 }
 
-/// Die Textur eines Symbols, einmal gelesen und im Kontext gemerkt (je Name und Länge); `None`,
+/// Die Textur eines Symbols, einmal je Stand des Katalogs gelesen und in `cache` gemerkt; `None`,
 /// wenn sich die Bytes nicht als PNG lesen lassen (auch SVG: ohne Rasterer im Programm, dafür
 /// steht das Standardsymbol) oder das Bild zu groß ist.
-fn symbol_texture(ctx: &egui::Context, name: &str, bytes: &[u8]) -> Option<egui::TextureHandle> {
-    if bytes.len() as u64 > MAX_SYMBOL_BYTES {
-        return None;
+fn symbol_texture(
+    ctx: &egui::Context,
+    cache: &mut SymbolCache,
+    name: &str,
+    bytes: &[u8],
+) -> Option<egui::TextureHandle> {
+    if let Some((len, texture)) = cache.map.get(name)
+        && *len == bytes.len()
+    {
+        return texture.clone();
     }
-    let id = egui::Id::new(("planora-katalog-symbol", name, bytes.len()));
-    if let Some(cached) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
-        return cached;
-    }
-    let texture = decode_symbol(bytes).map(|image| {
-        ctx.load_texture(
-            format!("katalog-symbol-{name}"),
-            image,
-            egui::TextureOptions::LINEAR,
-        )
-    });
-    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    let texture = if bytes.len() as u64 > MAX_SYMBOL_BYTES {
+        None
+    } else {
+        decode_symbol(bytes).map(|image| {
+            ctx.load_texture(
+                format!("katalog-symbol-{name}"),
+                image,
+                egui::TextureOptions::LINEAR,
+            )
+        })
+    };
+    cache
+        .map
+        .insert(name.to_string(), (bytes.len(), texture.clone()));
     texture
 }
 
