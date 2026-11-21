@@ -3316,11 +3316,11 @@ dependencies = [
 
 [[package]]
 name = "planora-plugin-api"
-version = "0.0.2-dev.2"
+version = "0.0.2-dev.4"
 
 [[package]]
 name = "planora-plugin-host"
-version = "0.0.2-dev.2"
+version = "0.0.2-dev.4"
 dependencies = [
  "async-trait",
  "bytes",
