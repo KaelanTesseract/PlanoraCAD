@@ -803,13 +803,13 @@ struct CatalogView<'a> {
     selected: Option<&'a str>,
 }
 
-/// Die Texturen der Symbole eines Stands des Katalogs: Name → (Länge der Bytes, Textur oder
+/// Die Texturen der Symbole eines Stands des Katalogs: Name → (Hash der Bytes, Textur oder
 /// `None` für ein unlesbares Symbol). Ändert sich der Stand (`fetched_at`), wird alles neu
 /// aufgebaut, die alten Texturen fallen weg.
 #[derive(Default)]
 struct SymbolCache {
     stamp: Option<u64>,
-    map: BTreeMap<String, (usize, Option<egui::TextureHandle>)>,
+    map: BTreeMap<String, (u64, Option<egui::TextureHandle>)>,
 }
 
 impl SymbolCache {
@@ -1156,6 +1156,14 @@ fn default_symbol(ui: &mut egui::Ui) {
     ui.painter().rect_filled(knob, 1.0, color);
 }
 
+/// Hash des Inhalts (erkennt ein geändertes Symbol gleicher Länge unter demselben Namen).
+fn content_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Die Textur eines Symbols, einmal je Stand des Katalogs gelesen und in `cache` gemerkt; `None`,
 /// wenn sich die Bytes nicht als PNG lesen lassen (auch SVG: ohne Rasterer im Programm, dafür
 /// steht das Standardsymbol) oder das Bild zu groß ist.
@@ -1165,8 +1173,9 @@ fn symbol_texture(
     name: &str,
     bytes: &[u8],
 ) -> Option<egui::TextureHandle> {
-    if let Some((len, texture)) = cache.map.get(name)
-        && *len == bytes.len()
+    let hash = content_hash(bytes);
+    if let Some((cached, texture)) = cache.map.get(name)
+        && *cached == hash
     {
         return texture.clone();
     }
@@ -1181,9 +1190,7 @@ fn symbol_texture(
             )
         })
     };
-    cache
-        .map
-        .insert(name.to_string(), (bytes.len(), texture.clone()));
+    cache.map.insert(name.to_string(), (hash, texture.clone()));
     texture
 }
 

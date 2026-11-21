@@ -1685,3 +1685,38 @@ fn missing_category_resets_to_all() {
     assert_eq!(h.w.category(), None);
     assert!(has(&seen, "Elektronik-Helfer"), "{}", join(&seen));
 }
+
+/// Ein PNG mit einem Pixel der Farbe `rgba`.
+fn png_1x1(rgba: [u8; 4]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, 1, 1);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header().unwrap().write_image_data(&rgba).unwrap();
+    out
+}
+
+/// Fix-Runde 2: zwei verschiedene PNG gleicher Länge unter demselben Namen und demselben
+/// `fetched_at` ergeben zwei Texturen (der Zwischenspeicher vergleicht den Inhalt, nicht die Länge).
+#[test]
+fn symbol_texture_follows_content_not_length() {
+    let _g = netz_anfang();
+    let (rot, blau) = (png_1x1([255, 0, 0, 255]), png_1x1([0, 0, 255, 255]));
+    assert_eq!(rot.len(), blau.len());
+    assert_ne!(rot, blau);
+    katalog_mit_symbol(&rot);
+    let mut h = harness("kat-inhalt", leere_orte("kat-inhalt"), Config::default());
+    h.ws.plugins.repo_fetch = netz;
+    let jetzt = planora_app::update_check::now_unix();
+    h.ws.plugins.catalog.request(netz, jetzt, true);
+    h.w.open_at(AddinsTab::Catalog);
+    katalog_warten(&mut h);
+    let erste = h.w.symbol_texture_id("s.png").expect("Textur");
+    // Gleicher Zeitpunkt, gleicher Name, gleiche Länge, anderer Inhalt.
+    katalog_mit_symbol(&blau);
+    h.ws.plugins.catalog.request(netz, jetzt, true);
+    katalog_warten(&mut h);
+    assert_eq!(h.ws.plugins.catalog.fetched_at(), Some(jetzt));
+    let zweite = h.w.symbol_texture_id("s.png").expect("neue Textur");
+    assert_ne!(zweite, erste);
+}
