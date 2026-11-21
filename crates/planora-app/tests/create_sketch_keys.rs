@@ -171,3 +171,37 @@ fn switching_to_a_drawing_ends_the_pick() {
     observe(&mut ws);
     assert_eq!(ws.active_tab().state.pending_pick, None);
 }
+
+#[test]
+fn undo_and_redo_rest_while_a_pick_runs() {
+    // Fusion: Solange ein Befehl läuft, ruht der Verlauf. Strg+Z beendete den Wahlmodus sonst
+    // still und nahm dabei noch den letzten Schritt zurück.
+    let mut ws = ws_with_box();
+    ws.observe_history(false);
+    let sketch = ws
+        .active_tab_mut()
+        .state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    ws.observe_history(false);
+    let features = ws.active_tab().state.document.features().len();
+    for pick in [PendingPick::NewSketch, PendingPick::SketchPlane(sketch)] {
+        ws.active_tab_mut().state.pending_pick = Some(pick);
+        let tab = ws.active_tab_mut();
+        let why = planora_app::workspace::pick_running();
+        assert_eq!(tab.undo_blocked(), Some(why.clone()), "{pick:?}");
+        assert_eq!(tab.redo_blocked(), Some(why.clone()), "{pick:?}");
+        assert_eq!(tab.undo(), Err(why.clone()), "{pick:?}");
+        assert_eq!(tab.redo(), Err(why), "{pick:?}");
+        let st = &ws.active_tab().state;
+        assert_eq!(st.pending_pick, Some(pick), "der Modus läuft weiter");
+        assert_eq!(st.document.features().len(), features, "nichts zurück");
+        ws.active_tab_mut().state.cancel_pending_pick();
+    }
+    // Nach Esc geht Rückgängig wieder.
+    assert_eq!(ws.active_tab_mut().undo(), Ok(()));
+    assert_eq!(
+        ws.active_tab().state.document.features().len(),
+        features - 1
+    );
+}

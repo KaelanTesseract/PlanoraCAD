@@ -829,8 +829,8 @@ impl FeatureDialog {
                     ui.colored_label(error_color(dark), e);
                 }
                 ui.add_space(6.0);
+                let ready = errors.is_empty() && self.profiles.problem().is_none();
                 ui.horizontal(|ui| {
-                    let ready = errors.is_empty() && self.profiles.problem().is_none();
                     if ui
                         .add_enabled(ready, egui::Button::new(tr!("tree-apply")))
                         .clicked()
@@ -841,6 +841,11 @@ impl FeatureDialog {
                         cancel = true;
                     }
                 });
+                // Wie in Fusion: Eingabe übernimmt (wenn bereit), Esc bricht ab, solange kein
+                // Feld tippt; abgedockt zählt auch Esc im Hauptfenster.
+                let (enter, esc) = crate::surface_project_dialog::keys(ui, ready);
+                apply |= enter;
+                cancel |= esc;
             });
         if let Some(sketch) = self.profile_sketch() {
             crate::profile_pick::publish(state, sketch, &self.profiles.picked);

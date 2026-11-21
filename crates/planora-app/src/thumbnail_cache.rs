@@ -264,12 +264,18 @@ fn build_unguarded(
         over_time: &mut over_time,
     };
     let mut meshes: Vec<Mesh> = Vec::new();
-    let solids: Vec<&Solid> = doc.visible_bodies().into_iter().map(|v| v.solid).collect();
+    // Ausgeblendete Körper (Auge im Browser) fehlen im Bild, wie in der Ansicht.
+    let solids: Vec<&Solid> = doc
+        .visible_bodies()
+        .into_iter()
+        .filter(|v| doc.body_shown(v.body))
+        .map(|v| v.solid)
+        .collect();
     let mesh_of = |s: &Solid| tessellate(s, &options).ok();
     if mesh_solids(&solids, &mesh_of, &mut gate, &mut meshes).is_none() {
         return Thumb::TooComplex;
     }
-    for v in doc.visible_meshes() {
+    for v in doc.visible_meshes().into_iter().filter(|v| doc.body_shown(v.body)) {
         // Vor dem Platzieren zählen: ein riesiges Netz wird gar nicht erst kopiert.
         if !gate.add(v.mesh.triangle_count()) {
             return Thumb::TooComplex;

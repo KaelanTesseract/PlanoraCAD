@@ -478,7 +478,9 @@ fn drawn_rectangle(rig: &mut Rig) -> [Pos2; 3] {
     rig.press(Key::R);
     rig.click(pos2(800.0, 350.0));
     rig.click(pos2(1200.0, 700.0));
+    // Esc beendet das Rechteck-Werkzeug (wie Fusion); den Zeiger unten misst ein frisches.
     rig.press(Key::Escape);
+    rig.press(Key::R);
     assert_eq!(sketch(rig.st()).curves().count(), 4);
     let (x0, y0) = (
         rig.at_pixel(pos2(900.0, 500.0)),

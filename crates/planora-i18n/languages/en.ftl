@@ -473,6 +473,7 @@ project-name-suffix = Document names must not end in ".pcad".
 project-nothing-to-undo = There is nothing to undo.
 project-nothing-to-redo = There is nothing to redo.
 project-export-writing = This is not possible while exporting.
+project-pick-running = First pick a plane or face, or press Esc to cancel.
 project-untitled = Untitled { $n }
 project-read-only-save = This version is read-only. Branch off or restore it first.
 project-pick-target = Please choose a project or a folder as the target.

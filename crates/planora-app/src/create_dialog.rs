@@ -407,6 +407,11 @@ impl CreateDialog {
                         cancel = true;
                     }
                 });
+                // Wie in Fusion: Eingabe übernimmt (wenn bereit), Esc bricht ab, solange kein
+                // Feld tippt; abgedockt zählt auch Esc im Hauptfenster.
+                let (enter, esc) = crate::surface_project_dialog::keys(ui, ready);
+                create |= enter;
+                cancel |= esc;
             });
         if let Some((sketch, sel)) = self.profile_choice() {
             profile_pick::publish(state, sketch, sel);

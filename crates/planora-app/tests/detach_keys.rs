@@ -539,14 +539,15 @@ fn typing_in_undocked_field_counts_for_history() {
     let first = rig.state().document.features()[0].id;
     rig.state().rename_draft = Some((first, "Neu".to_string()));
     rig.settle(3);
-    assert!(!viewport::typing_for_history(&rig.screen.ctx));
-    let child = detach::viewport_id(rename);
-    let field = center_of(&rig.screen.child_seen(child), "Neu");
-    rig.click_child(child, field, PointerButton::Primary);
+    // Das Namensfeld hat beim Öffnen die Tastatur (wie Fusion).
     assert!(
         viewport::typing_for_history(&rig.screen.ctx),
         "Tippen im abgedockten Feld zählt für den Verlauf"
     );
+    let child = detach::viewport_id(rename);
+    let field = center_of(&rig.screen.child_seen(child), "Neu");
+    rig.click_child(child, field, PointerButton::Primary);
+    assert!(viewport::typing_for_history(&rig.screen.ctx), "auch nach Klick");
     rig.state().rename_draft = None;
     rig.settle(3);
     assert!(!viewport::typing_for_history(&rig.screen.ctx), "Fenster zu");
@@ -720,4 +721,56 @@ fn replacing_unreadable_config_keeps_current_detach_state() {
         "im Bild"
     );
     assert_eq!(c.detached.len(), 2);
+}
+
+#[test]
+fn rename_field_has_the_keyboard_with_the_whole_name_marked() {
+    // Fusion: Beim Umbenennen ist der Name markiert, Tippen ersetzt ihn (angedockt wie abgedockt).
+    let rename = Place::Dialog("tree_rename");
+    for undocked in [false, true] {
+        let places = if undocked {
+            vec![(rename, window_at(200.0, 100.0))]
+        } else {
+            vec![]
+        };
+        let mut rig = Rig::new(&places);
+        let first = rig.state().document.features()[0].id;
+        rig.state().rename_draft = Some((first, "Alter Name".to_string()));
+        rig.settle(3);
+        let typed = vec![Event::Text("Platte".into())];
+        let enter = vec![key(Key::Enter, Modifiers::NONE)];
+        if undocked {
+            let child = detach::viewport_id(rename);
+            assert!(rig.screen.child_runs(child) > 0, "abgedockt");
+            rig.press_in(child, typed);
+            rig.press_in(child, enter);
+        } else {
+            rig.frame(typed);
+            rig.frame(enter);
+            rig.settle(2);
+        }
+        let focus = rig.screen.ctx.memory(|m| m.focused());
+        let draft = rig.state().rename_draft.clone();
+        assert!(draft.is_none(), "{undocked}: Enter übernimmt {draft:?} {focus:?}");
+        assert_eq!(
+            rig.state().document.feature(first).unwrap().name,
+            "Platte",
+            "{undocked}"
+        );
+        // Neu geöffnet: wieder markiert.
+        rig.state().rename_draft = Some((first, "Platte".to_string()));
+        rig.settle(3);
+        if undocked {
+            let child = detach::viewport_id(rename);
+            rig.press_in(child, vec![Event::Text("Deckel".into())]);
+        } else {
+            rig.frame(vec![Event::Text("Deckel".into())]);
+            rig.settle(2);
+        }
+        assert_eq!(
+            rig.state().rename_draft.as_ref().map(|d| d.1.as_str()),
+            Some("Deckel"),
+            "{undocked}"
+        );
+    }
 }
