@@ -4015,3 +4015,7 @@ catalog-rights-later = Rechte werden beim Installieren angezeigt
 catalog-install = Installieren
 catalog-installed = Installiert
 catalog-version-unknown = –
+catalog-hint-title = Zusatzmodule
+catalog-hint-text = Es gibt Zusatzmodule für PlanoraCAD, z. B. Elektronik. Jetzt ansehen?
+catalog-hint-open = Katalog öffnen
+catalog-hint-later = Später

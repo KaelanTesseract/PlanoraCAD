@@ -123,6 +123,14 @@ pub struct Config {
         deserialize_with = "lenient_bool_false"
     )]
     pub verbose_log: bool,
+    /// Der einmalige Hinweis auf den Katalog der Zusatzmodule beim ersten Start wurde schon
+    /// beantwortet. Voreinstellung aus; nur „an“ wird geschrieben. Kein Wahrheitswert → aus.
+    #[serde(
+        default,
+        skip_serializing_if = "is_false",
+        deserialize_with = "lenient_bool_false"
+    )]
+    pub catalog_hint_shown: bool,
     /// Gewählte Sprache als Id (BCP 47, etwa `de`, `en`, `pt-BR`; Einstellungen → Darstellung).
     /// Ohne Wahl gilt beim Start die Sprache von Windows. Kein oder ein leerer Text → keine
     /// Wahl; ob es die Sprache gibt, prüft erst das Programm. Ohne Wahl wird nichts geschrieben.
@@ -345,6 +353,7 @@ impl Default for Config {
             update_pending: None,
             theme: None,
             verbose_log: false,
+            catalog_hint_shown: false,
             language: None,
             length_unit: None,
             sketch_grid: true,

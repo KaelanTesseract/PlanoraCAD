@@ -851,6 +851,8 @@ pub struct Workspace {
     /// `config.plugins` konnte noch nicht gespeichert werden; es wird beim nächsten gelungenen
     /// Schreiben über [`Workspace::try_persist_config`] mit geschrieben.
     pub plugins_pending: bool,
+    /// `config.catalog_hint_shown` konnte noch nicht gespeichert werden.
+    pub catalog_hint_pending: bool,
     /// Für „Letzten Befehl wiederholen“ (Leertaste): der zuletzt abgeschlossene Befehl, über
     /// alle Tabs.
     pub last_command: crate::commands::LastCommand,
@@ -918,6 +920,7 @@ impl Workspace {
             sketch_grid_pending: false,
             plugins: crate::plugins::Plugins::empty(),
             plugins_pending: false,
+            catalog_hint_pending: false,
             last_command: Default::default(),
             sketch_clipboard: None,
             prompt: None,
@@ -1653,6 +1656,7 @@ impl Workspace {
         let plugins = self
             .plugins_pending
             .then(|| (self.config.plugins.clone(), self.config.last_plugin_check));
+        let catalog_hint = self.catalog_hint_pending;
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
@@ -1683,6 +1687,9 @@ impl Workspace {
                 c.plugins = p;
                 c.last_plugin_check = checked;
             }
+            if catalog_hint {
+                c.catalog_hint_shown = true;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1698,6 +1705,7 @@ impl Workspace {
                 self.length_unit_pending = false;
                 self.sketch_grid_pending = false;
                 self.plugins_pending = false;
+                self.catalog_hint_pending = false;
                 true
             }
             Err(_) => {
@@ -1719,6 +1727,7 @@ impl Workspace {
                     self.length_unit_pending = false;
                     self.sketch_grid_pending = false;
                     self.plugins_pending = false;
+                    self.catalog_hint_pending = false;
                 } else {
                     self.favorites_pending = pending;
                 }
@@ -2133,6 +2142,15 @@ impl Workspace {
     pub fn set_last_update_check(&mut self, unix_seconds: u64) -> bool {
         self.config.last_update_check = Some(unix_seconds);
         self.save_update_field(|u, c| c.last_update_check = u.last_check)
+    }
+
+    /// Merkt, dass der Hinweis auf den Katalog der Zusatzmodule beantwortet ist, und speichert
+    /// das gleich ([`Workspace::try_persist_config`]); misslingt das Schreiben, gilt es für die
+    /// Sitzung und kommt mit dem nächsten gelungenen Schreiben in die Datei.
+    pub fn mark_catalog_hint_shown(&mut self) -> bool {
+        self.config.catalog_hint_shown = true;
+        self.catalog_hint_pending = true;
+        self.try_persist_config()
     }
 
     /// Übersprungene Version; ein unlesbarer Text gilt als keine.

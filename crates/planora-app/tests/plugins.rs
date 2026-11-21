@@ -675,3 +675,154 @@ fn addins_submenus_use_app_arrow() {
         join(&seen)
     );
 }
+
+// ---- Hinweis auf den Katalog beim ersten Start (Plug-in-Katalog Task 4) ----
+
+/// App mit dem Hinweis (in Tests sonst aus), Konfiguration in Temp mit dem Stand `config`.
+struct HinweisApp {
+    ctx: egui::Context,
+    app: PlanoraApp,
+    time: f64,
+    seen: Vec<Seen>,
+    cfg: PathBuf,
+}
+
+impl HinweisApp {
+    fn neu(name: &str, config: Config) -> Self {
+        let dir = common::temp_root(&format!("planora-hinweis-{name}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut ws = Workspace::new(
+            Some(planora_project::library::Library::open(&dir.join("Projekte")).unwrap()),
+            config,
+        );
+        ws.config_path = dir.join("config.json");
+        assert_ne!(ws.config_path, Config::config_path(), "nie die echte Datei");
+        let cfg = ws.config_path.clone();
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts::definitions());
+        theme::apply(&ctx, true);
+        PlanoraApp::setup_context(&ctx);
+        let mut app = PlanoraApp::for_tests(ws);
+        app.enable_catalog_hint();
+        HinweisApp {
+            ctx,
+            app,
+            time: 0.0,
+            seen: Vec::new(),
+            cfg,
+        }
+    }
+
+    fn bild(&mut self, events: Vec<Event>) {
+        use eframe::App as _;
+        self.time += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0))),
+            time: Some(self.time),
+            events,
+            ..Default::default()
+        };
+        let mut f = eframe::Frame::_new_kittest();
+        let app = &mut self.app;
+        let out = self.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
+        self.seen = collect_seen(&out.shapes);
+        out.drop_without_applying_deltas();
+    }
+
+    fn einschwingen(&mut self) {
+        for _ in 0..4 {
+            self.bild(vec![]);
+        }
+    }
+
+    fn sieht(&self, text: &str) -> bool {
+        find(&self.seen, text).is_some()
+    }
+
+    fn klick(&mut self, text: &str) {
+        let at = find(&self.seen, text)
+            .unwrap_or_else(|| panic!("„{text}“ fehlt: {}", join(&self.seen)))
+            .rect
+            .center();
+        let b = |pressed| Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        self.bild(vec![Event::PointerMoved(at)]);
+        self.bild(vec![b(true)]);
+        self.bild(vec![b(false)]);
+        self.einschwingen();
+    }
+
+    fn gespeichert(&self) -> bool {
+        Config::read_from(&self.cfg).unwrap().catalog_hint_shown
+    }
+}
+
+const HINWEIS_TEXT: &str = "Es gibt Zusatzmodule für PlanoraCAD, z. B. Elektronik. Jetzt ansehen?";
+
+#[test]
+fn hint_shown_once() {
+    let mut a = HinweisApp::neu("einmal", Config::default());
+    a.einschwingen();
+    assert!(a.sieht(HINWEIS_TEXT), "{}", join(&a.seen));
+    assert!(a.sieht("Katalog öffnen") && a.sieht("Später"));
+    a.klick("Später");
+    assert!(!a.sieht(HINWEIS_TEXT), "{}", join(&a.seen));
+    assert!(!a.app.addins_window().is_open());
+    assert!(a.app.ws().config.catalog_hint_shown);
+    assert!(a.gespeichert());
+    // Neuer Start mit der gespeicherten Konfiguration: kein Hinweis.
+    let mut b = HinweisApp::neu("einmal2", Config::read_from(&a.cfg).unwrap());
+    b.einschwingen();
+    assert!(!b.sieht(HINWEIS_TEXT), "{}", join(&b.seen));
+}
+
+#[test]
+fn hint_escape_is_later() {
+    let mut a = HinweisApp::neu("escape", Config::default());
+    a.einschwingen();
+    assert!(a.sieht(HINWEIS_TEXT));
+    a.bild(escape());
+    a.einschwingen();
+    assert!(!a.sieht(HINWEIS_TEXT), "{}", join(&a.seen));
+    assert!(!a.app.addins_window().is_open());
+    assert!(a.gespeichert());
+}
+
+#[test]
+fn hint_opens_catalog() {
+    use planora_app::addins_window::AddinsTab;
+    let mut a = HinweisApp::neu("katalog", Config::default());
+    a.einschwingen();
+    a.klick("Katalog öffnen");
+    assert!(!a.sieht(HINWEIS_TEXT), "{}", join(&a.seen));
+    assert!(a.app.addins_window().is_open());
+    assert_eq!(a.app.addins_window().tab(), AddinsTab::Catalog);
+    assert!(a.gespeichert());
+}
+
+#[test]
+fn hint_waits_for_other_prompt() {
+    let mut a = HinweisApp::neu("wartet", Config::default());
+    a.app.ws_mut().prompt = Some(Prompt::Notice("offen".to_string()));
+    a.einschwingen();
+    assert!(!a.sieht(HINWEIS_TEXT), "{}", join(&a.seen));
+    assert!(!a.app.ws().config.catalog_hint_shown);
+    a.app.ws_mut().prompt = None;
+    a.einschwingen();
+    assert!(a.sieht(HINWEIS_TEXT), "{}", join(&a.seen));
+}
+
+#[test]
+fn hint_off_when_already_shown() {
+    let config = Config {
+        catalog_hint_shown: true,
+        ..Config::default()
+    };
+    let mut a = HinweisApp::neu("schon", config);
+    a.einschwingen();
+    assert!(!a.sieht(HINWEIS_TEXT), "{}", join(&a.seen));
+}

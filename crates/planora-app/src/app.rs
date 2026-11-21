@@ -1,6 +1,7 @@
-use crate::addins_window::AddinsWindow;
+use crate::addins_window::{AddinsTab, AddinsWindow};
 use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
+use crate::catalog_hint::{self, HintAction};
 use crate::crash::{RunMarker, StartFinding};
 use crate::crash_dialog::{self, CrashAction, CrashNotice};
 use crate::create_dialog::CreateDialog;
@@ -206,6 +207,9 @@ pub struct PlanoraApp {
     /// Rückfrage nach einem Absturz oder unerwarteten Ende beim letzten Lauf
     /// ([`crash_dialog`]); wartet, bis nichts anderes ansteht ([`PlanoraApp::crash_notice_tick`]).
     crash_notice: Option<CrashNotice>,
+    /// Hinweis auf den Katalog der Zusatzmodule beim ersten Start ([`crate::catalog_hint`]);
+    /// wartet, bis nichts anderes ansteht ([`PlanoraApp::catalog_hint_tick`]).
+    catalog_hint: CatalogHintState,
     /// Laufmarker dieser Instanz ([`crate::crash::start_run`]); [`eframe::App::on_exit`] löscht
     /// ihn.
     run_marker: Option<RunMarker>,
@@ -213,6 +217,15 @@ pub struct PlanoraApp {
     /// Hintergrund aufgebaut ([`crate::fonts_library::start`]), in Tests die mitgelieferten
     /// Schriften ([`PlanoraApp::set_font_state`]). Jedes Bild fragt sie ab.
     fonts: FontState,
+}
+
+/// Stand des Hinweises auf den Katalog der Zusatzmodule.
+#[derive(Clone, Copy, Debug, Default)]
+struct CatalogHintState {
+    /// Der Hinweis darf erscheinen (nur im Programm, nicht in Tests ohne Aufforderung).
+    enabled: bool,
+    /// Das Fenster ist gerade offen.
+    open: bool,
 }
 
 /// Schritt des Neustarts nach einem fertig geladenen und geprüften Update.
@@ -303,6 +316,7 @@ impl PlanoraApp {
         app.system_open = Box::new(ExplorerOpen);
         app.run_update_startup();
         app.run_marker = marker;
+        app.catalog_hint.enabled = true;
         app.set_start_finding(finding);
         app
     }
@@ -330,6 +344,40 @@ impl PlanoraApp {
     #[doc(hidden)]
     pub fn set_restart_phase(&mut self, phase: RestartPhase) {
         self.restart = phase;
+    }
+
+    /// Zeigt den Hinweis auf den Katalog der Zusatzmodule einmal, solange `catalog_hint_shown`
+    /// fehlt: erst nach dem ersten Bild und wenn nichts anderes ansteht (keine Rückfrage, keine
+    /// Absturz-Rückfrage, kein Hinweis nach einem Update, kein gesperrter Neustart, kein
+    /// anderes Fenster, nicht Projekte, nicht Zusatzmodule). Beide Wahlen speichern das Feld
+    /// ([`Workspace::mark_catalog_hint_shown`]); „Katalog öffnen“ öffnet danach das Fenster
+    /// „Zusatzmodule“ am Reiter Katalog.
+    fn catalog_hint_tick(&mut self, ctx: &egui::Context, dark: bool) {
+        if !self.catalog_hint.enabled || self.ws.config.catalog_hint_shown {
+            return;
+        }
+        if !self.catalog_hint.open {
+            let free = self.first_frame.is_some()
+                && self.crash_notice.is_none()
+                && self.ws.prompt.is_none()
+                && self.after_update.is_none()
+                && !self.restart_locked()
+                && !self.windows_open()
+                && !self.projects.is_open()
+                && !self.addins.is_open();
+            if !free {
+                return;
+            }
+            self.catalog_hint.open = true;
+        }
+        let Some(action) = catalog_hint::show(ctx, dark) else {
+            return;
+        };
+        self.catalog_hint.open = false;
+        self.ws.mark_catalog_hint_shown();
+        if action == HintAction::OpenCatalog {
+            self.addins.open_at(AddinsTab::Catalog);
+        }
     }
 
     /// Zeigt die Absturz-Rückfrage, sobald das erste Bild vorbei ist und nichts anderes ansteht:
@@ -445,6 +493,8 @@ impl PlanoraApp {
             keys_for_main_from_tree: false,
             tree_keys_fed: None,
             crash_notice: None,
+            // Nur das Programm zeigt den Hinweis (in `new`); Tests schalten ihn bei Bedarf ein.
+            catalog_hint: CatalogHintState::default(),
             run_marker: None,
             // Tests hängen nie an Systemschriften (Spec G7); das Programm setzt in `new` den
             // Hintergrund-Start.
@@ -1078,6 +1128,18 @@ impl PlanoraApp {
         }
     }
 
+    /// Arbeitsbereich, nur lesend (für Tests).
+    #[doc(hidden)]
+    pub fn ws(&self) -> &Workspace {
+        &self.ws
+    }
+
+    /// Schaltet den Hinweis auf den Katalog ein (für Tests).
+    #[doc(hidden)]
+    pub fn enable_catalog_hint(&mut self) {
+        self.catalog_hint.enabled = true;
+    }
+
     /// Arbeitsbereich (für Tests).
     #[doc(hidden)]
     pub fn ws_mut(&mut self) -> &mut Workspace {
@@ -1516,6 +1578,7 @@ impl PlanoraApp {
             || self.feedback.open
             || self.after_update.is_some()
             || self.crash_notice.as_ref().is_some_and(|n| n.open)
+            || self.catalog_hint.open
             || self.ws.active_tab().dialog_open()
             || crate::project_actions::dialog_open(&self.projects.ui)
             || self.settings.is_open()
@@ -3350,6 +3413,7 @@ impl eframe::App for PlanoraApp {
         // diesem Bild zurück.
         self.show_update_notice(&ctx);
         self.crash_notice_tick(&ctx, dark);
+        self.catalog_hint_tick(&ctx, dark);
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
         // Plug-ins: Ereignisse, Netz-Aufträge, Rechte-Nachfrage und Fehlerleiste.

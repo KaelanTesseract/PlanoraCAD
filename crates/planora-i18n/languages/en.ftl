@@ -4031,3 +4031,7 @@ catalog-rights-later = Rights are shown when installing
 catalog-install = Install
 catalog-installed = Installed
 catalog-version-unknown = –
+catalog-hint-title = Add-Ins
+catalog-hint-text = There are add-ins for PlanoraCAD, e.g. electronics. Take a look now?
+catalog-hint-open = Open catalog
+catalog-hint-later = Later
