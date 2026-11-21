@@ -65,8 +65,6 @@ impl StaleReason {
     }
 }
 
-/// Zustand des Katalogs. Ob gerade geholt wird, sagt [`Catalog::is_loading`]; der Zustand bleibt
-/// solange der letzte.
 /// Ein Symbol des Katalogs: der Inhalt (PNG, ungeprüft) und sein Hash. Der Hash wird einmal
 /// gebildet, wenn das Symbol geholt oder aus dem Zwischenspeicher gelesen wird; die Oberfläche
 /// erkennt daran ein geändertes Symbol, ohne in jedem Bild die Bytes zu hashen.
@@ -91,6 +89,8 @@ impl Symbol {
 /// Symbolname aus dem Katalog → Symbol.
 pub type Symbols = BTreeMap<String, Symbol>;
 
+/// Zustand des Katalogs. Ob gerade geholt wird, sagt [`Catalog::is_loading`]; der Zustand bleibt
+/// solange der letzte.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CatalogState {
     /// Noch nie geladen und kein (lesbarer) Zwischenspeicher.
