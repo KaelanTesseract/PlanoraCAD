@@ -134,12 +134,15 @@ def section_security(lines, name, code, diags):
     lines.append(f"### {name}")
     errors = [d for d in diags if d.get("severity") == "error"]
     if code == 0 and not errors:
-        lines.append("Keine Sicherheitsmeldungen.")
+        lines.append("Keine Meldungen.")
     for d in errors:
         adv = d.get("advisory") or {}
         what = adv.get("id") or d.get("code") or ""
         title = adv.get("title") or d.get("message", "")
-        lines.append(f"- **{what}** {crate_of(d)}: {title}")
+        kind = {"unmaintained": "nicht mehr gepflegt", "vulnerability": "Sicherheitslücke"}.get(
+            d.get("code"), "Meldung"
+        )
+        lines.append(f"- **{what}** {crate_of(d)} ({kind}): {title}")
     lines.append("")
 
 
@@ -160,13 +163,14 @@ def report():
     lines.append(f"# Wöchentliche Prüfung der Bibliotheken ({today}, Stand {sha.strip()})")
     lines.append("")
     lines.append(
-        "Nur ein Bericht: Hier wird nichts geändert. Sicherheitsmeldungen machen den Lauf rot."
+        "Nur ein Bericht: Hier wird nichts geändert. Sicherheitsmeldungen (auch „nicht mehr "
+        "gepflegt“) und Prüffehler machen den Lauf rot."
     )
     lines.append("")
 
     failed = False
     adv = {}
-    lines.append("## Sicherheit (cargo deny advisories)")
+    lines.append("## Sicherheit und Pflege (cargo deny advisories)")
     lines.append("")
     for name, ws in WORKSPACES:
         code, diags = deny(ws, ["advisories"])
@@ -259,7 +263,11 @@ def main():
     if args.issue:
         short = text
         if len(short) > ISSUE_MAX:
-            short = short[:ISSUE_MAX] + "\n\n… gekürzt; der ganze Bericht steht im Lauf.\n"
+            short = short[:ISSUE_MAX]
+            # Ein angeschnittener aufklappbarer Block wird geschlossen, damit der Hinweis sichtbar ist.
+            if short.count("<details>") > short.count("</details>"):
+                short += "\n\n</details>"
+            short += "\n\n… gekürzt; der ganze Bericht steht im Lauf.\n"
         args.issue.write_text(short, encoding="utf-8")
     return 1 if failed else 0
 

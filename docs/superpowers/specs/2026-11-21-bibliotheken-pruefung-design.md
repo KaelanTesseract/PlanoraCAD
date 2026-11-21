@@ -34,7 +34,8 @@ Hand und im Release-Lauf. Ob es neuere Fassungen gibt, prüft niemand.
      gezogen wird und ob es eine neuere Fassung des ziehenden Pakets gibt.
 - Bericht: im Lauf selbst (Job Summary) und in einem festen Issue „Wöchentliche Prüfung der
   Bibliotheken“, dessen Text jede Woche ersetzt wird.
-- Sicherheitsmeldung → Lauf rot → GitHub schickt E-Mail. Nur Veraltetes → Lauf grün.
+- Sicherheitsmeldung (auch „nicht mehr gepflegt“, wie cargo deny sie wertet) oder Prüffehler → Lauf rot → GitHub schickt E-Mail. Nur Veraltetes → Lauf grün.
+- Issue: Das offene wird ersetzt; hat Dennis es geschlossen, legt der nächste Lauf ein neues an.
 - Das Repo ist öffentlich, also auch das Issue; es nennt nur öffentlich bekannte Meldungen.
 - GitHub schaltet Zeitpläne nach 60 Tagen ohne Push ab.
 

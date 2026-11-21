@@ -51,10 +51,15 @@ pub fn format_offset(iso_utc: &str, offset_seconds: i32) -> Option<String> {
 }
 
 /// Abstand der Ortszeit des Rechners zu UTC in Sekunden zum angegebenen Zeitpunkt
-/// (Sekunden seit 1970), samt der damals geltenden Sommerzeit. `None`, wenn unbekannt.
+/// (Sekunden seit 1970), samt der damals geltenden Sommerzeit. `None`, wenn unbekannt (dann
+/// zeigen die Texte „… UTC“; `TimeZone::system()` fiele still auf UTC zurück).
+///
+/// Grenze: Die Regeln kommen aus der Zeitzonen-Datenbank von jiff, nicht aus Windows; die
+/// Windows-Einstellung „Sommerzeit automatisch anpassen: aus“ wird nicht beachtet.
 pub fn local_offset_at(unix_seconds: i64) -> Option<i32> {
     let t = jiff::Timestamp::from_second(unix_seconds).ok()?;
-    Some(jiff::tz::TimeZone::system().to_offset(t).seconds())
+    let tz = jiff::tz::TimeZone::try_system().ok()?;
+    Some(tz.to_offset(t).seconds())
 }
 
 /// Jetzt in der Ortszeit des Rechners (ohne Zone), etwa für Dateinamen und Berichte.

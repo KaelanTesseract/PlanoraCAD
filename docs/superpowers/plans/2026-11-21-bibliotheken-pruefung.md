@@ -4,9 +4,9 @@
 
 **Goal:** Ein wöchentlicher GitHub-Lauf berichtet über unsichere und veraltete Bibliotheken; vorher werden die offenen Abhängigkeitspunkte (chrono, async-executor) und der alte Testfehler `real_step_text_limit` erledigt.
 
-**Architecture:** Ein eigener Workflow `deps-check.yml` installiert `cargo-deny` und `cargo-outdated` in fester Fassung, ruft das Berichtsskript `.github/scripts/deps-report.sh` auf und schreibt dessen Markdown in die Job Summary und in ein festes Issue. planora-app nutzt danach jiff statt chrono.
+**Architecture:** Ein eigener Workflow `deps-check.yml` installiert `cargo-deny` und `cargo-outdated` in fester Fassung, ruft das Berichtsskript `.github/scripts/deps_report.py` auf und schreibt dessen Markdown in die Job Summary und in ein festes Issue. planora-app nutzt danach jiff statt chrono.
 
-**Tech Stack:** GitHub Actions (ubuntu-latest), bash, `gh` CLI, cargo-deny 0.22.0, cargo-outdated 0.19.0, jiff 1.0.2.
+**Tech Stack:** GitHub Actions (ubuntu-latest), Python 3, `gh` CLI, cargo-deny 0.22.0, cargo-outdated 0.19.0, jiff 1.0.2.
 
 **Spec:** `docs/superpowers/specs/2026-11-21-bibliotheken-pruefung-design.md`
 
@@ -74,10 +74,10 @@ Ursache: Die Hilfsfunktion prüft fest `"(0.1 MB, allowed 0.1 MB)"`; das stimmt 
 ### Task 4: Workflow und Bericht
 
 **Files:**
-- Create: `.github/workflows/deps-check.yml`, `.github/scripts/deps-report.sh`
+- Create: `.github/workflows/deps-check.yml`, `.github/scripts/deps_report.py`
 
 **Interfaces:**
-- `deps-report.sh` schreibt Markdown nach stdout und endet mit Code 1 genau dann, wenn `cargo deny check advisories` für einen der beiden Lockfiles scheitert; sonst 0.
+- `deps_report.py` schreibt Markdown nach stdout und endet mit Code 1 genau dann, wenn `cargo deny check advisories` für einen der beiden Lockfiles scheitert; sonst 0.
 - Abschnitte: „Sicherheit“, „Lizenzen und Regeln“, „Verträgliche Updates“, „Große Sprünge“, „Wiedervorlagen aus deny.toml“ – je für App und Plug-ins.
 - Wiedervorlagen: für jede `ignore`-ID aus `deny.toml` die Kette (`cargo tree -i <crate> -e normal --depth 3`) und ob das ziehende Paket in `cargo outdated` auftaucht.
 
