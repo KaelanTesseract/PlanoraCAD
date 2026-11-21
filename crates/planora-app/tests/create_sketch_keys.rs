@@ -196,8 +196,21 @@ fn undo_and_redo_rest_while_a_pick_runs() {
         let st = &ws.active_tab().state;
         assert_eq!(st.pending_pick, Some(pick), "der Modus läuft weiter");
         assert_eq!(st.document.features().len(), features, "nichts zurück");
-        ws.active_tab_mut().state.cancel_pending_pick();
+        // Die Meldung steht, solange der Modus läuft, und geht mit ihm.
+        let tab = ws.active_tab_mut();
+        tab.state.message = Some(planora_app::workspace::pick_running());
+        tab.forget_pick_hint();
+        assert!(tab.state.message.is_some(), "{pick:?}");
+        tab.state.cancel_pending_pick();
+        tab.forget_pick_hint();
+        assert_eq!(tab.state.message, None, "{pick:?}");
     }
+    // Andere Meldungen bleiben.
+    let tab = ws.active_tab_mut();
+    tab.state.message = Some("anders".into());
+    tab.forget_pick_hint();
+    assert_eq!(tab.state.message.as_deref(), Some("anders"));
+    tab.state.message = None;
     // Nach Esc geht Rückgängig wieder.
     assert_eq!(ws.active_tab_mut().undo(), Ok(()));
     assert_eq!(

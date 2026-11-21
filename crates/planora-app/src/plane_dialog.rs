@@ -828,6 +828,14 @@ impl PlaneDialog {
             return;
         };
         let scope = state.document.param_scope();
+        // Wie Fusion: Ein gezogener Wert springt auf die Anzeigegenauigkeit (Längen 0,01 mm,
+        // Winkel 0,1°), statt mit allen Nachkommastellen im Feld zu stehen.
+        let step = if matches!(unit, ParamUnit::Angle) {
+            10.0
+        } else {
+            100.0
+        };
+        let v = (v * step).round() / step;
         self.value = v;
         self.formula = None;
         self.text = stored_text(v, None, unit, &scope);

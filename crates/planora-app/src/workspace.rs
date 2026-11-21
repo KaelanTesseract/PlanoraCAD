@@ -388,6 +388,16 @@ impl DocTab {
         }
     }
 
+    /// Die Meldung „Erst eine Ebene oder Fläche wählen …“ gilt nur, solange der Wahlmodus läuft;
+    /// danach verschwindet sie (jedes Bild aufgerufen), sonst stünde sie über dem Ende hinaus.
+    pub fn forget_pick_hint(&mut self) {
+        if self.state.pending_pick.is_none()
+            && self.state.message.as_deref() == Some(pick_running().as_str())
+        {
+            self.state.message = None;
+        }
+    }
+
     /// Ist eine Skizze offen? Dann wirken Rückgängig und Wiederholen nur auf ihren Verlauf
     /// (R10), der Dokumentverlauf ruht.
     fn in_sketch(&self) -> bool {

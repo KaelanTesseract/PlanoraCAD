@@ -150,6 +150,11 @@ fn dragging_the_arrow_sets_the_offset_and_ok_keeps_it() {
     assert_eq!(r.s.camera.pitch, camera.pitch);
     let up = r.value();
     assert!(up > 5.0, "{up}");
+    assert_eq!(
+        (up * 100.0).round() / 100.0,
+        up,
+        "auf 0,01 mm gerundet (wie Fusion)"
+    );
     // Die Vorschau wandert mit: Ihre Mitte liegt im neuen Abstand.
     let rect = r.s.plane_pick.unwrap().preview.unwrap();
     assert!((rect.frame.origin.z - up).abs() < 1e-6);
@@ -227,6 +232,11 @@ fn dragging_the_turn_arrow_sets_the_angle() {
     r.release(p + vec2(0.0, 150.0));
     let a = r.value();
     assert!(a.abs() > 5.0 && a.abs() < 180.0, "{a}");
+    assert_eq!(
+        (a * 10.0).round() / 10.0,
+        a,
+        "auf 0,1° gerundet (wie Fusion)"
+    );
     // Zurück an den Ausgangspunkt: wieder (fast) 0.
     let q = r.grip_at();
     r.press(q);
