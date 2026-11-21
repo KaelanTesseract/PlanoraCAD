@@ -839,6 +839,20 @@ fn show_tabs(ui: &mut egui::Ui, tab: AddinsTab, actions: &mut Vec<Action>) {
     });
 }
 
+/// „Erneut versuchen“: holt den Katalog sofort neu (auch innerhalb der Wartezeit); gesperrt,
+/// solange er lädt.
+fn retry_button(ui: &mut egui::Ui, plugins: &Plugins, enabled: bool, actions: &mut Vec<Action>) {
+    if ui
+        .add_enabled(
+            enabled && !plugins.catalog.is_loading(),
+            egui::Button::new(tr!("catalog-retry")),
+        )
+        .clicked()
+    {
+        actions.push(Action::CatalogRetry);
+    }
+}
+
 /// Der Reiter „Katalog“: Suche und Kategorie, Hinweise zum Stand, darunter je nach Zustand die
 /// Liste mit den Details oder die Meldung.
 fn show_catalog(
@@ -872,6 +886,7 @@ fn show_catalog(
             ),
         };
         ui.add(egui::Label::new(egui::RichText::new(text).color(warning)).wrap());
+        retry_button(ui, plugins, enabled, actions);
     }
     if plugins.catalog.is_loading() {
         ui.weak(tr!("catalog-loading"));
@@ -886,15 +901,7 @@ fn show_catalog(
         CatalogState::Failed(text) => {
             ui.colored_label(warning, tr!("catalog-failed"));
             ui.add(egui::Label::new(text.as_str()).wrap());
-            if ui
-                .add_enabled(
-                    enabled && !plugins.catalog.is_loading(),
-                    egui::Button::new(tr!("catalog-retry")),
-                )
-                .clicked()
-            {
-                actions.push(Action::CatalogRetry);
-            }
+            retry_button(ui, plugins, enabled, actions);
         }
         CatalogState::TooNew(_) => {
             ui.colored_label(warning, tr!("catalog-too-new"));
@@ -1105,6 +1112,10 @@ fn show_catalog_details(
                         }
                         if plugins.is_fetching() {
                             ui.label(tr!("plugin-install-fetching"));
+                            let cancel = egui::Button::new(tr!("common-cancel"));
+                            if ui.add_enabled(enabled, cancel).clicked() {
+                                actions.push(Action::CancelFetch);
+                            }
                         }
                     }
                 });

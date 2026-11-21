@@ -1720,3 +1720,84 @@ fn symbol_texture_follows_content_not_length() {
     let zweite = h.w.symbol_texture_id("s.png").expect("neue Textur");
     assert_ne!(zweite, erste);
 }
+
+/// Abschluss: auch bei einem alten Stand (offline oder fehlerhaft) gibt es „Erneut versuchen“;
+/// es holt sofort neu, danach ist der Hinweis weg.
+#[test]
+fn stale_shows_retry() {
+    let _g = netz_anfang();
+    katalog_release(1, &zwei_eintraege());
+    let mut h = katalog_harness("kat-alt-erneut", leere_orte("kat-alt-erneut"));
+    let seen = bild(&mut h, vec![]);
+    assert!(!has(&seen, "Erneut versuchen"), "{}", join(&seen));
+    let url = planora_update::catalog::latest_release_url();
+    // Offline: alter Stand mit Hinweis und Knopf.
+    *lock(&NETZ_AUS) = true;
+    let spaeter = planora_app::update_check::now_unix() + 3600;
+    h.ws.plugins.catalog.request(netz, spaeter, true);
+    katalog_warten(&mut h);
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Hallo-Beispiel"), "{}", join(&seen));
+    assert!(has(&seen, "Erneut versuchen"), "{}", join(&seen));
+    // Fehlerhaft: ebenso.
+    *lock(&NETZ_AUS) = false;
+    katalog_text("{ kaputt");
+    h.ws.plugins.catalog.request(netz, spaeter + 3600, true);
+    katalog_warten(&mut h);
+    let seen = bild(&mut h, vec![]);
+    assert!(has(&seen, "Hallo-Beispiel"), "{}", join(&seen));
+    assert!(has(&seen, "Erneut versuchen"), "{}", join(&seen));
+    // Wieder in Ordnung: der Knopf holt sofort neu (auch in der Wartezeit).
+    katalog_release(1, &zwei_eintraege());
+    let vorher = gefragt(&url);
+    klick(&mut h, &seen, "Erneut versuchen");
+    katalog_warten(&mut h);
+    assert_eq!(gefragt(&url), vorher + 1);
+    let seen = bild(&mut h, vec![]);
+    assert!(!has(&seen, "Erneut versuchen"), "{}", join(&seen));
+    assert!(
+        !has(&seen, "Der Katalog ist nicht lesbar."),
+        "{}",
+        join(&seen)
+    );
+}
+
+/// Hält Anfragen an die Release-Liste von Plug-in-Repos fest, solange es gesetzt ist.
+static HALTEN: Mutex<bool> = Mutex::new(false);
+
+fn netz_haelt(url: &str, max: u64, timeout: Duration) -> Answer {
+    if url.contains("/releases?per_page=") {
+        let start = Instant::now();
+        while *lock(&HALTEN) && start.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    netz(url, max, timeout)
+}
+
+/// Abschluss: beim Installieren aus dem Katalog steht neben „Wird geholt…“ auch „Abbrechen“,
+/// wie im Reiter „Installiert“; es verwirft das Holen.
+#[test]
+fn catalog_install_can_be_cancelled() {
+    let _g = netz_anfang();
+    katalog_release(1, &zwei_eintraege());
+    let mut h = katalog_harness("kat-abbrechen", leere_orte("kat-abbrechen"));
+    h.ws.plugins.repo_fetch = netz_haelt;
+    *lock(&HALTEN) = true;
+    h.w.select_catalog(HALLO);
+    let seen = bild(&mut h, vec![]);
+    let seen = klick(&mut h, &seen, "Installieren");
+    assert!(h.ws.plugins.is_fetching());
+    let seen = if has(&seen, "Abbrechen") {
+        seen
+    } else {
+        bild(&mut h, vec![])
+    };
+    assert!(has(&seen, "Abbrechen"), "{}", join(&seen));
+    klick(&mut h, &seen, "Abbrechen");
+    *lock(&HALTEN) = false;
+    assert!(!h.ws.plugins.is_fetching());
+    assert!(h.ws.plugins.install.is_none());
+    let seen = bild(&mut h, vec![]);
+    assert!(!has(&seen, "Abbrechen"), "{}", join(&seen));
+}

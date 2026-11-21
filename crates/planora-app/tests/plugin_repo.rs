@@ -434,7 +434,10 @@ fn install_from_catalog_rejects_foreign_id() {
     assert!(h.ws.plugins.install.is_none(), "kein Dialog");
     let user = h.ws.plugins.host.places().user.clone();
     assert!(!user.join("foo.bar").exists(), "nichts installiert");
-    assert!(!user.join("planora.elektronik").exists(), "nichts installiert");
+    assert!(
+        !user.join("planora.elektronik").exists(),
+        "nichts installiert"
+    );
 }
 
 #[test]
