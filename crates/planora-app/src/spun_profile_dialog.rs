@@ -378,6 +378,7 @@ impl SpunProfileDialog {
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> DialogOutcome {
         let mut open = true;
         let (mut ok, mut cancel) = (false, false);
+        let mut field_enter = false;
         if self.dirty {
             self.refresh(state);
         }
@@ -446,15 +447,15 @@ impl SpunProfileDialog {
                         }
                         ui.end_row();
                         ui.label(tr!("spun-tolerance"));
-                        if crate::theme::field(
+                        let r = crate::theme::field(
                             ui,
                             egui::DragValue::new(&mut self.tolerance)
                                 .speed(0.001)
                                 .range(0.0001..=10.0)
                                 .suffix(" mm"),
-                        )
-                        .changed()
-                        {
+                        );
+                        field_enter |= crate::dialog::left_with_enter(ui, &r);
+                        if r.changed() {
                             self.error = None;
                             self.dirty = true;
                         }
@@ -481,7 +482,7 @@ impl SpunProfileDialog {
                 }
                 let (o, c) = footer(ui, self.error(), ready);
                 let (enter, esc) = keys(ui, ready);
-                ok |= o || enter;
+                ok |= o || enter || (field_enter && ready);
                 cancel |= c || esc;
             });
         if clear_selection {

@@ -433,6 +433,8 @@ impl SvgDialog {
         let mut cards = Vec::new();
         let loading = self.is_loading().then(|| self.progress());
         let choosing = self.choosing || self.loaded.is_none();
+        // Ein Feld, das mit Enter verlassen wird, übernimmt (wie Fusion).
+        let field_enter = std::cell::Cell::new(false);
         let error = self.error_text();
         let pick_error = self.target.error.as_ref().map(Msg::text);
         let has_loaded = self.loaded.is_some();
@@ -510,6 +512,9 @@ impl SvgDialog {
                                     .error_below(false)
                                     .label(label.as_str())
                                     .show(ui, &scope);
+                                    if crate::dialog::left_with_enter(ui, &out.response) {
+                                        field_enter.set(true);
+                                    }
                                     if let Some(e) = out.error {
                                         field_errors.push(tr!(
                                             "field-error",
@@ -543,6 +548,7 @@ impl SvgDialog {
                         footer_action = chooser.borrow_mut().show_footer(ui);
                         return;
                     }
+                    ok |= crate::dialog::enter_confirms(ui, field_enter.get(), ready);
                     ui.horizontal(|ui| {
                         if ui
                             .add_enabled(ready, egui::Button::new(tr!("common-ok")))

@@ -45,6 +45,14 @@ pub fn left_with_enter(ui: &egui::Ui, r: &egui::Response) -> bool {
     r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
 
+/// Übernimmt ein Befehlsfenster mit Enter (wie Fusion)? Wenn es `ready` ist und entweder ein
+/// Feld in diesem Bild mit Enter verlassen wurde (`field_enter`, aus [`left_with_enter`]) oder
+/// Enter kam, während kein Feld tippt ([`crate::surface_project_dialog::keys`]). So genügt ein
+/// Enter direkt im Feld.
+pub(crate) fn enter_confirms(ui: &egui::Ui, field_enter: bool, ready: bool) -> bool {
+    ready && (field_enter || crate::surface_project_dialog::keys(ui, true).0)
+}
+
 /// Vergisst, dass das Namensfeld `id` schon geöffnet war ([`name_field`]).
 pub fn forget_name_field(ctx: &egui::Context, id: egui::Id) {
     ctx.data_mut(|d| d.remove::<bool>(id.with("planora-name-field-fresh")));

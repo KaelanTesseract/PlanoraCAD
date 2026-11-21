@@ -674,6 +674,7 @@ impl BlendDialog {
         let (mut run, mut cancel) = (false, false);
         let scope = state.document.param_scope();
         let mut errors: Vec<String> = Vec::new();
+        let mut field_enter = false;
         Dialog::new(self.title(), DialogSize::Normal)
             .dock_key(self.dock_key())
             .id(self.window_id())
@@ -714,15 +715,17 @@ impl BlendDialog {
                         .show(ui, |ui| {
                             for (k, (p, r)) in self.points.iter_mut().enumerate() {
                                 ui.label(tr!("blend-point-n", n = k + 1));
-                                theme::text_field(
+                                let a = theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(p).desired_width(60.0),
                                 );
                                 ui.label("%");
-                                theme::text_field(
+                                let b = theme::text_field(
                                     ui,
                                     egui::TextEdit::singleline(r).desired_width(60.0),
                                 );
+                                field_enter |= crate::dialog::left_with_enter(ui, &a)
+                                    || crate::dialog::left_with_enter(ui, &b);
                                 if ui.button(tr!("blend-remove")).clicked() {
                                     remove = Some(k);
                                 }
@@ -758,6 +761,7 @@ impl BlendDialog {
                                     .error_below(false)
                                     .label(&label)
                                     .show(ui, &scope);
+                                field_enter |= crate::dialog::left_with_enter(ui, &out.response);
                                 if let Some(e) = out.error {
                                     errors.push(tr!("field-error", label = label, error = e));
                                 }
@@ -809,6 +813,8 @@ impl BlendDialog {
                         cancel = true;
                     }
                 });
+                // Wie in Fusion: ein Enter direkt im Feld übernimmt.
+                run |= crate::dialog::enter_confirms(ui, field_enter, errors.is_empty());
             });
         let keep = if run {
             self.execute(state)

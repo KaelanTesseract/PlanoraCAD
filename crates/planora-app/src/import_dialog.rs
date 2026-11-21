@@ -238,6 +238,7 @@ impl ImportDialog {
         self.tick(false);
         self.drop_if_stale(state);
         let (mut open, mut close, mut cancel, mut import) = (true, false, false, false);
+        let name_enter = std::cell::Cell::new(false);
         let mut chosen = None;
         let mut cards = Vec::new();
         let (mut name, mut unit) = (self.name.clone(), self.unit);
@@ -296,10 +297,15 @@ impl ImportDialog {
                         };
                         let mut name_card = |ui: &mut egui::Ui| {
                             ui.strong(tr!("props-name"));
-                            theme::text_field(
+                            let r = theme::text_field(
                                 ui,
                                 egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY),
                             );
+                            // Wie Fusion: Enter im Namen übernimmt (die Dateiauswahl hat ihr
+                            // eigenes Enter, darum nur aus dem Feld).
+                            if crate::dialog::left_with_enter(ui, &r) {
+                                name_enter.set(true);
+                            }
                             ui.add_space(4.0);
                             ui.strong(tr!("import-unit-title"));
                             ui.horizontal_wrapped(|ui| {
@@ -317,7 +323,8 @@ impl ImportDialog {
                     // Fußzeile: bleibt stehen, auch wenn der Inhalt darüber rollt. Die Dateiauswahl
                     // ist immer zu sehen, darum kein eigenes „Schließen“: „Abbrechen“ schließt.
                     footer_action = chooser.borrow_mut().show_footer(ui);
-                    if has_loaded && ui.button(tr!("import-import")).clicked() {
+                    if has_loaded && (ui.button(tr!("import-import")).clicked() || name_enter.get())
+                    {
                         import = true;
                     }
                 },

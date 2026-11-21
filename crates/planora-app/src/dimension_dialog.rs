@@ -376,8 +376,13 @@ impl DimensionDialog {
         let read_only = self.read_only;
         let tolerance_unit = self.unit;
         let inputs: RefCell<Vec<(String, bool)>> = RefCell::new(Vec::new());
+        // Ein Feld, das mit Enter verlassen wird, übernimmt das Fenster (wie Fusion).
+        let field_enter = std::cell::Cell::new(false);
         let note = |label: &str, r: &egui::Response| {
             inputs.borrow_mut().push((label.to_string(), r.enabled()));
+            if r.lost_focus() && r.ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                field_enter.set(true);
+            }
         };
         let (mut decimals, mut kind) = (self.decimals, self.kind);
         let (mut symmetric, mut upper, mut lower) = (
@@ -538,6 +543,7 @@ impl DimensionDialog {
                         delete = true;
                     }
                 });
+                apply |= crate::dialog::enter_confirms(ui, field_enter.get(), apply_ok);
             });
         self.inputs = inputs.into_inner();
         (self.decimals, self.kind) = (decimals, kind);

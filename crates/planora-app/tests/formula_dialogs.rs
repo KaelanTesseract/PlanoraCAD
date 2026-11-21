@@ -1722,3 +1722,55 @@ fn enter_right_in_a_field_confirms_the_create_window() {
     let f = tab.state.document.features()[0].id;
     assert_eq!(box_size(&tab.state, f).x, 25.0);
 }
+
+#[test]
+fn enter_right_in_a_field_confirms_the_blend_window() {
+    // Fusion: Radius tippen und Enter übernimmt, ohne zweites Enter.
+    let mut w = ws();
+    {
+        let s = &mut w.active_tab_mut().state;
+        s.create_box(DVec3::splat(20.0)).unwrap();
+        let e = edge_between(&s.bodies[0].solid, "Deckel", "Wand 1");
+        s.set_selection(Some(Pick::Edge(EdgeRef { body: 0, edge: e })));
+    }
+    let mut rig = Rig::new(w);
+    rig.tab().blend_dialog = Some(BlendDialog::fillet());
+    rig.settle();
+    let old = planora_app::formula_field::value_field_text(1.0, ParamUnit::Length);
+    rig.retype("Verrunden", &old, "2");
+    rig.frame(vec![key(Key::Enter, Modifiers::NONE)]);
+    rig.settle();
+    let tab = rig.tab();
+    assert!(tab.blend_dialog.is_none(), "ein Enter im Feld übernimmt");
+    match &tab.state.document.features().last().unwrap().kind {
+        FeatureKind::Verrunden { art, .. } => assert_eq!(*art, BlendArt::Rundung { radius: 2.0 }),
+        k => panic!("{k:?}"),
+    }
+}
+
+#[test]
+fn enter_right_in_the_name_field_creates_the_drawing() {
+    let mut w = ws();
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(20.0))
+        .unwrap();
+    let mut rig = Rig::new(w);
+    let d = planora_app::drawing_dialog::NewDrawingDialog::new(&rig.tab().state);
+    let old = d.name.clone();
+    rig.tab().drawing_dialog = Some(d);
+    rig.settle();
+    rig.retype("Neue Zeichnung", &old, "Blatt A");
+    rig.frame(vec![key(Key::Enter, Modifiers::NONE)]);
+    rig.settle();
+    let tab = rig.tab();
+    assert!(tab.drawing_dialog.is_none(), "ein Enter im Namen legt an");
+    assert!(
+        tab.state
+            .document
+            .drawings()
+            .iter()
+            .any(|d| d.name == "Blatt A"),
+        "angelegt mit dem getippten Namen"
+    );
+}
