@@ -2216,7 +2216,9 @@ pub fn edit(state: &mut AppState, id: FeatureId) {
 
 /// Kleines Fenster „Umbenennen“ mit Textfeld.
 fn rename_window(ctx: &egui::Context, state: &mut AppState) {
+    let field = egui::Id::new("planora-tree-rename-field");
     let Some((_, name)) = state.rename_draft.as_mut() else {
+        crate::dialog::forget_name_field(ctx, field);
         return;
     };
     let (mut apply, mut cancel) = (false, false);
@@ -2225,8 +2227,7 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
         .dock_key("tree_rename")
         .open(&mut open)
         .show(ctx, |ui| {
-            let r = theme::text_field(ui, egui::TextEdit::singleline(name));
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if crate::dialog::name_field(ui, field, name) {
                 apply = true;
             }
             ui.add_space(6.0);
@@ -2266,7 +2267,9 @@ pub fn apply_group_rename(state: &mut AppState) -> Result<(), String> {
 
 /// Kleines Fenster „Umbenennen“ einer Skizzengruppe mit Textfeld.
 fn group_rename_window(ctx: &egui::Context, state: &mut AppState) {
+    let field = egui::Id::new("planora-tree-group-rename-field");
     let Some((_, name)) = state.group_rename_draft.as_mut() else {
+        crate::dialog::forget_name_field(ctx, field);
         return;
     };
     let (mut apply, mut cancel) = (false, false);
@@ -2275,8 +2278,7 @@ fn group_rename_window(ctx: &egui::Context, state: &mut AppState) {
         .dock_key("tree_group_rename")
         .open(&mut open)
         .show(ctx, |ui| {
-            let r = theme::text_field(ui, egui::TextEdit::singleline(name));
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if crate::dialog::name_field(ui, field, name) {
                 apply = true;
             }
             ui.add_space(6.0);

@@ -723,7 +723,7 @@ fn dirty_dot_follows_history() {
         assert!(w.active_tab().is_dirty(), "beim Wiedergehen");
     }
 
-    // Offene Skizze: immer ungespeichert.
+    // Offene Skizze: erst eine Änderung im Entwurf ist ungespeichert (wie Fusion).
     let sk = st(&mut w)
         .add_sketch(planora_feature::SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
@@ -732,7 +732,7 @@ fn dirty_dot_follows_history() {
     let n = undo_len(&w);
     st(&mut w).open_sketch(sk).unwrap();
     observe(&mut w);
-    assert!(w.active_tab().is_dirty(), "Skizze offen");
+    assert!(!w.active_tab().is_dirty(), "nur geöffnet");
     assert_eq!(undo_len(&w), n, "Öffnen ist kein Schritt");
     // Unverändert geschlossen: kein Schritt, wieder sauber.
     st(&mut w).close_sketch();

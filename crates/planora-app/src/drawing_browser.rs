@@ -17,7 +17,6 @@ use crate::drawing_view::{view_name_msgs, view_names};
 use crate::icons::{paint_drawing_icon, paint_view_icon};
 use crate::msg::{Msg, MsgArg};
 use crate::state::AppState;
-use crate::theme;
 use planora_drawing::{Drawing, DrawingId, DrawingKind, Projection, ViewId};
 use planora_i18n::tr;
 
@@ -586,7 +585,9 @@ fn run(state: &mut AppState, action: Action, read_only: bool) {
 
 /// Kleines Fenster „Umbenennen“ mit Textfeld und rotem Fehlertext.
 pub(crate) fn rename_window(ctx: &egui::Context, state: &mut AppState) {
+    let field = egui::Id::new("planora-rename-drawing-field");
     let Some((id, mut name)) = state.rename_drawing_draft.clone() else {
+        crate::dialog::forget_name_field(ctx, field);
         return;
     };
     if state.document.drawing(id).is_none() {
@@ -601,8 +602,7 @@ pub(crate) fn rename_window(ctx: &egui::Context, state: &mut AppState) {
         .id(egui::Id::new("planora-rename-drawing"))
         .open(&mut open)
         .show(ctx, |ui| {
-            let r = theme::text_field(ui, egui::TextEdit::singleline(&mut name));
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if crate::dialog::name_field(ui, field, &mut name) {
                 apply = true;
             }
             if let Some(e) = &error {

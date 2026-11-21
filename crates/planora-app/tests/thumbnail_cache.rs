@@ -1499,3 +1499,31 @@ fn the_reader_handles_the_new_art_values_strictly() {
         assert!(load_cached(&dir, &key).is_none(), "{art:?}");
     }
 }
+
+#[test]
+fn hidden_bodies_do_not_appear_in_the_preview() {
+    // Wie die Ansicht und wie Fusion: Ein ausgeblendeter Körper fehlt im Vorschaubild.
+    let mut s = boxed();
+    s.set_body_hidden(0, true);
+    let lib = library();
+    let t = build(&doc_in(&lib, "Aus", &s), &key1(), &BuildLimits::default());
+    assert!(matches!(t, Thumb::NoBodies), "{t:?}");
+    // Netz-Körper ebenso.
+    let mut m = AppState::new();
+    m.import_mesh("Würfel", Arc::new(cube_mesh(5.0)), 1.0)
+        .unwrap();
+    m.set_body_hidden(0, true);
+    let t = build(&doc_in(&lib, "Netz", &m), &key1(), &BuildLimits::default());
+    assert!(matches!(t, Thumb::NoBodies), "{t:?}");
+    // Ordner „Körper“ aus.
+    let mut f = boxed();
+    let mut v = f.document.visibility().clone();
+    v.folders.bodies = true;
+    f.document.set_visibility(v);
+    let t = build(
+        &doc_in(&lib, "Ordner", &f),
+        &key1(),
+        &BuildLimits::default(),
+    );
+    assert!(matches!(t, Thumb::NoBodies), "{t:?}");
+}

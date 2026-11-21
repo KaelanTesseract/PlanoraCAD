@@ -82,6 +82,12 @@ pub fn export_writing() -> String {
     tr!("project-export-writing")
 }
 
+/// Meldung, solange ein Wahlmodus läuft („Skizze erstellen“, „Skizzenebene neu festlegen“): Wie
+/// in Fusion ruhen Rückgängig und Wiederholen, solange ein Befehl läuft.
+pub fn pick_running() -> String {
+    tr!("project-pick-running")
+}
+
 pub struct DocTab {
     pub id: u64,
     pub state: AppState,
@@ -229,12 +235,13 @@ impl DocTab {
         true
     }
 
-    /// Ungespeicherte Änderungen (R7): eine Skizze ist offen, eine Änderung ist noch kein
-    /// Schritt (auch vor dem ersten Bild danach und während einer Geste), oder der aktuelle
-    /// Schritt ist nicht der gespeicherte. Schreibgeschützte Ansichten sind nie „geändert“.
+    /// Ungespeicherte Änderungen (R7): die offene Skizze weicht vom Dokument ab (bloßes Öffnen
+    /// zählt nicht, wie Fusion), eine Änderung ist noch kein Schritt (auch vor dem ersten Bild
+    /// danach und während einer Geste), oder der aktuelle Schritt ist nicht der gespeicherte.
+    /// Schreibgeschützte Ansichten sind nie „geändert“.
     pub fn is_dirty(&self) -> bool {
         !self.read_only
-            && (self.state.sketch_session.is_some()
+            && (self.state.sketch_draft_changed()
                 || self.tracker.is_pending(self.state.document.edit_count())
                 || !self.history.is_saved())
     }
@@ -363,7 +370,8 @@ impl DocTab {
         (!now.same_content(self.history.current())).then_some(now)
     }
 
-    /// Gemeinsame Sperren von Rückgängig und Wiederholen: alte Version, Export schreibt.
+    /// Gemeinsame Sperren von Rückgängig und Wiederholen: alte Version, Export schreibt, ein
+    /// Wahlmodus läuft (wie Fusion: Während eines Befehls ruht der Verlauf).
     fn history_locked(&self) -> Option<String> {
         if self.read_only {
             Some(crate::drawing_browser::read_only_hint())
@@ -373,8 +381,20 @@ impl DocTab {
             .is_some_and(|d| d.is_writing_file())
         {
             Some(export_writing())
+        } else if self.state.pending_pick.is_some() {
+            Some(pick_running())
         } else {
             None
+        }
+    }
+
+    /// Die Meldung „Erst eine Ebene oder Fläche wählen …“ gilt nur, solange der Wahlmodus läuft;
+    /// danach verschwindet sie (jedes Bild aufgerufen), sonst stünde sie über dem Ende hinaus.
+    pub fn forget_pick_hint(&mut self) {
+        if self.state.pending_pick.is_none()
+            && self.state.message.as_deref() == Some(pick_running().as_str())
+        {
+            self.state.message = None;
         }
     }
 

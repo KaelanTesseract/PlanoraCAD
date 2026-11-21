@@ -465,6 +465,7 @@ project-name-suffix = Dokumentnamen dürfen nicht auf „.pcad“ enden.
 project-nothing-to-undo = Es gibt nichts rückgängig zu machen.
 project-nothing-to-redo = Es gibt nichts zu wiederholen.
 project-export-writing = Während des Exports ist das nicht möglich.
+project-pick-running = Erst eine Ebene oder Fläche wählen oder mit Esc abbrechen.
 project-untitled = Unbenannt { $n }
 project-read-only-save = Diese Version ist schreibgeschützt. Zuerst abzweigen oder wiederherstellen.
 project-pick-target = Bitte ein Projekt oder einen Ordner als Ziel wählen.

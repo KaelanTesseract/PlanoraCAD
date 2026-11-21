@@ -362,6 +362,7 @@ impl CreateDialog {
                 // Formelfelder; Meldungen stehen gesammelt unter dem Raster, damit sich die
                 // Felder nicht verschieben.
                 let mut errors = Vec::new();
+                let mut field_enter = false;
                 if !fields.is_empty() {
                     egui::Grid::new(("create_fields", key))
                         .num_columns(2)
@@ -377,6 +378,7 @@ impl CreateDialog {
                                 .error_below(false)
                                 .label(label)
                                 .show(ui, &scope);
+                                field_enter |= crate::dialog::left_with_enter(ui, &out.response);
                                 if let Some(e) = out.error {
                                     errors.push(tr!("field-error", label = label, error = e));
                                 }
@@ -407,6 +409,11 @@ impl CreateDialog {
                         cancel = true;
                     }
                 });
+                // Wie in Fusion: Eingabe übernimmt (wenn bereit), Esc bricht ab, solange kein
+                // Feld tippt; abgedockt zählt auch Esc im Hauptfenster.
+                let (enter, esc) = crate::surface_project_dialog::keys(ui, ready);
+                create |= enter || (field_enter && ready);
+                cancel |= esc;
             });
         if let Some((sketch, sel)) = self.profile_choice() {
             profile_pick::publish(state, sketch, sel);

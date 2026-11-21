@@ -178,6 +178,7 @@ impl TargetPick {
             filter: PickFilter::BASES,
             clicked: None,
             preview: None,
+            grip: None,
         });
     }
 

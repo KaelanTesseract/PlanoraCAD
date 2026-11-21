@@ -805,3 +805,38 @@ fn isometric_goes_into_the_empty_quadrant_of_the_block() {
         "{c:?}"
     );
 }
+
+#[test]
+fn hidden_bodies_are_left_out_of_drawing_views() {
+    // Fusion: Eine Zeichnungsansicht zeigt nur, was im Modell eingeblendet ist; ein Klick auf ein
+    // Auge rechnet die Ansicht neu.
+    let (mut st, _) = box_state(DVec3::splat(10.0));
+    st.create_box(DVec3::new(40.0, 10.0, 10.0)).unwrap();
+    let d = new_drawing(&mut st, "Blatt 1");
+    add(&mut st, d, ViewKind::Front, s(1, 1));
+    let mut ui = DrawingUi::default();
+    open(&mut ui, d);
+    tick(&mut ui, &st, true);
+    let both = width(&ready(&ui, &st, ViewKind::Front));
+    assert!(both >= 40.0, "{both}");
+    let big = st.bodies.iter().position(|b| b.bounds.1.x > 20.0).unwrap();
+    st.set_body_hidden(big, true);
+    tick(&mut ui, &st, true);
+    let small = width(&ready(&ui, &st, ViewKind::Front));
+    assert!((small - 10.0).abs() < 1e-6, "{small}");
+    // Ordner „Körper“ aus: nichts mehr zu zeichnen.
+    st.set_body_hidden(big, false);
+    let mut v = st.document.visibility().clone();
+    v.folders.bodies = true;
+    st.document.set_visibility(v);
+    tick(&mut ui, &st, true);
+    assert_eq!(
+        failed(&ui, &st, ViewKind::Front),
+        "Es gibt keinen Körper, der sich zeichnen lässt."
+    );
+    let mut v = st.document.visibility().clone();
+    v.folders.bodies = false;
+    st.document.set_visibility(v);
+    tick(&mut ui, &st, true);
+    assert!((width(&ready(&ui, &st, ViewKind::Front)) - both).abs() < 1e-6);
+}

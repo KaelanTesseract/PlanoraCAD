@@ -100,6 +100,23 @@ impl Tool {
                 | Tool::BlendCurve
         )
     }
+
+    /// Werkzeuge unter „Erstellen“, die Punkte setzen (Punkt, Linie, Rechteck, Kreis, Bogen,
+    /// Polygon, Langloch, Ellipse, Spline).
+    pub fn is_draw(self) -> bool {
+        matches!(
+            self,
+            Tool::Point
+                | Tool::Line
+                | Tool::Rectangle
+                | Tool::Circle
+                | Tool::Arc
+                | Tool::Polygon
+                | Tool::Slot
+                | Tool::Ellipse
+                | Tool::Spline
+        )
+    }
 }
 
 /// Zustand der Übergangskurve (Skizzen 11a): die Art, das erste gewählte Ende und das Ende unter
@@ -964,6 +981,18 @@ impl SketchSession {
         if tool == Tool::Text {
             self.begin_text();
         }
+    }
+
+    /// Hat das laufende Werkzeug noch keinen Punkt gesetzt (kein offener Punkt, kein Linienzug,
+    /// keine Wahl in 3D)?
+    pub(crate) fn nothing_drawn_yet(&self) -> bool {
+        self.pending.is_empty()
+            && self.pending_pos.is_empty()
+            && self.pending_curves.is_empty()
+            && self.open_start.is_none()
+            && self.line_chain.is_none()
+            && self.pick_points.is_empty()
+            && self.pending3.is_empty()
     }
 
     /// Vergisst, was das laufende Werkzeug schon gesetzt und getippt hat.
@@ -2204,6 +2233,9 @@ impl SketchSession {
         // Werkzeug wie in Fusion; sonst fällt unten nur das offene Maß weg, das Werkzeug bleibt.
         let dim_idle =
             self.tool == Tool::Dimension && self.dim.picks.is_empty() && self.dim.plan.is_none();
+        // Zeichenwerkzeuge (Linie, Rechteck, Kreis …): Ist noch kein Punkt gesetzt, beendet Esc
+        // das Werkzeug wie in Fusion; mitten in einer Form fällt unten nur die Form weg.
+        let draw_idle = self.tool.is_draw() && self.nothing_drawn_yet();
         self.end_drag(sk);
         // Ein Befehl ohne fertige Form hinterlässt nichts (wie Fusion).
         self.drop_open_points(sk);
@@ -2215,7 +2247,7 @@ impl SketchSession {
             self.set_tool(sk, Tool::Select);
             return;
         }
-        if dim_idle {
+        if dim_idle || draw_idle {
             self.set_tool(sk, Tool::Select);
             return;
         }

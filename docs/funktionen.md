@@ -159,7 +159,7 @@ Ist so eine Abhängigkeit schon erfüllt und überflüssig, steht das in der Mel
 - **Mittelebene:** zwischen zwei Ebenen oder ebenen Flächen; liegen sie nicht parallel, ist es die Winkelhalbierende.
 - **Ebene durch drei Punkte:** Eckpunkte von Körpern oder der Ursprung.
 - **Tangentialebene:** an einen Zylinder, Kegel oder eine Kugel, ausgerichtet an einer Ebene, mit Winkel.
-Die Ebene wird halbdurchsichtig orange gezeichnet, ohne dass Körper sie verdecken; die Ebene folgt ihren Bezügen, und ein verlorener Bezug zeigt den Fehler am Feature. Jedes Auswahlfeld im Fenster nimmt nur, was passt. Abstand und Winkel werden getippt (Zahl oder Formel), einen Ziehpfeil gibt es nicht. Kontextmenü der Zeile: Bearbeiten, Skizze erstellen, Umbenennen, Unterdrücken, Löschen.
+Die Ebene wird halbdurchsichtig orange gezeichnet, ohne dass Körper sie verdecken; die Ebene folgt ihren Bezügen, und ein verlorener Bezug zeigt den Fehler am Feature. Jedes Auswahlfeld im Fenster nimmt nur, was passt. Abstand und Winkel lassen sich tippen (Zahl oder Formel) oder wie in Fusion an der Vorschau ziehen: ein Pfeil entlang der Normale für den Abstand der Versatzebene, ein Drehpfeil am Rand für den Winkel der Ebene unter Winkel (Esc oder Rechtsklick nimmt nur den Zug zurück; der gezogene Wert ersetzt eine Formel). Die Tangentialebene hat keinen Griff. Kontextmenü der Zeile: Bearbeiten, Skizze erstellen, Umbenennen, Unterdrücken, Löschen.
 
 *Skizze auf Konstruktionsebene:* „Skizze erstellen“ im Kontextmenü der Ebene im Baum. Die Skizze folgt der Ebene, wenn sich diese ändert.
 
@@ -462,6 +462,7 @@ Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Ze
 **Was geht**
 - Ansichten: Vorne, Hinten, Links, Rechts, Oben, Unten und Isometrisch. Die Normansichten legen sich selbst an die richtige Stelle, wahlweise im Erstwinkel (Europa) oder im Dritten Winkel (USA); sie lassen sich nur entlang ihrer Richtung verschieben. Die isometrische Ansicht steht frei auf dem Blatt.
 - Blatt von A4 bis A0, hoch oder quer, mit Rahmen, Schriftfeld und weiteren Angaben (siehe „Zeichnungsblatt“ unten). Jede Ansicht hat ihren eigenen Maßstab (1:1, 1:2, 1:5, 1:10, 1:20, 1:50, 1:100, 2:1, 5:1, 10:1). Beim Anlegen schlägt das Programm den größten Maßstab vor, bei dem die drei Hauptansichten aufs Blatt passen.
+- Die Ansichten zeigen nur Körper, die im Baum eingeblendet sind (wie Fusion). Ein Klick auf ein Auge rechnet sie neu; auch das Vorschaubild im Fenster „Projekte“ lässt ausgeblendete Körper weg. Maße an Kanten eines ausgeblendeten Körpers verlieren dabei ihren Bezug. Die Stückliste zählt weiter alle Körper.
 - Sichtbare Kanten sind durchgezogen, verdeckte gestrichelt. Das Zeigen der verdeckten Kanten lässt sich je Ansicht ausschalten (Vorgabe: an für die Normansichten, aus für Isometrisch).
 - Kreise bleiben Kreise, Bögen bleiben Bögen, Freiformlinien bleiben glatte Kurven; es werden keine Streckenzüge daraus. Nur die Umrisse von Ringen (Torus) und Freiformflächen sind angenähert (auf 0,0001 mm genau).
 - Im Fenster: Umschalter zwischen 3D-Modell und Zeichnung (im Werkzeugfeld oben), Zoomen mit dem Mausrad, Verschieben mit der mittleren Maustaste, Ansichten anklicken und ziehen. Im Browser stehen die Zeichnungen mit ihren Ansichten. Die Berechnung läuft im Hintergrund mit Fortschrittsbalken; scheitert eine Ansicht, steht der Grund an ihr, und die Zeichnung bleibt erhalten.
@@ -742,6 +743,7 @@ Jede Änderung am Dokument lässt sich zurücknehmen und wieder herstellen: Kör
 
 **Der Punkt „ungespeichert“**
 - Der Punkt am Tab folgt dem Verlauf. Gehst du nach dem Speichern zurück, erscheint er. Gehst du zurück bis zum gespeicherten Stand, verschwindet er wieder.
+- Eine Skizze nur zu öffnen setzt den Punkt nicht (wie Fusion). Er erscheint erst, wenn du in ihr etwas änderst.
 - Rückgängig geht auch nach dem Speichern noch. Der Verlauf wird aber nicht mit der Datei gespeichert; nach einem Neustart ist er leer.
 - Ist ein Tab nach Rückgängig wieder so wie gespeichert, löscht das Programm seine Sicherung zwischendurch, damit beim Öffnen nichts Überholtes angeboten wird.
 
@@ -749,6 +751,7 @@ Jede Änderung am Dokument lässt sich zurücknehmen und wieder herstellen: Kör
 - Kamera und Hell oder Dunkel bleiben. Ein gewählter Körper bleibt gewählt, solange es ihn gibt. Eine gewählte Fläche oder Kante wird abgewählt, wenn sich das Modell ändert. Bei Schritten, die nur die Zeichnung betreffen, bleibt auch sie.
 - Offene Fenster (zum Beispiel „Quader erzeugen“ oder „Ändern“) werden geschlossen, wenn du Rückgängig über das Menü oder die Knöpfe benutzt. Was du darin noch nicht übernommen hattest, ist weg.
 - Die Tasten sind gesperrt, solange du in ein Feld tippst (dort gilt das Rückgängig des Feldes), ein Fenster oder eine Rückfrage offen ist, die Maustaste gedrückt ist oder eine Datei exportiert wird. Menü und Knöpfe gehen auch bei offenem Fenster und schließen es. Beim Export sind sie gesperrt.
+- Während „Skizze erstellen“ oder „Skizzenebene neu festlegen“ auf eine Ebene oder Fläche wartet, ruhen Rückgängig und Wiederholen ganz (Tasten, Menü und Knöpfe), wie in Fusion während eines Befehls. Erst wählen oder mit Esc abbrechen.
 - Die Umschalttasten zählen genau: Strg+Alt+Z oder Strg+Umschalt+N lösen nichts aus.
 - Die Namen der Aktionen erkennt das Programm am Unterschied zwischen vorher und nachher. Sie stimmen fast immer. Wenn mehrere Dinge in einem Schritt zusammenfallen, gilt eine feste Reihenfolge; ist nichts Passendes dabei, heißt der Schritt „Ändern“. Zwei Eigenheiten: Ändert man einen Maßwert in einer Skizze, heißt der Schritt „Skizze ändern“ (nicht „Maß ändern“). Spiegelt man eine einzelne Kurve, heißt der Schritt nach der Kurve (zum Beispiel „Kreis zeichnen“).
 - Ist das Zurückholen eines Schrittes einmal nicht möglich, bleibt das Dokument unverändert, es kommt die Meldung „Rückgängig ist nicht möglich.“ (bzw. „Wiederholen ist nicht möglich.“), und nur dieser Schritt fällt aus dem Verlauf. Das sollte nicht vorkommen.

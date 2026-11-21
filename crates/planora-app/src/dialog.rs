@@ -15,6 +15,41 @@ pub fn close_label() -> String {
     tr!("dialog-close")
 }
 
+/// Namensfeld eines Fensters „Umbenennen“ (wie Fusion): Beim Öffnen hat es die Tastatur und der
+/// ganze Name ist markiert, Tippen ersetzt ihn. `id` gehört zu diesem Fenster; beim Schließen
+/// [`forget_name_field`] aufrufen, damit das nächste Öffnen wieder markiert. Liefert `true`, wenn
+/// im Feld Enter gedrückt wurde.
+pub fn name_field(ui: &mut egui::Ui, id: egui::Id, name: &mut String) -> bool {
+    let fresh = id.with("planora-name-field-fresh");
+    let ctx = ui.ctx().clone();
+    // Im unsichtbaren Messdurchgang des ersten Bilds gäbe egui den Fokus gleich wieder ab.
+    let shown = ui.is_visible() && !ui.is_sizing_pass();
+    if shown && !ctx.data(|d| d.get_temp::<bool>(fresh).unwrap_or(false)) {
+        ctx.data_mut(|d| d.insert_temp(fresh, true));
+        let mut st = egui::text_edit::TextEditState::load(&ctx, id).unwrap_or_default();
+        let all = egui::text::CCursorRange::two(
+            egui::text::CCursor::new(0),
+            egui::text::CCursor::new(name.chars().count()),
+        );
+        st.cursor.set_char_range(Some(all));
+        st.store(&ctx, id);
+        ctx.memory_mut(|m| m.request_focus(id));
+    }
+    let r = theme::text_field(ui, egui::TextEdit::singleline(name).id(id));
+    left_with_enter(ui, &r)
+}
+
+/// Wurde das Feld mit der Antwort `r` in diesem Bild mit Enter verlassen? Wie in Fusion übernimmt
+/// ein Befehlsfenster dann (wenn es bereit ist), ohne zweites Enter.
+pub fn left_with_enter(ui: &egui::Ui, r: &egui::Response) -> bool {
+    r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
+/// Vergisst, dass das Namensfeld `id` schon geöffnet war ([`name_field`]).
+pub fn forget_name_field(ctx: &egui::Context, id: egui::Id) {
+    ctx.data_mut(|d| d.remove::<bool>(id.with("planora-name-field-fresh")));
+}
+
 /// Steht der Dialog, in dessen Inhalt `ui` zeichnet, in einem eigenen Fenster (abgedockt oder
 /// als Unterdialog über einem abgedockten Feld)?
 pub fn in_own_window(ui: &egui::Ui) -> bool {

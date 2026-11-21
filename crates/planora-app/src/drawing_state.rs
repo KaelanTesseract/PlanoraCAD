@@ -117,6 +117,8 @@ enum EntryState {
 struct Entry {
     /// Modellstand, zu dem das Ergebnis gehört.
     model: u64,
+    /// Welche Körper das Ergebnis zeigt (Augen im Browser, je Index in `bodies`).
+    shown: Vec<bool>,
     key: ViewKey,
     state: EntryState,
 }
@@ -193,11 +195,20 @@ impl std::fmt::Debug for DrawingUi {
 }
 
 /// Exakte Körper als eigene Kopien für einen Arbeitsthread (Netz-Körper ausgelassen).
-fn exact_copies(bodies: &[Body]) -> Vec<(String, Solid)> {
+/// Welche der Körper das Auge im Browser zeigt (Zeichnungen lassen ausgeblendete weg, wie
+/// Fusion).
+fn shown_bodies(bodies: &[Body], document: &Document) -> Vec<bool> {
+    bodies
+        .iter()
+        .map(|b| document.body_shown(b.source))
+        .collect()
+}
+
+fn exact_copies(bodies: &[Body], shown: &[bool]) -> Vec<(String, Solid)> {
     bodies
         .iter()
         .enumerate()
-        .filter(|(_, b)| b.kind != BodyKind::Mesh)
+        .filter(|(i, b)| b.kind != BodyKind::Mesh && shown.get(*i).copied().unwrap_or(true))
         .map(|(i, b)| (display_name(&b.name, i), b.solid.clone()))
         .collect()
 }
@@ -370,10 +381,12 @@ impl DrawingUi {
             }
         }
         let model = document.model_edit_count();
-        // Veraltete Einträge und nicht gebrauchte laufende Berechnungen verwerfen; `Drop` des
-        // Auftrags bricht ab.
+        let shown = shown_bodies(state_bodies, document);
+        // Veraltete Einträge (auch nach einem Klick auf ein Auge) und nicht gebrauchte laufende
+        // Berechnungen verwerfen; `Drop` des Auftrags bricht ab.
         self.cache.retain(|e| {
             e.model == model
+                && e.shown == shown
                 && (needed.iter().any(|k| same_key(k, &e.key))
                     || !matches!(e.state, EntryState::Running { .. }))
         });
@@ -386,9 +399,10 @@ impl DrawingUi {
             if self.cache.iter().any(|e| same_key(&e.key, key)) {
                 continue;
             }
-            let state = self.start(state_bodies, *key);
+            let state = self.start(state_bodies, &shown, *key);
             self.cache.push(Entry {
                 model,
+                shown: shown.clone(),
                 key: *key,
                 state,
             });
@@ -414,10 +428,10 @@ impl DrawingUi {
 
     /// Startet die Berechnung eines Schlüssels (Ansichtsart oder Schnittebene); ohne exakte
     /// Körper steht die Meldung sofort fest.
-    fn start(&mut self, bodies: &[Body], key: ViewKey) -> EntryState {
-        let solids = exact_copies(bodies);
+    fn start(&mut self, bodies: &[Body], shown: &[bool], key: ViewKey) -> EntryState {
+        let solids = exact_copies(bodies, shown);
         if solids.is_empty() {
-            let e = if bodies.is_empty() {
+            let e = if !shown.iter().any(|s| *s) {
                 DrawError::NoBodies
             } else {
                 DrawError::MeshBodiesOnly

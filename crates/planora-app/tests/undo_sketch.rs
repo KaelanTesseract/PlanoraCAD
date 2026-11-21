@@ -166,7 +166,7 @@ fn undo_in_sketch_touches_only_the_sketch() {
         Some(nothing_to_redo()),
         "nichts mehr zu wiederholen"
     );
-    // Die offene Skizze bleibt „ungespeichert“, auch am Anfang ihres Verlaufs.
+    // Die neue Skizze ist noch nicht gespeichert: „ungespeichert“, auch am Anfang ihres Verlaufs.
     tab(&mut w).undo().unwrap();
     assert!(w.active_tab().is_dirty());
 }

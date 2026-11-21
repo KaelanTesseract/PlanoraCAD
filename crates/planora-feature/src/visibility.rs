@@ -2,7 +2,7 @@
 //! Fusion. Der Ordner-Schalter steht für sich: Er blendet alles darin aus und lässt die Schalter
 //! der einzelnen Zeilen stehen. Ändert nur die Ansicht, nicht das Modell.
 
-use crate::model::{Document, FeatureId, FeatureKind, StandardPlane};
+use crate::model::{BodyRef, Document, FeatureId, FeatureKind, StandardPlane};
 use planora_drawing::BodyKey;
 use std::collections::BTreeSet;
 
@@ -56,6 +56,12 @@ impl Visibility {
 impl Document {
     pub fn visibility(&self) -> &Visibility {
         &self.visibility
+    }
+
+    /// Zeigt das Auge den Körper `r` (eigenes Auge und Ordner „Körper“)? Zeichnungen und
+    /// Vorschaubilder lassen ausgeblendete Körper weg, wie Fusion.
+    pub fn body_shown(&self, r: BodyRef) -> bool {
+        !self.visibility.folders.bodies && !self.visibility.bodies.contains(&self.body_key(r))
     }
 
     /// Setzt die Sichtbarkeit; Verweise auf nicht vorhandene oder nicht ausblendbare Features

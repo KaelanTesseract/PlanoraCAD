@@ -3771,6 +3771,30 @@ impl AppState {
     ///
     /// Lehnt das Dokument den Entwurf ab, bleiben Sitzung und Entwurf offen; die Meldung steht
     /// in `message` und im Skizzenfenster.
+    /// Gleicht der Entwurf `draft` der Skizze `id` dem Stand im Dokument (dann übernimmt das
+    /// Beenden nichts)? Auch eine reine Formeländerung (gleicher Wert, etwa „Breite“ →
+    /// „breite“) zählt als Änderung.
+    fn draft_matches_document(&self, id: FeatureId, draft: &SketchFeature) -> bool {
+        let Some(FeatureKind::Sketch(def)) = self.document.feature(id).map(|f| &f.kind) else {
+            return true;
+        };
+        draft.copies == def.copies
+            && draft.formulas == def.formulas
+            && self
+                .document
+                .sketch_of(id)
+                .is_some_and(|sk| sk.revision() == draft.sketch.revision())
+    }
+
+    /// Hat die offene Skizze etwas, das das Beenden übernähme (auch einen offenen Punkt des
+    /// laufenden Werkzeugs)? Ohne offene Skizze `false`. Bloßes Öffnen ändert nichts (wie Fusion).
+    pub fn sketch_draft_changed(&self) -> bool {
+        match (self.sketch_session.as_ref(), self.sketch_draft.as_ref()) {
+            (Some(se), Some(draft)) => !self.draft_matches_document(se.sketch, draft),
+            _ => false,
+        }
+    }
+
     fn commit_draft(&mut self) -> Result<(), String> {
         // Der Skizzenverlauf endet mit der Sitzung; nur wenn das Dokument den Entwurf ablehnt
         // und die Skizze offen bleibt, bleibt er auch.
@@ -3792,15 +3816,7 @@ impl AppState {
             return Ok(());
         };
         draft.plane = def.plane.clone();
-        // Auch eine reine Formeländerung (gleicher Wert, etwa „Breite“ → „breite“) wird
-        // übernommen.
-        let unchanged = draft.copies == def.copies
-            && draft.formulas == def.formulas
-            && self
-                .document
-                .sketch_of(id)
-                .is_some_and(|sk| sk.revision() == draft.sketch.revision());
-        if unchanged {
+        if self.draft_matches_document(id, &draft) {
             return Ok(());
         }
         let kind = FeatureKind::Sketch(draft.clone());

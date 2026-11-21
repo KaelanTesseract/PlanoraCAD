@@ -1276,3 +1276,24 @@ fn a_radius_that_would_bulge_an_oval_arc_is_refused_bit_equal() {
     .sweep();
     assert!(sweep < std::f64::consts::PI, "{sweep}");
 }
+
+#[test]
+fn esc_ends_a_drawing_tool_only_when_no_point_is_set() {
+    // Fusion: Esc ohne gesetzten Punkt beendet Linie, Kreis und Co.; mitten in einer Form fällt
+    // nur die Form weg, ein zweites Esc beendet das Werkzeug.
+    for tool in [Tool::Line, Tool::Rectangle, Tool::Circle, Tool::Point] {
+        let (mut sk, mut se) = setup();
+        se.set_tool(&mut sk, tool);
+        se.cancel(&mut sk);
+        assert_eq!(se.tool, Tool::Select, "{tool:?}: ohne Punkt endet es");
+    }
+    let (mut sk, mut se) = setup();
+    se.set_tool(&mut sk, Tool::Line);
+    click(&mut se, &mut sk, 1.0, 1.0);
+    se.cancel(&mut sk);
+    assert_eq!(se.tool, Tool::Line, "mit offenem Punkt bleibt das Werkzeug");
+    assert!(se.pending.is_empty());
+    assert_eq!(sk.points().count(), 0, "nichts bleibt zurück");
+    se.cancel(&mut sk);
+    assert_eq!(se.tool, Tool::Select, "das zweite Esc beendet es");
+}

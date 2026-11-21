@@ -631,3 +631,32 @@ fn discard_removes_the_autosave_of_the_tab() {
     assert!(autosave.exists(), "nach einem Absturz bleibt sie");
     let _ = std::fs::remove_dir_all(&r);
 }
+
+#[test]
+fn opening_a_saved_sketch_alone_is_no_change() {
+    // Fusion: Eine Skizze nur zu öffnen und wieder zu beenden ändert das Dokument nicht; der Tab
+    // zeigt kein „•“. Erst eine echte Änderung im Entwurf zählt.
+    let mut w = ws();
+    let sketch = w
+        .active_tab_mut()
+        .state
+        .add_sketch(planora_feature::SketchPlane::Standard(
+            planora_feature::StandardPlane::XY,
+        ))
+        .unwrap();
+    w.observe_history(false);
+    saved_document(&mut w, "Skizze", 0);
+    assert!(!w.active_tab().is_dirty(), "gespeichert");
+    w.active_tab_mut().state.open_sketch(sketch).unwrap();
+    w.observe_history(false);
+    assert!(!w.active_tab().is_dirty(), "nur geöffnet");
+    w.active_tab_mut()
+        .state
+        .session_sketch_mut()
+        .unwrap()
+        .1
+        .add_point(3.0, 4.0)
+        .unwrap();
+    w.observe_history(false);
+    assert!(w.active_tab().is_dirty(), "ein neuer Punkt");
+}

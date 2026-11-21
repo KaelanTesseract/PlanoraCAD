@@ -813,7 +813,9 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     let grip_hover = response
         .hover_pos()
         .filter(|p| !cube.contains(*p) && !home.contains(*p));
-    let grips_busy = !sketching && sketch_view::insert_grips_input(ui, rect, state, grip_hover);
+    let grips_busy = !sketching
+        && (sketch_view::insert_grips_input(ui, rect, state, grip_hover)
+            | crate::plane_grip::input(ui, rect, state, grip_hover));
     if sketching {
         // Das Overlay rechnet im ganzen Bereich (Auswahl und Fangen mit der vollen Größe) und
         // ruft selbst `set_viewport`; danach das freie Rechteck erneut setzen.
@@ -1082,6 +1084,10 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     painter.set(sketches_slot, Shape::Vec(overlay));
     // Griffe eines Einfügen-Fensters über allem (Modell und Skizze).
     sketch_view::paint_insert_grips(&painter, rect, state);
+    // Ziehgriff eines Ebenen-Fensters (Abstand oder Winkel).
+    if !sketching {
+        crate::plane_grip::paint(&painter, rect, state);
+    }
 
     // Würfel mit der endgültigen Kamera zeichnen (nach einem Klick schon in der neuen Ansicht).
     paint_cube(

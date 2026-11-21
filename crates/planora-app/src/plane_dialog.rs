@@ -14,6 +14,7 @@ use crate::dialog::{Dialog, DialogSize};
 use crate::formula_field::{FormulaField, names_hint, resolve_kept, stored_text};
 use crate::keymap::Action;
 use crate::msg::{Msg, MsgArg};
+use crate::plane_grip::{GripShape, PlaneGrip};
 use crate::state::{AppState, MAX_COORD_MM, PickFilter};
 use planora_feature::planes::{
     AxisRef, PlaneBase, PlaneDef, PlaneFeature, PointRef, StdAxis, compute_plane,
@@ -214,6 +215,8 @@ pub struct PlanePick {
     pub clicked: Option<PlaneClick>,
     /// Vorschau der Ebene (in der Hervorhebungsfarbe gezeichnet).
     pub preview: Option<PlaneRect>,
+    /// Ziehgriff für Abstand oder Winkel an der Vorschau ([`crate::plane_grip`]).
+    pub grip: Option<PlaneGrip>,
 }
 
 /// Die bearbeitete Ebene.
@@ -336,6 +339,40 @@ fn solids(state: &AppState) -> Vec<&Solid> {
         .filter(|j| !state.is_mesh(*j))
         .map(|j| &state.bodies[j].solid)
         .collect()
+}
+
+/// Form des Ziehgriffs zur berechneten Ebene `frame` mit der Vorschau `rect`: Pfeil entlang der
+/// Normale (Versatzebene) oder Drehpfeil um die Achse am Rand der Vorschau (Ebene unter Winkel);
+/// die übrigen Befehle haben keinen.
+fn grip_shape(def: &PlaneDef, frame: &Frame, rect: &PlaneRect) -> Option<GripShape> {
+    let mid = rect.frame.origin;
+    match def {
+        PlaneDef::Offset { distance, .. } => Some(GripShape::Distance {
+            at: mid,
+            dir: frame.z,
+            value: *distance,
+        }),
+        PlaneDef::Angle { angle, .. } => {
+            // Die Achse ist die x-Richtung der Ebene durch ihren Ursprung (`angle_frame`).
+            let axis = frame.x;
+            let center = frame.origin + axis * (mid - frame.origin).dot(axis);
+            let out = mid - center;
+            let arm = if out.length() > 1e-9 {
+                out.normalize()
+            } else {
+                frame.y
+            };
+            let extent = arm.dot(rect.frame.x).abs() * rect.half.x
+                + arm.dot(rect.frame.y).abs() * rect.half.y;
+            Some(GripShape::Angle {
+                center,
+                axis,
+                handle: mid + arm * extent,
+                value: *angle,
+            })
+        }
+        _ => None,
+    }
 }
 
 impl PlaneDialog {
@@ -755,26 +792,69 @@ impl PlaneDialog {
         if let Some(click) = state.plane_pick.as_mut().and_then(|p| p.clicked.take()) {
             self.take_click(state, click);
         }
+        // Ein gezogener Wert kommt als Zahl ins Feld (eine Formel weicht ihm, wie in Fusion).
+        if let Some(v) = state
+            .plane_pick
+            .as_mut()
+            .and_then(|p| p.grip.as_mut())
+            .and_then(|g| g.moved.take())
+        {
+            self.set_dragged(state, v);
+        }
         let result = self.preview(state);
         let preview = result
             .as_ref()
             .ok()
             .and_then(|(def, frame)| state.plane_rect_for(def, *frame));
+        let old = state.plane_pick.and_then(|p| p.grip);
+        let grip = match (&result, preview) {
+            (Ok((def, frame)), Some(rect)) => {
+                grip_shape(def, frame, &rect).map(|shape| PlaneGrip::follow(old, shape))
+            }
+            _ => None,
+        };
         state.plane_pick = Some(PlanePick {
             filter: self.command.slots()[self.active].filter(),
             clicked: None,
             preview,
+            grip,
         });
         result
     }
 
+    /// Übernimmt den Wert `v` (Millimeter oder Grad) aus dem Ziehgriff als Zahl ins Feld.
+    fn set_dragged(&mut self, state: &AppState, v: f64) {
+        let Some((_, unit)) = self.command.number() else {
+            return;
+        };
+        let scope = state.document.param_scope();
+        // Wie Fusion: Ein gezogener Wert springt auf die Anzeigegenauigkeit (Längen 0,01 mm,
+        // Winkel 0,1°), statt mit allen Nachkommastellen im Feld zu stehen.
+        let step = if matches!(unit, ParamUnit::Angle) {
+            10.0
+        } else {
+            100.0
+        };
+        let v = (v * step).round() / step;
+        self.value = v;
+        self.formula = None;
+        self.text = stored_text(v, None, unit, &scope);
+        self.error = None;
+    }
+
     /// Zeigt das Fenster; `true`, solange es offen bleiben soll.
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> bool {
+        // Hat Esc in diesem Bild nur einen Zug am Griff abgebrochen, bleibt das Fenster offen.
+        let esc_taken = state
+            .plane_pick
+            .and_then(|p| p.grip)
+            .is_some_and(|g| g.esc_taken);
         let preview = self.sync(state);
         let mut open = true;
         let (mut ok, mut cancel) = (false, false);
         let scope = state.document.param_scope();
         let mut field_error = None;
+        let mut field_enter = false;
         let id = egui::Id::new(("plane_dialog", self.editing()));
         Dialog::new(self.title(), DialogSize::Normal)
             .dock_key(self.command.dock_key())
@@ -813,6 +893,7 @@ impl PlaneDialog {
                             .error_below(false)
                             .label(label.as_str())
                             .show(ui, &scope);
+                            field_enter |= crate::dialog::left_with_enter(ui, &out.response);
                             if let Some(e) = out.error {
                                 field_error =
                                     Some(tr!("field-error", label = label.as_str(), error = e));
@@ -836,8 +917,8 @@ impl PlaneDialog {
                     ui.colored_label(error_color(dark), e);
                 }
                 ui.add_space(6.0);
+                let ready = preview.is_ok() && field_error.is_none();
                 ui.horizontal(|ui| {
-                    let ready = preview.is_ok() && field_error.is_none();
                     if ui
                         .add_enabled(ready, egui::Button::new(tr!("common-ok")))
                         .clicked()
@@ -848,9 +929,12 @@ impl PlaneDialog {
                         cancel = true;
                     }
                 });
-                // Esc bricht ab (wie „Abbrechen“), solange kein Feld tippt; im Fenster des
-                // Dialogs gelesen (abgedockt auch Esc im Hauptfenster).
-                if crate::dialog::escape_pressed(ui, false) {
+                // Esc bricht ab (wie „Abbrechen“), Enter übernimmt (wie Fusion, auch direkt im
+                // Feld), solange kein Feld tippt; im Fenster des Dialogs gelesen (abgedockt auch
+                // Esc im Hauptfenster).
+                let (enter, esc) = crate::surface_project_dialog::keys(ui, ready);
+                ok |= enter || (field_enter && ready);
+                if !esc_taken && esc {
                     cancel = true;
                 }
             });
