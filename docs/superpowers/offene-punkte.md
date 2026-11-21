@@ -3361,9 +3361,9 @@ Schlussprüfung (Skizzen 12):
 Spec `specs/2026-11-19-skizze-erstellen-design.md`, Plan `plans/2026-11-19-skizze-erstellen.md`, Zweig `feature/skizze-erstellen`.
 
 - **Gebaut:** Befehl „Skizze erstellen“ (`Action::CreateSketch`, ohne Vorgabetaste wie Fusion) im Menü „Erzeugen“ und als erstes Symbol der Werkzeugleiste unten; ersetzt „Skizze auf XY-/XZ-/YZ-Ebene“ und „Skizze auf gewählter Fläche“. Vorauswahl (Grundebene, Konstruktionsebene, ebene Fläche) startet sofort, sonst Wahlmodus `PendingPick::NewSketch` (`AppState::start_create_sketch`). Im Wahlmodus (auch „Skizzenebene neu festlegen“) zeigt `origin_plane_rects` alle drei Grundebenen, ohne die Sichtbarkeit im Dokument zu ändern.
-- **Annahme (Vorrang):** Eine nur für den Wahlmodus eingeblendete Grundebene steht hinter jedem anderen Treffer (Fläche, Konstruktionsebene, sichtbare Grundebene, auch wenn diese dahinter liegt) zurück, damit sie nichts im Modell verdeckt. Im Handtest gegen Fusion prüfen.
+- **Annahme (Vorrang):** Eine nur für den Wahlmodus eingeblendete Grundebene steht hinter jedem anderen Treffer (Fläche, Konstruktionsebene) zurück und gewinnt nur, wenn sonst nichts getroffen ist, damit sie nichts im Modell verdeckt. Eine sichtbare Grundebene gewinnt dagegen nur, wenn sie vor dem Treffer liegt (Tiefenvergleich, `state.rs` `plane_click_at`). Im Handtest gegen Fusion prüfen.
 - **Nachgezogen (2026-11-20, Teil C):** Die Taste gilt auch bei offener Skizze (Bereich „Überall“; schließt sie erst), nicht in der Zeichnung. „Letzten Befehl wiederholen“ kennt den Befehl (gemerkt, sobald eine Skizze entstand). Der Wahlmodus schließt DXF-, SVG- und Leinwand-Fenster samt Vorschau und endet beim Wechsel in die Zeichnung (`commands::observe`).
-- **Annahme:** Unpassende Vorauswahl (Kante, Körper, gekrümmte Fläche) wird geleert, dann Wahlmodus. Eine offene Skizze wird vorher geschlossen und bleibt nach Abbruch geschlossen.
+- **Annahme:** Unpassende Vorauswahl (Kante, Körper, gekrümmte Fläche) wird geleert, dann Wahlmodus. Eine offene Skizze wird vorher geschlossen und bleibt nach Abbruch geschlossen. Eine passende, aber gesperrte Vorauswahl (`sketch_on_face_blocked`) gibt nur die Meldung, keinen Wahlmodus.
 - **Blickrichtung:** XY von oben (Bild-oben +Y), XZ von vorn (+Z oben), YZ von rechts (+Z oben), wie Fusion mit „Z nach oben“; Test `create_sketch_view_direction_like_fusion`.
 - **Handtest:** (1) Leeres Modell, Ursprung ausgeblendet, Symbol unten: drei Ebenen halbdurchsichtig, Hervorhebung unter dem Zeiger. (2) Esc: Ebenen weg, nichts im Baum, Rückgängig unverändert. (3) XY, XZ, YZ je anlegen: Blick von oben, vorn, rechts. (4) Quader, Fläche vorwählen, Symbol: Skizze sofort auf der Fläche. (5) Im Wahlmodus Konstruktionsebene im Baum klicken. (6) Werkzeugleiste bei 1920×1080 ganz sichtbar.
 
@@ -3453,3 +3453,20 @@ Entwurf `specs/2026-11-21-bibliotheken-pruefung-design.md`, Plan `plans/2026-11-
 - **Stand des ersten Berichts (lokal, 2026-11-21):** 89 verträgliche Updates offen (`cargo update`), direkte Abhängigkeiten: crc32fast 1.5.2 → 1.5.5, naga 30.0.1 → 30.0.2, skrifa 0.44 → 0.50 (großer Sprung). Am 2026-11-22 im Zweig `chore/bibliotheken-updates` erledigt (alle verträglichen Updates, crc32fast 1.5.5, naga 30.0.2); offen bleibt nur **skrifa 0.50** (großer Sprung).
 - **skrifa 0.50 wartet auf egui** (Dennis, 2026-11-22): skrifa 0.50 geht nur mit harfrust 0.16, dessen Schnittstelle neu ist (Umbau von `planora-text/src/shape.rs`). egui 0.36 und 0.37 bringen noch skrifa 0.44 und harfrust 0.12 mit; ein eigener Sprung würde den Schriftenstapel doppelt einbauen. Erst heben, wenn egui auf skrifa 0.50 geht, dann zusammen mit egui. dxf 0.6.2 (chrono) und winit 0.31 (ttf-parser) bringen am 2026-11-22 nichts Neues.
 - CHANGELOG-Einträge kommen beim nächsten Release dazu.
+
+## Restliche Abweichungen von Fusion (2026-11-22, Zweig `fix/fusion-reste`)
+
+Entwurf `specs/2026-11-22-fusion-reste-design.md`, Plan `plans/2026-11-22-fusion-reste.md`.
+
+- ~~Tangentialebene ohne Griff~~ erledigt: Drehpfeil am Berührpunkt um die Achse der Fläche (`planes::tangent_axis`).
+- ~~Stückliste zählt ausgeblendete Körper~~ erledigt (Wunsch von Dennis): nur eingeblendete Körper; Hinweis „N ausgeblendete Körper sind nicht in der Stückliste.“ unter der Zeichnung und im Fenster „Blattangaben“, nicht auf dem Blatt.
+- ~~Übrige Befehlsfenster brauchen ein zweites Enter~~ erledigt: `dialog::enter_confirms` in Verrunden/Fase, Maß bearbeiten, Neue Zeichnung, Netz-Import (nur aus dem Namen), SVG/DXF/Leinwand einfügen, Isoparameter-Kurve, Profil drehen. „Auf Fläche projizieren“, Schnittkurve und Krümmungskamm haben kein Zahlenfeld und übernahmen schon mit einem Enter.
+- ~~Rundung in der Skizze ohne Radiusgriff, Fase vom Zeiger~~ erledigt: Radiusgriff in der Bogenmitte; Fase mit Startlänge (ein Fünftel der kürzeren Linie) und Griff je Abstand.
+- „Skizze erstellen“: Wortlaut der Annahmen oben berichtigt.
+
+Grenzen und Annahmen:
+- Griffe weiter ohne Fang; unter einem Fenster nicht greifbar (wie in Fusion verdeckt).
+- Maße an Kanten ausgeblendeter Körper bleiben ohne Kante; eine Positionsnummer an einem ausgeblendeten Körper meldet weiter „hat ihr Teil verloren“.
+- Blattinformationen übernehmen nicht mit Enter (Formular mit vielen Textfeldern).
+- Der Rundungsgriff rechnet den Radius aus dem Abstand zur Ecke im Verhältnis; bei Bögen statt Linien folgt er dem Zeiger nur genähert.
+- **Annahme:** Startlänge der Fase wie der Startradius der Rundung (Fusion nennt keinen Wert).
