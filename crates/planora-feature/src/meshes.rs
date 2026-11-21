@@ -93,6 +93,8 @@ impl Document {
                 self.meshes.remove(&mesh_id);
                 (self.next_id, self.next_mesh, self.edits, self.marker) = saved;
                 self.recompute();
+                // Die Zähler stehen wieder auf einem früheren Stand: Zwischenspeicher verwerfen.
+                self.hidden_by_group.clear();
                 let message = match status {
                     Some(FeatureStatus::Error(m) | FeatureStatus::Skipped(m)) => m,
                     _ => tr!("feature-mesh-not-created"),

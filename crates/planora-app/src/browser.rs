@@ -490,6 +490,8 @@ enum Action {
     ToggleHidden(usize),
     /// Auge einer Skizze oder Konstruktionsebene (Handtest Skizzen 6).
     ToggleFeatureHidden(FeatureId),
+    /// Haken „Maße anzeigen“ im Kontextmenü einer fertigen Skizze.
+    ToggleSketchDimensions(FeatureId),
     /// Auge einer Grundebene im Ordner „Ursprung“.
     ToggleOrigin(StandardPlane),
     /// Auge am Kopf eines Ordners.
@@ -1503,7 +1505,13 @@ fn sketch_row(
     let lock = crate::history_bar::lock_reason(state, &[id]);
     let lost = crate::lost_projections_dialog::offers(state, id);
     resp.context_menu(|ui| {
-        feature_menu(ui, action, id, r.suppressed, Some((lock, lost)));
+        feature_menu(
+            ui,
+            action,
+            id,
+            r.suppressed,
+            Some((lock, lost, state.sketch_dimension_menu(id))),
+        );
     });
 }
 
@@ -1674,7 +1682,7 @@ fn feature_menu(
     action: &mut Option<Action>,
     id: FeatureId,
     suppressed: bool,
-    sketch: Option<(Option<String>, bool)>,
+    sketch: Option<(Option<String>, bool, Option<bool>)>,
 ) {
     let pick = |action: &mut Option<Action>, a: Action, ui: &mut egui::Ui| {
         *action = Some(a);
@@ -1695,7 +1703,7 @@ fn feature_menu(
         pick(action, Action::Edit(id), ui);
     }
     rename_and_suppress(ui, action, id, suppressed);
-    if let Some((lock, lost)) = sketch {
+    if let Some((lock, lost, dimensions)) = sketch {
         ui.separator();
         for (label, act, key) in [
             (
@@ -1740,6 +1748,17 @@ fn feature_menu(
         );
         if ui.add(group).clicked() {
             pick(action, Action::CreateGroup(id), ui);
+        }
+        // Haken „Maße anzeigen“ der fertigen Skizze (Skizzen 12, Task 9); bei der geöffneten
+        // Skizze steht er im Skizzenfeld, hier fehlt er.
+        if let Some(on) = dimensions {
+            let mut checked = on;
+            if ui
+                .checkbox(&mut checked, tr!("tree-sketch-show-dimension"))
+                .clicked()
+            {
+                pick(action, Action::ToggleSketchDimensions(id), ui);
+            }
         }
         // Nur an Skizzen mit verlorenen Projektionen (Skizzen 11a).
         if lost {
@@ -1816,13 +1835,17 @@ fn origin(ui: &mut egui::Ui, state: &AppState, read_only: bool, action: &mut Opt
             None,
             |p, rect, c| paint_source(p, rect, IconSource::Font(Icon::SketchOnPlane), c),
         )
-        .on_hover_text(if redefining {
-            tr!("tree-plane-redefine-hint")
-        } else if picking {
-            tr!("tree-plane-pick-hint")
-        } else {
-            tr!("tree-plane-hint")
-        });
+        .on_hover_text(
+            if state.pending_pick == Some(crate::state::PendingPick::NewSketch) {
+                tr!("tree-plane-new-sketch-hint")
+            } else if redefining {
+                tr!("tree-plane-redefine-hint")
+            } else if picking {
+                tr!("tree-plane-pick-hint")
+            } else {
+                tr!("tree-plane-hint")
+            },
+        );
         let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
         let full = resp.rect;
         let key = ("eye-origin", format!("{std:?}"));
@@ -2038,6 +2061,7 @@ fn run(state: &mut AppState, action: Action) {
             let hidden = state.own_feature_hidden(id);
             state.set_feature_hidden(id, !hidden);
         }
+        Action::ToggleSketchDimensions(id) => state.toggle_finished_dimensions(id),
         Action::ToggleOrigin(p) => {
             let shown = state.is_origin_plane_shown(p);
             state.set_origin_plane_shown(p, !shown);

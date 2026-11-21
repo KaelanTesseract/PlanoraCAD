@@ -35,9 +35,11 @@ pub mod feedback;
 pub mod feedback_dialog;
 pub mod feedback_shot;
 pub mod file_chooser;
+pub mod finished_cache;
 pub mod fonts;
 pub mod fonts_library;
 pub mod formula_field;
+pub mod hard_crash;
 pub mod history;
 pub mod history_bar;
 pub mod icons;
@@ -140,5 +142,94 @@ pub mod testing {
             walk(&clipped.shape, &mut seen);
         }
         seen
+    }
+
+    use planora_render::StrokeVertex;
+
+    /// Ist das Dreieck eine Fläche (alle Ecken mit `edge` 0) statt eines Linienstücks?
+    fn is_fill(t: &[StrokeVertex]) -> bool {
+        t.iter().all(|v| v.edge == 0.0)
+    }
+
+    /// Zahl der Flächendreiecke in der Farbe `color`.
+    pub fn fill_triangles(v: &[StrokeVertex], color: egui::Color32) -> usize {
+        v.chunks(3)
+            .filter(|t| is_fill(t) && t[0].color == crate::sketch_view::stroke_rgba(color))
+            .count()
+    }
+
+    /// Zahl der Liniendreiecke in der Farbe `color`.
+    pub fn line_triangles(v: &[StrokeVertex], color: egui::Color32) -> usize {
+        v.chunks(3)
+            .filter(|t| !is_fill(t) && t[0].color == crate::sketch_view::stroke_rgba(color))
+            .count()
+    }
+
+    /// Farben der Linienstücke als GPU-Farben (jede einmal, in der Reihenfolge des ersten
+    /// Auftretens); vergleichen mit [`crate::sketch_view::stroke_rgba`].
+    pub fn line_colors(v: &[StrokeVertex]) -> Vec<[f32; 4]> {
+        let mut out = Vec::new();
+        for t in v.chunks(3).filter(|t| !is_fill(t)) {
+            let c = t[0].color;
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// GPU-Linien und -Flächen der geöffneten Skizze im Viewport `rect` bei 1 Pixel je Punkt.
+    pub fn open_strokes(state: &crate::state::AppState, rect: egui::Rect) -> Vec<StrokeVertex> {
+        let mut out = Vec::new();
+        let view = crate::viewport::stroke_view(state, rect, 1.0);
+        crate::sketch_view::open_sketch_strokes(state, &view, &mut out);
+        out
+    }
+
+    /// Bildschirmlage (logische Punkte in `rect`) einer Ecke, wie die GPU sie zeichnet; zum
+    /// Vergleich mit Lagen auf dem egui-Bildschirm.
+    pub fn stroke_point(p: &StrokeVertex, rect: egui::Rect) -> egui::Pos2 {
+        egui::pos2(
+            rect.left() + (p.ndc[0] + 1.0) * 0.5 * rect.width(),
+            rect.top() + (1.0 - p.ndc[1]) * 0.5 * rect.height(),
+        )
+    }
+
+    /// Die Liniendreiecke als (Bildschirmecken, GPU-Farbe wie [`crate::sketch_view::stroke_rgba`]);
+    /// Flächen mit `fills`.
+    pub fn stroke_triangles(
+        v: &[StrokeVertex],
+        rect: egui::Rect,
+        fills: bool,
+    ) -> Vec<([egui::Pos2; 3], [f32; 4])> {
+        v.chunks(3)
+            .filter(|t| t.len() == 3 && (fills || !is_fill(t)))
+            .map(|t| ([0, 1, 2].map(|i| stroke_point(&t[i], rect)), t[0].color))
+            .collect()
+    }
+
+    /// GPU-Linien und -Flächen der fertigen Skizzen im Viewport `rect` bei 1 Pixel je Punkt.
+    pub fn finished_strokes(state: &crate::state::AppState, rect: egui::Rect) -> Vec<StrokeVertex> {
+        let mut out = Vec::new();
+        let view = crate::viewport::stroke_view(state, rect, 1.0);
+        crate::sketch_view::finished_sketch_strokes(state, &view, &mut out);
+        out
+    }
+
+    /// GPU-Flächen und -Ränder der Konstruktionsebenen im Viewport `rect` bei 1 Pixel je Punkt.
+    pub fn plane_strokes(state: &crate::state::AppState, rect: egui::Rect) -> Vec<StrokeVertex> {
+        let mut out = Vec::new();
+        let view = crate::viewport::stroke_view(state, rect, 1.0);
+        crate::sketch_view::plane_strokes(state, &view, &mut out);
+        out
+    }
+
+    /// Zahl der gezeichneten Konstruktionsebenen (je Rechteck zwei Flächendreiecke).
+    pub fn plane_count(state: &crate::state::AppState, rect: egui::Rect) -> usize {
+        plane_strokes(state, rect)
+            .chunks(3)
+            .filter(|t| is_fill(t))
+            .count()
+            / 2
     }
 }

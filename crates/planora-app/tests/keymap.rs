@@ -74,7 +74,7 @@ fn overrides(entries: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
 #[test]
 fn defaults_match_the_spec_table_for_existing_actions() {
     let km = Keymap::defaults();
-    let want: [(Action, Vec<Binding>); 13] = [
+    let want: [(Action, Vec<Binding>); 14] = [
         (Action::New, vec![ctrl(Key::N)]),
         (Action::Projects, vec![ctrl(Key::O)]),
         (Action::Save, vec![ctrl(Key::S)]),
@@ -101,6 +101,8 @@ fn defaults_match_the_spec_table_for_existing_actions() {
         // Skizzen 9: „DXF einfügen“ und „SVG einfügen“ gelten auch in der offenen Skizze.
         (Action::InsertDxf, vec![]),
         (Action::InsertSvg, vec![]),
+        // „Skizze erstellen“ auch bei offener Skizze (schließt sie erst), ohne Taste ab Werk.
+        (Action::CreateSketch, vec![]),
     ];
     // Die Aktionen für überall; die Modellaktionen prüft `keymap_model.rs`.
     let all = Action::ALL.iter().filter(|a| a.area() == Area::All).count();

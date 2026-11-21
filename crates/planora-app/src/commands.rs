@@ -177,6 +177,31 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 }
             }
         }
+        Action::CreateSketch => {
+            // Die Taste gilt überall außer in der Zeichnung (dort gibt es den Befehl nicht, wie in
+            // Fusion); bei offener Skizze schließt der Befehl sie erst.
+            // Alte Version: gesperrt wie die übrigen Modellbefehle (der Bereich ist „Überall“, die
+            // Sperre oben greift hier nicht).
+            if ws.active_tab().read_only
+                || matches!(
+                    ws.active_tab().state.drawing_ui.area,
+                    crate::drawing_state::WorkArea::Drawing(_)
+                )
+            {
+                return MenuRequest::None;
+            }
+            // Fehler (offene Skizze nicht schließbar, gesperrte Vorauswahl) stehen in `message`.
+            match ws.active_tab_mut().state.start_create_sketch() {
+                // Mit Vorauswahl: die Skizze ist schon da.
+                Ok(Some(_)) => ws.last_command.remember(a),
+                // Wahlmodus: gemerkt, sobald er eine Skizze angelegt hat ([`observe`]).
+                Ok(None) => {
+                    ws.active_tab_mut().exclude_pick_modes();
+                    track(ws, a);
+                }
+                Err(_) => {}
+            }
+        }
         Action::Fillet => {
             let state = &mut ws.active_tab_mut().state;
             // Eine Sperre durch einen zurückgesetzten Körper meldet `open_blend` selbst.
@@ -356,6 +381,45 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 state.sketch_grid_changed = true;
             }
         }
+        Action::SketchSlice => {
+            // Wie der Haken: schaltet `SketchDisplay::slice` der geöffneten Skizze um (ein Schritt).
+            let state = &mut ws.active_tab_mut().state;
+            if let Some(id) = state.open_sketch_id() {
+                let mut d = state.document.sketch_display(id);
+                d.slice = !d.slice;
+                state.document.set_sketch_display(id, d);
+            }
+        }
+        Action::SketchDisplayMenu => {
+            // Öffnet oder schließt das Aufklappfeld des Skizzenfelds (auch im eigenen Fenster).
+            let state = &mut ws.active_tab_mut().state;
+            if state.open_sketch_id().is_some() {
+                state.sketch_display_menu_open = !state.sketch_display_menu_open;
+            }
+        }
+        Action::SketchShowProfile
+        | Action::SketchShowPoints
+        | Action::SketchShowDimensions
+        | Action::SketchShowConstraints
+        | Action::SketchShowConstruction
+        | Action::SketchShowProjected => {
+            // Wie die Haken im Skizzenfeld (Skizzen 12): ein Schritt, die Skizze bleibt offen.
+            let state = &mut ws.active_tab_mut().state;
+            if let Some(id) = state.open_sketch_id() {
+                let mut d = state.document.sketch_display(id);
+                let flag = match a {
+                    Action::SketchShowProfile => &mut d.profiles,
+                    Action::SketchShowPoints => &mut d.points,
+                    Action::SketchShowDimensions => &mut d.dimensions,
+                    Action::SketchShowConstraints => &mut d.constraints,
+                    Action::SketchShowConstruction => &mut d.construction,
+                    _ => &mut d.projected,
+                };
+                *flag = !*flag;
+                state.document.set_sketch_display(id, d);
+                state.sync_sketch_display();
+            }
+        }
         Action::SketchConstruction => {
             if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
                 se.toggle_construction_if_possible(sk);
@@ -379,6 +443,16 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             let state = &mut ws.active_tab_mut().state;
             if let Some(id) = state.open_sketch_id().or(state.selected_feature) {
                 state.open_sketch_dxf(id);
+            }
+        }
+        Action::SketchEditPicked => ws.active_tab_mut().state.edit_picked_sketch(),
+        Action::SketchHidePicked => ws.active_tab_mut().state.hide_picked_sketch(),
+        Action::SketchShowDimensionFinished => {
+            // Ein Schritt; die Skizze der Auswahl, nicht die geöffnete.
+            let state = &mut ws.active_tab_mut().state;
+            state.sketch_pick_menu = None;
+            if let Some(id) = state.sketch_for_dimension_menu() {
+                state.toggle_finished_dimensions(id);
             }
         }
         Action::SketchGroupCreate => {
@@ -519,6 +593,12 @@ fn toggle_visibility(state: &mut AppState) {
 /// (Baum, Verlaufsleiste), sonst der gewählte Körper (sein Ursprung, wie die Körperzeile im
 /// Baum). Zurückgesetzte Körper sind nicht gesperrt.
 fn delete_selection(state: &mut AppState) {
+    // Skizzen 12: Eine gewählte Skizzenkurve oder ein gewählter Skizzenpunkt der 3D-Ansicht
+    // löscht nichts (weder die Skizze noch einen Körper); ob Fusion hier Geometrie löscht, ist
+    // offen (offene-punkte.md).
+    if state.picked_sketch().is_some() {
+        return;
+    }
     // Skizzen 11b: Eine gewählte Skizzengruppe wird aufgelöst (keine Skizze gelöscht).
     if let Some(g) = state.selected_sketch_group() {
         let _ = state.ungroup_sketch_group(g);
@@ -542,6 +622,10 @@ fn window_open(tab: &DocTab, a: Action) -> bool {
     match a {
         Action::ExtrudeSketch => matches!(tab.dialog, Some(CreateDialog::ExtrudeSketch { .. })),
         Action::Fillet => tab.blend_dialog.is_some(),
+        Action::CreateSketch => matches!(
+            tab.state.pending_pick,
+            Some(crate::state::PendingPick::NewSketch)
+        ),
         _ => PlaneCommand::for_action(a).is_some_and(|c| {
             tab.plane_dialog
                 .as_ref()
@@ -555,6 +639,7 @@ fn made_by(a: Action, kind: &FeatureKind) -> bool {
     match a {
         Action::ExtrudeSketch => matches!(kind, FeatureKind::Extrude { .. }),
         Action::Fillet => matches!(kind, FeatureKind::Verrunden { .. }),
+        Action::CreateSketch => matches!(kind, FeatureKind::Sketch(_)),
         _ => match kind {
             FeatureKind::Plane(pf) => {
                 PlaneCommand::for_action(a) == Some(PlaneCommand::of(&pf.def))
@@ -583,6 +668,18 @@ pub(crate) fn track(ws: &mut Workspace, a: Action) {
 /// vergessen. Ein Fenster
 /// in einem anderen Tab wartet, bis der Tab wieder vorn ist; ist der Tab zu, entfällt es.
 pub fn observe(ws: &mut Workspace) {
+    // Ein Wahlmodus der 3D-Ansicht (etwa „Skizze erstellen“) endet, sobald die Zeichnung vorn ist
+    // (Menü, Baum oder neue Zeichnung): Dort gibt es nichts zu wählen, und sein Hinweis stünde
+    // sonst in der Statuszeile.
+    let st = &mut ws.active_tab_mut().state;
+    if st.pending_pick.is_some()
+        && matches!(
+            st.drawing_ui.area,
+            crate::drawing_state::WorkArea::Drawing(_)
+        )
+    {
+        st.cancel_pending_pick();
+    }
     ws.sync_sketch_grid();
     ws.sync_triad_view();
     observe_sketch(ws);

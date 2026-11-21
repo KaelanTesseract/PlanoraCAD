@@ -2437,6 +2437,8 @@ impl Sketch {
         self.check_centerline(&kind)?;
         self.refuse_text_glyphs(&kind)?;
         let lift = self.check_3d(&kind)?;
+        // Die Gruppen der Schleifenprüfung einmal anlegen; danach führt jedes Anlegen sie fort.
+        self.ensure_cycle_groups();
         // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
         let (mut data, start) = self.new_constraint_data(kind);
         data.supplement = supplement;
@@ -2463,10 +2465,13 @@ impl Sketch {
         }
         // 2D-Punkte, die die 3D-Abhängigkeit verbindet, werden 3D (Spec 10). Das legt Variablen
         // an, darum erst danach die Zusatzvariable.
+        let before = self.revision();
         self.apply_lift(&lift);
         data.extra = start.map(|t| self.new_var(t));
         self.touch_structure();
-        Ok(self.constraints.push(data))
+        let id = self.constraints.push(data);
+        self.follow_cycle_groups(before, id, !lift.is_empty());
+        Ok(id)
     }
 
     /// Die Daten einer neuen Abhängigkeit `kind` (geprüft) mit der Lage aus der aktuellen
@@ -2502,9 +2507,18 @@ impl Sketch {
 
     /// Die Variablen der neuen Abhängigkeit `data` ohne ihre (neue) Zusatzvariable.
     fn data_locals(&self, data: &ConstraintData, start: Option<f64>) -> Vec<usize> {
-        let mut x = self.vars.clone();
-        x.extend(start);
-        let mut locals = self.evaluate_data(data, &x).locals;
+        // Nur mit Zusatzvariable eine Kopie der Werte (sonst je Anlegen eine Kopie aller Werte).
+        let with_start;
+        let x: &[f64] = match start {
+            Some(t) => {
+                let mut x = self.vars.clone();
+                x.push(t);
+                with_start = x;
+                &with_start
+            }
+            None => &self.vars,
+        };
+        let mut locals = self.evaluate_data(data, x).locals;
         locals.retain(|&v| v < self.vars.len());
         locals
     }

@@ -131,6 +131,15 @@ pub struct Config {
         deserialize_with = "lenient_bool_false"
     )]
     pub catalog_hint_shown: bool,
+    /// Name für Zeichnungen (Einstellungen → Projekte): Vorgabe für „Erstellt“ in den
+    /// Projektangaben neuer Zeichnungen. Ab Werk keiner; der Anmeldename des Rechners wird nie
+    /// genommen. Kein oder ein leerer Text → keiner; ohne Namen wird nichts geschrieben.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_text"
+    )]
+    pub drawing_author: Option<String>,
     /// Gewählte Sprache als Id (BCP 47, etwa `de`, `en`, `pt-BR`; Einstellungen → Darstellung).
     /// Ohne Wahl gilt beim Start die Sprache von Windows. Kein oder ein leerer Text → keine
     /// Wahl; ob es die Sprache gibt, prüft erst das Programm. Ohne Wahl wird nichts geschrieben.
@@ -354,6 +363,7 @@ impl Default for Config {
             theme: None,
             verbose_log: false,
             catalog_hint_shown: false,
+            drawing_author: None,
             language: None,
             length_unit: None,
             sketch_grid: true,

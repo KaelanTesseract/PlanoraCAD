@@ -10,6 +10,12 @@ fn main() -> eframe::Result {
         planora_app::diag::init_global(data_dir);
         // Absturzbericht nach `abstuerze/`; der bisherige Hook läuft danach weiter.
         planora_app::crash::install_hook(data_dir.join(planora_app::crash::CRASH_DIR));
+        // Harte Abstürze (Zugriffsfehler, Stapelüberlauf; nur Windows) gehen am Hook vorbei:
+        // ein Ausnahmefilter schreibt dann einen kurzen Bericht in denselben Ordner.
+        planora_app::hard_crash::install(
+            data_dir.join(planora_app::crash::CRASH_DIR),
+            planora_app::crash::UserMask::from_env(),
+        );
         // Laufmarker anlegen und nachsehen, wie der letzte Lauf endete (Rückfrage in der App).
         run = planora_app::crash::start_run(data_dir, std::process::id());
     }

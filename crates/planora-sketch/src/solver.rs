@@ -26,7 +26,7 @@ use crate::constraint::{ConstraintId, ConstraintKind, SHARED_END_TANGENT_DRIFT};
 use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
-use crate::pattern::{PATTERN_ROUNDS, PatternId};
+use crate::pattern::PATTERN_ROUNDS;
 use crate::sparse::{
     Envelope, SparseRows, analyze_rows_sparse, envelope_cholesky_solve, rcm_order,
 };
@@ -517,7 +517,7 @@ fn sumsq(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum()
 }
 
-fn find(parent: &mut [usize], mut i: usize) -> usize {
+pub(crate) fn find(parent: &mut [usize], mut i: usize) -> usize {
     while parent[i] != i {
         parent[i] = parent[parent[i]];
         i = parent[i];
@@ -1312,64 +1312,6 @@ impl Sketch {
         (groups, in_constraint)
     }
 
-    /// Die lebenden Muster in einer Schleife: Eine Gruppe enthält eine Eingangsvariable (Vorlage,
-    /// Richtungslinie oder Mitte) und liest eine Exemplarvariable desselben Musters. Dann liefe das
-    /// Nachführen nie zusammen (Entscheidung 6). `extra`: die Variablen einer Abhängigkeit, die
-    /// erst angelegt werden soll; `touching`: nur Gruppen, die eine dieser Variablen enthalten
-    /// (`None`: alle Gruppen).
-    fn patterns_in_cycles(
-        &self,
-        extra: Option<&[usize]>,
-        touching: Option<&[usize]>,
-    ) -> Vec<PatternId> {
-        let held = self.pattern_vars();
-        if held.is_empty() {
-            return Vec::new();
-        }
-        let (groups, _) = self.build_groups_holding(&held, extra);
-        let io: Vec<(PatternId, HashSet<usize>, HashSet<usize>)> = self
-            .patterns()
-            .map(|(id, _)| {
-                let (inputs, outputs) = self.pattern_io(id);
-                (id, inputs, outputs)
-            })
-            .collect();
-        let touching: Option<HashSet<usize>> = touching.map(|t| t.iter().copied().collect());
-        let mut out: Vec<PatternId> = Vec::new();
-        for g in groups.iter().filter(|g| !g.pattern_reads.is_empty()) {
-            if let Some(t) = &touching
-                && !g.vars.iter().any(|v| t.contains(v))
-            {
-                continue;
-            }
-            for (id, inputs, outputs) in &io {
-                if !out.contains(id)
-                    && g.pattern_reads.iter().any(|v| outputs.contains(v))
-                    && g.vars.iter().any(|v| inputs.contains(v))
-                {
-                    out.push(*id);
-                }
-            }
-        }
-        out
-    }
-
-    /// Schlösse die Abhängigkeit mit den Variablen `locals` (noch nicht angelegt oder gerade
-    /// angelegt) eine neue Schleife zwischen Vorlage und eigenem Exemplar? Geprüft werden nur die
-    /// Gruppen, in denen sie liegt: Eine Schleife anderswo in der Skizze (etwa aus einer alten
-    /// Datei) sperrt fremde Befehle nicht.
-    pub(crate) fn pattern_cycle(&self, locals: &[usize]) -> bool {
-        !self
-            .patterns_in_cycles(Some(locals), Some(locals))
-            .is_empty()
-    }
-
-    /// Alle lebenden Muster in einer Schleife (beim Laden, vor und nach Befehlen, die Muster
-    /// ändern oder auflösen).
-    pub(crate) fn cyclic_patterns(&self) -> Vec<PatternId> {
-        self.patterns_in_cycles(None, None)
-    }
-
     /// Löst mit weichen Zusatzbedingungen (zum Ziehen). Harte Abhängigkeiten werden danach
     /// ohne die weichen exakt nachgelöst („Politur“).
     ///
@@ -1443,12 +1385,18 @@ impl Sketch {
 
     /// Prüft die Gruppen, die Exemplare lesen, an den aktuellen Werten: Verletzte Abhängigkeiten
     /// kommen nach `conflicting`, und ein „gelöst“ wird „nicht lösbar“ (kein Widerspruch: der
-    /// nächste Lauf führt weiter).
+    /// nächste Lauf führt weiter). Die Freiheitsgrade einer solchen Gruppe zählen danach nicht
+    /// mehr (`dof` zählt nur gelöste Gruppen; Härtung nach Skizzen 5).
     fn flag_stale_pattern_reads(&self, held: &HashSet<usize>, report: &mut SolveReport) {
         let tol_r = RESIDUAL_FRACTION * self.tolerance().linear;
         let (groups, _) = self.build_groups_holding(held, None);
         let mut violated = false;
+        let failed_before = report.conflicting.clone();
         for g in groups.iter().filter(|g| !g.pattern_reads.is_empty()) {
+            // Eine Gruppe, die im letzten Lauf schon scheiterte, hat keine Freiheitsgrade
+            // beigetragen.
+            let counted = !g.constraints.iter().any(|id| failed_before.contains(id));
+            let mut stale = false;
             for &id in &g.constraints {
                 let Some(ev) = self.evaluate(id, &self.vars) else {
                     continue;
@@ -1458,9 +1406,13 @@ impl Sketch {
                     continue;
                 }
                 violated = true;
+                stale = true;
                 if !self.constraints[id].internal && !report.conflicting.contains(&id) {
                     report.conflicting.push(id);
                 }
+            }
+            if stale && counted {
+                report.dof = report.dof.saturating_sub(self.analyze(g, &self.vars).dof);
             }
         }
         if violated && report.status == SolveStatus::Solved {

@@ -95,6 +95,8 @@ struct Shot {
     strokes: Vec<(Vec<Pos2>, egui::Color32)>,
     /// Wann das Bild ein nächstes anfordert.
     repaint: Duration,
+    /// Rechteck der 3D-Ansicht (aus dem Malaufruf der GPU).
+    view: Option<Rect>,
 }
 
 fn walk(shape: &Shape, s: &mut Shot) {
@@ -118,6 +120,7 @@ fn walk(shape: &Shape, s: &mut Shot) {
         Shape::QuadraticBezier(b) => s.vertices.extend(b.points),
         Shape::CubicBezier(b) => s.vertices.extend(b.points),
         Shape::Mesh(m) => s.vertices.extend(m.vertices.iter().map(|v| v.pos)),
+        Shape::Callback(cb) => s.view = Some(cb.rect),
         _ => {}
     }
 }
@@ -236,6 +239,32 @@ impl Rig {
         let mut shot = Shot::default();
         for c in &out.shapes {
             walk(&c.shape, &mut shot);
+        }
+        // Kurven, Vorschau und Profilflächen der geöffneten Skizze zeichnet die GPU (Skizzen 12):
+        // ihre Dreiecke samt Kantenmitten (auf der Mittellinie) wie egui-Eckpunkte; aufeinander
+        // folgende Liniendreiecke einer Farbe zählen als ein Linienzug.
+        if let Some(view) = shot.view {
+            let v = planora_app::testing::open_strokes(self.st(), view);
+            let with_mids = |t: [Pos2; 3]| {
+                let mut p = t.to_vec();
+                p.extend([0, 1, 2].map(|i| t[i].lerp(t[(i + 1) % 3], 0.5)));
+                p
+            };
+            for (t, _) in planora_app::testing::stroke_triangles(&v, view, true) {
+                shot.vertices.extend(with_mids(t));
+            }
+            let mut runs: Vec<(Vec<Pos2>, [f32; 4])> = Vec::new();
+            for (t, color) in planora_app::testing::stroke_triangles(&v, view, false) {
+                match runs.last_mut() {
+                    Some((pts, c)) if *c == color => pts.extend(with_mids(t)),
+                    _ => runs.push((with_mids(t), color)),
+                }
+            }
+            let u = |f: f32| (f * 255.0).round() as u8;
+            for (pts, c) in runs {
+                let c = egui::Color32::from_rgba_unmultiplied(u(c[0]), u(c[1]), u(c[2]), u(c[3]));
+                shot.strokes.push((pts, c));
+            }
         }
         shot.repaint = out
             .viewport_output
@@ -1492,7 +1521,11 @@ fn edited_text_is_not_painted_while_editing() {
         .iter()
         .map(|&p| to_screen(rig.sk().point_xy(p).unwrap()))
         .collect();
-    assert!(rig.st().show_sketch_profiles, "Profile werden gezeigt");
+    let id = rig.st().open_sketch_id().unwrap();
+    assert!(
+        rig.st().document.sketch_display(id).profiles,
+        "Profile werden gezeigt"
+    );
     let shot = rig.frame(vec![Event::PointerMoved(AWAY)]);
     let seen = glyph_spots.iter().filter(|s| shot.near_vertex(**s)).count();
     assert!(

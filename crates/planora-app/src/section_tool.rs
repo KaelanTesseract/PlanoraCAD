@@ -57,6 +57,10 @@ pub fn hint_second() -> String {
 pub fn not_from_here() -> Msg {
     crate::msg!("section-not-from-here")
 }
+/// Ablehnung: Der erste Klick liegt in keiner Ansicht (auch nicht knapp daneben).
+pub fn not_on_a_view() -> Msg {
+    crate::msg!("section-not-on-a-view")
+}
 /// Ablehnung: beide Klicks liegen (fast) auf demselben Punkt.
 pub fn too_short() -> Msg {
     crate::msg!("section-too-short")
@@ -93,6 +97,9 @@ pub fn not_a_number() -> Msg {
 }
 /// Mindestabstand der beiden Klicks auf dem Blatt in Millimetern.
 pub const MIN_LENGTH_MM: f64 = 1.0;
+/// So viele Bildschirmpunkte neben der Hüllbox einer Ansicht zählt der erste Klick noch als
+/// Klick in diese Ansicht (ein Klick knapp an den Rand soll nicht abgelehnt werden).
+pub const VIEW_MARGIN_PX: f64 = 12.0;
 
 /// Schlüssel einer Meldung: Stand des Dokuments und gewählte Ansicht; ändert sich einer, verfällt
 /// die Meldung.
@@ -634,13 +641,24 @@ fn try_click(state: &mut AppState, id: DrawingId, at: DVec2, px_per_mm: f64) -> 
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, l)| (*k, l.as_ref())).collect();
     let shown = shown_views(d, &refs);
     let Some((view, p0)) = state.section_tool.start else {
-        // Erster Klick: die oberste Ansicht, in deren Hüllbox der Punkt liegt.
-        let hit = shown.iter().rev().find(|s| {
+        // Erster Klick: die oberste Ansicht, in deren Hüllbox der Punkt liegt; sonst die nächste,
+        // wenn er höchstens `VIEW_MARGIN_PX` daneben liegt.
+        let gap = |s: &Shown| {
             let (lo, hi) = s.sheet_box();
-            at.x >= lo.x && at.x <= hi.x && at.y >= lo.y && at.y <= hi.y
+            let d = (lo - at).max(at - hi).max(DVec2::ZERO);
+            d.length()
+        };
+        let margin = VIEW_MARGIN_PX / px_per_mm.max(f64::EPSILON);
+        let hit = shown.iter().rev().find(|s| gap(s) == 0.0).or_else(|| {
+            shown
+                .iter()
+                .map(|s| (gap(s), s))
+                .filter(|(g, _)| *g <= margin)
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, s)| s)
         });
         let Some(s) = hit else {
-            return Err(not_from_here());
+            return Err(not_on_a_view());
         };
         if !s.spec.kind.is_normal() || s.spec.section.is_some() {
             return Err(not_from_here());

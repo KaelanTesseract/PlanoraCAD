@@ -20,6 +20,8 @@ use planora_sketch::{conic_apex_ok, conic_nurbs, control_spline_nurbs, tangent_c
 
 /// Schritte je Vollkreis für die Vorschau einer Form.
 pub const PREVIEW_STEPS_PER_TURN: usize = 96;
+/// Anteil der Länge der kürzeren gewählten Kurve, den eine neue Rundung als Startradius zeigt.
+pub const FILLET_DEFAULT_SHARE: f64 = 0.2;
 /// Winkel der Fase „Abstand und Winkel“, solange keiner getippt ist (Annahme: Vorgabe von Fusion).
 const CHAMFER_ANGLE_DEFAULT: f64 = std::f64::consts::FRAC_PI_4;
 /// Faktor für die Probe, ob eine vom Löser abgelehnte Rundung oder Fase kleiner ginge.
@@ -872,14 +874,35 @@ impl SketchSession {
     }
 
     /// Plan der Rundung, für Vorschau und Klick: Im Lauf gilt der heutige Radius der ersten
-    /// Rundung (`Equal` nimmt keinen anderen), sonst Feld oder Zeiger.
-    fn fillet_plan_at(&self, sk: &Sketch, at: DVec2) -> Option<FilletPlan> {
+    /// Rundung (`Equal` nimmt keinen anderen), sonst das Feld, sonst der Startradius
+    /// ([`fillet_default_radius`](Self::fillet_default_radius)). Der Zeiger ändert den Radius
+    /// nicht (wie Fusion).
+    fn fillet_plan_at(&self, sk: &Sketch, _at: DVec2) -> Option<FilletPlan> {
         let [a, b] = self.curve_picks()?;
         let radius = match self.fillet_run {
             Some((arc, r)) => sk.radius(arc).unwrap_or(r),
-            None => self.length_at(sk, FieldKind::Radius, at)?,
+            None => self
+                .input
+                .locked(FieldKind::Radius)
+                .or_else(|| self.fillet_default_radius(sk))?,
         };
         sk.fillet_plan(a, b, radius)
+    }
+
+    /// Startradius der Rundung nach der Wahl beider Kurven: Fusion zeigt „einen Radius im
+    /// Verhältnis zur kleineren der gewählten Kurven“. Hier [`FILLET_DEFAULT_SHARE`] ihrer Länge;
+    /// passt der nicht, je die Hälfte, bis er passt.
+    fn fillet_default_radius(&self, sk: &Sketch) -> Option<f64> {
+        let [a, b] = self.curve_picks()?;
+        let len = sk.curve_length(a.curve)?.min(sk.curve_length(b.curve)?);
+        let mut r = len * FILLET_DEFAULT_SHARE;
+        for _ in 0..12 {
+            if r.is_finite() && r > 0.0 && sk.fillet_plan(a, b, r).is_some() {
+                return Some(r);
+            }
+            r *= 0.5;
+        }
+        None
     }
 
     /// Plan der Fase, für Vorschau und Klick: Längen aus den Feldern, sonst vom Zeiger; der Winkel
@@ -1635,6 +1658,7 @@ impl SketchSession {
         }
         let at = self.draw_cursor.as_ref()?.at;
         match (self.planned_kind()?, self.pending_pos.as_slice(), kind) {
+            (ToolKind::Fillet, _, F::Radius) => self.fillet_default_radius(sk),
             (k, _, F::Radius | F::Distance | F::Distance2) if k.is_fillet_or_chamfer() => {
                 self.pointer_to_corner(sk, at)
             }

@@ -225,8 +225,8 @@ fn box_id(s: &Snapshot) -> u64 {
 }
 
 #[test]
-fn format_version_is_22() {
-    assert_eq!(FORMAT_VERSION, 22);
+fn format_version_is_23() {
+    assert_eq!(FORMAT_VERSION, 23);
 }
 
 /// Jede vorhandene Testdatei lädt und wird bytegleich wieder geschrieben, mit ihrem Format

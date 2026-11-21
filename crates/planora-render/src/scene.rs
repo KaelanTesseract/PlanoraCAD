@@ -2,6 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use planora_feature::FeatureId;
 use planora_kernel::{Edge, Face, Id};
 use planora_mesh::Mesh;
+use planora_sketch::model::{CurveId, PointId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FaceRef {
@@ -27,6 +28,17 @@ pub enum Pick {
         body: usize,
         edge: Id<Edge>,
         end: bool,
+    },
+    /// Kurve einer fertigen Skizze in der 3D-Ansicht (Skizzen 12). Wählbar und hervorgehoben,
+    /// aber nur die Skizze, nie ein Körper.
+    SketchCurve {
+        sketch: FeatureId,
+        curve: CurveId,
+    },
+    /// Punkt einer fertigen Skizze in der 3D-Ansicht (Skizzen 12).
+    SketchPoint {
+        sketch: FeatureId,
+        point: PointId,
     },
 }
 

@@ -2,22 +2,47 @@
 
 Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht oben.
 
+## 0.0.2-dev.4
+
+### Neu
+
+- „Name für Zeichnungen“: Neues Feld in „Datei → Einstellungen …“ unter „Projekte“. Dieser Name steht in neuen Zeichnungen unter „Erstellt“. Ab Werk ist das Feld leer; der Windows-Benutzername wird nicht mehr genommen. Zeichnungen, die es schon gibt, behalten ihren Eintrag.
+- Absturzbericht: Unter Windows schreibt das Programm jetzt auch bei harten Abstürzen (etwa Zugriffsfehler oder Stapelüberlauf) einen Bericht, nicht nur bei einem Rust-Absturz.
+
+### Geändert
+
+- Skizze, Rundung: Das Radiusfeld startet wie in Fusion mit einem Radius aus der kürzeren der beiden Kurven. Die Maus ändert den Radius nicht mehr; getippt wird wie bisher.
+- Versionen: Der Hauptzweig heißt auf Englisch jetzt „Main“ (wie in Fusion). In den Dateien bleibt er „Haupt“, alte Dateien ändern sich nicht. Ein neuer Zweig darf nicht „Haupt“ oder „Main“ heißen.
+- „Skizze erstellen“: Eine eigene Taste wirkt jetzt auch bei offener Skizze (sie wird erst geschlossen), und „Letzten Befehl wiederholen“ kennt den Befehl.
+
+### Behoben
+
+- Blattangaben: Die Felder springen nicht mehr nach oben, wenn eine Warnung wie „Eigentümer fehlt“ beim Tippen verschwindet. Vorher landete der nächste Klick leicht im falschen Feld.
+- Schnittansicht: Ein Klick knapp neben eine Ansicht beginnt die Schnittlinie trotzdem. Ein Klick ins Leere sagt jetzt, dass er in keiner Ansicht liegt, statt „nur aus gerader Ansicht“.
+- Skizze: Esc beendet „Projizieren“ samt seiner Meldung „Nichts Neues …“; vorher blieb sie stehen.
+- „Skizze erstellen“: Offene Fenster für DXF, SVG und Leinwand gehen beim Start zu, der Wahlmodus endet beim Wechsel in die Zeichnung, und eine sichtbare Grundebene geht vor einer, die nur für die Wahl eingeblendet ist.
+
 ## 0.0.2-dev.3
 
 ### Neu
+- Skizzen: „Skizze erstellen“ wie in Fusion. Das Symbol steht vorn in der Werkzeugleiste unten, im Menü „Erzeugen“ ersetzt es die vier Einträge „Skizze auf …“. Ist nichts gewählt, erscheinen die drei Grundebenen halbdurchsichtig (auch wenn „Ursprung“ ausgeblendet ist), und ein Klick auf eine Ebene oder ebene Fläche legt die Skizze an. Esc bricht ab. Mit einer gewählten Ebene oder Fläche startet die Skizze sofort. Eine Taste lässt sich in den Einstellungen belegen.
 - Skizzen: Zeichnen und Prüfen wie in Fusion. Neu sind die Mittelpunktlinie (erster Klick ist die Mitte, die getippte Länge gilt für die ganze Linie), die Übergangskurve unter „Bearbeiten → Ändern“ (verbindet zwei Enden glatt, wahlweise nur in der Richtung oder auch in der Krümmung) und der Krümmungskamm (Rechtsklick auf eine Kurve, Dichte und Maßstab einstellbar). Der Bogen „Mittelpunkt“ folgt der Richtung der Maus in beiden Drehrichtungen, und beim Bemaßen zweier Linien wählt die Lage des Zeigers zwischen Winkel und Gegenwinkel.
 - Skizzen: Kreis, Polygon und Rechteck haben in der 3D-Skizze jetzt dieselben Felder am Zeiger wie in 2D. Die Felder nehmen keinen Mausklick an, ein Klick setzt den Punkt wie sonst. Der Kreis „2 Tangenten“ fragt den Radius, das Polygon über eine Kante Länge, Winkel und Seitenzahl.
-- Skizzen: Oben im Skizzenfeld steht der Status (unterbestimmt, bestimmt, Widerspruch, nicht gelöst). Eine ganz bestimmte Skizze zeigt im Baum ein rotes Schloss. „Unterbestimmte finden“ listet, was sich noch bewegen lässt; ein Klick auf die Zeile holt das Element ins Bild.
+- Skizzen: Oben im Skizzenfeld steht der Status (unterbestimmt, bestimmt, Widerspruch, nicht gelöst). Eine ganz bestimmte Skizze zeigt im Baum ein rotes Schloss. „Skizze berechnen“ rechnet die ganze Skizze neu. „Unterbestimmte finden“ listet, was sich noch bewegen lässt; ein Klick auf die Zeile holt das Element ins Bild.
 - Skizzen: Löschst du einen Körper, auf den sich projizierte Kurven beziehen, bleibt die Skizze jetzt stehen und zeigt eine Warnung. Der Dialog „Verlorene Projektionen“ verknüpft die Kurven neu, löst sie oder löscht sie.
 - Skizzen: Große Skizzen rechnen viel schneller. Ziehst du in einer Kette aus 200 Kurven in 3D einen Punkt, rechnet sie etwa 0,03 s pro Mausbewegung statt über 30 s, eine DXF-Datei mit 1000 Bögen in etwa 0,01 s statt in über 2 Minuten. Kleine Skizzen rechnen wie vorher.
 - Skizzen: Löschst du eine Linie oder eine andere Kurve (Entf oder das X in „Unterbestimmte finden“), gehen ihre freien Endpunkte samt Maßen mit, wie in Fusion. Punkte, die noch eine andere Kurve benutzt, eingezogene Punkte (etwa ein Ursprung aus „3D-Geometrie einbeziehen“) und die Mitte eines Kreismusters bleiben stehen.
-- Skizzen mit einem Krümmungskamm, einer Übergangskurve, die am Ende in der Richtung der anschließenden Kurve verläuft, einem glatten Ellipsenbogen oder einem Gegenwinkel (der Ergänzungswinkel zu 180°) werden im neuen Dateiformat 21 gespeichert und lassen sich von älteren Programmversionen nicht öffnen. Dasselbe gilt für eine Datei mit einer projizierten Kurve, deren Quelle gelöscht ist. Alle anderen Dateien bleiben unverändert. Wo es von Fusion abweicht, steht in `docs/superpowers/offene-punkte.md`.
+- Skizzen mit einem Krümmungskamm, einer Übergangskurve, die am Ende in der Richtung der anschließenden Kurve verläuft, einem glatten Ellipsenbogen oder einem Gegenwinkel (der Ergänzungswinkel zu 180°) werden im neuen Dateiformat 21 gespeichert und lassen sich von älteren Programmversionen nicht öffnen. Dasselbe gilt für eine Datei mit einer projizierten Kurve, deren Quelle gelöscht ist oder im Verlauf hinter der Skizze steht. Alle anderen Dateien bleiben unverändert. Wo es von Fusion abweicht, steht in `docs/superpowers/offene-punkte.md`.
 - Skizzen: Kopieren, Ausschneiden und Einfügen (Strg+C, Strg+X, Strg+V) in der Skizze, auch in eine andere Skizze oder ein anderes Dokument. Die Kopie hängt nach dem Einfügen am Zeiger und lässt sich verschieben; beides zusammen ist ein Schritt in „Rückgängig“.
 - Skizzen: „Als DXF speichern“ im Rechtsklickmenü einer Skizze im Baum. Du wählst die Einheit und ob projizierte Geometrie und Konstruktionsgeometrie mitkommen. Nur ebene Skizzen gehen.
 - Skizzen: Skizzengruppen im Baum. Mit Strg-Klick mehrere Skizzen wählen, „Gruppe erstellen“, per Ziehen ordnen, mit einem Auge die ganze Gruppe ausblenden.
 - Skizzen: Die Höhe eines Textes nimmt eine Formel mit Parametern, und im Text steht `{Name}` für den Wert eines Parameters. Löschst du einen Parameter, der nur im Text vorkommt, fragt das Programm vorher nach. Ein Text hat außerdem einen Drehgriff, und sein Rahmen wächst mit, wenn der Text nicht mehr hineinpasst.
 - Skizzen: Neu im Klappmenü „Projizieren/Einschließen“ sind „Drehprofil“ (der Umriss eines Körpers, um eine Achse in die Skizzenebene gedreht) und „Isoparametrische Kurve“ (U- und V-Linien einer Körperfläche als 3D-Kurven).
 - Skizzen mit Gruppen, einer Höhenformel, einem Drehprofil oder einer Isokurve werden im neuen Dateiformat 22 gespeichert; ältere Programmversionen melden „zu neu“. Alle anderen Dateien bleiben unverändert. Windows und Ubuntu verhalten sich gleich.
+- Skizzen: Anzeige wie in Fusion. Körper verdecken jetzt Skizzenlinien, Profile, Konstruktionsebenen und das Raster, auch bei geöffneter Skizze. Neu ist der Haken „Slice“, der alles zwischen Kamera und Skizzenebene wegschneidet. Die Haken für die Anzeige (Skizzenraster, Fang, Slice, Profil, Punkte, Maße, Abhängigkeiten, Konstruktion, Projiziert) stehen hinter einem Symbol neben dem Skizzennamen. Skizzenraster und Fang gelten für alle Skizzen, die übrigen Haken je Skizze und werden mit ihr gespeichert. Jedes Umschalten steht im Verlauf des Dokuments; bei offener Skizze nimmt Strg+Z nur die Zeichenschritte zurück, die Haken erst nach dem Beenden der Skizze. Für jeden gibt es einen Befehl ohne feste Taste.
+- Skizzen: Fertige Skizzen lassen sich in 3D anklicken; ein Rechtsklick bietet „Skizze bearbeiten“, „Maße anzeigen“ und „Ausblenden“. „Maße anzeigen“ gibt es auch im Menü der Skizze im Baum. In den Fenstern „Ebene unter Winkel“ und „Ebene durch drei Punkte“ kannst du Skizzenlinien und Skizzenpunkte anklicken. Beim Ziehen an einem Drehgriff steht der Winkel neben dem Zeiger.
+- Skizzen mit einem abweichenden Anzeigehaken werden im neuen Dateiformat 23 gespeichert; ältere Programmversionen melden „zu neu“. Alle anderen Dateien bleiben unverändert.
+- Skizzen: Fertige Skizzen mit sehr vielen Kurven bleiben flüssig (rund 20-mal schneller pro Bild in einer Skizze mit 250 Texten), und große Skizzen mit Mustern rechnen schneller.
 
 ### Behoben
 - Ein Absturz beim Tippen in den Feldern am Zeiger (etwa Strg+A im Winkelfeld des Polygons in der 3D-Skizze) ist behoben.

@@ -93,7 +93,7 @@ fn fmt(d: &Document) -> u32 {
 
 #[test]
 fn format_7_only_with_parts_data() {
-    assert_eq!(FORMAT_VERSION, 22); // seit Skizzen 10 (3D-Skizze)
+    assert_eq!(FORMAT_VERSION, 23); // seit Skizzen 10 (3D-Skizze)
 
     // nichts: wie bisher
     assert_eq!(fmt(&with_box()), 1);
@@ -360,9 +360,9 @@ fn rejects_bad_parts_data() {
         assert!(m.contains("erst ab Dateiformat 7"), "{name}: {m}");
     }
 
-    // Format 23 ist zu neu (Skizzen 10: 20 ist jetzt bekannt), Format 7 nicht
-    let t = edited(|v| v["format"] = 23.into());
-    assert!(matches!(bad(&t), ProjectError::TooNew { found: 23, .. }));
+    // Format 24 ist zu neu (Skizzen 10: 20 ist jetzt bekannt), Format 7 nicht
+    let t = edited(|v| v["format"] = 24.into());
+    assert!(matches!(bad(&t), ProjectError::TooNew { found: 24, .. }));
     assert!(decode_version(&text7(), "x.json").is_ok());
 
     // 201 Kreise

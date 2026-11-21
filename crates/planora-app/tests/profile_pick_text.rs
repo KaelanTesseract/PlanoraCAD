@@ -536,30 +536,14 @@ fn edit_dialog_uses_groups_too() {
 
 // ---- Korrekturrunde 1 ---------------------------------------------------------------------------
 
-/// Zahl der Dreiecke in Netzen mit der Farbe `color`.
-fn filled_triangles(shapes: &[Shape], color: egui::Color32) -> usize {
-    shapes
-        .iter()
-        .map(|s| match s {
-            Shape::Mesh(m) => m
-                .indices
-                .chunks(3)
-                .filter(|t| m.vertices[t[0] as usize].color == color)
-                .count(),
-            Shape::Vec(v) => filled_triangles(v, color),
-            _ => 0,
-        })
-        .sum()
-}
-
 #[test]
 fn hover_over_text_highlights_all_of_text_and_with_ctrl_only_one() {
     let (ctx, mut s, id, mut d, i) = extrude_ready();
     let p = screen(&s, id, ring_of(T1, 0));
     let hover_fill = |s: &AppState| {
         let col = planora_app::theme::sketch_colors(s.dark);
-        filled_triangles(
-            &sketch_view::finished_sketch_shapes(s, SCREEN),
+        planora_app::testing::fill_triangles(
+            &planora_app::testing::finished_strokes(s, SCREEN),
             col.profile_fill_hover,
         )
     };

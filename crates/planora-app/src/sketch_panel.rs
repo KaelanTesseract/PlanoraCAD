@@ -466,6 +466,39 @@ pub fn look_at_button(ctx: &egui::Context) -> Option<egui::Rect> {
 /// Schriftgröße der Anzeigeschalter unter der Namenszeile der Palette (Tasks H1, H3).
 const SWITCH_TEXT_PX: f32 = 10.0;
 
+fn display_menu_id() -> egui::Id {
+    shell_panels::sketch_side_id().with("display-menu")
+}
+
+fn display_menu_button_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("display-menu-button")
+}
+
+fn display_menu_entries_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("display-menu-entries")
+}
+
+/// Ist das Aufklappfeld „Anzeigeoptionen“ offen? Die Ansicht liest es mit [`flyout_open`]: Esc und
+/// ein Drücken in die Zeichnung gehören dann dem Feld.
+pub fn display_menu_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(display_menu_id()))
+        .unwrap_or(false)
+}
+
+/// Lage des Symbols „Anzeigeoptionen“ in der Namenszeile im letzten Bild (für Tests).
+#[doc(hidden)]
+pub fn display_menu_button(ctx: &egui::Context) -> Option<egui::Rect> {
+    ctx.data(|d| d.get_temp::<egui::Rect>(display_menu_button_key()))
+}
+
+/// Name und Lage der Haken des offenen Aufklappfelds im letzten Bild, von oben nach unten; leer,
+/// solange es zu ist (für Tests).
+#[doc(hidden)]
+pub fn display_menu_entries(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<(String, egui::Rect)>>(display_menu_entries_key()))
+        .unwrap_or_default()
+}
+
 fn sketch_name_key() -> egui::Id {
     shell_panels::sketch_side_id().with("sketch-name")
 }
@@ -557,8 +590,14 @@ fn flyout_id(tool: Tool) -> egui::Id {
 }
 
 /// Ist eine Liste von Arten offen? Die Ansicht läuft im Bild vor der Leiste und liest das, damit
-/// Esc, Eingabe und ein Drücken in die Zeichnung nur die Liste treffen.
+/// Esc, Eingabe und ein Drücken in die Zeichnung nur die Liste treffen. Das Aufklappfeld
+/// „Anzeigeoptionen“ ([`display_menu_open`]) zählt ebenso.
 pub fn flyout_open(ctx: &egui::Context) -> bool {
+    strip_flyout_open(ctx) || display_menu_open(ctx)
+}
+
+/// Ist eine Liste der Arten in der Leiste offen?
+fn strip_flyout_open(ctx: &egui::Context) -> bool {
     TOOL_ORDER
         .iter()
         .any(|t| has_flyout(*t) && egui::Popup::is_id_open(ctx, flyout_id(*t)))
@@ -628,8 +667,31 @@ fn sketch_rects(ctx: &egui::Context) -> ShellRects {
 /// Zeigt die Skizzenfelder (Leiste, Skizzenfeld, Fuß), solange der Skizzen-Modus offen ist.
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let Some(index) = state.open_sketch_id() else {
+        // Mit der Skizze geht auch das Aufklappfeld „Anzeigeoptionen“ zu.
+        state.sketch_display_menu_open = false;
+        ctx.data_mut(|d| d.insert_temp(display_menu_id(), false));
         return;
     };
+    // Der Zustand liegt im Programmzustand (siehe `sketch_display_menu_open`) und wird für die
+    // Ansicht (`flyout_open`) und die Tests viewport-unabhängig im Kontext gespiegelt.
+    let mut menu_open = state.sketch_display_menu_open;
+    // Liegt das Skizzenfeld im eigenen Fenster, sieht dessen Aufklappfeld ein Drücken im
+    // Hauptfenster nicht: Es schließt hier (das Drücken gehört dem Feld, siehe `flyout_open`).
+    let undocked = crate::detach::with_state(ctx, |s| {
+        crate::detach::is_undocked(ctx, s, crate::detach::Place::SketchSide)
+    })
+    .unwrap_or(false);
+    if menu_open && undocked && ctx.input(|i| i.pointer.any_pressed()) {
+        menu_open = false;
+    }
+    // Ebenso Esc im Hauptfenster: Es schließt nur das Feld und bricht das Werkzeug nicht ab.
+    if menu_open
+        && undocked
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        menu_open = false;
+    }
+    ctx.data_mut(|d| d.insert_temp(display_menu_id(), menu_open));
     let rects = sketch_rects(ctx);
     let Some(strip) = rects.strip else {
         return;
@@ -639,13 +701,17 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     // Formeln der Maße nennen Parameter nur lesend (das Fenster „Parameter“ ist gesperrt).
     let scope = state.document.param_scope();
     let fonts = state.fonts().cloned();
-    let mut show_profiles = state.show_sketch_profiles;
+    // Die Anzeigeschalter gehören zur Skizze (Skizzen 12, `SketchDisplay`).
+    let before = state.document.sketch_display(index);
+    let mut display = before;
     let mut palette = SketchPalette {
         grid: state.sketch_show_grid,
         snap: state.sketch_snap_grid,
         three_d: false,
         three_d_changed: false,
         changed: false,
+        menu_open,
+        menu_was: menu_open,
         look_at: false,
         break_link: false,
         focus: None,
@@ -673,7 +739,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let side = SideInput {
         panel: &mut panel,
         scope: &scope,
-        show_profiles: &mut show_profiles,
+        display: &mut display,
         palette: &mut palette,
         fonts: fonts.as_deref(),
     };
@@ -689,10 +755,16 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         se.set_three_d(&mut sf.sketch, palette.three_d);
     }
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
-    state.show_sketch_profiles = show_profiles;
+    // Alle Anzeigeschalter zusammen: höchstens ein Schritt je Bild; die Skizze bleibt offen.
+    if display != before {
+        state.document.set_sketch_display(index, display);
+        state.sync_sketch_display();
+    }
     state.sketch_show_grid = palette.grid;
     state.sketch_snap_grid = palette.snap;
     state.sketch_grid_changed |= palette.changed;
+    state.sketch_display_menu_open = palette.menu_open;
+    ctx.data_mut(|d| d.insert_temp(display_menu_id(), palette.menu_open));
     if palette.look_at {
         state.look_at_sketch();
     }
@@ -734,7 +806,7 @@ fn strip_field(
     let km = crate::keymap::mouse::current(ctx);
     // Eine Taste hat Werkzeug oder Art gewechselt: Die Liste gehört zum alten Stand.
     let origin = (se.tool, se.kind_of(se.tool));
-    if flyout_open(ctx) && ctx.data(|d| d.get_temp(flyout_origin_key())) != Some(origin) {
+    if strip_flyout_open(ctx) && ctx.data(|d| d.get_temp(flyout_origin_key())) != Some(origin) {
         close_flyouts(ctx);
     }
     shell_panels::field(
@@ -955,6 +1027,11 @@ struct SketchPalette {
     three_d: bool,
     three_d_changed: bool,
     changed: bool,
+    /// Aufklappfeld „Anzeigeoptionen“ offen (Skizzen 12).
+    menu_open: bool,
+    /// Stand von `menu_open` am Bildanfang: Das Fenster des Skizzenfelds läuft je Bild eventuell
+    /// mehrmals, ein Klick auf das Symbol darf nur einmal umschalten.
+    menu_was: bool,
     /// Der Knopf „Blick auf“ wurde gedrückt.
     look_at: bool,
     /// Der Knopf „Verknüpfung aufheben“ wurde gedrückt (Skizzen 6).
@@ -967,8 +1044,9 @@ struct SketchPalette {
 struct SideInput<'a> {
     panel: &'a mut PanelState,
     scope: &'a ParamScope,
-    /// Schalter „Profil anzeigen“ ([`AppState::show_sketch_profiles`]).
-    show_profiles: &'a mut bool,
+    /// Anzeigeschalter der geöffneten Skizze (Skizzen 12): Slice, Profil, Punkte, Maße,
+    /// Abhängigkeiten, Konstruktion, Projektion.
+    display: &'a mut planora_feature::SketchDisplay,
     palette: &'a mut SketchPalette,
     /// Die Schriftliste für den Abschnitt „Text“; `None`, solange sie gelesen wird.
     fonts: Option<&'a planora_text::FontLibrary>,
@@ -998,7 +1076,7 @@ fn side_field(
     let SideInput {
         panel,
         scope,
-        show_profiles,
+        display,
         palette,
         fonts,
     } = side;
@@ -1012,7 +1090,7 @@ fn side_field(
         let side = SideInput {
             panel: &mut *panel,
             scope,
-            show_profiles: &mut *show_profiles,
+            display: &mut *display,
             palette: &mut *palette,
             fonts,
         };
@@ -1501,7 +1579,7 @@ fn side_contents(
     let SideInput {
         panel,
         scope,
-        show_profiles,
+        display,
         palette,
         fonts,
     } = side;
@@ -1509,9 +1587,8 @@ fn side_contents(
     // daneben der Schalter „3D-Skizze“ (Skizzen 10, er gehört zur Skizze) und das Symbol „Blick
     // auf“; ganz rechts liegt (mit eigenen Fenstern) das Symbol „Abdocken“/„Andocken“ über der
     // Zeile. Der Name nimmt den Rest und kürzt sich erst bei sehr langen Namen (Tasks H1, H3; der
-    // volle Name steht dann im Hinweis). Darunter die Anzeigeschalter „Skizzenraster“, „Fang“ und
-    // „Profil anzeigen“ (wie Fusions Skizzenpalette „Profil“: geschlossene Flächen hell
-    // eingefärbt); drei Haken passen in die schmale Spalte nur eng und mit kleiner Schrift.
+    // volle Name steht dann im Hinweis). Die Anzeigeschalter liegen hinter dem Symbol „Anzeige“
+    // ([`display_menu_button_and_list`]).
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.spacing_mut().icon_spacing = 2.0;
@@ -1519,7 +1596,10 @@ fn side_contents(
             if crate::detach::can_detach(ui.ctx()) {
                 ui.add_space(crate::dialog::corner_dock_width(ui));
             }
-            // Nur das Symbol (die Spalte ist schmal); Name und Hinweis im Hinweistext.
+            // Nur das Symbol (die Spalte ist schmal); Name und Hinweis im Hinweistext. Beide
+            // Symbole mit schmalem Rand, damit „Skizze 12“ neben ihnen ungekürzt bleibt.
+            let pad_x = ui.spacing().button_padding.x;
+            ui.spacing_mut().button_padding.x = 3.0;
             let label = tr!("sketch-look-at");
             let look = icons::source_icon_button(
                 ui,
@@ -1530,6 +1610,8 @@ fn side_contents(
             .on_hover_text(format!("{label}\n{}", tr!("sketch-look-at-hint")));
             ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
             palette.look_at |= look.clicked();
+            display_menu_button_and_list(ui, palette, display);
+            ui.spacing_mut().button_padding.x = pad_x;
             let three_d = ui
                 .checkbox(&mut palette.three_d, tr!("sketch-palette-three-d"))
                 .on_hover_text(tr!("sketch-palette-three-d-hint"));
@@ -1550,19 +1632,6 @@ fn side_contents(
                 ui.data_mut(|d| d.insert_temp(sketch_name_key(), (cut, shown.rect)));
             });
         });
-    });
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        ui.spacing_mut().icon_spacing = 2.0;
-        let small = |t: String| egui::RichText::new(t).size(SWITCH_TEXT_PX);
-        let grid = ui
-            .checkbox(&mut palette.grid, small(tr!("sketch-palette-grid")))
-            .on_hover_text(tr!("sketch-palette-grid-hint"));
-        let snap = ui
-            .checkbox(&mut palette.snap, small(tr!("sketch-palette-snap")))
-            .on_hover_text(tr!("sketch-palette-snap-hint"));
-        palette.changed |= grid.changed() || snap.changed();
-        ui.checkbox(show_profiles, small(tr!("sketch-show-profile")));
     });
     // Skizzenstatus oben im Feld (Skizzen 11a, A4); die Freiheitsgrade stehen weiter im Fußfeld.
     status_row(ui, se, &sf.sketch);
@@ -1924,6 +1993,111 @@ pub fn under_row_height(ui: &egui::Ui) -> f32 {
     ui.spacing().interact_size.y
 }
 
+/// Symbol „Anzeige“ in der Namenszeile und das Aufklappfeld darunter (Skizzen 12): „Skizzenraster“
+/// und „Fang“ (Programm), dann die Schalter der Skizze in Fusions Reihenfolge „Slice“, „Profil
+/// anzeigen“ (wie Fusion: geschlossene Flächen hell eingefärbt), „Punkte anzeigen“, „Maße
+/// anzeigen“, „Abhängigkeiten anzeigen“, „Konstruktionsgeometrie anzeigen“ und „Projizierte
+/// Geometrie anzeigen“, je eine Zeile in normaler Schrift. Das Feld bleibt beim Umschalten offen
+/// und schließt bei einem Klick daneben, bei Esc (macht [`egui::Popup`] selbst), beim erneuten
+/// Klick auf das Symbol und mit der Skizze (siehe [`show`]).
+fn display_menu_button_and_list(
+    ui: &mut egui::Ui,
+    palette: &mut SketchPalette,
+    display: &mut planora_feature::SketchDisplay,
+) {
+    // Nur das Symbol (die Spalte ist schmal); Name und Hinweis im Hinweistext.
+    let label = tr!("sketch-display-menu");
+    let button = icons::source_icon_button(
+        ui,
+        IconSource::Font(Icon::Display),
+        &label,
+        ui.visuals().dark_mode,
+    )
+    .on_hover_text(format!("{label}\n{}", tr!("sketch-display-menu-hint")));
+    ui.data_mut(|d| d.insert_temp(display_menu_button_key(), button.rect));
+    let mut entries: Vec<(String, egui::Rect)> = Vec::new();
+    // Ein Klick auf das Symbol schaltet um; ein Klick auf einen Haken lässt das Feld offen, ein
+    // Klick daneben (unten) oder Esc (macht `Popup` selbst) schließt es.
+    if button.clicked() {
+        palette.menu_open = !palette.menu_was;
+    }
+    let mut open = palette.menu_open;
+    let shown = egui::Popup::menu(&button)
+        .id(display_menu_id())
+        .open_bool(&mut open)
+        .align(egui::RectAlign::BOTTOM_END)
+        .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+        .show(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            let grid = ui
+                .checkbox(&mut palette.grid, tr!("sketch-palette-grid"))
+                .on_hover_text(tr!("sketch-palette-grid-hint"));
+            entries.push((tr!("sketch-palette-grid"), grid.rect));
+            let snap = ui
+                .checkbox(&mut palette.snap, tr!("sketch-palette-snap"))
+                .on_hover_text(tr!("sketch-palette-snap-hint"));
+            entries.push((tr!("sketch-palette-snap"), snap.rect));
+            palette.changed |= grid.changed() || snap.changed();
+            let switches = [
+                (
+                    &mut display.slice,
+                    tr!("sketch-palette-slice"),
+                    tr!("sketch-palette-slice-hint"),
+                ),
+                (
+                    &mut display.profiles,
+                    tr!("sketch-show-profile"),
+                    tr!("sketch-show-profile-hint"),
+                ),
+                (
+                    &mut display.points,
+                    tr!("sketch-show-points"),
+                    tr!("sketch-show-points-hint"),
+                ),
+                (
+                    &mut display.dimensions,
+                    tr!("sketch-show-dimensions"),
+                    tr!("sketch-show-dimensions-hint"),
+                ),
+                (
+                    &mut display.constraints,
+                    tr!("sketch-show-constraints"),
+                    tr!("sketch-show-constraints-hint"),
+                ),
+                (
+                    &mut display.construction,
+                    tr!("sketch-show-construction"),
+                    tr!("sketch-show-construction-hint"),
+                ),
+                (
+                    &mut display.projected,
+                    tr!("sketch-show-projected"),
+                    tr!("sketch-show-projected-hint"),
+                ),
+            ];
+            for (on, label, hint) in switches {
+                let r = ui.checkbox(on, &label).on_hover_text(hint);
+                entries.push((label, r.rect));
+            }
+        });
+    // Ein Drücken außerhalb von Feld und Symbol schließt es. Gedrückt, nicht geklickt: Das Fenster
+    // des Skizzenfelds läuft je Bild eventuell mehrmals, das Loslassen nach dem Öffnen träfe sonst
+    // schon das offene Feld.
+    if let Some(shown) = shown {
+        let outside = ui.input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|p| !shown.response.rect.contains(p) && !button.rect.contains(p))
+        });
+        if outside {
+            open = false;
+        }
+    }
+    palette.menu_open = open;
+    ui.data_mut(|d| d.insert_temp(display_menu_entries_key(), entries));
+}
+
 /// Die Statuszeile als Zeile der Palette.
 fn status_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &Sketch) {
     let report = se.status_report(sk);
@@ -1934,7 +2108,15 @@ fn status_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &Sketch) {
         StatusTone::Error => p.error,
         StatusTone::Warning => p.warning,
     };
-    ui.label(RichText::new(text).size(SWITCH_TEXT_PX + 1.0).color(color));
+    // Ein langer Status kürzt sich (ganz im Hinweis beim Überfahren und im Fußfeld). Die Zeile
+    // bleibt so hoch wie der Text (das Feld reicht bei 1080 Pixeln Höhe sonst nicht mehr).
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = 0.0;
+        ui.horizontal(|ui| {
+            let status = RichText::new(text).size(SWITCH_TEXT_PX + 1.0).color(color);
+            ui.add(egui::Label::new(status).truncate());
+        });
+    });
 }
 
 /// Fußfeld: rechts „Skizze beenden“, davor der Zustand der Skizze (Farbe nach Schweregrad und

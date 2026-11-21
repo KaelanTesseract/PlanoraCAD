@@ -34,7 +34,7 @@
 PlanoraCAD ist ein freies Programm, mit dem du Bauteile am Computer in 3D konstruierst: Halterungen, Gehäuse, Ersatzteile oder Teile für den 3D-Druck. Du zeichnest eine Skizze mit Maßen, machst daraus einen Körper und leitest davon eine technische Zeichnung ab. Jeder Schritt wird festgehalten. Änderst du später ein Maß, rechnet das Programm alles neu, was darauf aufbaut.
 
 > [!NOTE]
-> **Frühe Testversion.** Die aktuelle Version ist `0.0.2-dev.2` (Entwicklerkanal). Für Windows (64 Bit) gibt es einen fertigen Installer, unter Ubuntu baust du das Programm selbst. Sie ist zum Ausprobieren gedacht, noch nicht für den Alltag. Rechne mit Fehlern und sichere wichtige Projekte zusätzlich. Über jede [Rückmeldung](#fehler-melden-und-wünsche-äußern) freue ich mich.
+> **Frühe Testversion.** Die aktuelle Version ist `0.0.2-dev.4` (Entwicklerkanal). Für Windows (64 Bit) gibt es einen fertigen Installer, unter Ubuntu baust du das Programm selbst. Sie ist zum Ausprobieren gedacht, noch nicht für den Alltag. Rechne mit Fehlern und sichere wichtige Projekte zusätzlich. Über jede [Rückmeldung](#fehler-melden-und-wünsche-äußern) freue ich mich.
 
 ## Inhalt
 
@@ -52,13 +52,17 @@ PlanoraCAD ist ein freies Programm, mit dem du Bauteile am Computer in 3D konstr
 ## Was PlanoraCAD kann
 
 **Skizzen**
+- Eine Skizze mit einem Klick anlegen: „Skizze erstellen“ zeigt die Grundebenen zur Wahl, du klickst eine Ebene oder eine ebene Fläche an.
 - Linien, Rechtecke, Kreise, Bögen, Polygone, Langlöcher, Ellipsen, Splines und Kegelschnitte zeichnen, viele davon in mehreren Arten.
 - Maße direkt beim Zeichnen eintippen. Regeln wie „waagerecht“, „parallel“ oder „tangential“ entstehen von selbst.
-- Ecken abrunden, Kurven stutzen, dehnen und versetzen, Teile verschieben, drehen und spiegeln.
+- Ecken abrunden, Kurven stutzen, dehnen und versetzen, zwei Enden glatt verbinden, Teile verschieben, drehen und spiegeln.
+- Kopieren, Ausschneiden und Einfügen, auch in eine andere Skizze.
+- Das Programm zeigt, ob eine Skizze ganz bestimmt ist, und findet, was sich noch bewegen lässt.
 - Muster in Reihen oder im Kreis, die sich später noch ändern lassen.
-- Text im Rahmen oder entlang einer Kurve, mit den Schriften deines Rechners.
-- Kanten eines Körpers in die Skizze projizieren, DXF- und SVG-Dateien einfügen und ein Foto als Vorlage hinterlegen.
+- Text im Rahmen oder entlang einer Kurve, mit den Schriften deines Rechners. Höhe und Inhalt können Parameter nutzen.
+- Kanten eines Körpers in die Skizze projizieren, DXF- und SVG-Dateien einfügen und ein Foto als Vorlage hinterlegen. Skizzen lassen sich auch als DXF speichern.
 - 3D-Skizzen: Kurven frei im Raum zeichnen, zum Beispiel einen Kabelweg.
+- Skizzen in Gruppen ordnen und je Skizze wählen, was angezeigt wird. Körper verdecken die Skizze, und „Slice“ schneidet weg, was davor liegt.
 
 **Körper**
 - Skizzen herausziehen (extrudieren) oder um eine Achse drehen. Dazu gibt es Quader, Zylinder, Kugel und Kegel.
@@ -96,7 +100,7 @@ Alles mit Einzelheiten steht im [Handbuch](https://dennis-guse.de/planoracad/wik
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/bilder/skizze-muster.webp" alt="Skizze einer Platte mit Bohrungen, die kreisförmig um die Mitte angeordnet sind"><br><sub>Kreisförmige Anordnung in einer Skizze</sub></td>
+    <td width="50%"><img src="docs/bilder/skizze-muster.webp" alt="Skizze mit einem großen Kreis und sechs kleinen Kreisen, die kreisförmig um die Mitte angeordnet sind"><br><sub>Kreisförmige Anordnung in einer Skizze</sub></td>
     <td width="50%"><img src="docs/bilder/skizze-text.webp" alt="Der Text „GARTENHAUS 2026“ steht im Bogen auf einer Kurve"><br><sub>Text entlang einer Kurve</sub></td>
   </tr>
   <tr>

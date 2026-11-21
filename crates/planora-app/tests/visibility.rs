@@ -10,8 +10,8 @@ use egui::{Event, Modifiers, PointerButton, Pos2, Rect, pos2};
 use glam::Vec2;
 use planora_app::browser;
 use planora_app::plane_dialog::PlaneClick;
-use planora_app::sketch_view;
 use planora_app::state::{AppState, PickFilter};
+use planora_app::testing::{finished_strokes, plane_count};
 use planora_app::{fonts, theme};
 use planora_feature::planes::{PlaneBase, PlaneDef};
 use planora_feature::{FeatureId, SketchPlane, StandardPlane};
@@ -116,13 +116,13 @@ fn offset_plane(s: &mut AppState, z: f64) -> FeatureId {
 fn the_sketch_eye_hides_the_finished_sketch() {
     let mut s = AppState::new();
     let id = sketch_with_rectangle(&mut s);
-    assert!(!sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty());
+    assert!(!finished_strokes(&s, SCREEN).is_empty());
     let selected = s.selected_feature;
     let mut t = Tree::new();
     t.toggle(&mut s, "Skizze 1");
     assert!(s.is_feature_hidden(id));
     assert!(
-        sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty(),
+        finished_strokes(&s, SCREEN).is_empty(),
         "ausgeblendete Skizze wird nicht gezeichnet"
     );
     // Nur die Ansicht: Die Skizze bleibt im Dokument, das Auge ändert die Auswahl nicht.
@@ -130,7 +130,7 @@ fn the_sketch_eye_hides_the_finished_sketch() {
     assert_eq!(s.selected_feature, selected);
     t.toggle(&mut s, "Skizze 1");
     assert!(!s.is_feature_hidden(id));
-    assert!(!sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty());
+    assert!(!finished_strokes(&s, SCREEN).is_empty());
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn the_plane_eye_hides_the_plane_and_it_cannot_be_picked() {
     t.toggle(&mut s, "Ebene 1");
     assert!(s.is_feature_hidden(id));
     assert!(s.plane_rects().is_empty());
-    assert!(sketch_view::plane_shapes(&s, SCREEN).is_empty());
+    assert_eq!(plane_count(&s, SCREEN), 0);
     assert_eq!(s.pick(center, VIEW), None, "nicht mehr anklickbar");
     assert_eq!(s.selection, None, "Auswahl auf ihr entfällt");
     assert_eq!(s.hover, None);
@@ -164,7 +164,7 @@ fn origin_planes_start_hidden_and_the_eye_shows_them() {
         assert!(!s.is_origin_plane_shown(p), "{p:?}: anfangs aus wie Fusion");
     }
     assert!(s.origin_plane_rects().is_empty());
-    assert!(sketch_view::plane_shapes(&s, SCREEN).is_empty());
+    assert_eq!(plane_count(&s, SCREEN), 0);
     // Der Ordner „Ursprung“ ist anfangs zugeklappt.
     s.tree_folders.set_open(browser::Folder::Origin, true);
     let mut t = Tree::new();
@@ -176,7 +176,7 @@ fn origin_planes_start_hidden_and_the_eye_shows_them() {
     assert_eq!(rects[0].0, StandardPlane::XY);
     assert!((rects[0].1.frame.z - DVec3::Z).length() < 1e-12);
     assert!(rects[0].1.frame.origin.length() < 1e-12, "im Ursprung");
-    assert_eq!(sketch_view::plane_shapes(&s, SCREEN).len(), 1);
+    assert_eq!(plane_count(&s, SCREEN), 1);
     t.toggle(&mut s, "XY-Ebene");
     assert!(s.origin_plane_rects().is_empty());
 }
@@ -355,9 +355,9 @@ fn the_folder_eye_hides_everything_inside_and_keeps_the_row_eyes() {
 
     toggle_folder(&mut t, &mut s, Folder::Sketches);
     assert!(s.is_feature_hidden(sk));
-    assert!(sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty());
+    assert!(finished_strokes(&s, SCREEN).is_empty());
     toggle_folder(&mut t, &mut s, Folder::Sketches);
-    assert!(!sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty());
+    assert!(!finished_strokes(&s, SCREEN).is_empty());
 
     let full = s.scene.face_indices.len();
     s.selected_body = Some(0);

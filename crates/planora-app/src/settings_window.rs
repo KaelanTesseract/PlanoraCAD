@@ -153,6 +153,15 @@ pub fn nested() -> String {
     tr!("settings-nested")
 }
 /// Warnung, wenn der Wechsel gilt, die Einstellung aber nicht gespeichert werden konnte.
+pub fn author_label() -> String {
+    tr!("settings-author-label")
+}
+pub fn author_note() -> String {
+    tr!("settings-author-note")
+}
+pub fn author_not_saved() -> String {
+    tr!("settings-author-not-saved")
+}
 pub fn not_saved() -> String {
     tr!("settings-not-saved")
 }
@@ -163,6 +172,8 @@ pub const TWO_COLUMNS_FROM: f32 = 1600.0;
 /// Breite der Spalte „Darstellung“ neben „Updates“.
 const APPEARANCE_COLUMN_W: f32 = 280.0;
 
+/// Breite des Feldes „Name für Zeichnungen“.
+const AUTHOR_FIELD_W: f32 = 240.0;
 /// Kennung des Fensters (unabhängig vom Titel).
 const WINDOW_ID: &str = "planora_settings_window";
 
@@ -236,6 +247,7 @@ pub enum Note {
     LanguageNotSaved,
     UnitNotSaved,
     KeysNotSaved,
+    AuthorNotSaved,
     /// Das neue Projektverzeichnis gilt nur bis zum Programmende.
     NotSaved,
     /// Gespeicherte Dokumente sind offen.
@@ -258,6 +270,7 @@ impl Note {
             Note::LanguageNotSaved => language_not_saved(),
             Note::UnitNotSaved => unit_not_saved(),
             Note::KeysNotSaved => settings_ui::keys_not_saved(),
+            Note::AuthorNotSaved => author_not_saved(),
             Note::NotSaved => not_saved(),
             Note::RootLocked => root_locked(),
             Note::Nested => nested(),
@@ -386,6 +399,11 @@ pub struct SettingsWindow {
     /// Der Regler wurde bewegt, der Wert ist aber noch nicht gespeichert (gespeichert wird beim
     /// Loslassen, nicht in jedem Bild des Ziehens).
     transparency_unsaved: bool,
+    /// Eingabe im Feld „Name für Zeichnungen“, solange sie noch nicht gespeichert ist (gespeichert
+    /// wird, wenn das Feld den Fokus verliert oder das Fenster schließt).
+    author_draft: Option<String>,
+    /// Hinweis unter dem Feld „Name für Zeichnungen“ (nur [`author_not_saved`]).
+    author_message: Option<RootMessage>,
     /// Abschnitt „Tastenkürzel“: Suche, Erfassen, Doppelbelegung, Hinweise.
     keys: CaptureState,
     /// Rechteck des Fensters im letzten Bild (Layouttests).
@@ -401,6 +419,8 @@ impl SettingsWindow {
         self.message = None;
         self.appearance_message = None;
         self.updates_message = None;
+        self.author_draft = None;
+        self.author_message = None;
         // Eine noch laufende Suche bleibt sichtbar, ebenso ein Ergebnis, das noch nie zu sehen war
         // (das Fenster ging zu, während die Suche lief); ein schon gezeigtes Ergebnis nicht.
         if self.check_hint_shown && self.check_hint != Some(CheckHint::Running) {
@@ -425,6 +445,16 @@ impl SettingsWindow {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Speichert eine noch offene Eingabe im Feld „Name für Zeichnungen“
+    /// ([`Workspace::set_drawing_author`]); misslingt das, gilt sie für die Sitzung und der Hinweis
+    /// [`author_not_saved`] erscheint.
+    fn save_author(&mut self, ws: &mut Workspace) {
+        if let Some(name) = self.author_draft.take() {
+            let written = ws.set_drawing_author(&name);
+            self.author_message = (!written).then_some(RootMessage::Warning(Note::AuthorNotSaved));
+        }
     }
 
     /// Öffnet die Auswahl im Ordner-Modus im aktuellen Verzeichnis, fehlt es, in dessen
@@ -545,6 +575,12 @@ impl SettingsWindow {
         let appearance_message = self.appearance_message.clone();
         let updates_message = self.updates_message.clone();
         let mut verbose = ws.verbose_log();
+        let author_message = self.author_message.clone();
+        let mut author = self
+            .author_draft
+            .clone()
+            .unwrap_or_else(|| ws.drawing_author().to_string());
+        let (mut author_changed, mut author_left) = (false, false);
         let check_hint = self.check_hint.clone();
         self.check_hint_shown = true;
         let mut check_now = false;
@@ -620,9 +656,26 @@ impl SettingsWindow {
                         ui.add_space(theme::SPACE_2);
                         ui.strong(directory_label());
                         ui.add(egui::Label::new(path.as_str()).wrap());
-                        if !choosing && ui.button(change_directory()).clicked() {
-                            start = true;
-                        }
+                        // Knopf und „Name für Zeichnungen“ in einer Zeile, damit das Fenster bei
+                        // untereinander stehenden Spalten nicht höher wird; der Hinweis zum Namen
+                        // steht im Tooltip.
+                        ui.horizontal(|ui| {
+                            if !choosing && ui.button(change_directory()).clicked() {
+                                start = true;
+                            }
+                            ui.add_space(theme::SPACE_6);
+                            ui.strong(author_label());
+                            let r = theme::text_field(
+                                ui,
+                                egui::TextEdit::singleline(&mut author)
+                                    .id_salt("planora_settings_author")
+                                    .char_limit(planora_drawing::sheet_info::MAX_FIELD_CHARS)
+                                    .desired_width(AUTHOR_FIELD_W),
+                            )
+                            .on_hover_text(author_note());
+                            author_changed = r.changed();
+                            author_left = r.lost_focus();
+                        });
                         ui.label(keep_hint());
                         if let Some(m) = &message {
                             ui.colored_label(m.color(dark), m.text());
@@ -631,6 +684,9 @@ impl SettingsWindow {
                             ui.add_space(theme::SPACE_2);
                             ui.strong(choose_heading());
                             body_action = c.show_body(ui, places);
+                        }
+                        if let Some(m) = &author_message {
+                            ui.colored_label(m.color(dark), m.text());
                         }
                         ui.add_space(theme::SPACE_4);
                         settings_ui::show(ui, ws, keys);
@@ -698,6 +754,12 @@ impl SettingsWindow {
             let written = ws.set_verbose_log(verbose);
             self.updates_message =
                 (!written).then_some(RootMessage::Warning(Note::VerboseNotSaved));
+        }
+        if author_changed && !locked {
+            self.author_draft = Some(author);
+        }
+        if author_left || !open || close {
+            self.save_author(ws);
         }
         for action in [body_action, footer_action] {
             let target = match action {

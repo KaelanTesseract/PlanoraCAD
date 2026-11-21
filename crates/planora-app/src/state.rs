@@ -18,7 +18,7 @@ use planora_mesh::{
 };
 use planora_render::{
     EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, PlaneRect, Ray, SceneData,
-    build_scene_marked, pick_edge, pick_face, pick_plane, pick_vertex,
+    build_scene_marked, pick_edge_sliced, pick_face, pick_plane, pick_vertex_sliced, slice_cuts,
 };
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::helpers::Included;
@@ -190,6 +190,9 @@ pub enum PendingPick {
     /// „Skizzenebene neu festlegen“ für diese Skizze: Grundebene, Konstruktionsebene oder
     /// ebene Fläche wählen.
     SketchPlane(FeatureId),
+    /// „Skizze erstellen“ (wie Fusion „Create Sketch“): Grundebene, Konstruktionsebene oder
+    /// ebene Fläche wählen; der Klick legt die Skizze an und öffnet sie.
+    NewSketch,
 }
 
 /// Alles, was die Oberfläche anzeigt. Enthält keine egui-Typen und ist deshalb testbar.
@@ -235,6 +238,9 @@ pub struct AppState {
     /// Per Strg-Klick im Ordner „Skizzen“ gewählte Skizzen (Skizzen 11b); gilt nur, solange
     /// `selected_feature` darin steht (siehe [`AppState::browser_sketch_selection`]).
     pub browser_sketches: Vec<FeatureId>,
+    /// Rechtsklickmenü auf einer fertigen Skizze in der 3D-Ansicht (Skizzen 12): Bildschirmort
+    /// des Menüs. Gilt für die gewählte Skizzenkurve oder den gewählten Skizzenpunkt.
+    pub sketch_pick_menu: Option<(f32, f32)>,
     /// Im Ordner „Skizzen“ gewählte Gruppe (Skizzen 11b); gilt nur ohne `selected_feature`.
     pub browser_group: Option<planora_feature::SketchGroupId>,
     /// Grundebene unter dem Zeiger (hell gezeichnet; gilt nur für das laufende Bild).
@@ -265,9 +271,9 @@ pub struct AppState {
     pub sketch_request: Option<SketchRequest>,
     /// Zuletzt berechnete Profile (für die Dialoge, die jedes Bild neu zeichnen).
     pub profile_cache: ProfileCache,
-    /// Profile im Skizzen-Modus als helle Flächen zeigen (Skizzenfeld „Profil anzeigen“, wie
-    /// Fusions Skizzenpalette „Profil“); Vorgabe an.
-    pub show_sketch_profiles: bool,
+    /// Abgetastete Kurven und feste Mengen der fertigen Skizzen je Stand (Skizzen 12, Task 12b),
+    /// damit nicht jedes Bild jede Kurve neu abtastet.
+    pub finished_cache: crate::finished_cache::FinishedSketchCache,
     /// Skizzenraster zeigen (Skizzenfeld, wie Fusions Skizzenpalette); Vorgabe an. Ohne Raster
     /// kein Raster-Fang. Den Stand führt [`crate::workspace::Workspace::sync_sketch_grid`].
     pub sketch_show_grid: bool,
@@ -275,6 +281,10 @@ pub struct AppState {
     pub sketch_snap_grid: bool,
     /// Ein Schalter wurde betätigt: Der Arbeitsbereich speichert den Stand und gibt ihn allen Tabs.
     pub sketch_grid_changed: bool,
+    /// Aufklappfeld „Anzeigeoptionen“ im Skizzenfeld offen (Skizzen 12). Der Zustand liegt hier,
+    /// nicht im Popup-Speicher von egui: Der steht je Fenster, und das Skizzenfeld kann in einem
+    /// eigenen Fenster liegen.
+    pub sketch_display_menu_open: bool,
     /// „Ebenen anzeigen“ der Triade der 3D-Skizze (Rechtsklickmenü, Skizzen 10); Vorgabe an. Den
     /// Stand führt [`crate::workspace::Workspace::sync_triad_view`].
     pub triad_planes: bool,
@@ -574,6 +584,20 @@ fn link_vertices(state: &AppState, se: &mut SketchSession, draft: &mut SketchFea
 /// Länge des Geometrieschlüssels einer Kante (Anfangs- und Endpunkt, Parameterbereich).
 const EDGE_KEY_LEN: usize = 8;
 
+/// Slice beim Anklicken: Ab welcher Strahllänge zählt ein Treffer? 0, wenn der Strahl hinter der
+/// Ebene beginnt; sonst dort, wo er die Toleranz [`planora_render::SLICE_EPS`] vor der Ebene
+/// erreicht. `None`, wenn er die weggeschnittene Seite nie verlässt.
+fn slice_ray_start(plane: [f32; 4], origin: DVec3, dir: DVec3) -> Option<f32> {
+    let [nx, ny, nz, d] = plane.map(f64::from);
+    let n = DVec3::new(nx, ny, nz);
+    let side = n.dot(origin) + d - f64::from(planora_render::SLICE_EPS);
+    if side <= 0.0 {
+        return Some(0.0);
+    }
+    let towards = -n.dot(dir);
+    (towards > 1e-12).then(|| (side / towards) as f32)
+}
+
 /// Geometrieschlüssel einer Kante (Bitmuster von Endpunkten und Parameterbereich); gleich nur,
 /// wenn die Kante unverändert liegt. `None`, wenn es die Kante nicht gibt.
 fn edge_key(solid: &Solid, edge: Id<Edge>) -> Option<[u64; EDGE_KEY_LEN]> {
@@ -619,15 +643,22 @@ pub struct PickFilter {
     pub edges: bool,
     /// Flächen der Körper.
     pub faces: bool,
+    /// Punkte fertiger, sichtbarer Skizzen (Skizzen 12); normale Auswahl und Punktfelder.
+    pub sketch_points: bool,
+    /// Kurven fertiger, sichtbarer Skizzen (Skizzen 12); normale Auswahl und Achsenfelder.
+    pub sketch_curves: bool,
 }
 
 impl PickFilter {
-    /// Normale Auswahl in der 3D-Ansicht: Flächen, Kanten und Ebenen, keine Eckpunkte.
+    /// Normale Auswahl in der 3D-Ansicht: Flächen, Kanten, Ebenen und die fertigen Skizzen
+    /// (Skizzen 12), keine Eckpunkte.
     pub const SELECT: PickFilter = PickFilter {
         planes: true,
         vertices: false,
         edges: true,
         faces: true,
+        sketch_points: true,
+        sketch_curves: true,
     };
     /// Nur Flächen und Kanten (Projizieren und Schneiden im Skizzen-Modus).
     pub const GEOMETRY: PickFilter = PickFilter {
@@ -635,6 +666,8 @@ impl PickFilter {
         vertices: false,
         edges: true,
         faces: true,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// Punktwahl: Eckpunkte vor allem anderen, dann Kanten und Flächen. Ebenen zählen nicht
     /// und verdecken keine Ecken (die Punkte liegen oft hinter einer schon gezeichneten Ebene).
@@ -643,6 +676,8 @@ impl PickFilter {
         vertices: true,
         edges: true,
         faces: true,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// „3D-Geometrie einbeziehen“ (Skizzen 10): Ecken, Kanten, Flächen und Ebenen.
     pub const INCLUDE: PickFilter = PickFilter {
@@ -650,6 +685,8 @@ impl PickFilter {
         vertices: true,
         edges: true,
         faces: true,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// Bezug eines Ebenen-Fensters: Flächen und Ebenen, keine Kanten.
     pub const BASES: PickFilter = PickFilter {
@@ -657,6 +694,8 @@ impl PickFilter {
         vertices: false,
         edges: false,
         faces: true,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// Nur Flächen (Tangentialebene).
     pub const FACES: PickFilter = PickFilter {
@@ -664,6 +703,8 @@ impl PickFilter {
         vertices: false,
         edges: false,
         faces: true,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// Nur Kanten (Achse der Ebene unter Winkel).
     pub const EDGES: PickFilter = PickFilter {
@@ -671,6 +712,8 @@ impl PickFilter {
         vertices: false,
         edges: true,
         faces: false,
+        sketch_points: false,
+        sketch_curves: false,
     };
     /// Nur Eckpunkte („Ebene durch drei Punkte“).
     pub const VERTICES: PickFilter = PickFilter {
@@ -678,6 +721,8 @@ impl PickFilter {
         vertices: true,
         edges: false,
         faces: false,
+        sketch_points: false,
+        sketch_curves: false,
     };
 }
 const BODY_GAP_MM: f64 = 10.0;
@@ -734,6 +779,7 @@ impl AppState {
             tree_folders: crate::browser::FolderState::default(),
             tree_groups_open: std::collections::BTreeSet::new(),
             browser_sketches: Vec::new(),
+            sketch_pick_menu: None,
             browser_group: None,
             origin_hover: None,
             selected_origin: None,
@@ -745,10 +791,11 @@ impl AppState {
             fit_pending: false,
             sketch_request: None,
             profile_cache: ProfileCache::default(),
-            show_sketch_profiles: true,
+            finished_cache: Default::default(),
             sketch_show_grid: true,
             sketch_snap_grid: true,
             sketch_grid_changed: false,
+            sketch_display_menu_open: false,
             triad_planes: true,
             triad_handles: true,
             triad_view_changed: false,
@@ -976,6 +1023,17 @@ impl AppState {
             }
             // Eine Ebene hängt an keinem Körper; sie bleibt, solange sie gezeichnet wird.
             Pick::Plane(id) => self.plane_rect(id).map(|_| pick),
+            // Eine Skizzenkurve oder ein Skizzenpunkt bleibt, solange es sie gibt.
+            Pick::SketchCurve { sketch, curve } => self
+                .document
+                .sketch_of(sketch)
+                .and_then(|sk| sk.curve(curve))
+                .map(|_| pick),
+            Pick::SketchPoint { sketch, point } => self
+                .document
+                .sketch_of(sketch)
+                .and_then(|sk| sk.point_xyz(point).ok())
+                .map(|_| pick),
         }
     }
 
@@ -1044,18 +1102,16 @@ impl AppState {
     /// Ordner)?
     pub fn is_feature_hidden(&self, id: FeatureId) -> bool {
         let v = self.document.visibility();
-        let folder = match self.document.feature(id).map(|f| &f.kind) {
-            Some(FeatureKind::Sketch(_)) => v.folders.sketches,
-            Some(FeatureKind::Plane(_)) => v.folders.planes,
-            Some(FeatureKind::Canvas(_)) => v.folders.canvases,
-            _ => false,
+        // Je Bild für jede Skizze gerufen: das Feature nur einmal suchen, die Gruppen aus dem
+        // Zwischenspeicher des Dokuments (Skizzen 12, Task 12).
+        let (folder, sketch) = match self.document.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Sketch(_)) => (v.folders.sketches, true),
+            Some(FeatureKind::Plane(_)) => (v.folders.planes, false),
+            Some(FeatureKind::Canvas(_)) => (v.folders.canvases, false),
+            _ => (false, false),
         };
         // Skizzen 11b: eine Skizze in einer ausgeblendeten Gruppe (ihr eigenes Auge bleibt).
-        let by_group = matches!(
-            self.document.feature(id).map(|f| &f.kind),
-            Some(FeatureKind::Sketch(_))
-        ) && self.document.sketch_hidden_by_group(id);
-        folder || v.features.contains(&id) || by_group
+        folder || v.features.contains(&id) || (sketch && self.document.sketch_hidden_by_group(id))
     }
 
     /// Die im Ordner „Skizzen“ gewählten Skizzen (Skizzen 11b): die Strg-Klick-Wahl, solange
@@ -1248,6 +1304,64 @@ impl AppState {
         self.apply_visibility(v);
     }
 
+    /// Die Skizze der gewählten Skizzenkurve oder des gewählten Skizzenpunkts in der 3D-Ansicht
+    /// (Skizzen 12).
+    pub fn picked_sketch(&self) -> Option<FeatureId> {
+        match self.selection {
+            Some(Pick::SketchCurve { sketch, .. } | Pick::SketchPoint { sketch, .. }) => {
+                Some(sketch)
+            }
+            _ => None,
+        }
+    }
+
+    /// „Skizze bearbeiten“ im Rechtsklickmenü auf Skizzengeometrie: öffnet die Skizze der
+    /// Auswahl wie ein Doppelklick im Baum. Ohne gewählte Skizzengeometrie nichts.
+    pub fn edit_picked_sketch(&mut self) {
+        self.sketch_pick_menu = None;
+        if let Some(id) = self.picked_sketch() {
+            crate::browser::edit(self, id);
+        }
+    }
+
+    /// „Ausblenden“ im Rechtsklickmenü auf Skizzengeometrie: das Auge der Skizze geht aus
+    /// (wie im Baum; die Auswahl entfällt dabei). Ohne gewählte Skizzengeometrie nichts.
+    pub fn hide_picked_sketch(&mut self) {
+        self.sketch_pick_menu = None;
+        if let Some(id) = self.picked_sketch() {
+            self.set_feature_hidden(id, true);
+        }
+    }
+
+    /// Der Haken „Maße anzeigen“ im Rechtsklickmenü einer Skizze (Baum und 3D-Ansicht, Skizzen 12):
+    /// `Some(an)` für eine fertige Skizze, `None` bei der gerade geöffneten (dort gilt der Haken
+    /// im Skizzenfeld) und bei einer Kennung ohne Skizze.
+    pub fn sketch_dimension_menu(&self, id: FeatureId) -> Option<bool> {
+        self.document.sketch_of(id)?;
+        (self.open_sketch_id() != Some(id))
+            .then(|| self.document.sketch_display(id).dimensions_finished)
+    }
+
+    /// Schaltet „Maße anzeigen“ der fertigen Skizze `id` um (ein Schritt, Beschriftung
+    /// „Skizzenanzeige ändern“). Bei der geöffneten Skizze und ohne Skizze geschieht nichts.
+    pub fn toggle_finished_dimensions(&mut self, id: FeatureId) {
+        let Some(on) = self.sketch_dimension_menu(id) else {
+            return;
+        };
+        let mut d = self.document.sketch_display(id);
+        d.dimensions_finished = !on;
+        self.document.set_sketch_display(id, d);
+    }
+
+    /// Die Skizze für den belegbaren Befehl „Maße anzeigen“ der fertigen Skizze: die gewählte
+    /// Skizzengeometrie in der 3D-Ansicht, sonst die im Baum gewählte Skizze.
+    pub fn sketch_for_dimension_menu(&self) -> Option<FeatureId> {
+        self.picked_sketch().or_else(|| {
+            let id = self.selected_feature?;
+            self.document.sketch_of(id).map(|_| id)
+        })
+    }
+
     /// Ist die Grundebene `p` eingeblendet (Auge im Ordner „Ursprung“)?
     pub fn is_origin_plane_shown(&self, p: StandardPlane) -> bool {
         self.document.visibility().origin_shown(p)
@@ -1305,6 +1419,9 @@ impl AppState {
     fn sync_visibility(&mut self) {
         let hidden = |s: &Self, p: Option<Pick>| match p {
             Some(Pick::Plane(id)) => s.is_feature_hidden(id),
+            Some(Pick::SketchCurve { sketch, .. } | Pick::SketchPoint { sketch, .. }) => {
+                s.is_feature_hidden(sketch)
+            }
             Some(p) => pick_body(p).is_some_and(|j| s.is_body_hidden(j)),
             None => false,
         };
@@ -2450,12 +2567,16 @@ impl AppState {
     /// Ebene (eine ausgeschaltete Fläche ergibt nichts, verdeckt aber weiter). Ob eine Ebene
     /// Ecken und Kanten dahinter verdeckt, hängt vom Filter ab: bei `planes: true` verdeckt sie
     /// wie eine Fläche (liegt eine Fläche näher, gewinnt diese); mit `planes: false` (etwa
-    /// `PickFilter::VERTICES`) zählen Ebenen nicht und verdecken nichts.
+    /// `PickFilter::VERTICES`) zählen Ebenen nicht und verdecken nichts. Bei Slice
+    /// ([`AppState::active_slice`]) zählt von den Körpern nur, was hinter der Skizzenebene liegt.
     pub fn pick_with(&self, cursor: Vec2, viewport: Vec2, filter: PickFilter) -> Option<Pick> {
         if viewport.x < 1.0 || viewport.y < 1.0 {
             return None;
         }
         let nearest_face = self.nearest_face_hit(cursor, viewport);
+        // Slice: weggeschnittene Kanten(-teile) und Ecken zählen nicht und verdrängen keine
+        // sichtbaren (die Flächen schon in `nearest_face_hit`).
+        let slice = self.active_slice();
         let nearest_plane = if filter.planes {
             self.nearest_plane_hit(cursor, viewport)
         } else {
@@ -2475,26 +2596,28 @@ impl AppState {
         };
         if filter.vertices {
             let meshes: Vec<(usize, &Mesh)> = shown().map(|(j, b)| (j, &b.mesh)).collect();
-            if let Some((body, edge, end)) = pick_vertex(
+            if let Some((body, edge, end)) = pick_vertex_sliced(
                 &meshes,
                 &self.camera,
                 viewport,
                 cursor,
                 PICK_VERTEX_PX,
                 occluder,
+                slice,
             ) {
                 return Some(Pick::Vertex { body, edge, end });
             }
         }
         let mut best_edge: Option<(usize, planora_render::EdgeHit)> = None;
         for (body, b) in shown().filter(|_| filter.edges) {
-            if let Some(hit) = pick_edge(
+            if let Some(hit) = pick_edge_sliced(
                 &b.mesh,
                 &self.camera,
                 viewport,
                 cursor,
                 PICK_EDGE_PX,
                 occluder,
+                slice,
             ) && best_edge.is_none_or(|(_, h)| hit.pixel_distance < h.pixel_distance)
             {
                 best_edge = Some((body, hit));
@@ -2505,6 +2628,28 @@ impl AppState {
                 body,
                 edge: hit.edge,
             }));
+        }
+        // Skizzenpunkt, dann Skizzenkurve einer fertigen, sichtbaren Skizze (Skizzen 12); was ein
+        // Körper verdeckt, zählt nicht.
+        if filter.sketch_points || filter.sketch_curves {
+            let map = crate::sketch_view::Mapper {
+                camera: self.camera,
+                frame: planora_math::Frame::WORLD,
+                rect: egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(viewport.x, viewport.y),
+                ),
+            };
+            if let Some(hit) = crate::sketch_view::finished_sketch_under(
+                self,
+                &map,
+                egui::pos2(cursor.x, cursor.y),
+                slice,
+                filter.sketch_points,
+                filter.sketch_curves,
+            ) {
+                return Some(hit);
+            }
         }
         match (nearest_face, nearest_plane) {
             (Some((_, f)), Some((id, p))) if p < f.distance as f64 => Some(Pick::Plane(id)),
@@ -2549,11 +2694,14 @@ impl AppState {
     }
 
     /// Die eingeblendeten Grundebenen als Rechtecke im Ursprung, so groß wie
-    /// Konstruktionsebenen ([`AppState::plane_rect_for`]).
+    /// Konstruktionsebenen ([`AppState::plane_rect_for`]). In einem Wahlmodus ohne Fenster
+    /// ([`PendingPick`]: „Skizze erstellen“, „Skizzenebene neu festlegen“) alle drei, auch
+    /// ausgeblendete, wie in Fusion; die Sichtbarkeit im Dokument bleibt dabei unverändert.
     pub fn origin_plane_rects(&self) -> Vec<(StandardPlane, PlaneRect)> {
+        let picking = self.pending_pick.is_some();
         [StandardPlane::XY, StandardPlane::XZ, StandardPlane::YZ]
             .into_iter()
-            .filter(|p| self.is_origin_plane_shown(*p))
+            .filter(|p| picking || self.is_origin_plane_shown(*p))
             .filter_map(|p| {
                 let def = PlaneDef::Offset {
                     base: PlaneBase::Standard(p),
@@ -2564,9 +2712,14 @@ impl AppState {
             .collect()
     }
 
-    /// Die vorderste eingeblendete Grundebene unter dem Zeiger und die Strahllänge bis zu ihr
-    /// (wie [`Self::nearest_plane_hit`]).
-    fn nearest_origin_hit(&self, cursor: Vec2, viewport: Vec2) -> Option<(StandardPlane, f64)> {
+    /// Die vorderste gezeichnete Grundebene unter dem Zeiger, für die `keep` gilt, und die
+    /// Strahllänge bis zu ihr (wie [`Self::nearest_plane_hit`]).
+    fn nearest_origin_hit_where(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+        keep: impl Fn(StandardPlane) -> bool,
+    ) -> Option<(StandardPlane, f64)> {
         let ndc = Vec2::new(
             2.0 * cursor.x / viewport.x - 1.0,
             1.0 - 2.0 * cursor.y / viewport.y,
@@ -2578,6 +2731,7 @@ impl AppState {
         };
         self.origin_plane_rects()
             .into_iter()
+            .filter(|(p, _)| keep(*p))
             .filter_map(|(p, rect)| pick_plane(&ray, &rect).map(|t| (p, t)))
             .min_by(|a, b| a.1.total_cmp(&b.1))
     }
@@ -2611,12 +2765,22 @@ impl AppState {
             return None;
         }
         let hit = self.pick_with(cursor, viewport, filter);
-        let origin = filter
+        // Eine nur für den Wahlmodus eingeblendete Grundebene (im Baum ausgeblendet) steht hinter
+        // jedem anderen Treffer zurück, auch hinter einer sichtbaren Grundebene: Sie geht durch
+        // das Modell und soll nichts dahinter verdecken. Sie zählt nur ohne anderen Treffer.
+        let shown = filter
             .planes
-            .then(|| self.nearest_origin_hit(cursor, viewport))
+            .then(|| {
+                self.nearest_origin_hit_where(cursor, viewport, |p| self.is_origin_plane_shown(p))
+            })
             .flatten();
-        let Some((plane, t)) = origin else {
-            return hit.map(PlaneClick::View);
+        let Some((plane, t)) = shown else {
+            if hit.is_some() || !filter.planes {
+                return hit.map(PlaneClick::View);
+            }
+            return self
+                .nearest_origin_hit_where(cursor, viewport, |p| !self.is_origin_plane_shown(p))
+                .map(|(p, _)| PlaneClick::Standard(p));
         };
         // Abstand des anderen Treffers; Ecken und Kanten liegen vorn.
         let front = match hit {
@@ -2643,7 +2807,9 @@ impl AppState {
     ) -> Option<f64> {
         use crate::plane_dialog::PlaneClick;
         match click? {
-            PlaneClick::Standard(_) => self.nearest_origin_hit(cursor, viewport).map(|(_, t)| t),
+            PlaneClick::Standard(p) => self
+                .nearest_origin_hit_where(cursor, viewport, |q| q == p)
+                .map(|(_, t)| t),
             PlaneClick::View(Pick::Face(_)) => self
                 .nearest_face_hit(cursor, viewport)
                 .map(|(_, f)| f64::from(f.distance)),
@@ -2739,15 +2905,51 @@ impl AppState {
             1.0 - 2.0 * cursor.y / viewport.y,
         );
         let (origin, dir) = self.camera.ray(ndc);
+        self.nearest_face_along(origin, dir, self.active_slice())
+    }
+
+    /// Strahllänge bis zum ersten Körpertreffer des Strahls `origin` + t · `dir` (derselbe Treffer
+    /// wie beim Anklicken von Flächen, auch bei Slice: Was vor der Skizzenebene liegt, zählt
+    /// nicht; ausgeblendete Körper fehlen). `None`, wenn der Strahl keinen Körper trifft. Damit
+    /// prüfen fertige Skizzen, ob eine Stelle verdeckt ist: Der Treffer liegt dann vor ihr.
+    pub fn body_hit_distance(
+        &self,
+        origin: DVec3,
+        dir: DVec3,
+        slice: Option<[f32; 4]>,
+    ) -> Option<f64> {
+        self.nearest_face_along(to_vec3(origin), to_vec3(dir), slice)
+            .map(|(_, h)| f64::from(h.distance))
+    }
+
+    /// Die vorderste Fläche, die der Strahl trifft, mit dem Index ihres Körpers.
+    fn nearest_face_along(
+        &self,
+        origin: Vec3,
+        dir: Vec3,
+        slice: Option<[f32; 4]>,
+    ) -> Option<(usize, planora_render::FaceHit)> {
+        // Slice: Was vor der Skizzenebene liegt, ist weggeschnitten; der Strahl beginnt dann erst
+        // an der Ebene (knapp davor, so dass Flächen in der Ebene zählen).
+        let skip = match slice {
+            Some(plane) => slice_ray_start(plane, origin.as_dvec3(), dir.as_dvec3())?,
+            None => 0.0,
+        };
+        let start = origin + dir * skip;
         let mut nearest_face: Option<(usize, planora_render::FaceHit)> = None;
         for (body, b) in self.bodies.iter().enumerate() {
             if self.is_body_hidden(body) {
                 continue;
             }
-            if let Some(hit) = pick_face(&b.mesh, origin, dir)
-                && nearest_face.is_none_or(|(_, h)| hit.distance < h.distance)
-            {
-                nearest_face = Some((body, hit));
+            if let Some(mut hit) = pick_face(&b.mesh, start, dir) {
+                hit.distance += skip;
+                let at = (origin + dir * hit.distance).as_dvec3();
+                if slice.is_some_and(|plane| slice_cuts(plane, at)) {
+                    continue;
+                }
+                if nearest_face.is_none_or(|(_, h)| hit.distance < h.distance) {
+                    nearest_face = Some((body, hit));
+                }
             }
         }
         nearest_face
@@ -2862,7 +3064,7 @@ fn pick_body(p: Pick) -> Option<usize> {
         Pick::Face(FaceRef { body, .. })
         | Pick::Edge(EdgeRef { body, .. })
         | Pick::Vertex { body, .. } => Some(body),
-        Pick::Plane(_) => None,
+        Pick::Plane(_) | Pick::SketchCurve { .. } | Pick::SketchPoint { .. } => None,
     }
 }
 
@@ -2910,6 +3112,22 @@ impl AppState {
     /// Das geöffnete Skizzen-Feature.
     pub fn open_sketch_id(&self) -> Option<FeatureId> {
         self.sketch_session.as_ref().map(|s| s.sketch)
+    }
+
+    /// Schnittebene von Slice (Skizzen 12, [`planora_render::slice_plane`]): nur bei geöffneter
+    /// Skizze mit Haken `SketchDisplay::slice`. Die Ebene ist die Skizzenebene (`frame`, auch bei
+    /// 3D-Skizzen); die Seite folgt der Kamera dieses Augenblicks.
+    pub fn active_slice(&self) -> Option<[f32; 4]> {
+        let id = self.open_sketch_id()?;
+        if !self.document.sketch_display(id).slice {
+            return None;
+        }
+        let frame = *self.sketch_draft.as_ref()?.sketch.frame();
+        Some(planora_render::slice_plane(
+            frame.origin,
+            frame.z,
+            self.camera.eye().as_dvec3(),
+        ))
     }
 
     /// Legt ein leeres Skizzen-Feature „Skizze N“ auf der Ebene `plane` am Marker an. Bei
@@ -3121,8 +3339,10 @@ impl AppState {
     /// Netz-Körpers) gibt nur eine Meldung; der Modus bleibt.
     pub fn pick_sketch_plane(&mut self, click: crate::plane_dialog::PlaneClick) {
         use crate::plane_dialog::PlaneClick;
-        let Some(PendingPick::SketchPlane(sketch)) = self.pending_pick else {
-            return;
+        let sketch = match self.pending_pick {
+            Some(PendingPick::SketchPlane(sketch)) => sketch,
+            Some(PendingPick::NewSketch) => return self.pick_new_sketch_plane(click),
+            None => return,
         };
         let plane = match click {
             PlaneClick::Standard(p) => SketchPlane::Standard(p),
@@ -3139,6 +3359,97 @@ impl AppState {
         };
         self.cancel_pending_pick();
         let _ = self.redefine_sketch_plane(sketch, plane);
+    }
+
+    /// „Skizze erstellen“ (wie Fusion „Create Sketch“, ein Rückgängig-Schritt). Ist eine
+    /// Grundebene, eine Konstruktionsebene oder eine ebene Fläche gewählt, entsteht die Skizze
+    /// sofort darauf und wird geöffnet (`Ok(Some(id))`). Sonst wird die Auswahl geleert und der
+    /// Wahlmodus [`PendingPick::NewSketch`] beginnt (`Ok(None)`). Eine offene Skizze wird zuerst
+    /// geschlossen; scheitert das oder ist die Vorauswahl gesperrt, kommt der Grund zurück (auch
+    /// in `message`) und es gibt keinen Wahlmodus.
+    pub fn start_create_sketch(&mut self) -> Result<Option<FeatureId>, String> {
+        self.try_close_sketch()?;
+        self.message = None;
+        let origin = self.selected_origin_plane();
+        let plane = self.selected_plane();
+        let face = match self.selection {
+            Some(Pick::Face(FaceRef { body, face })) => self
+                .bodies
+                .get(body)
+                .is_some_and(|b| plane_of_face(&b.solid, face).is_some())
+                .then_some((body, face)),
+            _ => None,
+        };
+        if origin.is_some() || plane.is_some() || face.is_some() {
+            if let Some(why) = self.sketch_on_face_blocked() {
+                return self.fail(why);
+            }
+            self.end_pick_modes();
+            let made = match (origin, plane, face) {
+                (Some(p), _, _) => self.add_sketch(SketchPlane::Standard(p)),
+                (None, Some(id), _) => self.new_sketch_on_plane(id),
+                (None, None, Some((body, face))) => self.new_sketch_on_face(body, face),
+                (None, None, None) => unreachable!("checked above"),
+            }?;
+            // Die Vorauswahl ist verbraucht (wie Fusion): Nach „Skizze beenden“ ist nichts
+            // gewählt, der nächste Aufruf wählt neu.
+            self.selected_feature = None;
+            self.selected_body = None;
+            self.selected_origin = None;
+            self.set_selection(None);
+            self.open_sketch(made)?;
+            return Ok(Some(made));
+        }
+        self.end_pick_modes();
+        self.selected_feature = None;
+        self.selected_body = None;
+        self.selected_origin = None;
+        self.set_selection(None);
+        self.pending_pick = Some(PendingPick::NewSketch);
+        Ok(None)
+    }
+
+    /// Beendet die Klickmodi der Ansicht (Ebenen-Fenster, Kanten markieren, Wahlmodus), bevor
+    /// „Skizze erstellen“ wirkt. Erst nach den Prüfungen, damit ein abgelehnter Aufruf nichts
+    /// ändert.
+    fn end_pick_modes(&mut self) {
+        self.plane_pick = None;
+        self.edge_picking = false;
+        self.clear_edge_marks();
+        self.cancel_pending_pick();
+    }
+
+    /// Ein Klick im Wahlmodus „Skizze erstellen“: Grundebene, Konstruktionsebene oder ebene
+    /// Fläche legt die Skizze an, öffnet sie und beendet den Modus (auch wenn das Dokument
+    /// ablehnt, dann mit Meldung). Eine gekrümmte Fläche (oder eine Fläche eines Netz-Körpers)
+    /// gibt nur eine Meldung; der Modus bleibt.
+    fn pick_new_sketch_plane(&mut self, click: crate::plane_dialog::PlaneClick) {
+        use crate::plane_dialog::PlaneClick;
+        if let PlaneClick::View(Pick::Face(f)) = click
+            && let Err(e) = self.face_ref_for_sketch(f.body, f.face)
+        {
+            self.message = Some(e);
+            return;
+        }
+        let made = match click {
+            PlaneClick::Standard(p) => {
+                self.cancel_pending_pick();
+                self.add_sketch(SketchPlane::Standard(p))
+            }
+            PlaneClick::View(Pick::Plane(id)) => {
+                self.cancel_pending_pick();
+                self.new_sketch_on_plane(id)
+            }
+            PlaneClick::View(Pick::Face(f)) => {
+                self.cancel_pending_pick();
+                self.new_sketch_on_face(f.body, f.face)
+            }
+            // Kanten und Eckpunkte wählt der Filter nicht.
+            PlaneClick::View(_) => return,
+        };
+        if let Ok(id) = made {
+            let _ = self.open_sketch(id);
+        }
     }
 
     /// Verweis auf die ebene Fläche `face` des sichtbaren Körpers `body` für eine Skizze; sonst
@@ -3245,6 +3556,7 @@ impl AppState {
         // Jede geöffnete Skizze beginnt mit einem eigenen, leeren Verlauf (R10).
         self.sketch_history = Some(History::new(draft.clone(), sketch_bytes(&draft)));
         self.sketch_draft = Some(draft);
+        self.sync_sketch_display();
         self.selected_feature = Some(id);
         // Senkrecht auf die Ebene blicken, dann mittig in das freie Rechteck einpassen. Die
         // Kamera kennt hier noch das freie Rechteck des vorigen Bildes (Modellmodus); die
@@ -3416,6 +3728,19 @@ impl AppState {
     pub fn session_sketch(&self) -> Option<&Sketch> {
         self.sketch_session.as_ref()?;
         self.sketch_draft.as_ref().map(|d| &d.sketch)
+    }
+
+    /// Übernimmt die Anzeigeschalter der geöffneten Skizze (Dokument) und die Kopien ihres
+    /// Entwurfs in die Sitzung (Skizzen 12), damit Wählen, Rahmenauswahl und Fang auslassen, was
+    /// die Schalter ausblenden. Je Bild vor den Eingaben ([`crate::sketch_view::show_overlay`])
+    /// und beim Öffnen; ohne offene Skizze nichts.
+    pub fn sync_sketch_display(&mut self) {
+        let filter = crate::sketch_view::DisplayFilter::of_open(self);
+        if let Some(se) = self.sketch_session.as_mut()
+            && se.display != filter
+        {
+            se.display = filter;
+        }
     }
 
     /// Sitzung und Entwurfsskizze gemeinsam (für die Werkzeuge des Skizzen-Modus).

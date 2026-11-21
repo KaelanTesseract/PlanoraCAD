@@ -861,11 +861,25 @@ fn warnings_in_place() {
         shot.dlg(&planora_app::sheet_dialog::cut_warning(), rect)
             .is_empty()
     );
+    let creator_before = shot.dlg("Erstellt", rect)[0].rect;
 
     // 80 × „W“ im Feld Eigentümer: zu breit für das Feld im Schriftfeld.
     let field = pos2(label.left() + 250.0, label.center().y);
     h.click(field);
-    h.typed(&"W".repeat(80));
+    // Erstes Zeichen: „Eigentümer fehlt“ fällt weg, die Felder darunter bleiben stehen.
+    h.typed("W");
+    let rect = h.dialog_rect().unwrap();
+    let shot = h.settle();
+    assert!(
+        shot.dlg(&planora_app::sheet_dialog::owner_missing(), rect)
+            .is_empty()
+    );
+    let creator_now = shot.dlg("Erstellt", rect)[0].rect;
+    assert!(
+        (creator_now.top() - creator_before.top()).abs() < 0.5,
+        "„Erstellt“ springt nach dem ersten Zeichen nicht: {creator_before:?} → {creator_now:?}"
+    );
+    h.typed(&"W".repeat(79));
     let rect = h.dialog_rect().unwrap();
     let shot = h.settle();
     let label = shot.dlg("Eigentümer", rect)[0].rect;
@@ -873,6 +887,13 @@ fn warnings_in_place() {
         shot.dlg(&planora_app::sheet_dialog::owner_missing(), rect)
             .is_empty(),
         "Eigentümer ist jetzt eingetragen"
+    );
+    // Doku-Runde 0.0.2-dev.3: Fällt die Warnung weg, bleibt ihre Zeile frei, und die Felder
+    // darunter springen nicht (sonst ginge der nächste Klick ins falsche Feld).
+    let creator_after = shot.dlg("Erstellt", rect)[0].rect;
+    assert!(
+        (creator_after.top() - creator_before.top()).abs() < 0.5,
+        "„Erstellt“ springt nicht: {creator_before:?} → {creator_after:?}"
     );
     let cut = shot.dlg(&planora_app::sheet_dialog::cut_warning(), rect);
     assert_eq!(cut.len(), 1, "nur dieses Feld ist zu lang");

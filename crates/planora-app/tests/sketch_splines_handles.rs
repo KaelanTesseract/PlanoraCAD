@@ -295,9 +295,10 @@ fn a_tool_change_takes_over_the_drag_of_a_fit_point_with_a_handle() {
     assert_eq!(undo_len(&s), steps + 1);
 }
 
-/// Der Rho-Griff ist immer da: Es gibt nichts einzuschalten, also ist es ein gewöhnlicher Zug.
+/// Der Rho-Griff ist immer da, der Werkzeugwechsel nimmt den Zug aber wie am Drehgriff des Textes
+/// zurück (Skizzen 12 Task 11, Verhalten nach Fusion prüft Handtest 3): Wert wie vorher, kein Schritt.
 #[test]
-fn a_tool_change_takes_over_the_rho_drag() {
+fn a_tool_change_reverts_the_rho_drag() {
     let (mut s, c) = conic_sketch(0.5);
     select(&mut s, &[Item::Curve(c)]);
     let at = conic_shoulder(v(0.0, 0.0), v(10.0, 12.0), v(20.0, 0.0), 0.5);
@@ -305,10 +306,8 @@ fn a_tool_change_takes_over_the_rho_drag() {
     assert!(begin(&mut s, at));
     drag(&mut s, at + v(0.0, 2.4));
     change_tool(&mut s);
-    assert!((rho_of(&s, c) - 0.7).abs() < 1e-9);
-    assert_eq!(undo_len(&s), steps + 1);
-    assert!(s.undo_sketch());
     assert_eq!(rho_of(&s, c), 0.5);
+    assert_eq!(undo_len(&s), steps);
 }
 
 /// Der erste Zug schaltet erst ein und bleibt beim Werkzeugwechsel nie halb stehen, auch nicht, wenn
@@ -1565,15 +1564,26 @@ impl Rig {
         let out = self.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
         let mut n = 0;
         let along = to - from;
+        let mut on = |p: Pos2| {
+            let t = (p - from).dot(along) / along.length_sq();
+            if (0.0..=1.0).contains(&t) && (from + along * t).distance(p) < 0.7 {
+                n += 1;
+            }
+        };
         for c in &out.shapes {
-            stroke_points(&c.shape, &mut |p| {
-                let t = (p - from).dot(along) / along.length_sq();
-                if (0.0..=1.0).contains(&t) && (from + along * t).distance(p) < 0.7 {
-                    n += 1;
-                }
-            });
+            stroke_points(&c.shape, &mut on);
         }
+        // Die Linien der geöffneten Skizze zeichnet die GPU (Skizzen 12): die Kantenmitten
+        // ihrer Dreiecke liegen auf der Mittellinie.
+        let view = view_rect(&out.shapes);
         out.drop_without_applying_deltas();
+        if let Some(view) = view {
+            for (t, _) in gpu_triangles(self.st(), view) {
+                for i in 0..3 {
+                    on(t[i].lerp(t[(i + 1) % 3], 0.5));
+                }
+            }
+        }
         n
     }
 
@@ -1588,10 +1598,26 @@ impl Rig {
         let mut f = eframe::Frame::_new_kittest();
         let app = &mut self.app;
         let out = self.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
-        let n = out.shapes.iter().map(|c| shape_count(&c.shape)).sum();
+        let n: usize = out.shapes.iter().map(|c| shape_count(&c.shape)).sum();
+        let view = view_rect(&out.shapes);
         out.drop_without_applying_deltas();
-        n
+        // Dazu die Dreiecke der GPU-Linien der geöffneten Skizze (Skizzen 12).
+        n + view.map_or(0, |v| gpu_triangles(self.st(), v).len())
     }
+}
+
+/// Rechteck der 3D-Ansicht: das des Malaufrufs der GPU.
+fn view_rect(shapes: &[egui::epaint::ClippedShape]) -> Option<Rect> {
+    shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Callback(cb) => Some(cb.rect),
+        _ => None,
+    })
+}
+
+/// Dreiecke der GPU-Linien und -Flächen der geöffneten Skizze auf dem Bildschirm.
+fn gpu_triangles(s: &AppState, view: Rect) -> Vec<([Pos2; 3], [f32; 4])> {
+    let v = planora_app::testing::open_strokes(s, view);
+    planora_app::testing::stroke_triangles(&v, view, true)
 }
 
 /// Unsichtbar heißt auch: nicht gezeichnet. Ein Griff ohne Auswahl ändert das Bild nicht; mit Auswahl
@@ -1656,7 +1682,7 @@ fn a_finished_sketch_shows_only_constrained_handles() {
         }
         s.observe_sketch(false);
         s.close_sketch();
-        planora_app::sketch_view::finished_sketch_shapes(&s, rect).len()
+        planora_app::testing::finished_strokes(&s, rect).len()
     };
     let plain = shapes(false, false);
     assert!(plain > 0);

@@ -162,9 +162,17 @@ impl SlotKind {
     pub fn filter(self) -> PickFilter {
         match self {
             SlotKind::Base => PickFilter::BASES,
-            SlotKind::Axis => PickFilter::EDGES,
+            // Achse: nur Skizzenkurven, Punkt: nur Skizzenpunkte fertiger Skizzen (Skizzen 12); so trifft
+            // ein Klick nahe dem Linienende die Linie.
+            SlotKind::Axis => PickFilter {
+                sketch_curves: true,
+                ..PickFilter::EDGES
+            },
             SlotKind::Face => PickFilter::FACES,
-            SlotKind::Point => PickFilter::VERTICES,
+            SlotKind::Point => PickFilter {
+                sketch_points: true,
+                ..PickFilter::VERTICES
+            },
         }
     }
 
@@ -535,6 +543,30 @@ impl PlaneDialog {
                     .map(|r| SlotValue::Point(PointRef::EdgeEnd { edge: r, end }))
                     .map_err(|e| Msg::Raw(e.to_string()))
             }
+            (SlotKind::Axis, PlaneClick::View(Pick::SketchCurve { sketch, curve })) => {
+                // Nur gerade Linien geben eine Achse (Bögen, Kreise, Splines nicht).
+                let is_line = state
+                    .document
+                    .sketch_of(sketch)
+                    .and_then(|sk| sk.curve_world(curve))
+                    .is_some_and(|(c, ..)| matches!(c, planora_kernel::Curve::Line { .. }));
+                if is_line {
+                    Ok(SlotValue::Axis(AxisRef::SketchLine { sketch, curve }))
+                } else {
+                    Err(wrong())
+                }
+            }
+            (SlotKind::Point, PlaneClick::View(Pick::SketchPoint { sketch, point })) => {
+                let exists = state
+                    .document
+                    .sketch_of(sketch)
+                    .is_some_and(|sk| sk.point_xy(point).is_ok());
+                if exists {
+                    Ok(SlotValue::Point(PointRef::SketchPoint { sketch, point }))
+                } else {
+                    Err(wrong())
+                }
+            }
             _ => Err(wrong()),
         }
     }
@@ -549,6 +581,15 @@ impl PlaneDialog {
         let Some(own) = doc.index_of(e.id) else {
             return false;
         };
+        // Skizzen sind Features mit eigener Kennung; spätere gibt es an der Stelle noch nicht.
+        let sketch = match v {
+            SlotValue::Axis(AxisRef::SketchLine { sketch, .. })
+            | SlotValue::Point(PointRef::SketchPoint { sketch, .. }) => Some(*sketch),
+            _ => None,
+        };
+        if let Some(sk) = sketch {
+            return doc.index_of(sk).is_none_or(|i| i >= own);
+        }
         let origins: Vec<u64> = match v {
             SlotValue::Base(PlaneBase::Face(r)) | SlotValue::Face(r) => vec![r.origin],
             SlotValue::Axis(AxisRef::Edge(r))

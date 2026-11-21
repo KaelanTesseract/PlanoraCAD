@@ -34,7 +34,7 @@
 PlanoraCAD is a free program for designing parts in 3D on your computer: brackets, housings, spare parts or parts for 3D printing. You draw a sketch with dimensions, turn it into a solid and derive a technical drawing from it. Every step is recorded. If you change a dimension later, the program recalculates everything that builds on it.
 
 > [!NOTE]
-> **Early test version.** The current version is `0.0.2-dev.2` (developer channel). Windows (64-bit) gets a ready-made installer; on Ubuntu you build the program yourself. It is meant for trying out, not yet for everyday work. Expect bugs and keep extra copies of important projects. All [feedback](#reporting-bugs-and-wishes) is welcome.
+> **Early test version.** The current version is `0.0.2-dev.4` (developer channel). Windows (64-bit) gets a ready-made installer; on Ubuntu you build the program yourself. It is meant for trying out, not yet for everyday work. Expect bugs and keep extra copies of important projects. All [feedback](#reporting-bugs-and-wishes) is welcome.
 
 ## Contents
 
@@ -52,13 +52,17 @@ PlanoraCAD is a free program for designing parts in 3D on your computer: bracket
 ## What PlanoraCAD can do
 
 **Sketches**
+- Start a sketch with one click: "Create Sketch" shows the origin planes to choose from, and you click a plane or a flat face.
 - Draw lines, rectangles, circles, arcs, polygons, slots, ellipses, splines and conics, many of them in several ways.
 - Type dimensions while you draw. Rules such as "horizontal", "parallel" or "tangent" are added automatically.
-- Round corners, trim, extend and offset curves, move, rotate and mirror parts of a sketch.
+- Round corners, trim, extend and offset curves, connect two ends smoothly, move, rotate and mirror parts of a sketch.
+- Copy, cut and paste, also into another sketch.
+- The program shows whether a sketch is fully defined and finds what can still move.
 - Rectangular and circular patterns that you can still change later.
-- Text in a frame or along a curve, using the fonts on your computer.
-- Project edges of a solid into the sketch, insert DXF and SVG files and place a photo as a template.
+- Text in a frame or along a curve, using the fonts on your computer. Height and content can use parameters.
+- Project edges of a solid into the sketch, insert DXF and SVG files and place a photo as a template. Sketches can also be saved as DXF.
 - 3D sketches: draw curves freely in space, for example a cable route.
+- Organize sketches in groups and choose per sketch what is shown. Solids hide the sketch behind them, and "Slice" cuts away what is in front.
 
 **Solids**
 - Extrude sketches or revolve them around an axis. Box, cylinder, sphere and cone are built in.
@@ -96,7 +100,7 @@ All the details are in the [manual](https://dennis-guse.de/en/planoracad/wiki/).
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/bilder/skizze-muster-en.webp" alt="Sketch of a plate with holes arranged in a circle around the center"><br><sub>Circular pattern in a sketch</sub></td>
+    <td width="50%"><img src="docs/bilder/skizze-muster-en.webp" alt="Sketch with a large circle and six small circles arranged in a circle around the center"><br><sub>Circular pattern in a sketch</sub></td>
     <td width="50%"><img src="docs/bilder/skizze-text-en.webp" alt="The text “GARTENHAUS 2026” follows an arc"><br><sub>Text along a curve</sub></td>
   </tr>
   <tr>

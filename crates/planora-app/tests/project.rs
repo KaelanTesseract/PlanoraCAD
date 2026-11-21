@@ -823,3 +823,21 @@ fn strip_still_fits_1080() {
     });
     assert_eq!(en, ("Project/Include".to_string(), "Project".to_string()));
 }
+
+#[test]
+fn escape_ending_project_clears_its_message() {
+    // Doku-Runde 0.0.2-dev.3: „Nothing new …“ blieb nach Esc stehen. Esc beendet Projizieren wie
+    // in Fusion, und mit dem Befehl geht seine Meldung.
+    let mut s = box_with_sketch_on_top();
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::ProjectEdge);
+    }
+    s.project_into_sketch(ProjectTarget::Body(0), true).unwrap();
+    assert!(s.project_into_sketch(ProjectTarget::Body(0), true).is_err());
+    assert!(s.sketch_session.as_ref().unwrap().message.is_some());
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    se.cancel(sk);
+    assert_eq!(se.tool, Tool::Select);
+    assert!(se.message.is_none(), "{:?}", se.message);
+}

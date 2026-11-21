@@ -26,6 +26,7 @@ pub mod linalg;
 pub mod model;
 pub mod offset;
 pub mod pattern;
+pub(crate) mod pattern_cycles;
 pub mod profile;
 pub(crate) mod profile_legacy;
 pub(crate) mod profile_ref;

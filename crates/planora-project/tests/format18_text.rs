@@ -131,7 +131,7 @@ fn edited(f: impl FnOnce(&mut serde_json::Value)) -> String {
 
 #[test]
 fn format_version_is_18() {
-    assert_eq!(FORMAT_VERSION, 22);
+    assert_eq!(FORMAT_VERSION, 23);
 }
 
 #[test]
@@ -329,10 +329,10 @@ fn format_17_file_with_text_rejected() {
 }
 
 #[test]
-fn format_23_is_too_new() {
-    let text = encoded().replacen("\"format\": 18", "\"format\": 23", 1);
+fn format_24_is_too_new() {
+    let text = encoded().replacen("\"format\": 18", "\"format\": 24", 1);
     let e = decode_version(&text, "x.json").unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 23, .. }), "{e:?}");
+    assert!(matches!(e, ProjectError::TooNew { found: 24, .. }), "{e:?}");
 }
 
 /// Verdirbt den ersten Texteintrag einer Datei.

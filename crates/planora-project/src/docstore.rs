@@ -133,6 +133,24 @@ impl DocumentInfo {
 }
 
 /// Zweigname: getrimmt nicht leer, höchstens 60 Zeichen, keine Steuerzeichen.
+/// Der Name des Zweigs `name` für die Oberfläche: Der Hauptzweig ([`MAIN_BRANCH`], in der Datei
+/// immer „Haupt“) heißt in der Sprache der Oberfläche („Main“ auf Englisch, wie in Fusion), alle
+/// anderen Zweige wie gespeichert.
+pub fn branch_label(name: &str) -> String {
+    if name == MAIN_BRANCH {
+        tr!("branch-main")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Sähe ein neuer Zweig `name` aus wie der Hauptzweig (die Kennung oder ihr angezeigter Name,
+/// ohne Rücksicht auf Groß- und Kleinschreibung)?
+fn looks_like_main(name: &str) -> bool {
+    let n = name.trim().to_lowercase();
+    n == MAIN_BRANCH.to_lowercase() || n == branch_label(MAIN_BRANCH).to_lowercase()
+}
+
 pub fn branch_name_ok(n: &str) -> bool {
     !n.trim().is_empty()
         && n == n.trim()
@@ -550,7 +568,10 @@ impl DocStore {
                     // Mit Zweigname und ohne Ausgangsversion: neuer Zweig ab der Spitze des
                     // aktiven Zweigs (der Name wird nie stillschweigend ignoriert).
                     Some(name) => {
-                        if !branch_name_ok(name) || self.info.branches.contains_key(name) {
+                        if !branch_name_ok(name)
+                            || self.info.branches.contains_key(name)
+                            || looks_like_main(name)
+                        {
                             return Err(ProjectError::InvalidName(tr!("proj-branch-name-invalid")));
                         }
                         (tip, name.to_string())
@@ -564,7 +585,10 @@ impl DocStore {
                 })?;
                 match new_branch {
                     Some(name) => {
-                        if !branch_name_ok(name) || self.info.branches.contains_key(name) {
+                        if !branch_name_ok(name)
+                            || self.info.branches.contains_key(name)
+                            || looks_like_main(name)
+                        {
                             return Err(ProjectError::InvalidName(tr!("proj-branch-name-invalid")));
                         }
                         (Some(n), name.to_string())
@@ -579,10 +603,9 @@ impl DocStore {
 
     pub fn restore(&mut self, version: u32, onto_branch: &str) -> Result<u32> {
         self.ensure_lock()?;
-        let tip = self
-            .info
-            .tip(onto_branch)
-            .ok_or_else(|| ProjectError::NotFound(tr!("proj-branch-label", name = onto_branch)))?;
+        let tip = self.info.tip(onto_branch).ok_or_else(|| {
+            ProjectError::NotFound(tr!("proj-branch-label", name = branch_label(onto_branch)))
+        })?;
         let snapshot = self.load_version(version)?;
         self.append(
             Some(tip),
@@ -645,7 +668,7 @@ impl DocStore {
         if !self.info.branches.contains_key(name) {
             return Err(ProjectError::NotFound(tr!(
                 "proj-branch-label",
-                name = name
+                name = branch_label(name)
             )));
         }
         let mut info = self.info.clone();
@@ -708,7 +731,7 @@ impl DocStore {
         if !self.info.branches.contains_key(name) {
             return Err(ProjectError::NotFound(tr!(
                 "proj-branch-label",
-                name = name
+                name = branch_label(name)
             )));
         }
         if self.info.active_branch == name {

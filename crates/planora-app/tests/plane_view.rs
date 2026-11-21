@@ -4,7 +4,6 @@
 
 use egui::{Rect, pos2};
 use glam::{Vec2, Vec3};
-use planora_app::sketch_view;
 use planora_app::state::{AppState, PickFilter, StandardPlane};
 use planora_feature::planes::{PlaneBase, PlaneDef, PlaneFeature};
 use planora_feature::{FaceRef, FeatureId, FeatureKind, FeatureStatus};
@@ -170,24 +169,24 @@ fn suppressed_plane_not_drawn() {
     look_from_above(&mut s, Vec3::new(10.0, 10.0, 10.0));
     let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(VIEWPORT.x, VIEWPORT.y));
     assert!(s.plane_rect(plane).is_some());
-    assert_eq!(sketch_view::plane_shapes(&s, rect).len(), 1);
+    assert_eq!(planora_app::testing::plane_count(&s, rect), 1);
     let at = screen(&s, Vec3::new(-15.0, 10.0, 30.0));
 
     // Unterdrückt: nicht gezeichnet, nicht anklickbar.
     s.document.set_suppressed(plane, true).unwrap();
     s.refresh();
     assert!(s.plane_rect(plane).is_none());
-    assert!(sketch_view::plane_shapes(&s, rect).is_empty());
+    assert!(planora_app::testing::plane_strokes(&s, rect).is_empty());
     assert_eq!(s.pick(at, VIEWPORT), None);
     s.document.set_suppressed(plane, false).unwrap();
     s.refresh();
-    assert_eq!(sketch_view::plane_shapes(&s, rect).len(), 1);
+    assert_eq!(planora_app::testing::plane_count(&s, rect), 1);
 
     // Zurückgerollt (Marker vor der Ebene): ebenfalls nicht.
     s.document.set_marker(1).unwrap();
     s.refresh();
     assert!(s.plane_rect(plane).is_none());
-    assert!(sketch_view::plane_shapes(&s, rect).is_empty());
+    assert!(planora_app::testing::plane_strokes(&s, rect).is_empty());
 }
 
 #[test]
@@ -287,13 +286,13 @@ fn plane_selected_in_browser_is_highlighted() {
     look_from_above(&mut s, Vec3::new(10.0, 10.0, 10.0));
     let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(VIEWPORT.x, VIEWPORT.y));
     let col = planora_app::theme::sketch_colors(s.dark);
-    let fill = |s: &AppState| match &sketch_view::plane_shapes(s, rect)[..] {
-        [egui::Shape::Path(p)] => p.fill,
-        other => panic!("eine Fläche erwartet: {other:?}"),
+    let fill = |s: &AppState, c: egui::Color32| {
+        planora_app::testing::fill_triangles(&planora_app::testing::plane_strokes(s, rect), c)
     };
     assert!(!s.plane_highlighted(plane));
-    assert_eq!(fill(&s), col.plane_fill);
+    assert_eq!(fill(&s, col.plane_fill), 2, "eine Fläche");
     s.selected_feature = Some(plane);
     assert!(s.plane_highlighted(plane));
-    assert_eq!(fill(&s), col.plane_fill_active);
+    assert_eq!(fill(&s, col.plane_fill_active), 2);
+    assert_eq!(fill(&s, col.plane_fill), 0);
 }

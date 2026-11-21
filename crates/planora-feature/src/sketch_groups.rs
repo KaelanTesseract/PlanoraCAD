@@ -5,7 +5,7 @@
 use crate::error::FeatureError;
 use crate::model::{Document, FeatureId, FeatureKind};
 use planora_i18n::tr;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Dauerhafte Kennung einer Skizzengruppe; wird innerhalb eines Dokuments nicht wiederverwendet
 /// (siehe [`SketchGroups::next`]).
@@ -38,6 +38,33 @@ impl SketchGroups {
     }
 }
 
+/// Zwischenspeicher von [`Document::sketch_hidden_by_group`]: die durch Gruppen ausgeblendeten
+/// Skizzen zum Dokumentstand ([`Document::edit_count`]). Eine Kopie des Dokuments beginnt leer.
+#[derive(Default)]
+pub(crate) struct HiddenByGroup(std::sync::Mutex<Option<(u64, BTreeSet<FeatureId>)>>);
+
+impl HiddenByGroup {
+    /// Verwirft den Inhalt (wenn ein Zähler zurückgesetzt wird).
+    pub(crate) fn clear(&self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+}
+
+impl Clone for HiddenByGroup {
+    fn clone(&self) -> Self {
+        HiddenByGroup::default()
+    }
+}
+
+impl std::fmt::Debug for HiddenByGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HiddenByGroup")
+    }
+}
+
 /// Was sich in eine Skizzengruppe legen lässt: eine Skizze oder eine andere Gruppe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupItem {
@@ -49,6 +76,43 @@ impl SketchGroups {
     /// Die Gruppe mit der Kennung `id`.
     pub fn group(&self, id: SketchGroupId) -> Option<&SketchGroup> {
         self.groups.iter().find(|g| g.id == id)
+    }
+
+    /// Ist die Gruppe `start` selbst oder eine Gruppe auf dem Weg nach oben ausgeblendet? Eine
+    /// unbekannte Gruppe oder ein Kreis zählt als sichtbar.
+    fn hidden_upwards(&self, start: SketchGroupId) -> bool {
+        let mut at = Some(start);
+        let mut steps = 0;
+        while let Some(gid) = at {
+            let Some(x) = self.group(gid) else {
+                return false;
+            };
+            if x.hidden {
+                return true;
+            }
+            steps += 1;
+            if steps > self.groups.len() {
+                return false;
+            }
+            at = x.parent;
+        }
+        false
+    }
+
+    /// Alle Skizzen, die eine Gruppe auf dem Weg nach oben ausblendet (ihr eigenes Auge zählt
+    /// nicht).
+    fn hidden_members(&self) -> BTreeSet<FeatureId> {
+        let hidden: BTreeSet<SketchGroupId> = self
+            .groups
+            .iter()
+            .map(|g| g.id)
+            .filter(|&g| self.hidden_upwards(g))
+            .collect();
+        self.member
+            .iter()
+            .filter(|(_, g)| hidden.contains(g))
+            .map(|(&f, _)| f)
+            .collect()
     }
 
     /// Prüft die Stimmigkeit: Kennungen eindeutig, übergeordnete Gruppen vorhanden und ohne
@@ -303,24 +367,30 @@ impl Document {
 
     /// Ist die Skizze durch eine Gruppe auf dem Weg nach oben ausgeblendet? Das eigene Auge der
     /// Skizze zählt hier nicht.
+    ///
+    /// Läuft je Bild für jede Skizze (Browser, Ansicht, Wahl). Darum gilt ein Zwischenspeicher der
+    /// so ausgeblendeten Skizzen je Dokumentstand ([`Document::edit_count`]; jede Änderung an
+    /// Gruppen, auch Rückgängig/Wiederholen und das Auge einer Gruppe, zählt dort mit), statt bei
+    /// jedem Aufruf die Gruppenkette hochzulaufen (Skizzen 12, Task 12).
     pub fn sketch_hidden_by_group(&self, id: FeatureId) -> bool {
-        let g = &self.sketch_groups;
-        let mut at = g.member.get(&id).copied();
-        let mut steps = 0;
-        while let Some(gid) = at {
-            let Some(x) = g.group(gid) else {
-                return false;
-            };
-            if x.hidden {
-                return true;
-            }
-            steps += 1;
-            if steps > g.groups.len() {
-                return false;
-            }
-            at = x.parent;
+        if self.sketch_groups.member.is_empty() {
+            return false;
         }
-        false
+        let stamp = self.edit_count();
+        let mut cache = self
+            .hidden_by_group
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &*cache {
+            Some((s, hidden)) if *s == stamp => hidden.contains(&id),
+            _ => {
+                let hidden = self.sketch_groups.hidden_members();
+                let out = hidden.contains(&id);
+                *cache = Some((stamp, hidden));
+                out
+            }
+        }
     }
 
     /// Prüft die Skizzengruppen eines Bildes vor dem Übernehmen (Laden und Rückgängig).

@@ -1100,6 +1100,7 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let boolean_blocked = app.ws.active_tab().state.boolean_blocked();
     let blend_blocked = app.ws.active_tab().state.blend_blocked();
     let mut command = None;
+    let mut create_sketch = false;
     let mut seen: Vec<(String, egui::Rect)> = Vec::new();
     let mut chips_end = 0.0;
     field(ctx, bottom_id(), rects.bottom.min, frame, |ui| {
@@ -1137,6 +1138,30 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                     }
                     ui.separator();
                     chips_end = ui.cursor().left() - start;
+                    // „Skizze erstellen“ vorn wie in der Werkzeugleiste von Fusion.
+                    {
+                        let label = Action::CreateSketch.label();
+                        let r = ui
+                            .add_enabled_ui(lock.is_none(), |ui| {
+                                icons::source_icon_button(
+                                    ui,
+                                    icons::IconSource::Font(icons::Icon::SketchOnPlane),
+                                    &label,
+                                    dark,
+                                )
+                            })
+                            .inner;
+                        let tip = keymap::with_hint(&app.ws.keymap, Action::CreateSketch, &label);
+                        let r = match &lock {
+                            Some(why) => explain(r, &tip, why),
+                            None => r.on_hover_text(tip),
+                        };
+                        if r.clicked() {
+                            create_sketch = true;
+                        }
+                        seen.push((label, r.rect));
+                    }
+                    ui.separator();
                     type Item = (
                         String,
                         icons::IconSource,
@@ -1196,6 +1221,9 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
         Some(Command::Create(kind)) => app::run_create(&mut app.ws, kind),
         Some(Command::Blend(chamfer)) => app::run_blend(&mut app.ws, chamfer),
         None => {}
+    }
+    if create_sketch {
+        crate::commands::run_action(&mut app.ws, Action::CreateSketch);
     }
 }
 
