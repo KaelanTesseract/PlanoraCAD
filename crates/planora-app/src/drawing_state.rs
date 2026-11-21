@@ -198,7 +198,10 @@ impl std::fmt::Debug for DrawingUi {
 /// Welche der Körper das Auge im Browser zeigt (Zeichnungen lassen ausgeblendete weg, wie
 /// Fusion).
 fn shown_bodies(bodies: &[Body], document: &Document) -> Vec<bool> {
-    bodies.iter().map(|b| document.body_shown(b.source)).collect()
+    bodies
+        .iter()
+        .map(|b| document.body_shown(b.source))
+        .collect()
 }
 
 fn exact_copies(bodies: &[Body], shown: &[bool]) -> Vec<(String, Solid)> {

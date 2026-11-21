@@ -1520,6 +1520,10 @@ fn hidden_bodies_do_not_appear_in_the_preview() {
     let mut v = f.document.visibility().clone();
     v.folders.bodies = true;
     f.document.set_visibility(v);
-    let t = build(&doc_in(&lib, "Ordner", &f), &key1(), &BuildLimits::default());
+    let t = build(
+        &doc_in(&lib, "Ordner", &f),
+        &key1(),
+        &BuildLimits::default(),
+    );
     assert!(matches!(t, Thumb::NoBodies), "{t:?}");
 }

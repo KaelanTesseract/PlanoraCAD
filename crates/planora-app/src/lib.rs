@@ -56,6 +56,7 @@ pub mod parameter_dialog;
 pub mod parts_section;
 pub mod places;
 pub mod plane_dialog;
+pub mod plane_grip;
 pub mod profile_pick;
 pub mod project_actions;
 pub mod project_tiles;

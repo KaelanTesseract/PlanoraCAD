@@ -744,6 +744,7 @@ impl FeatureDialog {
                 // Meldungen der Formelfelder stehen gesammelt unter dem Raster, damit sich die
                 // Felder nicht verschieben.
                 let mut errors = Vec::new();
+                let mut field_enter = false;
                 // Meldungen gespeicherter kaputter Formeln (unverändert): gezeigt, sperren aber
                 // „Übernehmen“ nicht, damit sich andere Felder ändern lassen.
                 let mut kept_broken = Vec::new();
@@ -765,6 +766,8 @@ impl FeatureDialog {
                                         .error_below(false)
                                         .label(label.as_str())
                                         .show(ui, &scope);
+                                        field_enter |=
+                                            crate::dialog::left_with_enter(ui, &out.response);
                                         if let Some(e) = out.error {
                                             let msg = tr!("field-error", label = &label, error = e);
                                             if is_kept_broken(saved, key, &f.text) {
@@ -844,7 +847,7 @@ impl FeatureDialog {
                 // Wie in Fusion: Eingabe übernimmt (wenn bereit), Esc bricht ab, solange kein
                 // Feld tippt; abgedockt zählt auch Esc im Hauptfenster.
                 let (enter, esc) = crate::surface_project_dialog::keys(ui, ready);
-                apply |= enter;
+                apply |= enter || (field_enter && ready);
                 cancel |= esc;
             });
         if let Some(sketch) = self.profile_sketch() {

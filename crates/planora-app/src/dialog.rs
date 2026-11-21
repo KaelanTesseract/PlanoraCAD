@@ -36,6 +36,12 @@ pub fn name_field(ui: &mut egui::Ui, id: egui::Id, name: &mut String) -> bool {
         ctx.memory_mut(|m| m.request_focus(id));
     }
     let r = theme::text_field(ui, egui::TextEdit::singleline(name).id(id));
+    left_with_enter(ui, &r)
+}
+
+/// Wurde das Feld mit der Antwort `r` in diesem Bild mit Enter verlassen? Wie in Fusion übernimmt
+/// ein Befehlsfenster dann (wenn es bereit ist), ohne zweites Enter.
+pub fn left_with_enter(ui: &egui::Ui, r: &egui::Response) -> bool {
     r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
 }
 

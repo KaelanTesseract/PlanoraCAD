@@ -275,7 +275,11 @@ fn build_unguarded(
     if mesh_solids(&solids, &mesh_of, &mut gate, &mut meshes).is_none() {
         return Thumb::TooComplex;
     }
-    for v in doc.visible_meshes().into_iter().filter(|v| doc.body_shown(v.body)) {
+    for v in doc
+        .visible_meshes()
+        .into_iter()
+        .filter(|v| doc.body_shown(v.body))
+    {
         // Vor dem Platzieren zählen: ein riesiges Netz wird gar nicht erst kopiert.
         if !gate.add(v.mesh.triangle_count()) {
             return Thumb::TooComplex;

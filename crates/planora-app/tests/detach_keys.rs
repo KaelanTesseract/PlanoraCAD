@@ -547,7 +547,10 @@ fn typing_in_undocked_field_counts_for_history() {
     let child = detach::viewport_id(rename);
     let field = center_of(&rig.screen.child_seen(child), "Neu");
     rig.click_child(child, field, PointerButton::Primary);
-    assert!(viewport::typing_for_history(&rig.screen.ctx), "auch nach Klick");
+    assert!(
+        viewport::typing_for_history(&rig.screen.ctx),
+        "auch nach Klick"
+    );
     rig.state().rename_draft = None;
     rig.settle(3);
     assert!(!viewport::typing_for_history(&rig.screen.ctx), "Fenster zu");
@@ -751,7 +754,10 @@ fn rename_field_has_the_keyboard_with_the_whole_name_marked() {
         }
         let focus = rig.screen.ctx.memory(|m| m.focused());
         let draft = rig.state().rename_draft.clone();
-        assert!(draft.is_none(), "{undocked}: Enter übernimmt {draft:?} {focus:?}");
+        assert!(
+            draft.is_none(),
+            "{undocked}: Enter übernimmt {draft:?} {focus:?}"
+        );
         assert_eq!(
             rig.state().document.feature(first).unwrap().name,
             "Platte",

@@ -1694,9 +1694,31 @@ fn esc_cancels_and_enter_confirms_the_create_and_edit_windows() {
     rig.retype("„Quader 1“ bearbeiten", "11", "30");
     rig.frame(vec![key(Key::Escape, Modifiers::NONE)]); // Feld verlassen
     rig.settle();
-    assert!(rig.tab().feature_dialog.is_some(), "Esc im Feld schließt nicht");
+    assert!(
+        rig.tab().feature_dialog.is_some(),
+        "Esc im Feld schließt nicht"
+    );
     rig.frame(vec![key(Key::Enter, Modifiers::NONE)]);
     rig.settle();
     assert!(rig.tab().feature_dialog.is_none(), "Eingabe übernimmt");
     assert_eq!(box_size(&rig.tab().state, f).x, 30.0);
+}
+
+#[test]
+fn enter_right_in_a_field_confirms_the_create_window() {
+    // Fusion: Wert tippen und Enter übernimmt den Befehl.
+    let mut rig = Rig::new(ws());
+    rig.tab().dialog = Some(CreateDialog::Box {
+        x: 11.0,
+        y: 12.0,
+        z: 13.0,
+    });
+    rig.settle();
+    rig.retype("Quader erzeugen", "11", "25");
+    rig.frame(vec![key(Key::Enter, Modifiers::NONE)]);
+    rig.settle();
+    let tab = rig.tab();
+    assert!(tab.dialog.is_none(), "ein Enter im Feld übernimmt");
+    let f = tab.state.document.features()[0].id;
+    assert_eq!(box_size(&tab.state, f).x, 25.0);
 }
