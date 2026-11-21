@@ -1,7 +1,7 @@
 //! Plug-in-Katalog Task 1: Katalog-Release und `katalog.json` lesen und prüfen. Ohne Netz.
 
 use planora_update::catalog::{
-    CATALOG_FORMAT, CatalogError, MAX_ENTRIES, latest_release_url, parse_catalog,
+    CATALOG_FORMAT, CacheIndex, CatalogError, MAX_ENTRIES, latest_release_url, parse_catalog,
     parse_latest_release,
 };
 use serde_json::json;
@@ -98,7 +98,9 @@ fn symbol_names_checked() {
         (r"a\b.png", None),
         ("x.gif", None),
         ("", None),
-        ("logo.svg", Some("logo.svg")),
+        // SVG kann das Programm nicht zeichnen (kein Rasterer): nur PNG.
+        ("logo.svg", None),
+        ("LOGO.PNG", Some("LOGO.PNG")),
         ("logo.png", Some("logo.png")),
     ] {
         let mut e = entry("a.b", "https://github.com/a/b");
@@ -136,6 +138,14 @@ fn asset(name: &str, size: u64, tag: &str) -> serde_json::Value {
 }
 
 #[test]
+fn symbol_files_are_png() {
+    let file = CacheIndex::symbol_file("logo.svg");
+    assert!(file.ends_with(".png"), "{file}");
+    assert!(CacheIndex::is_symbol_file(&file));
+    assert!(!CacheIndex::is_symbol_file(&file.replace(".png", ".svg")));
+}
+
+#[test]
 fn release_url() {
     assert_eq!(
         latest_release_url(),
@@ -153,6 +163,7 @@ fn release_parse() {
         "assets": [
             asset("katalog.json", 500, "katalog-1"),
             asset("logo.png", 1000, "katalog-1"),
+            asset("logo.svg", 1000, "katalog-1"),
             asset("riesig.png", 300 << 10, "katalog-1"),
             foreign,
             asset("notiz.txt", 5, "katalog-1"),

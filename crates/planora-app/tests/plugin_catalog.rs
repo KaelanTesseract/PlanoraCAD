@@ -3,7 +3,7 @@
 
 mod common;
 
-use planora_app::plugin_catalog::{Catalog, CatalogState, StaleReason};
+use planora_app::plugin_catalog::{Catalog, CatalogState, StaleReason, Symbol};
 use planora_app::plugins::Plugins;
 use planora_project::config::Config;
 use planora_update::catalog::{CATALOG_OWNER, CATALOG_REPO, latest_release_url};
@@ -166,7 +166,7 @@ fn loads_and_caches() {
     let CatalogState::Ready { symbols, .. } = c.state() else {
         unreachable!()
     };
-    assert_eq!(symbols.get("a.png").map(Vec::as_slice), Some(png));
+    assert_eq!(symbols.get("a.png").map(|s| s.bytes.as_slice()), Some(png));
     // Grenzen beim Laden: Release-Liste 4 MiB, katalog.json 1 MiB, Symbol 256 KiB, je 30 s.
     let calls = lock(&GEFRAGT).clone();
     let limit = |u: &str| {
@@ -297,11 +297,18 @@ fn only_named_symbols_loaded() {
         &katalog(
             1,
             &[
-                ("planora.a", Some("b.svg")),
+                ("planora.a", Some("b.png")),
                 ("planora.c", Some("fehlt.png")),
+                // SVG wird nicht angenommen und nicht geladen (kein Rasterer im Programm).
+                ("planora.d", Some("d.svg")),
             ],
         ),
-        &[("a.png", b"a"), ("b.svg", svg), ("c.png", b"c")],
+        &[
+            ("a.png", b"a"),
+            ("b.png", b"b"),
+            ("c.png", b"c"),
+            ("d.svg", svg),
+        ],
     );
     let mut c = Catalog::new(ordner("symbole"));
     holen(&mut c, netz, JETZT);
@@ -310,12 +317,21 @@ fn only_named_symbols_loaded() {
         .filter(|(u, _, _)| u.ends_with(".png") || u.ends_with(".svg"))
         .count();
     assert_eq!(downloads, 1);
-    assert_eq!(gefragt(&asset_url("b.svg")), 1);
-    let CatalogState::Ready { symbols, .. } = c.state() else {
+    assert_eq!(gefragt(&asset_url("b.png")), 1);
+    assert_eq!(gefragt(&asset_url("d.svg")), 0);
+    let CatalogState::Ready {
+        symbols, entries, ..
+    } = c.state()
+    else {
         panic!("{:?}", c.state())
     };
     assert_eq!(symbols.len(), 1);
-    assert_eq!(symbols.get("b.svg").map(Vec::as_slice), Some(svg));
+    assert_eq!(
+        symbols.get("b.png").map(|s| s.bytes.as_slice()),
+        Some(&b"b"[..])
+    );
+    let d = entries.iter().find(|e| e.id == "planora.d").unwrap();
+    assert_eq!(d.symbol, None, "Eintrag bleibt, ohne Symbol");
 }
 
 #[test]
@@ -399,7 +415,7 @@ fn symboldatei(dir: &std::path::Path) -> PathBuf {
     std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())
-        .find(|p| p.extension().is_some_and(|x| x == "png" || x == "svg"))
+        .find(|p| p.extension().is_some_and(|x| x == "png"))
         .unwrap()
 }
 
@@ -451,13 +467,13 @@ fn failed_symbol_keeps_old_one() {
         panic!("{:?}", c.state())
     };
     assert_eq!(*stale, None);
-    assert_eq!(symbols.get("a.png").map(Vec::as_slice), Some(png));
+    assert_eq!(symbols.get("a.png").map(|s| s.bytes.as_slice()), Some(png));
     // Auch im Zwischenspeicher noch da.
     let again = Catalog::new(dir);
     let CatalogState::Ready { symbols, .. } = again.state() else {
         panic!()
     };
-    assert_eq!(symbols.get("a.png").map(Vec::as_slice), Some(png));
+    assert_eq!(symbols.get("a.png").map(|s| s.bytes.as_slice()), Some(png));
 }
 
 #[test]
@@ -537,4 +553,28 @@ fn stale_tmp_files_removed() {
         neu.exists(),
         "eine junge Zwischendatei könnte gerade geschrieben werden"
     );
+}
+
+/// Abschluss: der Hash eines Symbols wird einmal mit den Bytes gebildet (im Arbeitsthread bzw.
+/// beim Lesen des Zwischenspeichers), nicht in jedem Bild; er folgt dem Inhalt.
+#[test]
+fn symbol_hash_follows_content() {
+    let a = Symbol::new(b"rot".to_vec());
+    assert_eq!(a.bytes, b"rot");
+    assert_eq!(a, Symbol::new(b"rot".to_vec()));
+    let b = Symbol::new(b"rou".to_vec());
+    assert_ne!(a.hash, b.hash);
+    // Beim Holen gebildet und im Zustand gehalten.
+    let _g = anfang();
+    let png: &[u8] = b"symbol";
+    release(
+        &katalog(1, &[("planora.a", Some("a.png"))]),
+        &[("a.png", png)],
+    );
+    let mut c = Catalog::new(ordner("symbol-hash"));
+    holen(&mut c, netz, JETZT);
+    let CatalogState::Ready { symbols, .. } = c.state() else {
+        panic!("{:?}", c.state())
+    };
+    assert_eq!(symbols.get("a.png"), Some(&Symbol::new(png.to_vec())));
 }

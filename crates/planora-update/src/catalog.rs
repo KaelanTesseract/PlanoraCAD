@@ -68,7 +68,7 @@ fn has_ext(name: &str, ext: &str) -> bool {
 }
 
 /// Liest die Antwort auf [`latest_release_url`]. Pflicht ist das Asset `katalog.json`;
-/// Symbole sind die übrigen `.png`/`.svg`-Assets bis [`MAX_SYMBOL_BYTES`], höchstens
+/// Symbole sind die übrigen `.png`-Assets bis [`MAX_SYMBOL_BYTES`], höchstens
 /// [`MAX_SYMBOLS`]. Assets, deren Adresse nicht genau unter dem Release des Katalog-Repos
 /// liegt, werden übergangen. Ein Entwurf ist ein Fehler.
 pub fn parse_latest_release(json: &str) -> Result<CatalogRelease, String> {
@@ -100,7 +100,7 @@ pub fn parse_latest_release(json: &str) -> Result<CatalogRelease, String> {
             if catalog.is_none() {
                 catalog = Some(to_ref(a));
             }
-        } else if (has_ext(&a.name, ".png") || has_ext(&a.name, ".svg"))
+        } else if has_ext(&a.name, ".png")
             && a.size <= MAX_SYMBOL_BYTES
             && symbols.len() < MAX_SYMBOLS
         {
@@ -190,12 +190,13 @@ fn valid_id(id: &str) -> bool {
     rest > 0
 }
 
-/// Ein Symbol-Name muss ein einfacher Dateiname mit `.png` oder `.svg` sein.
+/// Ein Symbol-Name muss ein einfacher Dateiname mit `.png` sein (SVG kann das Programm ohne
+/// Rasterer nicht zeichnen).
 fn symbol_ok(name: &str) -> bool {
     !name.is_empty()
         && !name.contains(['/', '\\', '?', '#', '@', ':'])
         && !name.contains("..")
-        && (has_ext(name, ".png") || has_ext(name, ".svg"))
+        && has_ext(name, ".png")
 }
 
 /// Texte je Sprache; Nicht-Texte und leere Texte fallen weg.
@@ -311,22 +312,14 @@ impl CacheIndex {
         serde_json::from_str(text).ok()
     }
 
-    /// Dateiname für das Symbol `name`: SHA-256 des Namens (hex) plus `.svg` oder `.png`.
+    /// Dateiname für das Symbol `name`: SHA-256 des Namens (hex) plus `.png`.
     pub fn symbol_file(name: &str) -> String {
-        let ext = if has_ext(name, ".svg") {
-            ".svg"
-        } else {
-            ".png"
-        };
-        format!("{}{ext}", crate::sha256::hex_digest(name.as_bytes()))
+        format!("{}.png", crate::sha256::hex_digest(name.as_bytes()))
     }
 
-    /// Hat `file` die Form aus [`CacheIndex::symbol_file`] (64 Hex-Zeichen plus `.png`/`.svg`)?
+    /// Hat `file` die Form aus [`CacheIndex::symbol_file`] (64 Hex-Zeichen plus `.png`)?
     pub fn is_symbol_file(file: &str) -> bool {
-        let Some(stem) = file
-            .strip_suffix(".png")
-            .or_else(|| file.strip_suffix(".svg"))
-        else {
+        let Some(stem) = file.strip_suffix(".png") else {
             return false;
         };
         stem.len() == 64

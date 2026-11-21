@@ -67,16 +67,40 @@ impl StaleReason {
 
 /// Zustand des Katalogs. Ob gerade geholt wird, sagt [`Catalog::is_loading`]; der Zustand bleibt
 /// solange der letzte.
+/// Ein Symbol des Katalogs: der Inhalt (PNG, ungeprüft) und sein Hash. Der Hash wird einmal
+/// gebildet, wenn das Symbol geholt oder aus dem Zwischenspeicher gelesen wird; die Oberfläche
+/// erkennt daran ein geändertes Symbol, ohne in jedem Bild die Bytes zu hashen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Symbol {
+    pub bytes: Vec<u8>,
+    pub hash: u64,
+}
+
+impl Symbol {
+    pub fn new(bytes: Vec<u8>) -> Symbol {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        Symbol {
+            hash: hasher.finish(),
+            bytes,
+        }
+    }
+}
+
+/// Symbolname aus dem Katalog → Symbol.
+pub type Symbols = BTreeMap<String, Symbol>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CatalogState {
     /// Noch nie geladen und kein (lesbarer) Zwischenspeicher.
     Never,
     /// Ein Stand: frisch geholt oder aus dem Zwischenspeicher. `symbols`: Symbolname aus dem
-    /// Katalog → Inhalt (PNG oder SVG, ungeprüft). `fetched_at`: Zeitpunkt des Holens (Sekunden
+    /// Katalog → Symbol (Inhalt und Hash). `fetched_at`: Zeitpunkt des Holens (Sekunden
     /// seit 1970). `stale`: das letzte Holen misslang (warum), gezeigt wird dieser ältere Stand.
     Ready {
         entries: Vec<CatalogEntry>,
-        symbols: BTreeMap<String, Vec<u8>>,
+        symbols: Symbols,
         fetched_at: u64,
         stale: Option<StaleReason>,
     },
@@ -90,7 +114,7 @@ pub enum CatalogState {
 enum Outcome {
     Loaded {
         entries: Vec<CatalogEntry>,
-        symbols: BTreeMap<String, Vec<u8>>,
+        symbols: Symbols,
         /// Gründe für übergangene Einträge.
         skipped: Vec<String>,
         /// Der Zwischenspeicher ließ sich nicht schreiben (Grund).
@@ -231,13 +255,7 @@ impl Catalog {
 
 /// Holt Release, Liste und Symbole und schreibt den Zwischenspeicher (im Arbeitsthread).
 /// `old`: die Symbole des bisherigen Stands (bleiben, wenn ihr Download misslingt).
-fn load(
-    fetch: RepoFetch,
-    dir: &Path,
-    now: u64,
-    old: &BTreeMap<String, Vec<u8>>,
-    progress: &Progress,
-) -> Outcome {
+fn load(fetch: RepoFetch, dir: &Path, now: u64, old: &Symbols, progress: &Progress) -> Outcome {
     let (text, entries, symbols, skipped) = match fetch_all(fetch, old, progress) {
         Ok(Fetched::Catalog(t, e, s, k)) => (t, e, s, k),
         Ok(Fetched::TooNew(n)) => return Outcome::TooNew(n),
@@ -258,18 +276,13 @@ fn load(
 /// Was beim Holen herauskam.
 enum Fetched {
     /// Text, Einträge, Symbole, übergangene Einträge.
-    Catalog(
-        String,
-        Vec<CatalogEntry>,
-        BTreeMap<String, Vec<u8>>,
-        Vec<String>,
-    ),
+    Catalog(String, Vec<CatalogEntry>, Symbols, Vec<String>),
     TooNew(u32),
 }
 
 fn fetch_all(
     fetch: RepoFetch,
-    old: &BTreeMap<String, Vec<u8>>,
+    old: &Symbols,
     progress: &Progress,
 ) -> Result<Fetched, (String, StaleReason)> {
     let net = |e| (e, StaleReason::Offline);
@@ -313,15 +326,15 @@ fn fetch_all(
         }
         match plugin_repo::get(fetch, &asset.url, MAX_SYMBOL_BYTES, REQUEST_TIMEOUT) {
             Ok(bytes) => {
-                symbols.insert(asset.name.clone(), bytes);
+                symbols.insert(asset.name.clone(), Symbol::new(bytes));
             }
             Err(e) => {
                 diag::warn(&format!(
                     "Plug-in catalog: symbol not loaded: {}",
                     truncate(&e)
                 ));
-                if let Some(bytes) = old.get(&asset.name) {
-                    symbols.insert(asset.name.clone(), bytes.clone());
+                if let Some(symbol) = old.get(&asset.name) {
+                    symbols.insert(asset.name.clone(), symbol.clone());
                 }
             }
         }
@@ -381,7 +394,7 @@ fn read_cache(dir: &Path) -> Option<CatalogState> {
             continue;
         }
         if let Some(bytes) = read_limited(&dir.join(file), MAX_SYMBOL_BYTES) {
-            symbols.insert(name.clone(), bytes);
+            symbols.insert(name.clone(), Symbol::new(bytes));
         }
     }
     Some(CatalogState::Ready {
@@ -398,8 +411,8 @@ fn read_cache(dir: &Path) -> Option<CatalogState> {
 fn write_cache(
     dir: &Path,
     text: &str,
-    symbols: &BTreeMap<String, Vec<u8>>,
-    old: &BTreeMap<String, Vec<u8>>,
+    symbols: &Symbols,
+    old: &Symbols,
     now: u64,
 ) -> Result<(), String> {
     if dir.as_os_str().is_empty() {
@@ -412,13 +425,13 @@ fn write_cache(
         catalog_sha256: hex_digest(text.as_bytes()),
         symbols: BTreeMap::new(),
     };
-    for (name, bytes) in symbols {
+    for (name, symbol) in symbols {
         let file = CacheIndex::symbol_file(name);
         let path = dir.join(&file);
-        let unchanged = old.get(name) == Some(bytes)
-            && std::fs::metadata(&path).is_ok_and(|m| m.len() == bytes.len() as u64);
+        let unchanged = old.get(name) == Some(symbol)
+            && std::fs::metadata(&path).is_ok_and(|m| m.len() == symbol.bytes.len() as u64);
         if !unchanged {
-            atomic_write_unique(&path, bytes).map_err(|e| e.to_string())?;
+            atomic_write_unique(&path, &symbol.bytes).map_err(|e| e.to_string())?;
         }
         index.symbols.insert(name.clone(), file);
     }

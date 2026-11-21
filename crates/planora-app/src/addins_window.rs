@@ -19,7 +19,7 @@ use crate::dialog::{Dialog, DialogSize, close_label};
 use crate::file_chooser::{self, ChooserAction, FileChooser, display_path};
 use crate::local_time::unix_time_text;
 use crate::places::Places;
-use crate::plugin_catalog::{CatalogState, StaleReason};
+use crate::plugin_catalog::{CatalogState, StaleReason, Symbol, Symbols};
 use crate::plugin_prompts::{grant_text, origin_text, right_name, state_text};
 use crate::plugins::{self as app_plugins, Plugins, entry_name};
 use crate::theme;
@@ -985,7 +985,7 @@ fn show_filters(ui: &mut egui::Ui, plugins: &Plugins, view: &mut CatalogView<'_>
 fn show_catalog_list(
     ui: &mut egui::Ui,
     shown: &[&CatalogEntry],
-    symbols: (&BTreeMap<String, Vec<u8>>, &mut SymbolCache),
+    symbols: (&Symbols, &mut SymbolCache),
     current: Option<&str>,
     catalog_empty: bool,
     lang: &str,
@@ -1015,12 +1015,20 @@ fn show_catalog_list(
                 for e in shown {
                     ui.horizontal(|ui| {
                         show_symbol(ui, e, symbols.0, symbols.1);
+                        // Fester Platz für den Namen; ein zu langer wird mit „…“ gekürzt, die
+                        // Liste bleibt so breit, und rechts bleibt Platz für die Kategorie.
+                        let name_w = ui.available_width() * 0.6;
                         let name = egui::Button::selectable(
                             current == Some(e.id.as_str()),
                             catalog_name(e, lang),
                         )
-                        .min_size(egui::vec2(ui.available_width() * 0.6, 0.0));
-                        if ui.add(name).clicked() {
+                        .truncate()
+                        .min_size(egui::vec2(name_w, 0.0));
+                        let clicked = ui
+                            .allocate_ui(egui::vec2(name_w, 0.0), |ui| ui.add(name))
+                            .inner
+                            .clicked();
+                        if clicked {
                             actions.push(Action::CatalogSelect(e.id.clone()));
                         }
                         ui.label(
@@ -1126,17 +1134,12 @@ fn show_catalog_details(
 
 /// Das Symbol eines Eintrags (24 px) oder, wenn es fehlt oder sich nicht lesen lässt, das
 /// Standardsymbol.
-fn show_symbol(
-    ui: &mut egui::Ui,
-    e: &CatalogEntry,
-    symbols: &BTreeMap<String, Vec<u8>>,
-    cache: &mut SymbolCache,
-) {
+fn show_symbol(ui: &mut egui::Ui, e: &CatalogEntry, symbols: &Symbols, cache: &mut SymbolCache) {
     let texture = e
         .symbol
         .as_deref()
-        .and_then(|name| symbols.get(name).map(|bytes| (name, bytes)))
-        .and_then(|(name, bytes)| symbol_texture(ui.ctx(), cache, name, bytes));
+        .and_then(|name| symbols.get(name).map(|symbol| (name, symbol)))
+        .and_then(|(name, symbol)| symbol_texture(ui.ctx(), cache, name, symbol));
     match texture {
         Some(t) => {
             ui.add(egui::Image::new(&t).fit_to_exact_size(egui::vec2(SYMBOL_SIZE, SYMBOL_SIZE)));
@@ -1167,24 +1170,17 @@ fn default_symbol(ui: &mut egui::Ui) {
     ui.painter().rect_filled(knob, 1.0, color);
 }
 
-/// Hash des Inhalts (erkennt ein geändertes Symbol gleicher Länge unter demselben Namen).
-fn content_hash(bytes: &[u8]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// Die Textur eines Symbols, einmal je Stand des Katalogs gelesen und in `cache` gemerkt; `None`,
-/// wenn sich die Bytes nicht als PNG lesen lassen (auch SVG: ohne Rasterer im Programm, dafür
-/// steht das Standardsymbol) oder das Bild zu groß ist.
+/// Die Textur eines Symbols, einmal je Stand des Katalogs gelesen und in `cache` gemerkt (am
+/// Hash aus [`Symbol`] erkennt es einen geänderten Inhalt gleicher Länge unter demselben Namen);
+/// `None`, wenn sich die Bytes nicht als PNG lesen lassen (dafür steht das Standardsymbol) oder
+/// das Bild zu groß ist.
 fn symbol_texture(
     ctx: &egui::Context,
     cache: &mut SymbolCache,
     name: &str,
-    bytes: &[u8],
+    symbol: &Symbol,
 ) -> Option<egui::TextureHandle> {
-    let hash = content_hash(bytes);
+    let (hash, bytes) = (symbol.hash, symbol.bytes.as_slice());
     if let Some((cached, texture)) = cache.map.get(name)
         && *cached == hash
     {

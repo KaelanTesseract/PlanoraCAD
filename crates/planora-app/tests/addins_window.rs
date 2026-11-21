@@ -1801,3 +1801,53 @@ fn catalog_install_can_be_cancelled() {
     let seen = bild(&mut h, vec![]);
     assert!(!has(&seen, "Abbrechen"), "{}", join(&seen));
 }
+
+/// Abschluss: ein langer Name wird in der Liste gekürzt („…“); die Liste wird nicht breiter, die
+/// Kategorie steht daneben noch in der Liste.
+#[test]
+fn long_name_truncated_in_list() {
+    let _g = netz_anfang();
+    let lang =
+        "Ein Plug-in mit einem wirklich außerordentlich langen Namen, der nicht in die Liste passt";
+    katalog_release(
+        1,
+        &[(
+            "planora.lang",
+            lang,
+            "Kurz",
+            "werkzeuge",
+            "https://github.com/jemand/lang".to_string(),
+        )],
+    );
+    let mut h = katalog_harness("kat-lang", leere_orte("kat-lang"));
+    let seen = bild(&mut h, vec![]);
+    let window = h.w.last_rect.unwrap();
+    let install = find(&seen, "Installieren").unwrap_or_else(|| panic!("{}", join(&seen)));
+    // Die Liste reicht höchstens bis vor die Details.
+    let in_list: Vec<&Seen> = seen
+        .iter()
+        .filter(|s| s.rect.left() < install.rect.left() && window.contains_rect(s.rect))
+        .collect();
+    let name = in_list
+        .iter()
+        .filter(|s| s.text.starts_with("Ein Plug-in mit"))
+        .min_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
+        .unwrap_or_else(|| panic!("Name fehlt: {}", join(&seen)));
+    let category = in_list
+        .iter()
+        .find(|s| s.text == "Werkzeuge")
+        .unwrap_or_else(|| panic!("Kategorie fehlt: {}", join(&seen)));
+    assert!(name.rect.width() < 320.0, "Name {:?}", name.rect);
+    assert!(
+        category.rect.left() >= name.rect.right(),
+        "{:?} {:?}",
+        name.rect,
+        category.rect
+    );
+    assert!(
+        category.rect.right() <= window.left() + 340.0,
+        "Liste verbreitert: {:?} (Fenster {:?})",
+        category.rect,
+        window
+    );
+}
