@@ -3377,3 +3377,46 @@ Spec `specs/2026-11-19-skizze-erstellen-design.md`, Plan `plans/2026-11-19-skizz
 - **Esc beendet Projizieren samt Meldung** (2026-11-20): Mit dem Befehl geht seine Meldung („Nichts Neues …“).
 - **Hauptzweig auf Englisch „Main“** (2026-11-20, Fund der Doku-Runde): `MAIN_BRANCH` bleibt in der Datei „Haupt“ (Kennung, alte Dateien bytegleich); angezeigt wird `docstore::branch_label` (de „Haupt“, en „Main“). Neue Zweige mit dem Namen „Haupt“ oder dem angezeigten Namen (ohne Groß-/Kleinschreibung) werden abgelehnt. **Grenze:** Ein Zweig, der in einer anderen Sprache angelegt wurde und dort zufällig wie der Hauptzweig einer weiteren Sprache heißt, sähe dort doppelt aus; mit nur de/en ist das ausgeschlossen.
 - **Bericht bei harten Abstürzen** (2026-11-20, Fund der Doku-Runde: App „plötzlich weg“ ohne Bericht): Unter Windows setzt `hard_crash::install` einen `SetUnhandledExceptionFilter`. Der Filter legt Code, Adresse und Rücksprungadressen in feste Speicherplätze und weckt einen beim Start angelegten Schreib-Thread, der den Bericht im Format des Panik-Hooks schreibt (`crash::write_report`); höchstens 5 s Wartezeit, dann geht die Ausnahme weiter an Windows. Grund für den Schreib-Thread: Nach einem Stapelüberlauf reicht der Stapel des abgestürzten Threads nicht für Text und Datei. **Grenzen:** kein Ablauf (Backtrace), nur Adressen; ein Ende von außen und `abort`/`__fastfail` bleiben ohne Bericht. Den Absturz der Doku-Runde hätte das vermutlich nicht erfasst (alles deutet auf ein Ende von außen).
+
+## Plug-ins Etappe 1
+Stand nach der Abschluss-Fixwelle (Gesamtprüfung und Task 9 erledigt). Quelle: Prüfungen der Tasks 2 bis 8; alle Punkte sind klein (Minor) und bewusst aufgeschoben.
+
+**Paket und Laufzeit (Task 2)**
+- Icon-Namen und Sprach-Id beim Auspacken auf sichere Zeichen beschränken; Paket-Test für doppeltes `plugin.wasm`; `miniz_oxide =0.9.1` steht doppelt neben 0.8.9.
+- Der Quell-Hash deckt WIT, `plugins/Cargo.toml`/`.lock` und die Skripte nicht ab und bindet die Bytes der `.pcplugin` nicht; Symlinks im Hash.
+- `shutdown()` markiert die Instanz nicht als tot; Ausgabe beim Instanziieren geht verloren.
+- Testlücken: Args, `subscribe-instant`, Warten innerhalb der Frist und mehrere kurze Wartezeiten; ein Plug-in, das die Ressourcentabelle (4096) wirklich füllt.
+
+**Rechte und Anfragen (Task 3)**
+- Fehlende URL-Testfälle; nutzloses `assert_eq!(p.clone(), p)`.
+
+**Installieren und Orte (Task 4)**
+- SAFETY-Kommentar zum Zwischenspeicher überzeichnet.
+- Testlücken (Deaktivieren während Loading, Verweigern bei offenem Netz, Rollback beim Installieren).
+- `deliver()` und `event()` verwerfen bei voller Warteschlange (1024 Einträge) weiter still; nur die Byte-Grenze des Postfachs (8 MiB) schreibt einmal einen Hinweis ins Protokoll.
+- Lässt sich ein liegen gebliebenes `.alt-<id>` dauerhaft nicht löschen, scheitert die nächste Installation derselben Kennung (das Aufräumen am Anfang von `install` bricht ab).
+
+**Menü, Meldungen, Nachfrage (Task 5)**
+- Nur die letzte Plug-in-Meldung je Bild wird protokolliert (`plugins.rs`); Reihenfolge von Escape bei der Rechte-Nachfrage.
+- Das Test-Plug-in zählt `on_result` nicht (`late_net_result_dropped` erreicht die Host-Prüfung nicht); drei deutsche `format_err!`-Texte in `runtime.rs`.
+
+**Dialoge (Task 6)**
+- NaN/inf als Startwerte; Format für Riesenzahlen; lange Beschriftungen ohne Umbruch.
+- Der Ausfall-Test umgeht den UI-Pfad; Schließen mit X ungetestet.
+
+**Einstellungen und Installation (Task 7)**
+- Herabstufen unter die mitgelieferte Version ist irreführend; `replaces` kann veralten.
+- Tests für Deinstallieren im Lauf fehlen; `replaced` startet ein Plug-in im Zustand Loading nicht neu.
+- Die Verwaltung in den Einstellungen zeigt `fs-folder`, `model-read`, `model-write` noch ohne den Hinweis „noch nicht verfügbar“ (nur der Installationsdialog hat ihn).
+
+**Repo-Link und Updates (Task 8)**
+- Veralteter Kommentar in `net.rs`.
+- Eine Neuinstallation über den Repo-Link kann still herabstufen (Hinweis nötig).
+- Der Installer muss später `author`, `net_hosts` und `source` (Herkunft) mitschreiben; ohne `source` fragt das Programm gespeicherte Rechte neu.
+- Echter GitHub-Zugriff wurde nie von Hand geprüft (Tests laufen offline).
+
+## Plug-in-Katalog
+- Handtest gegen das echte Katalog-Repo und `KaelanTesseract/PlanoraCAD-Plugin-Hallo` v0.1.0 steht aus (Tests laufen offline): Hinweis beim ersten Start, Reiter Katalog, Installieren über GitHub, Prüfsumme, Herkunft „aus dem Katalog“, Offline-Anzeige.
+- SVG-Symbole werden nicht angenommen (nur PNG bis 256 x 256 Pixel).
+- Die Details im Reiter Katalog zeigen die neueste Version nur bei installierten Plug-ins oder gefundenen Updates; die neueste Version (und die verlangten Rechte) beim Öffnen der Details aus dem Plug-in-Repo holen.
+- Keine Signaturprüfung; nur HTTPS zu GitHub und, falls das Release eine `.sha256` hat, die Paket-Prüfsumme (nur gegen Übertragungsfehler).

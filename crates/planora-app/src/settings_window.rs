@@ -9,7 +9,8 @@
 //! die lange Tabelle sonst „Projekte“ nach unten schöbe). Gewählt wird über die
 //! Dateiauswahl im Ordner-Modus; der Wechsel wirkt wie [`Workspace::choose_root`] und
 //! [`Workspace::persist_config`] (nur `root` wird geschrieben, Favoriten bleiben). Nichts wird
-//! verschoben, kopiert oder gelöscht.
+//! verschoben, kopiert oder gelöscht. Die Plug-ins verwaltet das Fenster „Zusatzmodule“
+//! ([`crate::addins_window`]).
 
 use crate::dialog::{Dialog, DialogSize, close_label};
 use crate::file_chooser::{self, ChooserAction, FileChooser, display_path};
@@ -377,7 +378,7 @@ pub struct SettingsWindow {
     open: bool,
     /// Beim Schließen wieder das Fenster „Projekte“ öffnen.
     return_to_projects: bool,
-    /// Dateiauswahl im Ordner-Modus, solange gewählt wird.
+    /// Dateiauswahl des Projektverzeichnisses, solange gewählt wird.
     chooser: Option<FileChooser>,
     message: Option<RootMessage>,
     /// Hinweis unter dem Regler (nur [`transparency_not_saved`]).

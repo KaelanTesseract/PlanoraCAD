@@ -572,7 +572,7 @@ fn notes(ui: &mut egui::Ui, update: &Update, dark: bool) {
 
 /// Ein Block: Überschriften größer und halbfett, Aufzählungspunkte mit Spiegelstrich und
 /// Einzug, Absätze; fetter Text halbfett in der Hauptfarbe.
-fn note_block(ui: &mut egui::Ui, block: &NoteBlock, dark: bool) {
+pub(crate) fn note_block(ui: &mut egui::Ui, block: &NoteBlock, dark: bool) {
     let body = egui::TextStyle::Body.resolve(ui.style());
     match block {
         NoteBlock::Heading(level, spans) => {

@@ -43,6 +43,7 @@ PlanoraCAD is a free program for designing parts in 3D on your computer: bracket
 - [Download and install](#download-and-install)
 - [On Ubuntu](#on-ubuntu)
 - [Updates and language](#updates-and-language)
+- [Plug-ins](#plug-ins)
 - [Reporting bugs and wishes](#reporting-bugs-and-wishes)
 - [What does not work yet](#what-does-not-work-yet)
 - [Privacy](#privacy)
@@ -178,6 +179,10 @@ Differences from Windows:
 - PlanoraCAD is available in German and English. On first start it uses the language of Windows, otherwise English.
 - To switch: "File → Settings …", section "Appearance".
 - Want to add another language? The guide is in [docs/uebersetzen.md](docs/uebersetzen.md).
+
+## Plug-ins
+
+PlanoraCAD can be extended with plug-ins (Windows and Ubuntu). A plug-in is a small WebAssembly program that runs in a sandbox and may only do what you allow. You manage plug-ins in the window **File → Add-Ins → Manage …** and install them there from the **catalog** (the "Catalog" tab, a curated list), from a file (`.pcplugin`) or via the developer's GitHub link; their commands are under **File → Add-Ins**. Plug-ins must use a GPL-3.0-compatible license. More: [Using plug-ins](docs/plug-ins.md) and [Developing plug-ins](docs/plugins/entwickler.md) (both in German). The interface is version 0.x and may still break. If you build on Ubuntu yourself, you also need `libssl-dev` and `pkg-config`.
 
 ## Reporting bugs and wishes
 

@@ -1,0 +1,7 @@
+id = "planora.beispiel-hallo"
+name = "Beispiel-Hallo"
+version = "0.1.0"
+api = "0.1"
+author = "Dennis Guse"
+license = "GPL-3.0-only"
+description = "Beispiel-Plug-in: öffnet einen Dialog und sagt Hallo."

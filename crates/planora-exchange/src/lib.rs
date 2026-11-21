@@ -20,6 +20,7 @@ mod svg;
 mod text;
 mod threemf;
 mod zip;
+pub mod zip_read;
 
 pub use check::{MeshReport, check_mesh, weld_exact};
 pub use dxf::read_dxf;

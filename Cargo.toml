@@ -26,6 +26,8 @@ planora-update = { path = "crates/planora-update" }
 planora-i18n = { path = "crates/planora-i18n" }
 planora-text = { path = "crates/planora-text" }
 planora-style = { path = "crates/planora-style" }
+planora-plugin-host = { path = "crates/planora-plugin-host" }
+planora-plugin-api = { path = "crates/planora-plugin-api" }
 
 # externe Crates (Lizenzen am 2026-10-09 geprüft: alle MIT und/oder Apache-2.0, earcutr ISC, spade MIT OR Apache-2.0, Roboto-Schrift Apache-2.0)
 glam = "0.34"
@@ -70,6 +72,28 @@ usvg = { version = "0.50", default-features = false, features = ["svgz"] }
 # flate2 (MIT OR Apache-2.0) entpackt SVGZ mit Größengrenze; schon über usvg und png im Baum.
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
+
+# Plug-in-Pakete (planora-exchange, planora-plugin-host; Plug-ins Etappe 1). Am 2026-11-19 geprüft:
+# miniz_oxide MIT OR Zlib OR Apache-2.0 (schon im Baum), toml und semver MIT OR Apache-2.0;
+# Unterpakete siehe cargo deny.
+miniz_oxide = "=0.9.1"
+toml = "1.1"
+semver = { version = "1", features = ["serde"] }
+
+# Plug-in-Laufzeit (planora-plugin-host, Plug-ins Etappe 1 Task 2). Am 2026-11-19 geprüft: wasmtime und
+# wasmtime-wasi Apache-2.0 WITH LLVM-exception (neueste stabile Version 50.0.3); nur die Funktionen
+# cranelift, component-model, runtime und parallel-compilation. sha2 MIT OR Apache-2.0 (prüft die
+# Quell-Hashes der Beispiel-Plug-ins und bildet ab Task 4 den Schlüssel des Zwischenspeichers für
+# übersetzte Plug-ins).
+wasmtime = { version = "=50.0.3", default-features = false, features = ["cranelift", "component-model", "runtime", "parallel-compilation"] }
+wasmtime-wasi = { version = "=50.0.3", default-features = false, features = ["p2"] }
+# Für die Ausgabe-Umleitung der Plug-ins (alle schon über wasmtime-wasi im Baum, MIT bzw. MIT OR Apache-2.0):
+# bytes und async-trait für die Strom-Schnittstelle, tokio nur wegen des Merkmals AsyncWrite, das
+# wasmtime-wasi von jedem Ausgabestrom verlangt, und "time" für die Wartezeiten der Plug-ins.
+bytes = "1"
+async-trait = "0.1"
+tokio = { version = "1", default-features = false, features = ["time"] }
+sha2 = "0.10"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

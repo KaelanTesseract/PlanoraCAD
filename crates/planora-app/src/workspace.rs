@@ -780,6 +780,11 @@ pub enum Prompt {
     /// Sprache lässt sich bei offenem Hinweis nicht wechseln (die Fehlertexte aus
     /// `planora-project` folgen in Task 13).
     Notice(String),
+    /// „Plug-in X entfernen?“ aus den Einstellungen (Kennung und Anzeigename).
+    RemovePlugin {
+        id: String,
+        name: String,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -843,6 +848,15 @@ pub struct Workspace {
     /// werden; sie werden beim nächsten gelungenen Schreiben der Konfiguration mit geschrieben
     /// (wie `length_unit_pending`).
     pub sketch_grid_pending: bool,
+    /// Die Plug-ins des Programms ([`crate::plugins::Plugins`]). [`Workspace::new`] legt sie leer
+    /// an (ohne Fundorte, damit Tests nie die echten Ordner lesen); das Programm setzt sie in
+    /// [`crate::app::PlanoraApp::new`] auf die Fundorte des Systems.
+    pub plugins: crate::plugins::Plugins,
+    /// `config.plugins` konnte noch nicht gespeichert werden; es wird beim nächsten gelungenen
+    /// Schreiben über [`Workspace::try_persist_config`] mit geschrieben.
+    pub plugins_pending: bool,
+    /// `config.catalog_hint_shown` konnte noch nicht gespeichert werden.
+    pub catalog_hint_pending: bool,
     /// Für „Letzten Befehl wiederholen“ (Leertaste): der zuletzt abgeschlossene Befehl, über
     /// alle Tabs.
     pub last_command: crate::commands::LastCommand,
@@ -908,6 +922,9 @@ impl Workspace {
             language_pending: false,
             length_unit_pending: false,
             sketch_grid_pending: false,
+            plugins: crate::plugins::Plugins::empty(),
+            plugins_pending: false,
+            catalog_hint_pending: false,
             last_command: Default::default(),
             sketch_clipboard: None,
             prompt: None,
@@ -1639,6 +1656,11 @@ impl Workspace {
         let language = self.pending_language();
         let length_unit = self.pending_length_unit();
         let sketch_grid = self.pending_sketch_grid();
+        // Mit den Plug-ins auch der Zeitpunkt ihrer letzten Prüfung auf Updates.
+        let plugins = self
+            .plugins_pending
+            .then(|| (self.config.plugins.clone(), self.config.last_plugin_check));
+        let catalog_hint = self.catalog_hint_pending;
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
@@ -1665,6 +1687,13 @@ impl Workspace {
                 c.sketch_grid = grid;
                 c.sketch_snap = snap;
             }
+            if let Some((p, checked)) = plugins {
+                c.plugins = p;
+                c.last_plugin_check = checked;
+            }
+            if catalog_hint {
+                c.catalog_hint_shown = true;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1679,6 +1708,8 @@ impl Workspace {
                 self.language_pending = false;
                 self.length_unit_pending = false;
                 self.sketch_grid_pending = false;
+                self.plugins_pending = false;
+                self.catalog_hint_pending = false;
                 true
             }
             Err(_) => {
@@ -1699,6 +1730,8 @@ impl Workspace {
                     self.language_pending = false;
                     self.length_unit_pending = false;
                     self.sketch_grid_pending = false;
+                    self.plugins_pending = false;
+                    self.catalog_hint_pending = false;
                 } else {
                     self.favorites_pending = pending;
                 }
@@ -2020,6 +2053,8 @@ impl Workspace {
     /// dann unangetastet. Wie [`Workspace::set_theme`].
     pub fn set_language(&mut self, lang: &planora_i18n::Lang) -> bool {
         planora_i18n::set_global(lang.clone());
+        // Beschriftungen der Plug-in-Befehle und `host-info` später gestarteter Plug-ins.
+        self.plugins.host.set_language(lang.id());
         // Parameter im Text (Skizzen 11b): Das Dezimalzeichen im Text folgt der Sprache.
         for t in &mut self.tabs {
             t.reshape_due = true;
@@ -2111,6 +2146,15 @@ impl Workspace {
     pub fn set_last_update_check(&mut self, unix_seconds: u64) -> bool {
         self.config.last_update_check = Some(unix_seconds);
         self.save_update_field(|u, c| c.last_update_check = u.last_check)
+    }
+
+    /// Merkt, dass der Hinweis auf den Katalog der Zusatzmodule beantwortet ist, und speichert
+    /// das gleich ([`Workspace::try_persist_config`]); misslingt das Schreiben, gilt es für die
+    /// Sitzung und kommt mit dem nächsten gelungenen Schreiben in die Datei.
+    pub fn mark_catalog_hint_shown(&mut self) -> bool {
+        self.config.catalog_hint_shown = true;
+        self.catalog_hint_pending = true;
+        self.try_persist_config()
     }
 
     /// Übersprungene Version; ein unlesbarer Text gilt als keine.

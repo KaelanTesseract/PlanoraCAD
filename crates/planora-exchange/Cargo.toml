@@ -14,6 +14,7 @@ planora-i18n.workspace = true
 dxf.workspace = true
 usvg.workspace = true
 flate2.workspace = true
+miniz_oxide.workspace = true
 image.workspace = true
 
 [dev-dependencies]

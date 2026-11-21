@@ -150,20 +150,33 @@ pub fn redirect_target(current: &str, location: &str) -> Result<String, InstallE
     if let Some(target) = local_redirect(current, location) {
         return Ok(target);
     }
+    checked_redirect(current, location, host_allowed).map_err(InstallError::Network)
+}
+
+/// Löst die Weiterleitung von `current` nach `location` auf (HTTPS, `//host/pfad` oder
+/// `/pfad`) und prüft den Zielrechner mit `allowed`; sonst der Fehlertext. Gemeinsamer Teil von
+/// [`redirect_target`] (Updates des Programms) und
+/// [`crate::plugin_source::redirect_target`] (Plug-ins, ohne das feste [`REPO`]).
+pub(crate) fn checked_redirect(
+    current: &str,
+    location: &str,
+    allowed: fn(&str) -> bool,
+) -> Result<String, String> {
+    let location = location.trim();
     let target = if location.starts_with("https://") {
         location.to_string()
     } else if let Some(rest) = location.strip_prefix("//") {
         format!("https://{rest}")
     } else if location.starts_with('/') {
-        let (origin, _) = split_origin(current)
-            .ok_or_else(|| InstallError::Network(tr!("update-detail-redirect-denied")))?;
+        let (origin, _) =
+            split_origin(current).ok_or_else(|| tr!("update-detail-redirect-denied"))?;
         format!("{origin}{location}")
     } else {
-        return Err(InstallError::Network(tr!("update-detail-redirect-denied")));
+        return Err(tr!("update-detail-redirect-denied"));
     };
     match split_origin(&target) {
-        Some((_, host)) if host_allowed(&host) => Ok(target),
-        _ => Err(InstallError::Network(tr!("update-detail-redirect-foreign"))),
+        Some((_, host)) if allowed(&host) => Ok(target),
+        _ => Err(tr!("update-detail-redirect-foreign")),
     }
 }
 
@@ -210,7 +223,7 @@ fn local_redirect(current: &str, location: &str) -> Option<String> {
 
 /// `("https://authority", host)` einer HTTPS-Adresse; `None` mit Anmeldedaten oder anderem
 /// Port als 443.
-fn split_origin(url: &str) -> Option<(String, String)> {
+pub(crate) fn split_origin(url: &str) -> Option<(String, String)> {
     let rest = url.strip_prefix("https://")?;
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..end];
@@ -225,7 +238,9 @@ fn split_origin(url: &str) -> Option<(String, String)> {
     Some((format!("https://{authority}"), host.to_ascii_lowercase()))
 }
 
-fn host_allowed(host: &str) -> bool {
+/// Erlaubte Rechner für Weiterleitungen beim Laden von Release-Dateien: `github.com` und
+/// `*.githubusercontent.com` (Host klein geschrieben, aus [`split_origin`]).
+pub(crate) fn host_allowed(host: &str) -> bool {
     const SUFFIX: &str = ".githubusercontent.com";
     let valid = !host.is_empty()
         && host

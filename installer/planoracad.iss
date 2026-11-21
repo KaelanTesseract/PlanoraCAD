@@ -105,6 +105,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Dirs]
 ; Ordner fuer weitere Sprachdateien (*.ftl), die das Programm beim Start liest.
 Name: "{app}\languages"
+; Leerer Ordner fuer mitgelieferte Plug-ins.
+Name: "{app}\plugins"
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "PlanoraCAD.exe"; Flags: ignoreversion

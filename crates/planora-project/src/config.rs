@@ -81,6 +81,14 @@ pub struct Config {
         deserialize_with = "lenient_seconds"
     )]
     pub last_update_check: Option<u64>,
+    /// Zeitpunkt der letzten Prüfung der Plug-ins mit Repo-Link auf Updates in Sekunden seit
+    /// 1970 (UTC). Keine ganze Zahl ab 0 → keiner.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_seconds"
+    )]
+    pub last_plugin_check: Option<u64>,
     /// Übersprungene Version als Text („Diese Version überspringen“); geprüft wird erst im
     /// Programm. Kein oder ein leerer Text → keine.
     #[serde(
@@ -115,6 +123,14 @@ pub struct Config {
         deserialize_with = "lenient_bool_false"
     )]
     pub verbose_log: bool,
+    /// Der einmalige Hinweis auf den Katalog der Zusatzmodule beim ersten Start wurde schon
+    /// beantwortet. Voreinstellung aus; nur „an“ wird geschrieben. Kein Wahrheitswert → aus.
+    #[serde(
+        default,
+        skip_serializing_if = "is_false",
+        deserialize_with = "lenient_bool_false"
+    )]
+    pub catalog_hint_shown: bool,
     /// Name für Zeichnungen (Einstellungen → Projekte): Vorgabe für „Erstellt“ in den
     /// Projektangaben neuer Zeichnungen. Ab Werk keiner; der Anmeldename des Rechners wird nie
     /// genommen. Kein oder ein leerer Text → keiner; ohne Namen wird nichts geschrieben.
@@ -184,6 +200,49 @@ pub struct Config {
         deserialize_with = "lenient_detached"
     )]
     pub detached: BTreeMap<String, DetachedWindow>,
+    /// Plug-ins: Kennung → an/aus und gespeicherte Rechte. Ein falscher Typ des ganzen Felds
+    /// ergibt „leer“, kaputte Einträge fallen einzeln weg (siehe [`lenient_plugins`]). Ohne
+    /// Einträge wird nichts geschrieben.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "lenient_plugins"
+    )]
+    pub plugins: BTreeMap<String, PluginConfig>,
+}
+
+/// Der gespeicherte Zustand eines Plug-ins: eingeschaltet oder nicht und die dauerhaft
+/// beantworteten Rechte (Kennung des Rechts → `"allowed"` oder `"denied"`), dazu Autor und
+/// Rechner (`net-hosts`) und Herkunft des Manifests, für das sie galten (beim Start gelten die
+/// Rechte nur für dasselbe Plug-in derselben Herkunft; ohne Autor oder Herkunft werden sie neu
+/// gefragt). „Nur dieses Mal“ wird nie gespeichert.
+/// Leere Felder werden nicht geschrieben.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rights: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub net_hosts: Vec<String>,
+    /// Herkunft des Plug-ins beim Speichern: `"bundled"`, `"file"` oder der Repo-Link (Rechte
+    /// gelten nur für dieselbe Herkunft; ohne werden sie neu gefragt).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        PluginConfig {
+            enabled: true,
+            rights: BTreeMap::new(),
+            author: None,
+            net_hosts: Vec::new(),
+            source: None,
+        }
+    }
 }
 
 /// Lage und Größe eines abgedockten Fensters in physischen Pixeln. `x` und `y` dürfen negativ
@@ -298,10 +357,12 @@ impl Default for Config {
             update_channel: DEFAULT_UPDATE_CHANNEL.to_string(),
             update_check: true,
             last_update_check: None,
+            last_plugin_check: None,
             skipped_version: None,
             update_pending: None,
             theme: None,
             verbose_log: false,
+            catalog_hint_shown: false,
             drawing_author: None,
             language: None,
             length_unit: None,
@@ -310,6 +371,7 @@ impl Default for Config {
             show_triad_planes: true,
             show_triad_handles: true,
             detached: BTreeMap::new(),
+            plugins: BTreeMap::new(),
         }
     }
 }
@@ -485,6 +547,72 @@ fn lenient_favorites<'de, D: Deserializer<'de>>(
         })
         .unwrap_or_default();
     Ok(clean_favorites(list))
+}
+
+/// Liest `plugins` nachsichtig: ein falscher Typ ergibt „leer“, ein Eintrag, der kein Objekt ist,
+/// wird übergangen. Die Felder werden getrennt gelesen, damit ein kaputter Wert nicht die anderen
+/// kostet: ein `enabled`, das kein Wahrheitswert ist, gilt als eingeschaltet; Rechte mit einem
+/// anderen Wert als `"allowed"`/`"denied"` fallen einzeln weg; ein `author`, der kein Text ist
+/// (oder leer), gilt als unbekannt; aus `net_hosts` zählen nur die Texte.
+fn lenient_plugins<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<BTreeMap<String, PluginConfig>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let Some(map) = value.as_object() else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(map
+        .iter()
+        .filter_map(|(id, v)| {
+            let entry = v.as_object()?;
+            let enabled = entry
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            let rights = entry
+                .get("rights")
+                .and_then(serde_json::Value::as_object)
+                .map(|r| {
+                    r.iter()
+                        .filter_map(|(k, g)| {
+                            let g = g.as_str()?;
+                            (g == "allowed" || g == "denied").then(|| (k.clone(), g.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let author = entry
+                .get("author")
+                .and_then(serde_json::Value::as_str)
+                .filter(|a| !a.is_empty())
+                .map(String::from);
+            let net_hosts = entry
+                .get("net_hosts")
+                .and_then(serde_json::Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let source = entry
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            Some((
+                id.clone(),
+                PluginConfig {
+                    enabled,
+                    rights,
+                    author,
+                    net_hosts,
+                    source,
+                },
+            ))
+        })
+        .collect())
 }
 
 /// Liest `detached` nachsichtig: ein falscher Typ ergibt „leer“, einzelne Einträge ohne vier

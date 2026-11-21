@@ -27,6 +27,7 @@ allow = [
     "CC0-1.0",
     "BSL-1.0",
     "GPL-3.0-only",
+    "GPL-3.0-or-later",
 ]
 confidence-threshold = 0.9
 

@@ -356,3 +356,37 @@ fn a_locked_current_file_never_eats_the_older_ones() {
             .contains("b 299")
     );
 }
+
+/// Handtest Plug-ins F1: Scheitert gleich das erste Schreiben (Datei kurz gesperrt), fehlten
+/// „Start PlanoraCAD“ und alles Weitere einer kurzen Sitzung in der Datei, weil der nächste
+/// Versuch erst nach 50 Zeilen kam. Beim Beenden ([`Diag::flush`]) kommt der Rest nach.
+#[test]
+fn pending_lines_are_flushed_at_exit() {
+    let dir = temp("flush");
+    let path = logs(&dir).join(LOG_NAME);
+    let mut d = Diag::with_dir(&dir);
+    std::fs::create_dir(&path).unwrap(); // Schreiben scheitert
+    d.log(Level::Info, "Start PlanoraCAD");
+    d.log(Level::Info, "zweite Zeile");
+    std::fs::remove_dir(&path).unwrap();
+    d.flush();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("Start PlanoraCAD") && text.contains("zweite Zeile"));
+    assert!(!d.file_error());
+}
+
+/// Nach einem Schreibfehler versucht das Protokoll es spätestens nach einigen Sekunden wieder,
+/// nicht erst nach 50 Zeilen.
+#[test]
+fn a_write_error_is_retried_after_a_while() {
+    let dir = temp("retry-zeit");
+    let path = logs(&dir).join(LOG_NAME);
+    let mut d = Diag::with_dir(&dir);
+    std::fs::create_dir(&path).unwrap();
+    d.log(Level::Info, "verpasst");
+    std::fs::remove_dir(&path).unwrap();
+    d.age_failure(diag::RETRY_SECS + 1);
+    d.log(Level::Info, "später");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("verpasst") && text.contains("später"));
+}

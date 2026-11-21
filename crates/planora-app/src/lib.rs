@@ -1,6 +1,7 @@
 //! PlanoraCAD – Anwendungslogik und Oberfläche.
 
 pub mod about_dialog;
+pub mod addins_window;
 pub mod app;
 pub mod balloon_browser;
 pub mod balloon_tool;
@@ -10,6 +11,7 @@ pub mod browser;
 pub mod build_info;
 pub mod canvas;
 pub mod cards;
+pub mod catalog_hint;
 pub mod commands;
 pub mod crash;
 pub mod crash_addr;
@@ -56,6 +58,11 @@ pub mod parameter_dialog;
 pub mod parts_section;
 pub mod places;
 pub mod plane_dialog;
+pub mod plugin_catalog;
+pub mod plugin_dialog;
+pub mod plugin_prompts;
+pub mod plugin_repo;
+pub mod plugins;
 pub mod profile_pick;
 pub mod project_actions;
 pub mod project_tiles;

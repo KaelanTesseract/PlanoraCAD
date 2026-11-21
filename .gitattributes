@@ -6,3 +6,10 @@ crates/planora-drawing/tests/fixtures/*.dxf -text
 crates/planora-drawing/tests/fixtures/*.pdf -text
 crates/planora-step/tests/data/*.step text eol=lf
 crates/planora-drawing/tests/data/*.dxf -text
+plugins/**/*.rs text eol=lf
+plugins/**/*.toml text eol=lf
+plugins/**/*.ftl text eol=lf
+crates/planora-plugin-api/wit/*.wit text eol=lf
+crates/planora-plugin-host/tests/data/*.pcplugin -text
+crates/planora-plugin-host/tests/data/*.quelle-sha256 text eol=lf
+tools/build-plugins.sh text eol=lf

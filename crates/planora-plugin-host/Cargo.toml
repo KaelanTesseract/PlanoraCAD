@@ -1,0 +1,32 @@
+[package]
+name = "planora-plugin-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+fluent-bundle.workspace = true
+tokio.workspace = true
+unic-langid.workspace = true
+planora-plugin-api.workspace = true
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+planora-exchange.workspace = true
+# Meldungen in der Sprache des Programms (tr!, wie planora-update und planora-exchange).
+planora-i18n.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+miniz_oxide.workspace = true
+
+[lints]
+workspace = true

@@ -34,6 +34,7 @@ pub fn show(ctx: &egui::Context, ws: &mut Workspace) {
         Prompt::TakeOver { path, version } => take_over(ctx, ws, path, version),
         Prompt::AutosaveOffer { tab } => autosave_offer(ctx, ws, tab),
         Prompt::Notice(text) => notice(ctx, ws, &text),
+        Prompt::RemovePlugin { id, name } => remove_plugin(ctx, ws, &id, &name),
     }
 }
 
@@ -395,5 +396,34 @@ fn notice(ctx: &egui::Context, ws: &mut Workspace, text: &str) {
     });
     if ok {
         ws.prompt = None;
+    }
+}
+
+/// Text der Rückfrage vor dem Entfernen eines Plug-ins.
+pub fn remove_plugin_text(name: &str) -> String {
+    tr!("plugin-remove-text", plugin = name)
+}
+
+/// „Plug-in X entfernen?“: „Entfernen“ entfernt es ([`crate::plugins::remove`]), „Abbrechen“
+/// lässt es stehen.
+fn remove_plugin(ctx: &egui::Context, ws: &mut Workspace, id: &str, name: &str) {
+    let mut choice = None;
+    window(ctx, "remove_plugin", &tr!("plugin-remove-title"), |ui| {
+        ui.label(remove_plugin_text(name));
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button(tr!("plugin-settings-remove")).clicked() {
+                choice = Some(true);
+            }
+            if ui.button(tr!("common-cancel")).clicked() {
+                choice = Some(false);
+            }
+        });
+    });
+    if let Some(remove) = choice {
+        ws.prompt = None;
+        if remove {
+            crate::plugins::remove(ws, id);
+        }
     }
 }
