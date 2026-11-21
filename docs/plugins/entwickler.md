@@ -199,7 +199,7 @@ Der Katalog (Reiter **Katalog** im Fenster **Zusatzmodule**) wird kuratiert. Plu
 Regeln für ein Plug-in im Katalog:
 
 - Jedes Plug-in hat ein eigenes GitHub-Repo mit Veröffentlichungen (Releases), die dem Abschnitt „Installieren, Repo-Link und Updates“ genügen (eine `.pcplugin`, Tag = Version, optional `.sha256`). Der Installer von PlanoraCAD liefert keine Plug-ins mit.
-- Das Katalog-Repo `KaelanTesseract/PlanoraCAD-Plugins` enthält nur die Liste. Das Programm liest das neueste nicht als Entwurf markierte Release (GitHub-API `/releases/latest`); `katalog.json` und die Symbole hängen als Dateien an diesem Release, nicht am Hauptzweig. Der Katalog ist im Programm fest eingetragen und nicht einstellbar.
+- Das Katalog-Repo `KaelanTesseract/PlanoraCAD-Plugins` enthält nur die Liste. Das Programm liest das neueste Release, das weder Entwurf noch Vorabversion ist (GitHub-API `/releases/latest` überspringt beides); das Katalog-Release darf darum nicht als Vorabversion markiert sein. `katalog.json` und die Symbole hängen als Dateien an diesem Release, nicht am Hauptzweig. Der Katalog ist im Programm fest eingetragen und nicht einstellbar.
 - `katalog.json` (höchstens 1 MiB), Format 1:
 
 ```json
@@ -218,8 +218,8 @@ Regeln für ein Plug-in im Katalog:
 }
 ```
 
-- `id` ist die Plug-in-Id aus der `plugin.toml`; `repo` ist der Repo-Link ohne Port und Abfrage. `kategorie` ist `elektronik`, `import-export`, `werkzeuge` oder `beispiele`; alles andere erscheint als „Sonstiges“.
-- `symbol` ist optional und nennt eine weitere Datei im selben Release: **nur PNG**, höchstens 256 × 256 Pixel und 256 KiB. Fehlt es oder ist es ungültig, nimmt das Programm das Standardsymbol. SVG wird nicht gezeichnet.
+- `id` ist die Plug-in-Id aus der `plugin.toml`; beim Installieren wird geprüft, dass das Paket genau diese Id trägt, sonst wird nichts installiert; `repo` ist der Repo-Link ohne Port und Abfrage. `kategorie` ist `elektronik`, `import-export`, `werkzeuge` oder `beispiele`; alles andere erscheint als „Sonstiges“.
+- `symbol` ist optional und nennt eine weitere Datei im selben Release: **nur PNG** (Endung `.png`), höchstens 256 × 256 Pixel und 256 KiB. Fehlt es oder ist es ungültig, nimmt das Programm das Standardsymbol. Andere Formate wie SVG nimmt das Programm nicht an und lädt sie nicht (es hat keinen Rasterer dafür).
 - Unbekannte Felder werden ignoriert. Eine unbekannt höhere `format`-Nummer zeigt „Katalog braucht eine neuere PlanoraCAD-Version“ und sonst nichts.
 - Version, verlangte Rechte und Autor stammen immer aus dem Plug-in-Repo, nicht aus der Liste. Die Installation läuft wie über den Repo-Link; als Herkunft wird zusätzlich „aus dem Katalog“ vermerkt.
 

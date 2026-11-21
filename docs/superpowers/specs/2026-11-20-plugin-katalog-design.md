@@ -50,7 +50,7 @@ Liegt als Release-Datei im **neuesten Release** des Katalog-Repos (nicht im Haup
 - `name`, `beschreibung`: Texte je Sprache; fehlt die aktuelle Sprache ⇒ Englisch ⇒ erster vorhandener.
 - `kategorie`: freier Bezeichner; das Programm kennt Übersetzungen für eine feste Liste (Vorschlag: `elektronik`, `import-export`, `werkzeuge`, `beispiele`), unbekannte erscheinen unter „Sonstiges“.
 - `repo`: muss die Etappe-1-Regel für Repo-Links erfüllen (`parse_repo_link`), sonst wird der Eintrag übergangen.
-- `symbol`: optional, Name einer weiteren Datei im selben Katalog-Release (PNG oder SVG, ≤ 256 KiB); fehlt sie ⇒ Standardsymbol.
+- `symbol`: optional, Name einer weiteren Datei im selben Katalog-Release (nur PNG, ≤ 256 KiB; SVG wird nicht angenommen, Abschluss-Ruling); fehlt sie ⇒ Standardsymbol.
 - Unbekannte Felder werden ignoriert (spätere Erweiterungen).
 
 ## Programmseite

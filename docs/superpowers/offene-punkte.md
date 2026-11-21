@@ -3261,5 +3261,6 @@ Stand nach der Abschluss-Fixwelle (Gesamtprüfung und Task 9 erledigt). Quelle: 
 
 ## Plug-in-Katalog
 - Handtest gegen das echte Katalog-Repo und `KaelanTesseract/PlanoraCAD-Plugin-Hallo` v0.1.0 steht aus (Tests laufen offline): Hinweis beim ersten Start, Reiter Katalog, Installieren über GitHub, Prüfsumme, Herkunft „aus dem Katalog“, Offline-Anzeige.
-- SVG-Symbole werden nicht gezeichnet (nur PNG bis 256 x 256 Pixel).
-- Keine Signaturprüfung; nur HTTPS zu GitHub und die Paket-Prüfsumme.
+- SVG-Symbole werden nicht angenommen (nur PNG bis 256 x 256 Pixel).
+- Die Details im Reiter Katalog zeigen die neueste Version nur bei installierten Plug-ins oder gefundenen Updates; die neueste Version (und die verlangten Rechte) beim Öffnen der Details aus dem Plug-in-Repo holen.
+- Keine Signaturprüfung; nur HTTPS zu GitHub und, falls das Release eine `.sha256` hat, die Paket-Prüfsumme (nur gegen Übertragungsfehler).
