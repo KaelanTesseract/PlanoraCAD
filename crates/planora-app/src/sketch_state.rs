@@ -703,6 +703,8 @@ pub struct SketchSession {
     /// Rundung/Fase: die zuletzt gerundete Kurve und ihr Radius; die nächste Rundung derselben
     /// Sitzung schließt mit dem zweiten Klick ab.
     pub fillet_run: Option<(CurveId, f64)>,
+    /// Ziehgriffe von Rundung und Fase (wie Fusion).
+    pub kind_grip: crate::sketch_kinds::KindGripState,
     /// Versatz: die ganze tangentiale Kette nehmen (Vorgabe).
     pub offset_chain: bool,
     /// Klicklagen der gewählten Kurven von Rundung und Fase (zählen nicht in `kind_stage`).
@@ -893,6 +895,7 @@ impl SketchSession {
             trim_drag: None,
             modify_edits: (0, None),
             fillet_run: None,
+            kind_grip: Default::default(),
             offset_chain: true,
             pick_points: Vec::new(),
             curve_picks: CurvePicks::default(),

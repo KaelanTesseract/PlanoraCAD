@@ -1119,11 +1119,12 @@ fn tab_switches_between_distance_and_angle() {
     assert_eq!(se.input.active, 1);
     se.next_field(false);
     assert_eq!(se.input.active, 0);
-    // Ohne getippten Winkel zeigt das Feld die Vorgabe, die Länge den Zeiger.
+    // Ohne getippten Winkel zeigt das Feld die Vorgabe, die Länge die Startlänge (wie Fusion:
+    // ein Fünftel der kürzeren Linie, hier 30 mm), nicht den Zeiger.
     let (se, sk) = s.session_sketch_mut().unwrap();
     se.update_cursor(sk, Some(v(40.0, 0.0)), PICK);
     assert!((se.field_value(sk, F::Angle).unwrap() - 45_f64.to_radians()).abs() < 1e-12);
-    assert!((se.field_value(sk, F::Distance).unwrap() - 10.0).abs() < 1e-9);
+    assert!((se.field_value(sk, F::Distance).unwrap() - 6.0).abs() < 1e-9);
 }
 
 #[test]
@@ -1282,7 +1283,7 @@ fn a_fixed_near_end_refuses_the_chamfer_with_its_own_message() {
 }
 
 #[test]
-fn a_chamfer_over_raw_events_needs_two_clicks_and_a_third_at_the_pointer() {
+fn a_chamfer_over_raw_events_needs_two_clicks_and_a_third_anywhere() {
     let ctx = context();
     let mut s = corner();
     let steps = undo_len(&s);
@@ -1291,8 +1292,9 @@ fn a_chamfer_over_raw_events_needs_two_clicks_and_a_third_at_the_pointer() {
     raw_click(&ctx, &mut s, v(20.0, 0.0));
     raw_click(&ctx, &mut s, v(0.0, 20.0));
     assert_eq!(stage(&s), 2);
-    // Der Abstand kommt vom Zeiger: Abstand zur Ecke.
-    let at = v(6.0, 8.0);
+    // Der Abstand ist die Startlänge (ein Fünftel der kürzeren Linie, hier 8 mm), nicht der
+    // Zeiger (wie Fusion; gezogen wird am Griff).
+    let at = v(15.0, 20.0);
     let p = screen(&s, at);
     play(&ctx, &mut s, vec![vec![Event::PointerMoved(p)], vec![]]);
     let raw = s
@@ -1303,7 +1305,7 @@ fn a_chamfer_over_raw_events_needs_two_clicks_and_a_third_at_the_pointer() {
         .as_ref()
         .unwrap()
         .raw;
-    let d = raw.length();
+    let d = 8.0;
     let shown = {
         let (se, sk) = s.session_sketch_mut().unwrap();
         se.kind_preview(sk, raw).expect("Vorschau")
@@ -1557,4 +1559,135 @@ fn at_stage_one_the_shared_point_picks_the_other_curve() {
     assert!(click(&mut s, v(0.0, 0.0)).is_err());
     assert_eq!(message(&s), Some(t("sketch-fillet-point-curves")));
     assert_eq!(stage(&s), 1);
+}
+
+// ---- Griffe an Rundung und Fase (wie Fusion) -------------------------------------------------------
+
+fn locked(s: &AppState, kind: F) -> Option<f64> {
+    let se = s.sketch_session.as_ref().unwrap();
+    se.input
+        .fields
+        .iter()
+        .find(|f| f.kind == kind)
+        .and_then(|f| f.locked)
+}
+
+fn grips(s: &AppState) -> Vec<planora_app::sketch_kinds::KindGrip> {
+    let se = s.sketch_session.as_ref().unwrap();
+    se.kind_grips(sketch(s))
+}
+
+/// Zieht den Griff von `from` nach `to` (Skizzenkoordinaten) mit echten Zeigerereignissen.
+fn raw_drag(ctx: &egui::Context, s: &mut AppState, from: DVec2, to: DVec2) {
+    let (a, b) = (screen(s, from), screen(s, to));
+    let mid = a + (b - a) * 0.5;
+    play(
+        ctx,
+        s,
+        vec![
+            vec![Event::PointerMoved(a)],
+            vec![button_with(a, true, Modifiers::NONE)],
+            vec![Event::PointerMoved(mid)],
+            vec![Event::PointerMoved(b)],
+            vec![button_with(b, false, Modifiers::NONE)],
+            vec![],
+        ],
+    );
+}
+
+#[test]
+fn dragging_the_fillet_grip_sets_the_radius() {
+    let ctx = context();
+    let mut s = corner();
+    choose(&mut s, ToolKind::Fillet);
+    play(&ctx, &mut s, vec![vec![]]);
+    raw_click(&ctx, &mut s, v(20.0, 0.0));
+    raw_click(&ctx, &mut s, v(0.0, 20.0));
+    assert_eq!(stage(&s), 2);
+    let g = grips(&s);
+    assert_eq!(g.len(), 1, "ein Radiusgriff");
+    assert_eq!(g[0].field, F::Radius);
+    assert!(
+        (g[0].value - 8.0).abs() < 1e-9,
+        "Startradius {}",
+        g[0].value
+    );
+    // Doppelt so weit von der Ecke: doppelter Radius.
+    raw_drag(&ctx, &mut s, g[0].at, g[0].at * 2.0);
+    let locked = locked(&s, F::Radius);
+    assert_eq!(locked, Some(16.0), "gezogen, auf 0,01 mm gerundet");
+    assert_eq!(stage(&s), 2, "der Zug legt nichts an");
+    // Ein Klick an der Ecke neben dem Griff legt die Rundung mit dem gezogenen Radius an.
+    raw_click(&ctx, &mut s, v(12.0, 2.0));
+    let sk = sketch(&s);
+    let r = sk
+        .curves()
+        .find_map(|(id, c)| matches!(c.kind, CurveKind::Arc { .. }).then(|| sk.radius(id)))
+        .flatten()
+        .expect("Rundungsbogen");
+    assert!((r - 16.0).abs() < 1e-6, "{r}");
+}
+
+#[test]
+fn esc_during_a_grip_drag_takes_back_only_the_drag() {
+    let ctx = context();
+    let mut s = corner();
+    choose(&mut s, ToolKind::Fillet);
+    play(&ctx, &mut s, vec![vec![]]);
+    raw_click(&ctx, &mut s, v(20.0, 0.0));
+    raw_click(&ctx, &mut s, v(0.0, 20.0));
+    let g = grips(&s)[0];
+    let (a, b) = (screen(&s, g.at), screen(&s, g.at * 2.0));
+    play(
+        &ctx,
+        &mut s,
+        vec![
+            vec![Event::PointerMoved(a)],
+            vec![button_with(a, true, Modifiers::NONE)],
+            vec![Event::PointerMoved(b)],
+            vec![Event::Key {
+                key: Key::Escape,
+                physical_key: Some(Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![button_with(b, false, Modifiers::NONE)],
+            vec![],
+        ],
+    );
+    assert_eq!(locked(&s, F::Radius), None, "Feld wie vorher");
+    assert_eq!(stage(&s), 2, "das Werkzeug bleibt in der Stufe");
+}
+
+#[test]
+fn chamfer_starts_with_a_default_length_not_the_pointer() {
+    let mut s = rectangle();
+    chamfer_picks(&mut s, ToolKind::ChamferEqual, false);
+    let a = preview(&mut s, v(45.0, 2.0)).expect("Vorschau");
+    let b = preview(&mut s, v(20.0, 20.0)).expect("Vorschau");
+    assert_eq!(a, b, "der Zeiger ändert die Fase nicht");
+    let g = grips(&s);
+    assert_eq!(g.len(), 1);
+    assert!(
+        (g[0].value - 6.0).abs() < 1e-9,
+        "ein Fünftel von 30 mm: {}",
+        g[0].value
+    );
+}
+
+#[test]
+fn two_distance_chamfer_grips_change_only_their_own_distance() {
+    let ctx = context();
+    let mut s = corner();
+    choose(&mut s, ToolKind::ChamferTwoDistances);
+    play(&ctx, &mut s, vec![vec![]]);
+    raw_click(&ctx, &mut s, v(20.0, 0.0));
+    raw_click(&ctx, &mut s, v(0.0, 20.0));
+    let g = grips(&s);
+    assert_eq!(g.len(), 2, "je Abstand ein Griff");
+    assert_eq!([g[0].field, g[1].field], [F::Distance, F::Distance2]);
+    raw_drag(&ctx, &mut s, g[1].at, g[1].at * 1.5);
+    assert_eq!(locked(&s, F::Distance), None, "der erste bleibt");
+    assert_eq!(locked(&s, F::Distance2), Some(12.0));
 }
