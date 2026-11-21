@@ -49,7 +49,7 @@ winit.workspace = true
 # Fenster- und Programmsymbol sowie Logo im Über-Dialog aus PNG lesen (png ist über egui ohnehin im Baum).
 png = "0.18"
 # Ortszeit des Rechners für Zeitangaben (nur in local_time.rs benutzt).
-chrono.workspace = true
+jiff.workspace = true
 # Prüfsumme der eigenen kleinen ZIP-Schreibfunktion (zip_store.rs, Projektdatei in der
 # Rückmeldung). Am 2026-10-26 geprüft: MIT OR Apache-2.0, über png/wgpu ohnehin im Baum.
 crc32fast = "=1.5.2"

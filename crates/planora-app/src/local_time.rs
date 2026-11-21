@@ -53,11 +53,13 @@ pub fn format_offset(iso_utc: &str, offset_seconds: i32) -> Option<String> {
 /// Abstand der Ortszeit des Rechners zu UTC in Sekunden zum angegebenen Zeitpunkt
 /// (Sekunden seit 1970), samt der damals geltenden Sommerzeit. `None`, wenn unbekannt.
 pub fn local_offset_at(unix_seconds: i64) -> Option<i32> {
-    use chrono::{Local, Offset, TimeZone};
-    Local
-        .timestamp_opt(unix_seconds, 0)
-        .single()
-        .map(|dt| dt.offset().fix().local_minus_utc())
+    let t = jiff::Timestamp::from_second(unix_seconds).ok()?;
+    Some(jiff::tz::TimeZone::system().to_offset(t).seconds())
+}
+
+/// Jetzt in der Ortszeit des Rechners (ohne Zone), etwa für Dateinamen und Berichte.
+pub fn now_local() -> jiff::civil::DateTime {
+    jiff::ZonedDateTime::now().datetime()
 }
 
 /// Sekunden seit 1970 aus genau „JJJJ-MM-TTThh:mm:ssZ“ (mit gültigem Datum und gültiger Uhrzeit).

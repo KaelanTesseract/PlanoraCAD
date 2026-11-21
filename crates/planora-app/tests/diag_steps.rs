@@ -142,22 +142,21 @@ fn step_time_is_hh_mm_ss() {
     let mut d = Diag::in_memory();
     d.step("Zeit");
     let t = d.recent_steps()[0].time.clone();
-    assert!(
-        chrono::NaiveTime::parse_from_str(&t, "%H:%M:%S").is_ok(),
-        "{t}"
-    );
+    assert!(jiff::civil::Time::strptime("%H:%M:%S", &t).is_ok(), "{t}");
     assert_eq!(t.len(), 8);
 }
 
 #[test]
 fn step_time_is_local_time() {
-    use chrono::Timelike;
     let mut d = Diag::in_memory();
-    let before = chrono::Local::now().time().num_seconds_from_midnight() as i64;
+    let secs = |t: jiff::civil::Time| {
+        i64::from(t.hour()) * 3600 + i64::from(t.minute()) * 60 + i64::from(t.second())
+    };
+    let before = secs(jiff::ZonedDateTime::now().time());
     d.step("Ortszeit");
-    let after = chrono::Local::now().time().num_seconds_from_midnight() as i64;
-    let t = chrono::NaiveTime::parse_from_str(&d.recent_steps()[0].time, "%H:%M:%S").unwrap();
-    let s = t.num_seconds_from_midnight() as i64;
+    let after = secs(jiff::ZonedDateTime::now().time());
+    let t = jiff::civil::Time::strptime("%H:%M:%S", &d.recent_steps()[0].time).unwrap();
+    let s = secs(t);
     // Ortszeit (nicht UTC): zwischen den beiden Lesungen, mit Spielraum und Mitternacht.
     let dist = |a: i64, b: i64| (a - b).rem_euclid(86_400).min((b - a).rem_euclid(86_400));
     assert!(

@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::NaiveDate;
 use planora_app::crash::{self, ReportInput};
 use planora_app::diag::{Diag, Level, Step};
 use planora_app::feedback::{self, Personal};
@@ -16,10 +15,8 @@ use planora_app::feedback::{self, Personal};
 /// Nur ein Test zur Zeit darf den globalen Hook tauschen.
 static HOOK_LOCK: Mutex<()> = Mutex::new(());
 
-fn time() -> chrono::NaiveDateTime {
-    NaiveDate::from_ymd_opt(2026, 10, 26)
-        .and_then(|d| d.and_hms_opt(14, 3, 22))
-        .expect("gültige Zeit")
+fn time() -> jiff::civil::DateTime {
+    jiff::civil::date(2026, 10, 26).at(14, 3, 22, 0)
 }
 
 fn input() -> ReportInput {

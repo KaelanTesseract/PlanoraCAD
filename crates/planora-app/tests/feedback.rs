@@ -527,10 +527,7 @@ fn parts_defaults_and_labels() {
 #[test]
 fn bundle_dir_names_and_collision() {
     let data = temp("dir");
-    let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 26)
-        .unwrap()
-        .and_hms_opt(14, 3, 22)
-        .unwrap();
+    let now = jiff::civil::date(2026, 10, 26).at(14, 3, 22, 0);
     let d1 = bundle_dir(&data, now);
     assert_eq!(d1, data.join(FEEDBACK_DIR).join("2026-10-26_14-03-22"));
     std::fs::create_dir_all(&d1).unwrap();
@@ -887,10 +884,7 @@ fn attach_hint_names_the_project_zip_when_it_goes_along() {
 fn cleanup_feedback_dirs_drops_old_then_keeps_ten_newest_and_only_own() {
     let data = temp("aufraeumen");
     let base = data.join(FEEDBACK_DIR);
-    let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 26)
-        .unwrap()
-        .and_hms_opt(12, 0, 0)
-        .unwrap();
+    let now = jiff::civil::date(2026, 10, 26).at(12, 0, 0, 0);
     let mk = |name: &str| {
         let d = base.join(name);
         std::fs::create_dir_all(&d).unwrap();
@@ -924,10 +918,7 @@ fn cleanup_feedback_dirs_drops_old_then_keeps_ten_newest_and_only_own() {
 fn cleanup_feedback_dirs_only_touches_exact_own_names() {
     let data = temp("aufraeumen-streng");
     let base = data.join(FEEDBACK_DIR);
-    let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 26)
-        .unwrap()
-        .and_hms_opt(12, 0, 0)
-        .unwrap();
+    let now = jiff::civil::date(2026, 10, 26).at(12, 0, 0, 0);
     let foreign = [
         "2026-09-01_10-00-00_backup",
         "2026-09-01_10-00-00_",
@@ -953,10 +944,7 @@ fn cleanup_feedback_dirs_only_touches_exact_own_names() {
 fn cleanup_feedback_dirs_treats_future_stamps_as_now() {
     let data = temp("aufraeumen-zukunft");
     let base = data.join(FEEDBACK_DIR);
-    let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 26)
-        .unwrap()
-        .and_hms_opt(12, 0, 0)
-        .unwrap();
+    let now = jiff::civil::date(2026, 10, 26).at(12, 0, 0, 0);
     let mk = |name: &str| {
         let d = base.join(name);
         std::fs::create_dir_all(&d).unwrap();
@@ -975,10 +963,7 @@ fn cleanup_feedback_dirs_treats_future_stamps_as_now() {
         assert!(d.exists());
     }
     // Zeit holt den Stempel ein: dann altert er normal.
-    let later = chrono::NaiveDate::from_ymd_opt(2030, 3, 1)
-        .unwrap()
-        .and_hms_opt(0, 0, 0)
-        .unwrap();
+    let later = jiff::civil::date(2030, 3, 1).at(0, 0, 0, 0);
     cleanup_feedback_dirs(&base, later);
     assert!(!future.exists());
 }

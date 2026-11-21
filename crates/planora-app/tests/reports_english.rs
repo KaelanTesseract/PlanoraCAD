@@ -4,7 +4,6 @@
 
 mod common;
 
-use chrono::NaiveDate;
 use common::{Screen, assert_english, assert_has, find};
 use planora_app::build_info::{BuildInfo, GpuInfo};
 use planora_app::commands;
@@ -41,9 +40,7 @@ fn report_input(steps: Vec<Step>, log: Vec<String>) -> ReportInput {
         steps,
         log,
         document: Some(r"C:\Projekte\Halter.pcad".into()),
-        time: NaiveDate::from_ymd_opt(2026, 10, 26)
-            .and_then(|d| d.and_hms_opt(14, 3, 22))
-            .unwrap(),
+        time: jiff::civil::date(2026, 10, 26).at(14, 3, 22, 0),
     }
 }
 

@@ -6,7 +6,6 @@
 
 mod common;
 
-use chrono::NaiveDate;
 use eframe::App as _;
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::{PlanoraApp, RestartPhase};
@@ -57,9 +56,7 @@ fn input(version: &str, document: Option<PathBuf>) -> ReportInput {
         steps: vec![],
         log: vec!["2026-10-26T13:03:19Z INFO Start".into()],
         document,
-        time: NaiveDate::from_ymd_opt(2026, 10, 26)
-            .and_then(|d| d.and_hms_opt(14, 3, 22))
-            .unwrap(),
+        time: jiff::civil::date(2026, 10, 26).at(14, 3, 22, 0),
     }
 }
 
