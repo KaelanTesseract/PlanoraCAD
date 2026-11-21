@@ -15,6 +15,7 @@ Ein Plug-in ist ein kleines WebAssembly-Programm (eine WASM-Komponente), das Pla
 - [Rechte und Anfragen](#rechte-und-anfragen)
 - [Zeitgrenzen und Speichergrenzen](#zeitgrenzen-und-speichergrenzen)
 - [Installieren, Repo-Link und Updates](#installieren-repo-link-und-updates)
+- [In den Katalog](#in-den-katalog)
 - [Andere Sprachen (ungetestet)](#andere-sprachen-ungetestet)
 - [Leistung](#leistung)
 
@@ -190,6 +191,37 @@ WASI-Sockets (`wasi:sockets`) und Namensauflösung sind abgeschaltet: Netz gibt 
   - Kanal nach dem Zusatz: ohne Zusatz stabil, `beta…` oder `rc…` Beta, alles andere Entwicklerkanal. Angeboten werden nur Versionen, die nach SemVer-Vorrang höher sind als die installierte (Build-Metadaten wie `+abc` zählen nicht); das gilt auch noch beim Einspielen. Gelesen wird die erste Seite der Release-Liste (bis zu 100 Veröffentlichungen).
 - Das Programm sucht beim Start (höchstens einmal am Tag) nach Updates für Plug-ins, die über einen Repo-Link installiert wurden, und holt dabei nur die Release-Liste (30 Sekunden). Gibt es neuere Versionen, erscheint ein Hinweis; das Paket selbst wird erst beim Öffnen von „Aktualisieren“ geladen (höchstens 64 MiB, 5 Minuten insgesamt); bis dahin zeigt der Dialog „Wird geholt…“.
 - Beim Ersetzen durch eine neue Version bleiben Rechte nur bei gleichem Autor, gleicher Herkunft und gleichen Rechnern erhalten (siehe oben).
+
+## In den Katalog
+
+Der Katalog (Reiter **Katalog** im Fenster **Zusatzmodule**) wird kuratiert. Plug-ins kommen nur über Dennis Guse in den Katalog; gepflegt wird er von der Session „PlanoraCAD Plugin-Pläne“, die auch die Plug-in-Repos anlegt. Aufgenommen werden nur Plug-ins von Dennis selbst. Wer ein Plug-in anderer Herkunft anbieten will, nutzt Datei oder Repo-Link (siehe oben).
+
+Regeln für ein Plug-in im Katalog:
+
+- Jedes Plug-in hat ein eigenes GitHub-Repo mit Veröffentlichungen (Releases), die dem Abschnitt „Installieren, Repo-Link und Updates“ genügen (eine `.pcplugin`, Tag = Version, optional `.sha256`). Der Installer von PlanoraCAD liefert keine Plug-ins mit.
+- Das Katalog-Repo `KaelanTesseract/PlanoraCAD-Plugins` enthält nur die Liste. Das Programm liest das neueste nicht als Entwurf markierte Release (GitHub-API `/releases/latest`); `katalog.json` und die Symbole hängen als Dateien an diesem Release, nicht am Hauptzweig. Der Katalog ist im Programm fest eingetragen und nicht einstellbar.
+- `katalog.json` (höchstens 1 MiB), Format 1:
+
+```json
+{
+  "format": 1,
+  "eintraege": [
+    {
+      "id": "planora.beispiel-hallo",
+      "name": { "de": "Beispiel-Hallo", "en": "Example Hello" },
+      "beschreibung": { "de": "…", "en": "…" },
+      "kategorie": "beispiele",
+      "repo": "https://github.com/KaelanTesseract/PlanoraCAD-Plugin-Hallo",
+      "symbol": "symbol.png"
+    }
+  ]
+}
+```
+
+- `id` ist die Plug-in-Id aus der `plugin.toml`; `repo` ist der Repo-Link ohne Port und Abfrage. `kategorie` ist `elektronik`, `import-export`, `werkzeuge` oder `beispiele`; alles andere erscheint als „Sonstiges“.
+- `symbol` ist optional und nennt eine weitere Datei im selben Release: **nur PNG**, höchstens 256 × 256 Pixel und 256 KiB. Fehlt es oder ist es ungültig, nimmt das Programm das Standardsymbol. SVG wird nicht gezeichnet.
+- Unbekannte Felder werden ignoriert. Eine unbekannt höhere `format`-Nummer zeigt „Katalog braucht eine neuere PlanoraCAD-Version“ und sonst nichts.
+- Version, verlangte Rechte und Autor stammen immer aus dem Plug-in-Repo, nicht aus der Liste. Die Installation läuft wie über den Repo-Link; als Herkunft wird zusätzlich „aus dem Katalog“ vermerkt.
 
 ## Andere Sprachen (ungetestet)
 

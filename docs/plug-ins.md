@@ -5,6 +5,7 @@ Plug-ins sind kleine Zusatzprogramme, die PlanoraCAD um Befehle erweitern. Sie l
 ## Inhalt
 
 - [Wo du Plug-ins findest](#wo-du-plug-ins-findest)
+- [Der Katalog](#der-katalog)
 - [Plug-in installieren](#plug-in-installieren)
 - [Plug-in benutzen](#plug-in-benutzen)
 - [Rechte](#rechte)
@@ -14,11 +15,21 @@ Plug-ins sind kleine Zusatzprogramme, die PlanoraCAD um Befehle erweitern. Sie l
 
 ## Wo du Plug-ins findest
 
-Plug-ins müssen unter einer Lizenz stehen, die zur GPL-3.0 passt. In dieser Version liefert der Installer noch keine Plug-ins mit; du bekommst sie als Datei (Endung `.pcplugin`) oder über den GitHub-Link des Entwicklers. Installiere nur Plug-ins, denen du vertraust. Signaturen prüft PlanoraCAD in dieser Version noch nicht.
+Plug-ins müssen unter einer Lizenz stehen, die zur GPL-3.0 passt. Der Installer liefert keine Plug-ins mit. Du findest sie im **Katalog** (Reiter im Fenster **Zusatzmodule**, siehe unten), als Datei (Endung `.pcplugin`) oder über den GitHub-Link des Entwicklers. Installiere nur Plug-ins, denen du vertraust. Signaturen prüft PlanoraCAD in dieser Version noch nicht.
+
+## Der Katalog
+
+Der Katalog ist eine kuratierte Liste von Plug-ins, die zu PlanoraCAD gehören. Beim ersten Start nach der Aktualisierung fragt PlanoraCAD einmal: „Es gibt Zusatzmodule für PlanoraCAD, z. B. Elektronik. Jetzt ansehen?“ Mit **Katalog öffnen** springst du direkt in den Reiter, mit **Später** (oder Esc) schließt du die Frage; sie kommt danach nicht wieder. Den Katalog erreichst du jederzeit über **Datei → Zusatzmodule → Verwalten …**, Reiter **Katalog**.
+
+- Links stehen Symbol, Name und Kategorie; oben kannst du suchen (Name und Beschreibung) und nach Kategorie filtern. Rechts stehen Beschreibung, neueste Version, verlangte Rechte und **Installieren**.
+- **Installieren** läuft wie über den Repo-Link: Du siehst im Dialog Name, Autor, Lizenz und Rechte und bestätigst. Das Paket wird von GitHub geholt und die Prüfsumme geprüft. Im Reiter **Installiert** steht als Herkunft „aus dem Katalog“; Updates kommen wie bei jedem Repo-Link-Plug-in.
+- PlanoraCAD lädt den Katalog beim Öffnen des Reiters (höchstens alle 10 Minuten neu) und bei der täglichen Update-Suche aus dem öffentlichen GitHub-Repo `KaelanTesseract/PlanoraCAD-Plugins`. Die letzte Fassung bleibt auf der Festplatte; ohne Internet siehst du sie mit dem Hinweis „offline – Stand vom …“. Wurde der Katalog noch nie geladen, steht dort „Der Katalog konnte nicht geladen werden“ mit **Erneut versuchen**.
+- Der Katalog zeigt nur Plug-ins von Dennis Guse. Einen Katalogeintrag für dein eigenes Plug-in gibt es nicht auf Zuruf; Plug-ins von anderen installierst du weiter über Datei oder Repo-Link.
+- Es gibt keine Bewertungen, Download-Zahlen oder Bildschirmfotos. Eine Signaturprüfung gibt es nicht; geschützt wird nur über HTTPS zu GitHub und die Prüfsumme des Pakets.
 
 ## Das Fenster „Zusatzmodule“
 
-Alle Plug-ins verwaltest du im Fenster **Zusatzmodule**: **Datei → Zusatzmodule → Verwalten …** (wie „Skripte und Zusatzmodule“ in Fusion). Links steht die Liste der Plug-ins mit Haken (ein- oder ausschalten, wirkt sofort und wird gleich gespeichert) und Zustand, rechts alles zum gewählten Plug-in: Version, Herkunft, Autor, Lizenz, Beschreibung, seine Rechte mit ihrem Stand und **Zurücknehmen**, bei einem Repo-Link die Quelle und die Updates, und **Entfernen**. Ein ausgeschaltetes Plug-in bleibt in der Liste, auch nach einem Neustart. Darüber steht, in welchem Ordner die installierten Plug-ins liegen. Wie andere Fenster lässt sich auch dieses abdocken.
+Alle Plug-ins verwaltest du im Fenster **Zusatzmodule**: **Datei → Zusatzmodule → Verwalten …** (wie „Skripte und Zusatzmodule“ in Fusion). Es hat zwei Reiter: **Installiert** und **Katalog**. Im Reiter „Installiert“ steht links steht die Liste der Plug-ins mit Haken (ein- oder ausschalten, wirkt sofort und wird gleich gespeichert) und Zustand, rechts alles zum gewählten Plug-in: Version, Herkunft, Autor, Lizenz, Beschreibung, seine Rechte mit ihrem Stand und **Zurücknehmen**, bei einem Repo-Link die Quelle und die Updates, und **Entfernen**. Ein ausgeschaltetes Plug-in bleibt in der Liste, auch nach einem Neustart. Darüber steht, in welchem Ordner die installierten Plug-ins liegen. Wie andere Fenster lässt sich auch dieses abdocken.
 
 ## Plug-in installieren
 

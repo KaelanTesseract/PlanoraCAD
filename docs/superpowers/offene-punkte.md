@@ -3258,3 +3258,8 @@ Stand nach der Abschluss-Fixwelle (Gesamtprüfung und Task 9 erledigt). Quelle: 
 - Eine Neuinstallation über den Repo-Link kann still herabstufen (Hinweis nötig).
 - Der Installer muss später `author`, `net_hosts` und `source` (Herkunft) mitschreiben; ohne `source` fragt das Programm gespeicherte Rechte neu.
 - Echter GitHub-Zugriff wurde nie von Hand geprüft (Tests laufen offline).
+
+## Plug-in-Katalog
+- Handtest gegen das echte Katalog-Repo und `KaelanTesseract/PlanoraCAD-Plugin-Hallo` v0.1.0 steht aus (Tests laufen offline): Hinweis beim ersten Start, Reiter Katalog, Installieren über GitHub, Prüfsumme, Herkunft „aus dem Katalog“, Offline-Anzeige.
+- SVG-Symbole werden nicht gezeichnet (nur PNG bis 256 x 256 Pixel).
+- Keine Signaturprüfung; nur HTTPS zu GitHub und die Paket-Prüfsumme.

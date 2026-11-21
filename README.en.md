@@ -178,7 +178,7 @@ Differences from Windows:
 
 ## Plug-ins
 
-PlanoraCAD can be extended with plug-ins (Windows and Ubuntu). A plug-in is a small WebAssembly program that runs in a sandbox and may only do what you allow. You manage plug-ins in the window **File → Add-Ins → Manage …** and install them there from a file (`.pcplugin`) or via the developer's GitHub link; their commands are under **File → Add-Ins**. Plug-ins must use a GPL-3.0-compatible license. More: [Using plug-ins](docs/plug-ins.md) and [Developing plug-ins](docs/plugins/entwickler.md) (both in German). The interface is version 0.x and may still break. If you build on Ubuntu yourself, you also need `libssl-dev` and `pkg-config`.
+PlanoraCAD can be extended with plug-ins (Windows and Ubuntu). A plug-in is a small WebAssembly program that runs in a sandbox and may only do what you allow. You manage plug-ins in the window **File → Add-Ins → Manage …** and install them there from the **catalog** (the "Catalog" tab, a curated list), from a file (`.pcplugin`) or via the developer's GitHub link; their commands are under **File → Add-Ins**. Plug-ins must use a GPL-3.0-compatible license. More: [Using plug-ins](docs/plug-ins.md) and [Developing plug-ins](docs/plugins/entwickler.md) (both in German). The interface is version 0.x and may still break. If you build on Ubuntu yourself, you also need `libssl-dev` and `pkg-config`.
 
 ## Reporting bugs and wishes
 
