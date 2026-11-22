@@ -274,6 +274,47 @@ impl Sketch {
         self.cycle_groups = Some(g);
     }
 
+    /// Seit dem Stand `before` wurden nur Variablen, Punkte oder Kurven angehängt: Die Gruppen
+    /// gelten weiter (neue Variablen liegen hinter ihnen und gehören zu keiner Gruppe), sonst
+    /// baute die nächste Prüfung sie neu (Reste der Härtungen nach Skizzen 5).
+    pub(crate) fn carry_cycle_groups(&mut self, before: u64) {
+        let now = self.revision();
+        if let Some(g) = &mut self.cycle_groups
+            && g.revision == before
+        {
+            Arc::make_mut(g).revision = now;
+        }
+    }
+
+    /// Seit dem Stand `before` wurden nur Variablen, Punkte, Kurven und die Abhängigkeiten `ks`
+    /// angehängt (Anlegen einer Kurve mit ihren internen Abhängigkeiten): die Gruppen mit `ks`
+    /// fortführen statt neu bauen.
+    pub(crate) fn follow_appended(&mut self, before: u64, ks: &[crate::constraint::ConstraintId]) {
+        let Some(mut g) = self.cycle_groups.take() else {
+            return;
+        };
+        if g.revision != before {
+            return;
+        }
+        let groups = Arc::make_mut(&mut g);
+        let n = self.vars.len();
+        let start = groups.parent.len();
+        groups.parent.extend(start..n);
+        groups.in_constraint.resize(n, false);
+        for &id in ks {
+            let c = &self.constraints[id];
+            if c.alive
+                && c.enabled
+                && !c.driven
+                && let Some(all) = self.constraint_locals(id, &self.vars)
+            {
+                groups.add_locals(&all);
+            }
+        }
+        groups.revision = self.revision();
+        self.cycle_groups = Some(g);
+    }
+
     /// Nach dem Anlegen der Abhängigkeit `id` (ohne andere Änderung seit dem Stand `before`): die
     /// Gruppen mit ihr fortführen statt neu bauen. `lifted`: Das Anlegen hat Punkte in den Raum
     /// gehoben; dann gelten die Gruppen nicht mehr.
