@@ -1388,6 +1388,7 @@ sketch-tangent-no-solution = There is no circle here that touches the chosen cur
 sketch-fillet-too-big = This radius does not fit here: the fillet would be larger than the curves
 sketch-fillet-no-corner = These two curves do not form a corner
 sketch-fillet-kinds = There is no fillet with this radius on this ellipse or spline
+sketch-grip-too-large = Value too large
 sketch-fillet-point-curves = Exactly two curves must end at this point
 sketch-chamfer-lines = A chamfer only works between two lines
 sketch-chamfer-too-big = This does not fit: the distance is longer than the line, or the angle is too large

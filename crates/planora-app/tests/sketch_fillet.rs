@@ -1774,3 +1774,82 @@ fn cancel_ends_a_running_grip_drag() {
     se.cancel(sk);
     assert!(se.kind_grip.drag.is_none(), "Abbruch beendet den Zug");
 }
+
+#[test]
+fn a_grip_drag_past_the_lines_stops_at_the_largest_fillet() {
+    let ctx = context();
+    let mut s = corner();
+    choose(&mut s, ToolKind::Fillet);
+    play(&ctx, &mut s, vec![vec![]]);
+    raw_click(&ctx, &mut s, v(20.0, 0.0));
+    raw_click(&ctx, &mut s, v(0.0, 20.0));
+    let g = grips(&s);
+    // Weit über die Linien (je 40 mm) hinaus: Der Radius bleibt am größten, der passt.
+    raw_drag(&ctx, &mut s, g[0].at, g[0].at * 30.0);
+    let r = locked(&s, F::Radius).expect("Radius gesetzt");
+    assert!(
+        r <= 40.0 + 1e-9 && r >= 39.9,
+        "größter passender Radius, nicht {r}"
+    );
+    assert_eq!(grips(&s).len(), 1, "die Vorschau bleibt");
+    assert_eq!(stage(&s), 2);
+}
+
+#[test]
+fn a_typed_fillet_radius_that_does_not_fit_says_so() {
+    let ctx = context();
+    let mut s = corner();
+    choose(&mut s, ToolKind::Fillet);
+    play(&ctx, &mut s, vec![vec![]]);
+    raw_click(&ctx, &mut s, v(20.0, 0.0));
+    raw_click(&ctx, &mut s, v(0.0, 20.0));
+    let i = s
+        .sketch_session
+        .as_ref()
+        .unwrap()
+        .input
+        .fields
+        .iter()
+        .position(|f| f.kind == F::Radius)
+        .unwrap();
+    type_in(&mut s, i, "100");
+    play(&ctx, &mut s, vec![vec![]]);
+    let se = s.sketch_session.as_ref().unwrap();
+    assert_eq!(se.kind_grip.over, Some(F::Radius), "Hinweis „Wert zu groß“");
+    type_in(&mut s, i, "10");
+    play(&ctx, &mut s, vec![vec![]]);
+    let se = s.sketch_session.as_ref().unwrap();
+    assert_eq!(se.kind_grip.over, None, "passt wieder");
+}
+
+#[test]
+fn a_dragged_value_in_inches_has_three_places() {
+    with_unit(DisplayUnit::Zoll, || {
+        let ctx = context();
+        let mut s = corner();
+        choose(&mut s, ToolKind::Fillet);
+        play(&ctx, &mut s, vec![vec![]]);
+        raw_click(&ctx, &mut s, v(20.0, 0.0));
+        raw_click(&ctx, &mut s, v(0.0, 20.0));
+        let g = grips(&s);
+        raw_drag(&ctx, &mut s, g[0].at, g[0].at * 1.5);
+        let se = s.sketch_session.as_ref().unwrap();
+        let f = se
+            .input
+            .fields
+            .iter()
+            .find(|f| f.kind == F::Radius)
+            .unwrap();
+        let places = f
+            .text
+            .split([',', '.'])
+            .nth(1)
+            .map_or(0, |d| d.chars().filter(char::is_ascii_digit).count());
+        assert!(places <= 3, "Zoll mit höchstens drei Stellen: {:?}", f.text);
+        let r = f.locked.unwrap();
+        assert!(
+            (r / 25.4 * 1000.0 - (r / 25.4 * 1000.0).round()).abs() < 1e-6,
+            "{r}"
+        );
+    });
+}

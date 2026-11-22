@@ -1371,6 +1371,7 @@ sketch-tangent-no-solution = Hier gibt es keinen Kreis, der die gewählten Kurve
 sketch-fillet-too-big = Dieser Radius passt hier nicht: Die Rundung wäre größer als die Kurven
 sketch-fillet-no-corner = Diese beiden Kurven bilden keine Ecke
 sketch-fillet-kinds = An dieser Ellipse oder diesem Spline gibt es keine Rundung mit diesem Radius
+sketch-grip-too-large = Wert zu groß
 sketch-fillet-point-curves = An diesem Punkt müssen genau zwei Kurven enden
 sketch-chamfer-lines = Eine Fase geht nur zwischen zwei Linien
 sketch-chamfer-too-big = Das passt nicht: Der Abstand ist länger als die Linie, oder der Winkel ist zu groß

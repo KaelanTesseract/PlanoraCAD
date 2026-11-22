@@ -2504,6 +2504,7 @@ pub fn kind_grips_input(
     if !busy {
         if let Some(se) = state.sketch_session.as_mut() {
             se.kind_grip.hot = None;
+            se.kind_grip.over = None;
         }
         return false;
     }
@@ -2518,6 +2519,7 @@ pub fn kind_grips_input(
         return false;
     };
     let grips = se.kind_grips(&sk);
+    se.kind_grip.over = se.too_large_field(&sk);
     let (down, pressed, latest) = ui.input(|i| {
         (
             i.pointer.primary_down(),
@@ -2569,7 +2571,10 @@ pub fn kind_grips_input(
             return true;
         }
         if let Some(p) = latest.and_then(|p| map.to_sketch(p)) {
-            se.set_grip_value(d.grip.field, d.grip.value_at(p), &scope);
+            // Über die Grenze hinaus bleibt der größte passende Wert (die Vorschau bleibt).
+            let v = se.fit_grip_value(&sk, d.grip.field, d.grip.value, d.grip.value_at(p));
+            se.set_grip_value(d.grip.field, v, &scope);
+            se.kind_grip.over = None;
         }
         if !down {
             se.kind_grip.drag = None;
