@@ -2483,16 +2483,30 @@ pub fn insert_grips_input(
 const KIND_GRIP_PX: f32 = 5.0;
 const KIND_GRIP_HIT_PX: f32 = 9.0;
 
-/// Eingaben an den Griffen von Rundung und Fase (wie Fusion): Drücken auf einen Griff beginnt
-/// einen Zug, Ziehen schreibt den Wert ins Feld (wie getippt), Loslassen endet; Esc oder
-/// Rechtsklick nimmt nur den Zug zurück. `true`, wenn die Griffe den Zeiger in diesem Bild
-/// nehmen; dann setzt das Werkzeug nichts.
+/// Ab dieser Bewegung (Pixel) wird aus einem Druck auf einen Griff ein Zug; ein Klick ohne
+/// Bewegung gehört dem Werkzeug (legt die Rundung oder Fase an).
+const KIND_GRIP_START_PX: f32 = 4.0;
+
+/// Eingaben an den Griffen von Rundung und Fase (wie Fusion): Ein Druck auf einen Griff wird
+/// zum Zug, sobald sich der Zeiger bewegt; Ziehen schreibt den Wert ins Feld (wie getippt),
+/// Loslassen endet. Esc oder Rechtsklick nimmt nur den Zug zurück (das Werkzeug bleibt in seiner
+/// Stufe). `true`, solange ein Zug läuft; dann setzt das Werkzeug nichts. Ein Klick ohne
+/// Bewegung und bloßes Schweben bleiben beim Werkzeug.
 pub fn kind_grips_input(
     ui: &egui::Ui,
     rect: Rect,
     state: &mut AppState,
     hover: Option<Pos2>,
 ) -> bool {
+    let busy = state.sketch_session.as_ref().is_some_and(|se| {
+        se.kind_grip.drag.is_some() || se.planned_kind().is_some_and(|k| k.is_fillet_or_chamfer())
+    });
+    if !busy {
+        if let Some(se) = state.sketch_session.as_mut() {
+            se.kind_grip.hot = None;
+        }
+        return false;
+    }
     let Some(map) = mapper(rect, state) else {
         return false;
     };
@@ -2503,6 +2517,7 @@ pub fn kind_grips_input(
     let Some(se) = state.sketch_session.as_mut() else {
         return false;
     };
+    let grips = se.kind_grips(&sk);
     let (down, pressed, latest) = ui.input(|i| {
         (
             i.pointer.primary_down(),
@@ -2510,20 +2525,44 @@ pub fn kind_grips_input(
             i.pointer.latest_pos(),
         )
     });
-    if let Some(d) = se.kind_grip.drag.clone() {
+    if let Some(mut d) = se.kind_grip.drag.clone() {
+        // Der Griff ist weg (andere Stufe, andere Kurven): Der Zug endet ohne Wirkung.
+        if !grips.iter().any(|g| g.field == d.grip.field) {
+            se.kind_grip.drag = None;
+            return false;
+        }
+        if !d.started {
+            let moved = latest
+                .is_some_and(|p| p.distance(pos2(d.press.0, d.press.1)) >= KIND_GRIP_START_PX);
+            if !down {
+                // Nur geklickt: Der Klick gehört dem Werkzeug.
+                se.kind_grip.drag = None;
+                return false;
+            }
+            if !moved {
+                return false;
+            }
+            d.started = true;
+            // Was egui jetzt als Zug sieht, ist kein Auswahlrahmen und kein Klick.
+            se.box_aborted = true;
+            se.kind_grip.drag = Some(d.clone());
+        }
         let (secondary, esc) = ui.input(|i| {
             (
                 i.pointer.button_pressed(PointerButton::Secondary),
                 i.key_pressed(egui::Key::Escape),
             )
         });
-        let esc = esc && !viewport::typing(ui.ctx());
+        // Esc gilt dem Zug, auch wenn ein Feld am Zeiger die Tastatur hat (es gehört demselben
+        // Werkzeug).
         if secondary || esc {
             if let Some(before) = d.before {
                 se.restore_field(before);
             }
             se.kind_grip.drag = None;
-            // Esc gilt nur dem Zug: Werkzeug und Felder sehen es nicht mehr.
+            // Nur der Zug geht zurück: Esc sehen Werkzeug und Felder nicht, der Rechtsklick
+            // öffnet nichts und bricht die Stufe nicht ab.
+            se.box_aborted = true;
             if esc {
                 ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             }
@@ -2537,7 +2576,6 @@ pub fn kind_grips_input(
         }
         return true;
     }
-    let grips = se.kind_grips(&sk);
     let hot = hover.and_then(|h| {
         grips.iter().copied().find(|g| {
             map.to_screen(g.at)
@@ -2545,13 +2583,18 @@ pub fn kind_grips_input(
         })
     });
     se.kind_grip.hot = hot.map(|g| g.field);
-    if pressed && let Some(grip) = hot {
+    if pressed
+        && let Some(grip) = hot
+        && let Some(at) = latest.or(hover)
+    {
         se.kind_grip.drag = Some(crate::sketch_kinds::KindGripDrag {
             before: se.field_state(grip.field),
             grip,
+            press: (at.x, at.y),
+            started: false,
         });
     }
-    hot.is_some()
+    false
 }
 
 /// Zeichnet die Griffe von Rundung und Fase über der Vorschau.

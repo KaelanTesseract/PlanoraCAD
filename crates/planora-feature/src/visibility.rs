@@ -65,12 +65,15 @@ impl Document {
     }
 
     /// Setzt die Sichtbarkeit; Verweise auf nicht vorhandene oder nicht ausblendbare Features
-    /// fallen weg. Der Änderungszähler steigt nur bei einer Änderung und das Modell rechnet nicht
-    /// neu ([`Document::edit_count`], nicht [`Document::model_edit_count`]).
+    /// fallen weg. Die Stücklistenblätter folgen den Augen. Der Änderungszähler steigt nur bei
+    /// einer Änderung und das Modell rechnet nicht neu ([`Document::edit_count`], nicht [`Document::model_edit_count`]).
     pub fn set_visibility(&mut self, v: Visibility) {
         let v = self.pruned_visibility(v);
         if v != self.visibility {
             self.visibility = v;
+            // Die Stückliste zählt nur eingeblendete Körper: die Blätter folgen (dieselbe
+            // Änderung).
+            self.sync_parts_sheets_inner();
             self.drawing_edits += 1;
         }
     }

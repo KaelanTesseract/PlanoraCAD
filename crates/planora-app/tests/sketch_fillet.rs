@@ -1691,3 +1691,86 @@ fn two_distance_chamfer_grips_change_only_their_own_distance() {
     assert_eq!(locked(&s, F::Distance), None, "der erste bleibt");
     assert_eq!(locked(&s, F::Distance2), Some(12.0));
 }
+
+#[test]
+fn right_click_during_a_grip_drag_keeps_the_stage() {
+    let ctx = context();
+    let mut s = corner();
+    choose(&mut s, ToolKind::Fillet);
+    play(&ctx, &mut s, vec![vec![]]);
+    raw_click(&ctx, &mut s, v(20.0, 0.0));
+    raw_click(&ctx, &mut s, v(0.0, 20.0));
+    let g = grips(&s)[0];
+    let (a, b) = (screen(&s, g.at), screen(&s, g.at * 2.0));
+    let right = |pressed| Event::PointerButton {
+        pos: b,
+        button: PointerButton::Secondary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    play(
+        &ctx,
+        &mut s,
+        vec![
+            vec![Event::PointerMoved(a)],
+            vec![button_with(a, true, Modifiers::NONE)],
+            vec![Event::PointerMoved(b)],
+            vec![right(true)],
+            vec![right(false)],
+            vec![button_with(b, false, Modifiers::NONE)],
+            vec![],
+        ],
+    );
+    assert_eq!(locked(&s, F::Radius), None, "Feld wie vorher");
+    assert_eq!(stage(&s), 2, "der Rechtsklick nimmt nur den Zug zurück");
+}
+
+#[test]
+fn a_click_on_the_grip_creates_the_fillet() {
+    // Der Griff sitzt mitten auf der Vorschau: Ein Klick ohne Bewegung legt an (wie überall
+    // sonst), statt einen Zug zu beginnen.
+    let ctx = context();
+    let mut s = corner();
+    choose(&mut s, ToolKind::Fillet);
+    play(&ctx, &mut s, vec![vec![]]);
+    raw_click(&ctx, &mut s, v(20.0, 0.0));
+    raw_click(&ctx, &mut s, v(0.0, 20.0));
+    let g = grips(&s)[0];
+    raw_click(&ctx, &mut s, g.at);
+    assert_eq!(locked(&s, F::Radius), None, "kein Wert geschrieben");
+    let sk = sketch(&s);
+    let r = sk
+        .curves()
+        .find_map(|(id, c)| matches!(c.kind, CurveKind::Arc { .. }).then(|| sk.radius(id)))
+        .flatten()
+        .expect("Rundungsbogen");
+    assert!((r - 8.0).abs() < 1e-6, "Startradius: {r}");
+}
+
+#[test]
+fn cancel_ends_a_running_grip_drag() {
+    let ctx = context();
+    let mut s = corner();
+    choose(&mut s, ToolKind::Fillet);
+    play(&ctx, &mut s, vec![vec![]]);
+    raw_click(&ctx, &mut s, v(20.0, 0.0));
+    raw_click(&ctx, &mut s, v(0.0, 20.0));
+    let g = grips(&s)[0];
+    let (a, b) = (screen(&s, g.at), screen(&s, g.at * 2.0));
+    play(
+        &ctx,
+        &mut s,
+        vec![
+            vec![Event::PointerMoved(a)],
+            vec![button_with(a, true, Modifiers::NONE)],
+            vec![Event::PointerMoved(b)],
+        ],
+    );
+    assert!(
+        s.sketch_session.as_ref().unwrap().kind_grip.drag.is_some(),
+        "Zug läuft"
+    );
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    se.cancel(sk);
+    assert!(se.kind_grip.drag.is_none(), "Abbruch beendet den Zug");
+}

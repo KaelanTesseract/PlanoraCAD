@@ -42,12 +42,15 @@ pub struct KindGrip {
     pub value: f64,
 }
 
-/// Laufender Zug an einem [`KindGrip`]: der Griff beim Greifen und das Feld davor (Esc oder
-/// Rechtsklick stellt es wieder her).
+/// Druck oder laufender Zug an einem [`KindGrip`]: der Griff beim Greifen und das Feld davor
+/// (Esc oder Rechtsklick stellt es wieder her).
 #[derive(Clone, Debug)]
 pub struct KindGripDrag {
     pub grip: KindGrip,
     pub before: Option<crate::sketch_input::DrawField>,
+    /// Bildschirmlage des Drucks; erst eine Bewegung davon weg macht den Druck zum Zug.
+    pub press: (f32, f32),
+    pub started: bool,
 }
 
 /// Griffe von Rundung und Fase: der Griff unter dem Zeiger und ein laufender Zug.
@@ -447,7 +450,7 @@ impl ToolKind {
     }
 
     /// Rundung oder eine der Fasen?
-    fn is_fillet_or_chamfer(self) -> bool {
+    pub(crate) fn is_fillet_or_chamfer(self) -> bool {
         self.tool() == Tool::Fillet
     }
 
