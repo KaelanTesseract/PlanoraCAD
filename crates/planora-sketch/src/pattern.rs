@@ -1415,6 +1415,7 @@ impl Sketch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::solver::SolveStatus;
     use planora_math::{Frame, Tolerance};
 
     fn plan(sources: Vec<CurveId>, n: u32, spacing: f64) -> PatternPlan {
@@ -1435,6 +1436,38 @@ mod tests {
         let d = &s.patterns[id];
         let k = d.source_points.iter().position(|&x| x == src).unwrap();
         d.instances.iter().find(|i| i.at == at).unwrap().points[k]
+    }
+
+    /// Reste der Härtungen nach Skizzen 5 (2026-11-22): Eine Schleife zwischen Vorlage und
+    /// eigenem Exemplar (hier erzwungen, an der Prüfung vorbei) läuft nie zusammen. Nach den
+    /// Musterrunden ist die Gruppe, die das Exemplar liest, überholt: Sie macht „nicht lösbar“
+    /// und zählt nicht mehr bei den Freiheitsgraden; der freie Punkt daneben zählt weiter.
+    #[test]
+    fn a_stale_pattern_group_does_not_count_its_freedom() {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let a = s.add_point(0.0, 0.0).unwrap();
+        let b = s.add_point(10.0, 0.0).unwrap();
+        let line = s.add_line(a, b).unwrap();
+        let id = s.add_pattern(&plan(vec![line], 2, 15.0)).unwrap();
+        let free = s.add_point(0.0, 50.0).unwrap();
+        let before = s.solve();
+        assert_eq!(before.status, SolveStatus::Solved);
+        // Linie 4, freier Punkt 2; die Musterwerte stehen fest.
+        assert_eq!(before.dof, 6);
+        // Vorlagenpunkt senkrecht über dem eigenen Exemplar (15 daneben): Jede Runde schiebt den
+        // Punkt hinüber, jede Nachführung das Exemplar wieder 15 weiter. Die Höhe von a bleibt
+        // frei (ein Freiheitsgrad der Gruppe).
+        let q = corner(&s, id, a, [1, 0]);
+        s.push_internal(ConstraintKind::Vertical(
+            crate::constraint::LineOrPoints::Points(a, q),
+        ));
+        let report = s.solve();
+        assert_eq!(report.status, SolveStatus::NotConverged);
+        // Punkt b der Linie (2) und der freie Punkt (2) zählen; die überholte Gruppe um a (ihre
+        // Höhe) nicht.
+        assert_eq!(report.dof, 4, "die überholte Gruppe zählt nicht");
+        assert!(report.free_points.contains(&free));
+        assert!(report.free_points.contains(&b));
     }
 
     /// Eine Skizze, die schon ein Muster Q in einer Schleife hält (nur über eine Entwicklerdatei

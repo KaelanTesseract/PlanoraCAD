@@ -3497,3 +3497,11 @@ Zurückgestellt (Prüfung 2026-11-22, klein):
 - Die Maßzahl im Export-Status zählt vor der Rechnung ruhende Maße mit, danach nicht.
 - Der Netz-Hinweis unter der Zeichnung nennt ausgeblendete Netz-Körper, der Export nicht mehr.
 - `resting_balloons` baut die Körperliste zweimal.
+
+## Reste der Härtungen nach Skizzen 5 (2026-11-22)
+
+Kurzentwurf: `specs/2026-11-22-haertung-reste-design.md`. Schließt die drei Grenzen aus Skizzen 12, Task 13 (oben).
+
+- **Gitterfehler beim Lösen:** `SolveReport.pattern_problem` trägt den Grund der letzten Nachführung (etwa `ParallelDirections`). Ein abgelehnter Zug meldet „Das lässt sich nicht dorthin ziehen.“ mit dem Grund (`sketch_state::drag_blocked_message`), der Status „Nicht lösbar: …“ (`sketch-status-unsolvable-pattern`). Die Zugregeln sind unverändert.
+- **Bogen mit Mustern:** `with_internal_checked` kopiert in 2D nicht mehr (`append_mark`/`cut_back`, Stand und Lösungsspeicher zurück). Die Gruppen der Schleifenprüfung werden über `add_point` (`carry_cycle_groups`) und das Anlegen der Kurve (`follow_appended`) fortgeführt statt je Bogen neu gebaut. 200 Bögen bei 3200 Musterkurven (release): 194 ms → 1 ms (`adding_arcs_with_a_pattern_does_not_copy_the_sketch`, `--ignored`). Mit Anheben in 3D bleibt die Kopie (`apply_lift` ändert Vorhandenes); `add_point3` führt die Gruppen nicht fort.
+- **Freiheitsgrade im Sonderfall:** Test `pattern::tests::a_stale_pattern_group_does_not_count_its_freedom` (Schleife per `push_internal` erzwungen, `Vertical` zwischen Vorlage und Exemplar). **Grenze:** `free_points` nennt die Punkte der überholten Gruppe weiter, obwohl ihre Freiheitsgrade nicht zählen.
