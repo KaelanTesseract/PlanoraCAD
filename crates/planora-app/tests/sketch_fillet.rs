@@ -1788,7 +1788,7 @@ fn a_grip_drag_past_the_lines_stops_at_the_largest_fillet() {
     raw_drag(&ctx, &mut s, g[0].at, g[0].at * 30.0);
     let r = locked(&s, F::Radius).expect("Radius gesetzt");
     assert!(
-        r <= 40.0 + 1e-9 && r >= 39.9,
+        (39.9..=40.0 + 1e-9).contains(&r),
         "größter passender Radius, nicht {r}"
     );
     assert_eq!(grips(&s).len(), 1, "die Vorschau bleibt");
