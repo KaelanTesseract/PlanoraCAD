@@ -1890,3 +1890,34 @@ fn tool_button_name_lock_and_reason() {
         assert!(!st.balloon_tool.is_active());
     }
 }
+
+#[test]
+fn balloon_on_a_hidden_body_rests_on_the_sheet() {
+    let (mut st, [a, b], d, v, mut h) = two_boxes(BIG);
+    let ba = st
+        .document
+        .add_balloon(d, v, key(a), (0.5, 0.5), (-15.0, 10.0))
+        .unwrap();
+    let bb = st
+        .document
+        .add_balloon(d, v, key(b), (0.5, 0.5), (15.0, 10.0))
+        .unwrap();
+    compute(&mut st, &mut h);
+    let ids =
+        |h: &Harness| -> Vec<BalloonId> { h.layout().balloons.iter().map(|x| x.id).collect() };
+    assert_eq!(ids(&h), vec![ba, bb]);
+    // Zweiter Quader ausgeblendet: sein Kreis ruht (nicht gezeichnet, nicht verloren).
+    let mut vis = st.document.visibility().clone();
+    vis.bodies.insert(key(b));
+    st.document.set_visibility(vis);
+    compute(&mut st, &mut h);
+    assert_eq!(ids(&h), vec![ba]);
+    let numbers = planora_app::balloon_tool::numbers_cached(&h.ctx, &st, d);
+    assert_eq!(planora_app::balloon_tool::lost_count(&numbers), 0);
+    // Wieder eingeblendet: zurück.
+    let mut vis = st.document.visibility().clone();
+    vis.bodies.clear();
+    st.document.set_visibility(vis);
+    compute(&mut st, &mut h);
+    assert_eq!(ids(&h), vec![ba, bb]);
+}

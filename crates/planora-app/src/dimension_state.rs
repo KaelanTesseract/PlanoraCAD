@@ -27,7 +27,7 @@ use planora_drawing::{
 };
 use planora_feature::{
     RefCache, geo_ref_for_edge_cached, geo_ref_for_face_cached, resolve_drawing_dimensions_views,
-    resolve_geo_cached,
+    resolve_geo_cached, rest_hidden_dimensions,
 };
 use planora_kernel::{Edge, Face, Id, Solid};
 use planora_math::{DVec2, Tolerance};
@@ -121,6 +121,9 @@ struct Cached {
     /// die Adresse eindeutig bleibt): Wird ein Schnitt fertig oder neu gerechnet, wird neu
     /// aufgelöst.
     sections: Sections,
+    /// Welche exakten Körper eingeblendet waren: Maße an ausgeblendeten Körpern ruhen, ein
+    /// Klick aufs Auge löst also neu auf.
+    shown: Vec<bool>,
     dims: Arc<ResolvedDims>,
 }
 
@@ -178,6 +181,15 @@ impl std::fmt::Debug for DimensionUi {
 /// Exakte Körper in der Reihenfolge, in der auch die Ansichten berechnet werden.
 fn exact_bodies(bodies: &[Body]) -> Vec<&Body> {
     bodies.iter().filter(|b| b.kind != BodyKind::Mesh).collect()
+}
+
+/// Je exaktem Körper (Reihenfolge wie [`exact_bodies`]): Zeigt ihn das Auge? Zeichnungen lassen
+/// ausgeblendete Körper weg, ihre Maße ruhen.
+fn exact_shown(state: &AppState) -> Vec<bool> {
+    exact_bodies(&state.bodies)
+        .into_iter()
+        .map(|b| state.document.body_shown(b.source))
+        .collect()
 }
 
 /// Übernimmt die Messungen von `old` für die Maße von `d`, wenn kein Maß neu ist und sich bei
@@ -245,11 +257,12 @@ impl DimensionUi {
                 drawing,
                 model,
                 edit,
-                (Vec::new(), Vec::new()),
+                (Vec::new(), Vec::new(), Vec::new()),
                 ResolvedDims::default(),
             );
         };
         let views: Vec<(ViewId, ViewKind)> = d.views.iter().map(|v| (v.id, v.kind)).collect();
+        let shown = exact_shown(state);
         let reused = self
             .cache
             .as_ref()
@@ -257,6 +270,7 @@ impl DimensionUi {
                 c.drawing == drawing
                     && c.model == model
                     && c.views == views
+                    && c.shown == shown
                     && same_sections(&c.sections, &sections)
             })
             .and_then(|c| reuse(&c.dims, d));
@@ -267,9 +281,17 @@ impl DimensionUi {
             Some(r) => r,
             None => {
                 self.resolutions += 1;
-                let solids: Vec<&Solid> = exact_bodies(&state.bodies)
+                let all: Vec<&Solid> = exact_bodies(&state.bodies)
                     .into_iter()
                     .map(|b| &b.solid)
+                    .collect();
+                // Aufgelöst wird gegen die eingeblendeten Körper (wie die Ansichten); Maße, die
+                // nur an ausgeblendeten hängen, ruhen danach.
+                let solids: Vec<&Solid> = all
+                    .iter()
+                    .zip(&shown)
+                    .filter(|(_, s)| **s)
+                    .map(|(b, _)| *b)
                     .collect();
                 let view_solids: BTreeMap<ViewId, Vec<&Solid>> = sections
                     .iter()
@@ -278,8 +300,11 @@ impl DimensionUi {
                 match resolve_drawing_dimensions_views(d, &solids, &view_solids, || {
                     Ok::<(), Infallible>(())
                 }) {
-                    Ok((dims, new_keys)) => {
+                    Ok((mut dims, new_keys)) => {
                         keys.extend(new_keys);
+                        if solids.len() < all.len() {
+                            rest_hidden_dimensions(d, &mut dims, &all);
+                        }
                         dims
                     }
                     Err(never) => match never {},
@@ -294,7 +319,7 @@ impl DimensionUi {
             }
         }
         dims.last_known = known.clone();
-        self.store(drawing, model, edit, (views, sections), dims)
+        self.store(drawing, model, edit, (views, sections, shown), dims)
     }
 
     fn store(
@@ -302,7 +327,7 @@ impl DimensionUi {
         drawing: DrawingId,
         model: u64,
         edit: u64,
-        (views, sections): (Vec<(ViewId, ViewKind)>, Sections),
+        (views, sections, shown): (Vec<(ViewId, ViewKind)>, Sections, Vec<bool>),
         dims: ResolvedDims,
     ) -> Arc<ResolvedDims> {
         let dims = Arc::new(dims);
@@ -312,6 +337,7 @@ impl DimensionUi {
             edit,
             views,
             sections,
+            shown,
             dims: Arc::clone(&dims),
         });
         dims

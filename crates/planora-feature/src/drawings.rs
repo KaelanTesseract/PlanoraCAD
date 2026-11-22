@@ -12,7 +12,7 @@ use planora_drawing::{
     Sheet, ViewId, ViewKind, align_dir, sections_ok_on,
 };
 use planora_i18n::{DisplayUnit, tr};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// Höchstzahl der Zeichnungen in einem Dokument.
 pub const MAX_DRAWINGS: usize = 1000;
@@ -496,6 +496,35 @@ impl Document {
                     .map(|r| r.pos);
                 (b.id, pos)
             })
+            .collect()
+    }
+
+    /// Die Nummernkreise der Zeichnung, deren Körper es gibt, die aber ausgeblendet sind (Auge
+    /// oder Ordner „Körper“): Sie ruhen, werden also nicht gezeichnet und nicht als verloren
+    /// gemeldet; eingeblendet kommen sie zurück. Unbekannte Zeichnung: leer.
+    pub fn resting_balloons(&self, drawing: DrawingId) -> BTreeSet<BalloonId> {
+        let Some(d) = self.drawing(drawing) else {
+            return BTreeSet::new();
+        };
+        if d.balloons.is_empty() {
+            return BTreeSet::new();
+        }
+        let hidden: HashSet<BodyKey> = self
+            .visible_bodies()
+            .into_iter()
+            .filter(|v| !self.body_shown(v.body))
+            .map(|v| self.body_key(v.body))
+            .collect();
+        let shown: HashSet<BodyKey> = self
+            .visible_bodies()
+            .into_iter()
+            .filter(|v| self.body_shown(v.body))
+            .map(|v| self.body_key(v.body))
+            .collect();
+        d.balloons
+            .iter()
+            .filter(|b| hidden.contains(&b.body) && !shown.contains(&b.body))
+            .map(|b| b.id)
             .collect()
     }
 

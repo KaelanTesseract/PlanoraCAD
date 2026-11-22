@@ -9,7 +9,7 @@ use crate::model::Document;
 use crate::refs::RefCache;
 use planora_drawing::annotate::ResolvedDims;
 use planora_drawing::dimension::{
-    ChainMode, DimId, DimKind, DimSpec, Geo3, GeoRef, GeoRefData, TagData,
+    ChainMode, DimError, DimId, DimKind, DimSpec, Geo3, GeoRef, GeoRefData, TagData,
     Tolerance as DimTolerance, ref_count,
 };
 use planora_drawing::limits::MAX_DIMENSIONS;
@@ -20,7 +20,7 @@ use planora_drawing::{
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::Solid;
 use planora_math::{DVec3, Tolerance};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::convert::Infallible;
 
 /// Höchstzahl der Nachkommastellen eines Maßes.
@@ -378,4 +378,37 @@ pub fn resolve_drawing_dimensions_views<'a, E>(
             .push((m.clone(), result));
     }
     Ok((out, keys))
+}
+
+/// Lässt Maße ruhen, die nur wegen ausgeblendeter Körper keinen Bezug haben: `dims` wurde gegen
+/// die eingeblendeten Körper aufgelöst; ein verlorenes Maß einer Ansicht ohne Schnitt, dessen
+/// Bezüge sich gegen `all` (eingeblendete und ausgeblendete Körper) alle auflösen lassen, fällt
+/// aus `dims` heraus. Es gilt dann weder als aufgelöst noch als verloren und wird nicht
+/// gezeichnet; wieder eingeblendet kommt es zurück. Gibt die Kennungen der ruhenden Maße.
+pub fn rest_hidden_dimensions(
+    d: &Drawing,
+    dims: &mut ResolvedDims,
+    all: &[&Solid],
+) -> BTreeSet<DimId> {
+    let tol = Tolerance::default();
+    let cache = RefCache::new();
+    let mut resting = BTreeSet::new();
+    for (view, entries) in dims.by_view.iter_mut() {
+        if d.view(*view).is_none_or(|v| v.section.is_some()) {
+            continue;
+        }
+        entries.retain(|(spec, result)| {
+            let lost = matches!(result, Err(DimError::Lost(_)));
+            let rests = lost
+                && spec
+                    .refs
+                    .iter()
+                    .all(|r| resolve_geo_cached(all, r, &tol, &cache).is_ok());
+            if rests {
+                resting.insert(spec.id);
+            }
+            !rests
+        });
+    }
+    resting
 }

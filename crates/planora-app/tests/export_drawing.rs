@@ -1905,3 +1905,31 @@ fn plain_prepare_refuses_drawings_with_balloons() {
     let solids = vec![("Teil 1".to_string(), s.bodies[0].solid.clone())];
     let _ = prepare_drawing(&drawing, &solids, compute_view, &Progress::new());
 }
+
+#[test]
+fn balloons_on_hidden_bodies_rest_in_the_export() {
+    let dir = temp_dir("ruht");
+    let (mut s, f) = named_boxes(2);
+    let id = add_drawing(&mut s, "Blatt 1");
+    let front = front_of(&s, id);
+    s.document
+        .add_balloon(id, front, body_key(f[0]), (0.5, 0.5), (-15.0, 10.0))
+        .unwrap();
+    s.document
+        .add_balloon(id, front, body_key(f[1]), (0.5, 0.5), (-25.0, 10.0))
+        .unwrap();
+    // Zweiter Körper ausgeblendet: sein Kreis ruht, der Export gelingt ohne ihn.
+    let mut v = s.document.visibility().clone();
+    v.bodies.insert(body_key(f[1]));
+    s.document.set_visibility(v);
+    let mut d = dialog_with(&s, SVG, false, id);
+    assert!(
+        matches!(d.status(&s), ExportStatus::DrawingReady { .. }),
+        "{:?}",
+        d.status(&s)
+    );
+    let out = written(&mut d, &s, &dir.join("r.svg"));
+    let g = svg_group(&out, "Vorne Positionen");
+    assert!(g.contains(">1</text>") && !g.contains(">2</text>"), "{g}");
+    let _ = fs::remove_dir_all(&dir);
+}
