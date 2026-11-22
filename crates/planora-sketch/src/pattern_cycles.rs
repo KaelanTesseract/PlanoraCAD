@@ -310,7 +310,7 @@ impl Sketch {
                 #[cfg(debug_assertions)]
                 debug_assert!(
                     g.same_as(&CycleGroups::build(self)),
-                    "Gruppen der Schleifenprüfung überholt, obwohl der Stand gleich ist"
+                    "cycle groups stale at an unchanged revision"
                 );
                 Arc::clone(g)
             }
