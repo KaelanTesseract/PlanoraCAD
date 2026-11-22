@@ -9,7 +9,7 @@ use crate::model::Document;
 use crate::refs::RefCache;
 use planora_drawing::annotate::ResolvedDims;
 use planora_drawing::dimension::{
-    ChainMode, DimError, DimId, DimKind, DimSpec, Geo3, GeoRef, GeoRefData, TagData,
+    ChainMode, DimId, DimKind, DimSpec, Geo3, GeoRef, GeoRefData, TagData,
     Tolerance as DimTolerance, ref_count,
 };
 use planora_drawing::limits::MAX_DIMENSIONS;
