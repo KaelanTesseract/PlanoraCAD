@@ -1215,6 +1215,7 @@ sketch-length-lines-only = Length only exists for lines
 sketch-cannot-measure = The dimension cannot be measured
 sketch-apply-conflict = Contradiction: "{ $action }" conflicts with existing constraints
 sketch-apply-unsolved = "{ $action }" could not be solved
+sketch-apply-unsolved-pattern = "{ $action }" could not be solved: { $reason }
 sketch-became-driven = This dimension is already determined by other constraints and is only displayed
 sketch-redundant = This constraint is redundant
 sketch-redundant-partly = Part of this constraint is already implied by others; the rest applies

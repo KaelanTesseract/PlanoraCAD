@@ -1,7 +1,9 @@
 //! Reste der Härtungen nach Skizzen 5 (2026-11-22): Geht das Gitter eines Musters erst beim
 //! Lösen nicht mehr, nennen der abgelehnte Zug und der Status den Grund.
 
-use planora_app::sketch_state::{Severity, SketchSession, drag_blocked_message};
+use planora_app::sketch_state::{
+    Severity, SketchSession, apply_unsolved_message, drag_blocked_message,
+};
 use planora_app::state::{AppState, StandardPlane};
 use planora_feature::SketchPlane;
 use planora_i18n::{german, with_lang};
@@ -126,6 +128,27 @@ fn a_point_drag_that_lays_the_direction_parallel_names_the_reason() {
         assert!(
             text.contains("Die Richtungslinien des Musters sind parallel."),
             "{text:?}"
+        );
+    });
+}
+
+/// Handtest Punkt 8: Macht eine neue Abhängigkeit (etwa „Waagerecht“ an der Richtungslinie) das
+/// Gitter ungültig, nennt die Ablehnung den Grund.
+#[test]
+fn an_applied_constraint_names_the_pattern_reason() {
+    with_lang(&german(), || {
+        let report = parallel_report();
+        let mut good = report.clone();
+        good.status = SolveStatus::Solved;
+        good.pattern_problem = None;
+        assert_eq!(
+            apply_unsolved_message("Waagerecht", &report, Some(&good)).text(),
+            "„Waagerecht“ ließ sich nicht lösen: Die Richtungslinien des Musters sind parallel."
+        );
+        // War das Gitter schon vorher kaputt: allgemein.
+        assert_eq!(
+            apply_unsolved_message("Waagerecht", &report, Some(&report)).text(),
+            "„Waagerecht“ ließ sich nicht lösen"
         );
     });
 }

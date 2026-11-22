@@ -1198,6 +1198,7 @@ sketch-length-lines-only = Die Länge gibt es nur für Linien
 sketch-cannot-measure = Das Maß lässt sich nicht messen
 sketch-apply-conflict = Widerspruch: „{ $action }“ widerspricht vorhandenen Abhängigkeiten
 sketch-apply-unsolved = „{ $action }“ ließ sich nicht lösen
+sketch-apply-unsolved-pattern = „{ $action }“ ließ sich nicht lösen: { $reason }
 sketch-became-driven = Dieses Maß ist bereits durch andere Abhängigkeiten bestimmt und wird nur angezeigt
 sketch-redundant = Diese Abhängigkeit ist überzählig
 sketch-redundant-partly = Diese Abhängigkeit ist zum Teil schon durch andere bestimmt; der übrige Teil gilt
