@@ -3466,7 +3466,23 @@ Entwurf `specs/2026-11-22-fusion-reste-design.md`, Plan `plans/2026-11-22-fusion
 
 Grenzen und Annahmen:
 - Griffe weiter ohne Fang; unter einem Fenster nicht greifbar (wie in Fusion verdeckt).
-- Maße an Kanten ausgeblendeter Körper bleiben ohne Kante; eine Positionsnummer an einem ausgeblendeten Körper meldet weiter „hat ihr Teil verloren“.
+- ~~Maße an Kanten ausgeblendeter Körper bleiben ohne Kante; eine Positionsnummer an einem ausgeblendeten Körper meldet weiter „hat ihr Teil verloren“~~ erledigt in `fix/fusion-kleinpunkte` (unten).
 - Blattinformationen übernehmen nicht mit Enter (Formular mit vielen Textfeldern).
 - Der Rundungsgriff rechnet den Radius aus dem Abstand zur Ecke im Verhältnis; bei Bögen statt Linien folgt er dem Zeiger nur genähert.
 - **Annahme:** Startlänge der Fase wie der Startradius der Rundung (Fusion nennt keinen Wert).
+
+## Kleinpunkte nach den Fusion-Resten (2026-11-22, Zweig `fix/fusion-kleinpunkte`)
+
+Entwurf `specs/2026-11-22-fusion-kleinpunkte-design.md`. Aus dem Handtest von `fix/fusion-reste`.
+
+- ~~Griff in der Skizze ohne Obergrenze~~ erledigt: Ein Zug über die Grenze bleibt am größten passenden Wert (die Vorschau bleibt); ein getippter Wert, mit dem Rundung oder Fase nicht passt, zeigt am Feld „Wert zu groß“.
+- ~~Gezogener Wert in Zoll mit vielen Stellen~~ erledigt: gerundet in der Anzeigeeinheit (mm 0,01, Zoll 0,001).
+- ~~Wertefelder über der rechten Leiste~~ erledigt: Die Felder am Zeiger wechseln die Seite, wenn sie eine schwebende Leiste (links, rechts, Skizzenleiste) überdecken würden (alle Werkzeuge).
+- ~~Rote Meldungen an ausgeblendeten Körpern~~ erledigt: Positionsnummern und Maße an ausgeblendeten (nicht gelöschten) Körpern ruhen: nicht gezeichnet, nicht verloren, eingeblendet wieder da (`Document::resting_balloons`, `rest_hidden_dimensions`). Gelöscht bleibt verloren.
+- Nebenbefund behoben: Der Export (PDF, DXF, SVG) zeichnete ausgeblendete Körper in die Ansichten, der Bildschirm nicht. Jetzt lassen beide sie weg.
+
+Grenzen und Annahmen:
+- Der Rundungsgriff bleibt so empfindlich wie die Geometrie: Er bleibt unter dem Zeiger auf dem Bogen, an einer rechten Ecke ergibt 1 mm Zug etwa 2,4 mm Radius (wie Fusion).
+- Ebenen-Griffe ohne Fang und mit fester Bildschirmlänge: wie Fusion, kein Umbau.
+- SVG einfügen legt die Mitte der Datei auf den Ursprung und verschiebt dann um X/Y-Abstand; der Handtest-Verdacht „X-Abstand wirkt nicht“ war keiner.
+- Ein Maß ruht nur in Ansichten ohne Schnitt und nur, wenn alle seine Bezüge an vorhandenen Körpern hängen; ein Maß zwischen einem ein- und einem ausgeblendeten Körper ruht ebenfalls.
