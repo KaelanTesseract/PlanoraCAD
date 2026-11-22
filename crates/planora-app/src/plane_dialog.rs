@@ -25,7 +25,7 @@ use planora_feature::{
 };
 use planora_i18n::tr;
 use planora_kernel::Solid;
-use planora_math::Frame;
+use planora_math::{DVec3, Frame};
 use planora_render::{Pick, PlaneRect};
 use planora_sketch::plane_of_face;
 
@@ -342,11 +342,26 @@ fn solids(state: &AppState) -> Vec<&Solid> {
 }
 
 /// Form des Ziehgriffs zur berechneten Ebene `frame` mit der Vorschau `rect`: Pfeil entlang der
-/// Normale (Versatzebene) oder Drehpfeil um die Achse am Rand der Vorschau (Ebene unter Winkel);
-/// die übrigen Befehle haben keinen.
-fn grip_shape(def: &PlaneDef, frame: &Frame, rect: &PlaneRect) -> Option<GripShape> {
+/// Normale (Versatzebene), Drehpfeil um die Achse am Rand der Vorschau (Ebene unter Winkel) oder
+/// Drehpfeil um die Achse der berührten Fläche `turn` am Berührpunkt (Tangentialebene, wie
+/// Fusion); die übrigen Befehle haben keinen.
+fn grip_shape(
+    def: &PlaneDef,
+    frame: &Frame,
+    rect: &PlaneRect,
+    turn: Option<(DVec3, DVec3)>,
+) -> Option<GripShape> {
     let mid = rect.frame.origin;
     match def {
+        PlaneDef::Tangent { angle, .. } => {
+            let (at, axis) = turn?;
+            Some(GripShape::Angle {
+                center: at + axis * (mid - at).dot(axis),
+                axis,
+                handle: mid,
+                value: *angle,
+            })
+        }
         PlaneDef::Offset { distance, .. } => Some(GripShape::Distance {
             at: mid,
             dir: frame.z,
@@ -809,7 +824,12 @@ impl PlaneDialog {
         let old = state.plane_pick.and_then(|p| p.grip);
         let grip = match (&result, preview) {
             (Ok((def, frame)), Some(rect)) => {
-                grip_shape(def, frame, &rect).map(|shape| PlaneGrip::follow(old, shape))
+                let turn = planora_feature::planes::tangent_axis(
+                    def,
+                    &solids(state),
+                    &state.kernel.tolerance,
+                );
+                grip_shape(def, frame, &rect, turn).map(|shape| PlaneGrip::follow(old, shape))
             }
             _ => None,
         };

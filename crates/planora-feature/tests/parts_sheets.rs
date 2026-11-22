@@ -730,3 +730,26 @@ fn paper_change_without_page_change_counts_one_edit() {
     d.update_drawing(first, |x| x.sheet = A3_QUER).unwrap();
     assert_eq!(d.edit_count(), c + 1);
 }
+
+#[test]
+fn pages_follow_the_eyes() {
+    // A4 quer: 26 Zeilen je Blatt. Ausgeblendete Körper zählen nicht (Wunsch von Dennis), also
+    // folgt auch die Zahl der Blätter dem Auge, ohne dass das Modell neu rechnet.
+    let (mut d, ids) = doc_with(27, A4_QUER);
+    assert_eq!(pages(&d), [1, 2]);
+    let mut v = d.visibility().clone();
+    v.bodies.insert(planora_drawing::BodyKey {
+        feature: ids[26].0,
+        index: 0,
+    });
+    d.set_visibility(v);
+    assert_eq!(pages(&d), [1], "ausgeblendet: kein leeres Folgeblatt");
+    let mut v = d.visibility().clone();
+    v.bodies.clear();
+    d.set_visibility(v);
+    assert_eq!(
+        pages(&d),
+        [1, 2],
+        "eingeblendet: das Folgeblatt ist wieder da"
+    );
+}

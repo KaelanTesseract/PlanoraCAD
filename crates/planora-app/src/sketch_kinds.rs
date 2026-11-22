@@ -31,6 +31,51 @@ const CONIC_PREVIEW_STEPS: usize = 64;
 /// Schritte der Vorschau eines Splines mit Kontrollpunkten je Knotenabschnitt.
 const CONTROL_PREVIEW_STEPS: usize = 16;
 
+/// Ziehgriff an der Vorschau von Rundung oder Fase (wie Fusion): `at` liegt auf der Vorschau,
+/// gezogen wird entlang der Richtung von der Ecke `corner` zu `at`; `value` ist der heutige Wert
+/// des Felds `field` (mm).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KindGrip {
+    pub field: FieldKind,
+    pub at: DVec2,
+    pub corner: DVec2,
+    pub value: f64,
+}
+
+/// Druck oder laufender Zug an einem [`KindGrip`]: der Griff beim Greifen und das Feld davor
+/// (Esc oder Rechtsklick stellt es wieder her).
+#[derive(Clone, Debug)]
+pub struct KindGripDrag {
+    pub grip: KindGrip,
+    pub before: Option<crate::sketch_input::DrawField>,
+    /// Bildschirmlage des Drucks; erst eine Bewegung davon weg macht den Druck zum Zug.
+    pub press: (f32, f32),
+    pub started: bool,
+}
+
+/// Griffe von Rundung und Fase: der Griff unter dem Zeiger und ein laufender Zug.
+#[derive(Clone, Debug, Default)]
+pub struct KindGripState {
+    pub hot: Option<FieldKind>,
+    pub drag: Option<KindGripDrag>,
+}
+
+impl KindGrip {
+    /// Wert des Felds, wenn der Zeiger bei `p` (Skizzenkoordinaten) steht: der Abstand von der
+    /// Ecke entlang des Griffs, im Verhältnis zum Wert beim Greifen (bei Linien genau; bei
+    /// Bögen eine gute Näherung). Gerundet auf 0,01 mm, nie kleiner als 0,01 mm.
+    pub fn value_at(&self, p: DVec2) -> f64 {
+        let arm = self.at - self.corner;
+        let d0 = arm.length();
+        if d0 <= 1e-12 {
+            return self.value;
+        }
+        let d = (p - self.corner).dot(arm / d0);
+        let v = (self.value * d / d0 * 100.0).round() / 100.0;
+        v.max(0.01)
+    }
+}
+
 /// Eine Art, eine Form zu zeichnen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolKind {
@@ -405,7 +450,7 @@ impl ToolKind {
     }
 
     /// Rundung oder eine der Fasen?
-    fn is_fillet_or_chamfer(self) -> bool {
+    pub(crate) fn is_fillet_or_chamfer(self) -> bool {
         self.tool() == Tool::Fillet
     }
 
@@ -860,17 +905,95 @@ impl SketchSession {
         }
     }
 
-    /// Abstand des Zeigers `at` zur Ecke der gewählten Kurven.
-    fn pointer_to_corner(&self, sk: &Sketch, at: DVec2) -> Option<f64> {
-        let [a, b] = self.curve_picks()?;
-        Some(sk.fillet_corner(a, b)?.distance(at))
-    }
-
-    /// Länge aus dem Feld `field`, sonst der Abstand des Zeigers zur Ecke.
-    fn length_at(&self, sk: &Sketch, field: FieldKind, at: DVec2) -> Option<f64> {
+    /// Länge aus dem Feld `field`, sonst die Startlänge der Fase (wie Fusion: nicht vom Zeiger;
+    /// gezogen wird am Griff).
+    fn length_at(&self, sk: &Sketch, field: FieldKind, _at: DVec2) -> Option<f64> {
         self.input
             .locked(field)
-            .or_else(|| self.pointer_to_corner(sk, at))
+            .or_else(|| self.chamfer_default_length(sk))
+    }
+
+    /// Startlänge der Fase nach der Wahl beider Linien: wie der Startradius der Rundung
+    /// [`FILLET_DEFAULT_SHARE`] der kürzeren Linie; passt sie nicht, je die Hälfte.
+    fn chamfer_default_length(&self, sk: &Sketch) -> Option<f64> {
+        let [a, b] = self.curve_picks()?;
+        let len = sk.curve_length(a.curve)?.min(sk.curve_length(b.curve)?);
+        let mut d = len * FILLET_DEFAULT_SHARE;
+        for _ in 0..12 {
+            if d.is_finite() && d > 0.0 && sk.chamfer_plan(a, b, ChamferKind::Equal(d)).is_some() {
+                return Some(d);
+            }
+            d *= 0.5;
+        }
+        None
+    }
+
+    /// Ziehgriffe an der Vorschau von Rundung und Fase, sobald beide Kurven gewählt sind (wie
+    /// Fusion): Rundung ein Griff in der Mitte des Bogens (Radius); Fase je Abstand ein Griff am
+    /// Fasenpunkt auf seiner Linie. Im Lauf mehrerer Rundungen (fester Radius) keiner.
+    pub fn kind_grips(&self, sk: &Sketch) -> Vec<KindGrip> {
+        use FieldKind as F;
+        let Some(kind) = self.planned_kind().filter(|k| k.is_fillet_or_chamfer()) else {
+            return Vec::new();
+        };
+        if self.curve_picks().is_none() {
+            return Vec::new();
+        }
+        if kind == ToolKind::Fillet {
+            if self.fillet_run.is_some() {
+                return Vec::new();
+            }
+            let Some(p) = self.fillet_plan_at(sk, DVec2::ZERO) else {
+                return Vec::new();
+            };
+            let half = (p.arc.start - p.arc.center).to_angle() + p.arc.sweep() / 2.0;
+            let mid = p.arc.center + DVec2::from_angle(half) * p.radius;
+            return vec![KindGrip {
+                field: F::Radius,
+                at: mid,
+                corner: p.corner_at,
+                value: p.radius,
+            }];
+        }
+        let Some(p) = self.chamfer_plan_at(sk, kind, DVec2::ZERO) else {
+            return Vec::new();
+        };
+        let grip = |field, i: usize| KindGrip {
+            field,
+            at: p.touch[i],
+            corner: p.corner_at,
+            value: p.touch[i].distance(p.corner_at),
+        };
+        match kind {
+            ToolKind::ChamferTwoDistances => vec![grip(F::Distance, 0), grip(F::Distance2, 1)],
+            _ => vec![grip(F::Distance, 0)],
+        }
+    }
+
+    /// Schreibt den gezogenen Wert `v` ins Feld `field`, als wäre er getippt.
+    pub fn set_grip_value(
+        &mut self,
+        field: FieldKind,
+        v: f64,
+        scope: &planora_feature::ParamScope,
+    ) {
+        let Some(i) = self.input.fields.iter().position(|f| f.kind == field) else {
+            return;
+        };
+        let text = crate::formula_field::value_field_text(v, field.unit());
+        self.type_field(i, &text, scope);
+    }
+
+    /// Das Feld `field` (für den Beginn eines Zugs).
+    pub(crate) fn field_state(&self, field: FieldKind) -> Option<crate::sketch_input::DrawField> {
+        self.input.fields.iter().find(|f| f.kind == field).cloned()
+    }
+
+    /// Stellt das Feld wieder her, wie es vor dem Zug war.
+    pub(crate) fn restore_field(&mut self, before: crate::sketch_input::DrawField) {
+        if let Some(f) = self.input.fields.iter_mut().find(|f| f.kind == before.kind) {
+            *f = before;
+        }
     }
 
     /// Plan der Rundung, für Vorschau und Klick: Im Lauf gilt der heutige Radius der ersten
@@ -1660,7 +1783,7 @@ impl SketchSession {
         match (self.planned_kind()?, self.pending_pos.as_slice(), kind) {
             (ToolKind::Fillet, _, F::Radius) => self.fillet_default_radius(sk),
             (k, _, F::Radius | F::Distance | F::Distance2) if k.is_fillet_or_chamfer() => {
-                self.pointer_to_corner(sk, at)
+                self.chamfer_default_length(sk)
             }
             (ToolKind::ChamferDistanceAngle, _, F::Angle) => Some(CHAMFER_ANGLE_DEFAULT),
             (ToolKind::Rect3P, &[from], F::Width) => Some(from.distance(at)),

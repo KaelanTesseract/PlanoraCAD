@@ -1996,3 +1996,34 @@ fn frame_cost() {
         );
     }
 }
+
+#[test]
+fn parts_list_hint_names_hidden_bodies() {
+    let (mut st, ids) = boxes(3);
+    new_drawing(&mut st, A3_QUER);
+    let mut v = st.document.visibility().clone();
+    v.bodies.insert(planora_drawing::BodyKey {
+        feature: ids[1].0,
+        index: 0,
+    });
+    st.document.set_visibility(v);
+    let mut h = H::new(BIG, false, st);
+    let shot = h.settle();
+    assert!(
+        shot.has("1 ausgeblendeter Körper ist nicht in der Stückliste."),
+        "Hinweis unter der Zeichnung"
+    );
+    let texts = h.table_texts();
+    assert!(texts.contains(&"Quader 1".to_string()), "{texts:?}");
+    assert!(texts.contains(&"Quader 3".to_string()), "{texts:?}");
+    assert!(
+        !texts.contains(&"Quader 2".to_string()),
+        "ausgeblendet, nicht in der Tabelle: {texts:?}"
+    );
+    // Wieder eingeblendet: kein Hinweis mehr.
+    let mut v = h.st().document.visibility().clone();
+    v.bodies.clear();
+    h.st().document.set_visibility(v);
+    let shot = h.settle();
+    assert!(!shot.has("1 ausgeblendeter Körper ist nicht in der Stückliste."));
+}

@@ -1084,6 +1084,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     painter.set(sketches_slot, Shape::Vec(overlay));
     // Griffe eines Einfügen-Fensters über allem (Modell und Skizze).
     sketch_view::paint_insert_grips(&painter, rect, state);
+    // Griffe von Rundung und Fase in der Skizze (wie Fusion).
+    sketch_view::paint_kind_grips(&painter, rect, state);
     // Ziehgriff eines Ebenen-Fensters (Abstand oder Winkel).
     if !sketching {
         crate::plane_grip::paint(&painter, rect, state);

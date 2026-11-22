@@ -404,6 +404,7 @@ impl IsoDialog {
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> DialogOutcome {
         let mut open = true;
         let (mut ok, mut cancel) = (false, false);
+        let mut field_enter = false;
         if self.stale() {
             self.refresh(state);
         }
@@ -474,15 +475,15 @@ impl IsoDialog {
                         match self.mode {
                             IsoMode::Single => {
                                 ui.label(tr!("iso-distance"));
-                                if crate::theme::field(
+                                let r = crate::theme::field(
                                     ui,
                                     egui::DragValue::new(&mut self.distance)
                                         .speed(0.005)
                                         .range(0.0..=1.0)
                                         .max_decimals(4),
-                                )
-                                .changed()
-                                {
+                                );
+                                field_enter |= crate::dialog::left_with_enter(ui, &r);
+                                if r.changed() {
                                     // Ein getippter Wert gilt für alle Richtungen; der Punkt
                                     // ist dann nicht mehr die Lage.
                                     self.point = None;
@@ -491,14 +492,14 @@ impl IsoDialog {
                             }
                             IsoMode::Distributed => {
                                 ui.label(tr!("iso-count"));
-                                if crate::theme::field(
+                                let r = crate::theme::field(
                                     ui,
                                     egui::DragValue::new(&mut self.count)
                                         .speed(0.1)
                                         .range(1..=MAX_COUNT),
-                                )
-                                .changed()
-                                {
+                                );
+                                field_enter |= crate::dialog::left_with_enter(ui, &r);
+                                if r.changed() {
                                     self.error = None;
                                 }
                             }
@@ -520,7 +521,7 @@ impl IsoDialog {
                 }
                 let (o, c) = footer(ui, self.error(), ready);
                 let (enter, esc) = keys(ui, ready);
-                ok |= o || enter;
+                ok |= o || enter || (field_enter && ready);
                 cancel |= c || esc;
             });
         if clear_face {

@@ -236,6 +236,23 @@ pub fn compute_plane(
     }
 }
 
+/// Drehachse einer Tangentialebene als Punkt und Einheitsrichtung: die Achse der berührten
+/// Fläche (Zylinder, Kegel, Kugel), um die [`tangent_frame`] den Winkel dreht. Für andere
+/// Ebenen oder eine nicht auflösbare Fläche `None`. Die App setzt daran den Drehgriff (wie
+/// Fusion).
+pub fn tangent_axis(def: &PlaneDef, solids: &[&Solid], tol: &Tolerance) -> Option<(DVec3, DVec3)> {
+    let PlaneDef::Tangent { face, .. } = def else {
+        return None;
+    };
+    let found = resolve_face(solids, face, tol).ok()?;
+    match &solids[found.body].faces[found.face].surface {
+        Surface::Cylinder { frame, .. }
+        | Surface::Cone { frame, .. }
+        | Surface::Sphere { frame, .. } => Some((frame.origin, frame.z)),
+        _ => None,
+    }
+}
+
 /// Achse als Punkt, Einheitsrichtung und Normale der Bezugsebene durch die Achse (Kante: erste
 /// angrenzende ebene Fläche, X/Y: XY, Z: XZ, Skizzenlinie: Skizzenebene).
 pub(crate) fn resolve_axis(

@@ -142,6 +142,15 @@ pub fn parent_missing() -> Msg {
 fn no_drawing_open() -> Msg {
     crate::msg!("drawing-none-open")
 }
+/// Hinweis unter einer Zeichnung mit Stückliste, solange ausgeblendete Körper darin fehlen
+/// (nur auf dem Bildschirm, nicht auf dem gedruckten oder exportierten Blatt).
+pub fn parts_hidden_note(state: &AppState, drawing: &Drawing) -> Option<Msg> {
+    if matches!(parts_space_for(drawing, 0, true), PartsSpace::None) {
+        return None;
+    }
+    let n = state.document.parts_hidden_count();
+    (n > 0).then(|| crate::msg!("drawing-parts-hidden", n = n))
+}
 /// Hinweis am gesperrten „Ansicht hinzufügen“ eines Stücklistenblatts.
 pub fn no_views_on_parts_sheet() -> Msg {
     crate::msg!("drawing-no-views-on-parts-sheet")
@@ -1308,6 +1317,14 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
             .texts
             .insert(0, balloon_tool::lost_note(lost_balloons));
         red += 1;
+    }
+    // Ausgeblendete Körper fehlen in der Stückliste (Wunsch von Dennis); nur auf dem Bildschirm.
+    if let Some(n) = state
+        .document
+        .drawing(id)
+        .and_then(|d| parts_hidden_note(state, d))
+    {
+        notes.texts.push(n);
     }
     // Die Meldung des Vorschlags gilt nur, bis sich das Dokument oder die Auswahl ändert.
     if state.drawing_ui.dim_message_key != Some(message_key(state)) {

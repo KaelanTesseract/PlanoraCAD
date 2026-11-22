@@ -523,3 +523,50 @@ fn snapshot_override_limit_boundary() {
     assert!(Document::from_snapshot(fill(1000), 0.05).is_ok());
     assert!(Document::from_snapshot(fill(1001), 0.05).is_err());
 }
+
+#[test]
+fn hidden_bodies_are_not_in_the_parts_list() {
+    let mut d = Document::new();
+    let a = d
+        .add_feature("A", bx_at(DVec3::splat(10.0), DVec3::ZERO))
+        .unwrap();
+    let b = d
+        .add_feature("B", bx_at(DVec3::splat(10.0), DVec3::new(30.0, 0.0, 0.0)))
+        .unwrap();
+    let c = d
+        .add_feature("C", bx_at(DVec3::splat(10.0), DVec3::new(60.0, 0.0, 0.0)))
+        .unwrap();
+    assert_eq!(d.parts_rows().len(), 3);
+    assert_eq!(d.parts_hidden_count(), 0);
+    let mut v = d.visibility().clone();
+    v.bodies.insert(key(b));
+    d.set_visibility(v);
+    assert_eq!(
+        d.parts_rows(),
+        vec![row(1, "A", 1, vec![key(a)]), row(2, "C", 1, vec![key(c)])],
+        "wie Fusion gewünscht: ausgeblendete Körper zählen nicht"
+    );
+    assert_eq!(d.parts_hidden_count(), 1);
+    let mut v = d.visibility().clone();
+    v.bodies.clear();
+    d.set_visibility(v);
+    assert_eq!(d.parts_rows().len(), 3);
+    assert_eq!(d.parts_hidden_count(), 0);
+}
+
+#[test]
+fn hidden_bodies_folder_empties_the_parts_list() {
+    let mut d = Document::new();
+    for (i, n) in ["A", "B", "C"].iter().enumerate() {
+        d.add_feature(
+            *n,
+            bx_at(DVec3::splat(10.0), DVec3::new(30.0 * i as f64, 0.0, 0.0)),
+        )
+        .unwrap();
+    }
+    let mut v = d.visibility().clone();
+    v.folders.bodies = true;
+    d.set_visibility(v);
+    assert!(d.parts_rows().is_empty());
+    assert_eq!(d.parts_hidden_count(), 3);
+}

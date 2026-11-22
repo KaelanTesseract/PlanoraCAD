@@ -24,10 +24,14 @@ struct Rig {
 
 impl Rig {
     fn new(d: PlaneDialog) -> Rig {
-        let ctx = egui::Context::default();
-        ctx.set_fonts(fonts::definitions());
         let mut s = AppState::new();
         s.create_box(planora_math::DVec3::splat(20.0)).unwrap();
+        Rig::with_state(d, s)
+    }
+
+    fn with_state(d: PlaneDialog, mut s: AppState) -> Rig {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts::definitions());
         // Schräg von vorn oben: Normale und Achse stehen sichtbar im Bild.
         s.camera = planora_render::OrbitCamera {
             // Das Modell links im Bild: Die Mitte gehört dem Fenster.
@@ -94,7 +98,7 @@ impl Rig {
     fn value(&self) -> f64 {
         match self.d.definition(&self.s).unwrap().0 {
             PlaneDef::Offset { distance, .. } => distance,
-            PlaneDef::Angle { angle, .. } => angle,
+            PlaneDef::Angle { angle, .. } | PlaneDef::Tangent { angle, .. } => angle,
             other => panic!("{other:?}"),
         }
     }
@@ -281,5 +285,63 @@ fn enter_after_a_drag_creates_the_plane() {
     assert!(
         matches!(planes.as_slice(), [PlaneDef::Offset { distance, .. }] if *distance == v),
         "{planes:?}"
+    );
+}
+
+/// Tangentialebene an der Mantelfläche eines Körpers aus `make` (Bezug: XZ).
+fn tangent_rig(make: impl FnOnce(&mut AppState)) -> Rig {
+    use planora_kernel::Surface;
+    let mut s = AppState::new();
+    make(&mut s);
+    let solid = &s.bodies[0].solid;
+    let (id, _) = solid
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Cylinder { .. } | Surface::Sphere { .. }))
+        .expect("gekrümmte Fläche");
+    let face = planora_feature::FaceRef::from_face(solid, id, &planora_math::Tolerance::default())
+        .unwrap();
+    let mut d = PlaneDialog::new(PlaneCommand::Tangent);
+    d.fill(SlotValue::Face(face));
+    d.fill(SlotValue::Base(
+        planora_feature::planes::PlaneBase::Standard(StandardPlane::XZ),
+    ));
+    Rig::with_state(d, s)
+}
+
+#[test]
+fn dragging_the_turn_arrow_turns_the_tangent_plane() {
+    let mut r = tangent_rig(|s| {
+        s.create_cylinder(10.0, 20.0).unwrap();
+    });
+    let GripShape::Angle { axis, value, .. } = r.grip() else {
+        panic!("Drehpfeil erwartet (wie Fusion)")
+    };
+    assert_eq!(value, 0.0);
+    assert!(
+        axis.cross(planora_math::DVec3::Z).length() < 1e-9,
+        "um die Zylinderachse: {axis:?}"
+    );
+    let p = r.grip_at();
+    r.press(p);
+    r.move_to(p + vec2(0.0, 150.0));
+    r.release(p + vec2(0.0, 150.0));
+    let a = r.value();
+    assert!(a.abs() > 5.0 && a.abs() < 180.0, "{a}");
+    assert_eq!((a * 10.0).round() / 10.0, a, "auf 0,1° gerundet");
+    assert!(r.open, "das Fenster bleibt offen");
+}
+
+#[test]
+fn tangent_grip_on_a_sphere_turns_about_its_axis() {
+    let r = tangent_rig(|s| {
+        s.create_sphere(10.0).unwrap();
+    });
+    let GripShape::Angle { axis, .. } = r.grip() else {
+        panic!("Drehpfeil erwartet")
+    };
+    assert!(
+        axis.cross(planora_math::DVec3::Z).length() < 1e-9,
+        "um die Achse der Kugel: {axis:?}"
     );
 }

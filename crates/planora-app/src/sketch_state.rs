@@ -703,6 +703,8 @@ pub struct SketchSession {
     /// Rundung/Fase: die zuletzt gerundete Kurve und ihr Radius; die nächste Rundung derselben
     /// Sitzung schließt mit dem zweiten Klick ab.
     pub fillet_run: Option<(CurveId, f64)>,
+    /// Ziehgriffe von Rundung und Fase (wie Fusion).
+    pub kind_grip: crate::sketch_kinds::KindGripState,
     /// Versatz: die ganze tangentiale Kette nehmen (Vorgabe).
     pub offset_chain: bool,
     /// Klicklagen der gewählten Kurven von Rundung und Fase (zählen nicht in `kind_stage`).
@@ -893,6 +895,7 @@ impl SketchSession {
             trim_drag: None,
             modify_edits: (0, None),
             fillet_run: None,
+            kind_grip: Default::default(),
             offset_chain: true,
             pick_points: Vec::new(),
             curve_picks: CurvePicks::default(),
@@ -916,6 +919,7 @@ impl SketchSession {
     /// geht der erste Zug, der einen Griff erst einschaltet, der Zug am Drehgriff eines Textes und
     /// der Zug am Rho-Griff: Sie bleiben nie halb stehen.
     pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
+        self.kind_grip = Default::default();
         // Auch der Zug am Drehgriff eines Textes und am Rho-Griff geht ganz zurück: Ein Werkzeugwechsel
         // hinterlässt nichts (beide gleich, Skizzen 12 Task 11; Fusion-Verhalten prüft Handtest 3).
         if self
@@ -2188,6 +2192,9 @@ impl SketchSession {
     /// (gewählter Bezug oder gesetztes Maß) und endet erst, wenn nichts mehr offen ist. Ein
     /// Abhängigkeitsbefehl ([`Tool::Constraint`]) endet ganz, ohne seine halbe Auswahl.
     pub fn cancel(&mut self, sk: &mut Sketch) {
+        // Ein Zug an einem Griff von Rundung oder Fase endet mit (er schriebe sonst in die Felder
+        // der nächsten Stufe).
+        self.kind_grip = Default::default();
         // Ein offenes Rechtsklickmenü schließt zuerst.
         if self.curve_menu.take().is_some() {
             return;

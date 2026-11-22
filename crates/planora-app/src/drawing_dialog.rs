@@ -182,6 +182,7 @@ impl NewDrawingDialog {
         let (mut name, mut paper, mut landscape) = (self.name.clone(), self.paper, self.landscape);
         let (mut projection, mut base) = (self.projection, self.base);
         let (mut scale, mut scale_chosen) = (self.scale, self.scale_chosen);
+        let mut field_enter = false;
         let response = Dialog::new(tr!("drawing-new-title"), DialogSize::Wide)
             .dock_key("drawing_new")
             .open(&mut open)
@@ -193,7 +194,8 @@ impl NewDrawingDialog {
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
                             ui.label(tr!("drawing-new-name"));
-                            theme::text_field(ui, egui::TextEdit::singleline(&mut name));
+                            let r = theme::text_field(ui, egui::TextEdit::singleline(&mut name));
+                            field_enter |= crate::dialog::left_with_enter(ui, &r);
                             ui.end_row();
                             ui.label(tr!("drawing-new-paper"));
                             egui::ComboBox::from_id_salt("planora-new-drawing-paper")
@@ -264,6 +266,7 @@ impl NewDrawingDialog {
                         close = true;
                     }
                 });
+                create |= crate::dialog::enter_confirms(ui, field_enter, error.is_none());
             });
         (self.name, self.paper, self.landscape) = (name, paper, landscape);
         (self.projection, self.base) = (projection, base);
