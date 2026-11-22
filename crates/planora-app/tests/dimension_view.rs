@@ -1751,3 +1751,52 @@ fn angle_arc_is_painted_within_a_pixel_and_radial_drag_changes_the_radius() {
     assert!((after.offset - 15.0).abs() < 1e-3, "{}", after.offset);
     assert_eq!(after.text_shift, (0.0, 0.0));
 }
+
+/// Ids der Maße, die die Auflösung liefert, getrennt in aufgelöst und verloren.
+fn dim_states(st: &mut AppState, d: DrawingId) -> (Vec<DimId>, Vec<DimId>) {
+    let mut ui = std::mem::take(&mut st.dimension_ui);
+    let dims = ui.resolve(st, d);
+    let ok = dims
+        .by_view
+        .values()
+        .flatten()
+        .filter(|e| e.1.is_ok())
+        .map(|e| e.0.id);
+    let lost = dims
+        .by_view
+        .values()
+        .flatten()
+        .filter(|e| e.1.is_err())
+        .map(|e| e.0.id);
+    let out = (ok.collect(), lost.collect());
+    st.dimension_ui = ui;
+    out
+}
+
+#[test]
+fn dimensions_on_a_hidden_body_rest_and_come_back() {
+    let mut st = AppState::new();
+    st.create_box(BOX).unwrap();
+    let b = st.create_box(BOX).unwrap();
+    let d = new_drawing(&mut st);
+    let front = add_view(&mut st, d, ViewKind::Front, 120.0, 100.0);
+    let w0 = add_width(&mut st, d, front, 0, 10.0);
+    let w1 = add_width(&mut st, d, front, 1, 20.0);
+    assert_eq!(dim_states(&mut st, d), (vec![w0, w1], vec![]));
+    // Zweiter Quader ausgeblendet: sein Maß ruht (weder aufgelöst noch verloren).
+    let mut v = st.document.visibility().clone();
+    v.bodies.insert(planora_drawing::BodyKey {
+        feature: b.0,
+        index: 0,
+    });
+    st.document.set_visibility(v);
+    assert_eq!(dim_states(&mut st, d), (vec![w0], vec![]));
+    // Wieder eingeblendet: zurück.
+    let mut v = st.document.visibility().clone();
+    v.bodies.clear();
+    st.document.set_visibility(v);
+    assert_eq!(dim_states(&mut st, d), (vec![w0, w1], vec![]));
+    // Gelöscht ist verloren, nicht ruhend.
+    st.delete_feature(b).unwrap();
+    assert_eq!(dim_states(&mut st, d), (vec![w0], vec![w1]));
+}

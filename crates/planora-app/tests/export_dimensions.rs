@@ -1180,3 +1180,39 @@ fn every_view_kind_exports_without_marks_on_isometric() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn hidden_bodies_and_their_dimensions_rest_in_the_export() {
+    let mut s = AppState::new();
+    s.create_box(BOX).unwrap();
+    let second = s.create_box(DVec3::new(30.0, 30.0, 30.0)).unwrap();
+    s.selected_body = None;
+    let id = add_drawing(&mut s, "Blatt 1");
+    let front = s.document.drawing(id).unwrap().views[0].id;
+    let spec = width_spec(&s, 1, front);
+    s.document.add_dimension(id, spec).unwrap();
+    let visible = |d: &ExportDialog, s: &AppState| match d.status(s) {
+        ExportStatus::DrawingReady { visible, .. } => visible,
+        other => panic!("{other:?}"),
+    };
+    let d = dialog(&s, SVG);
+    assert_eq!(ready(&d, &s).0, 1);
+    let both = visible(&d, &s);
+    // Zweiter Quader ausgeblendet: nicht in der Ansicht, sein Maß ruht (kein „verloren“).
+    let mut v = s.document.visibility().clone();
+    v.bodies.insert(planora_drawing::BodyKey {
+        feature: second.0,
+        index: 0,
+    });
+    s.document.set_visibility(v);
+    let d = dialog(&s, SVG);
+    assert_eq!(ready(&d, &s).0, 0, "das Maß ruht");
+    assert!(visible(&d, &s) < both, "der ausgeblendete Quader fehlt");
+    // Wieder eingeblendet: wie vorher.
+    let mut v = s.document.visibility().clone();
+    v.bodies.clear();
+    s.document.set_visibility(v);
+    let d = dialog(&s, SVG);
+    assert_eq!(ready(&d, &s).0, 1);
+    assert_eq!(visible(&d, &s), both);
+}

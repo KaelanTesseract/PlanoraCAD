@@ -406,3 +406,45 @@ fn numbers_follow_the_part() {
     // Die Kreise selbst bleiben in der Zeichnung.
     assert_eq!(d.drawing(dr).unwrap().balloons.len(), 3);
 }
+
+#[test]
+fn balloons_on_hidden_bodies_rest() {
+    let mut d = Document::new();
+    let bolzen = cube_at(&mut d, "Bolzen", 0.0);
+    let platte = cube_at(&mut d, "Platte", 20.0);
+    let (dr, view) = with_view(&mut d);
+    let bb = d
+        .add_balloon(dr, view, key(bolzen), (0.0, 0.0), (-10.0, 10.0))
+        .unwrap();
+    let bp = d
+        .add_balloon(dr, view, key(platte), (0.25, 0.75), (10.0, 10.0))
+        .unwrap();
+    assert!(d.resting_balloons(dr).is_empty());
+    // „Platte“ ausgeblendet: ihr Kreis ruht (nicht verloren), „Bolzen“ bleibt Pos. 1.
+    let mut v = d.visibility().clone();
+    v.bodies.insert(key(platte));
+    d.set_visibility(v);
+    assert_eq!(
+        d.resting_balloons(dr),
+        std::collections::BTreeSet::from([bp])
+    );
+    assert_eq!(d.balloon_numbers(dr)[&bb], Some(1));
+    // Der ganze Ordner „Körper“ aus: beide ruhen.
+    let mut v = d.visibility().clone();
+    v.folders.bodies = true;
+    d.set_visibility(v);
+    assert_eq!(
+        d.resting_balloons(dr),
+        std::collections::BTreeSet::from([bb, bp])
+    );
+    // Gelöscht ist nicht ausgeblendet: Der Kreis ist verloren, er ruht nicht.
+    let mut v = d.visibility().clone();
+    v.folders.bodies = false;
+    v.bodies.clear();
+    d.set_visibility(v);
+    d.delete(platte).unwrap();
+    assert!(d.resting_balloons(dr).is_empty());
+    assert_eq!(d.balloon_numbers(dr)[&bp], None);
+    // Unbekannte Zeichnung: leer.
+    assert!(d.resting_balloons(DrawingId(99)).is_empty());
+}

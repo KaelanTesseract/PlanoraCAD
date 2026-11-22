@@ -901,3 +901,25 @@ fn the_field_names_follow_the_language() {
         assert!(!o.seen.iter().any(|t| t == "Länge"));
     });
 }
+
+#[test]
+fn fields_at_the_pointer_flip_away_from_a_floating_panel() {
+    use egui::{Rect, pos2};
+    use planora_app::sketch_inline::field_pos;
+    let view = Rect::from_min_max(pos2(0.0, 0.0), pos2(1920.0, 1080.0));
+    let panel = Rect::from_min_max(pos2(1640.0, 60.0), pos2(1900.0, 900.0));
+    let at = pos2(1500.0, 700.0);
+    // Ohne Leiste rechts vom Zeiger.
+    let free = field_pos(view, at, 200.0, 0, 2, &[]);
+    assert!(free.x > at.x, "{free:?}");
+    // Die rechte Leiste läge darunter: links vom Zeiger.
+    let flipped = field_pos(view, at, 200.0, 0, 2, &[panel]);
+    assert!(flipped.x + 200.0 < at.x, "{flipped:?}");
+    assert_eq!(flipped.y, free.y, "nur die Seite wechselt");
+    // Weit weg von der Leiste: wie ohne.
+    let far = pos2(400.0, 700.0);
+    assert_eq!(
+        field_pos(view, far, 200.0, 1, 2, &[panel]),
+        field_pos(view, far, 200.0, 1, 2, &[])
+    );
+}

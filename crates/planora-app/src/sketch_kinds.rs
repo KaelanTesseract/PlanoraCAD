@@ -22,6 +22,9 @@ use planora_sketch::{conic_apex_ok, conic_nurbs, control_spline_nurbs, tangent_c
 pub const PREVIEW_STEPS_PER_TURN: usize = 96;
 /// Anteil der Länge der kürzeren gewählten Kurve, den eine neue Rundung als Startradius zeigt.
 pub const FILLET_DEFAULT_SHARE: f64 = 0.2;
+
+/// Ein Feldwert, der statt des getippten gilt (Prüfen eines gezogenen Werts).
+type Over = Option<(FieldKind, f64)>;
 /// Winkel der Fase „Abstand und Winkel“, solange keiner getippt ist (Annahme: Vorgabe von Fusion).
 const CHAMFER_ANGLE_DEFAULT: f64 = std::f64::consts::FRAC_PI_4;
 /// Faktor für die Probe, ob eine vom Löser abgelehnte Rundung oder Fase kleiner ginge.
@@ -58,12 +61,16 @@ pub struct KindGripDrag {
 pub struct KindGripState {
     pub hot: Option<FieldKind>,
     pub drag: Option<KindGripDrag>,
+    /// Feld, dessen getippter Wert nicht passt (Rundung oder Fase ohne Vorschau): zeigt
+    /// „Wert zu groß“.
+    pub over: Option<FieldKind>,
 }
 
 impl KindGrip {
     /// Wert des Felds, wenn der Zeiger bei `p` (Skizzenkoordinaten) steht: der Abstand von der
     /// Ecke entlang des Griffs, im Verhältnis zum Wert beim Greifen (bei Linien genau; bei
-    /// Bögen eine gute Näherung). Gerundet auf 0,01 mm, nie kleiner als 0,01 mm.
+    /// Bögen eine gute Näherung). Ungerundet ([`round_grip_value`] rundet), nie kleiner als ein
+    /// Rundungsschritt.
     pub fn value_at(&self, p: DVec2) -> f64 {
         let arm = self.at - self.corner;
         let d0 = arm.length();
@@ -71,8 +78,35 @@ impl KindGrip {
             return self.value;
         }
         let d = (p - self.corner).dot(arm / d0);
-        let v = (self.value * d / d0 * 100.0).round() / 100.0;
-        v.max(0.01)
+        (self.value * d / d0).max(grip_step())
+    }
+}
+
+/// Rundungsschritt gezogener Werte in mm: 0,01 mm, in Zoll 0,001 in.
+fn grip_step() -> f64 {
+    match planora_i18n::current_unit() {
+        planora_i18n::DisplayUnit::Zoll => 0.001 * 25.4,
+        _ => 0.01,
+    }
+}
+
+/// Rundet einen gezogenen Wert (mm) in der Anzeigeeinheit: mm auf 0,01, Zoll auf 0,001; nie
+/// kleiner als ein Schritt. `down` rundet ab (Obergrenze, damit der Wert weiter passt).
+pub fn round_grip_value(v: f64, down: bool) -> f64 {
+    let step = grip_step();
+    let n = v / step;
+    let n = if down { (n + 1e-9).floor() } else { n.round() }.max(1.0);
+    grip_steps_value(n)
+}
+
+/// Wert (mm) von `n` Rundungsschritten der Anzeigeeinheit.
+fn grip_steps_value(n: f64) -> f64 {
+    match planora_i18n::current_unit() {
+        // Zoll zeigt das Feld ohnehin mit höchstens sechs Stellen.
+        planora_i18n::DisplayUnit::Zoll => n * grip_step(),
+        // Geteilt statt mal 0,01: trifft die nächste darstellbare Zahl, sonst zeigt das
+        // Feld „0,35000000000000003“.
+        _ => n / 100.0,
     }
 }
 
@@ -907,9 +941,10 @@ impl SketchSession {
 
     /// Länge aus dem Feld `field`, sonst die Startlänge der Fase (wie Fusion: nicht vom Zeiger;
     /// gezogen wird am Griff).
-    fn length_at(&self, sk: &Sketch, field: FieldKind, _at: DVec2) -> Option<f64> {
-        self.input
-            .locked(field)
+    fn length_at(&self, sk: &Sketch, field: FieldKind, over: Over) -> Option<f64> {
+        over.filter(|(f, _)| *f == field)
+            .map(|(_, v)| v)
+            .or_else(|| self.input.locked(field))
             .or_else(|| self.chamfer_default_length(sk))
     }
 
@@ -989,6 +1024,79 @@ impl SketchSession {
         self.input.fields.iter().find(|f| f.kind == field).cloned()
     }
 
+    /// Passt Rundung oder Fase, wenn das Feld `field` den Wert `v` hat?
+    fn grip_value_fits(&self, sk: &Sketch, field: FieldKind, v: f64) -> bool {
+        let Some(kind) = self.planned_kind() else {
+            return false;
+        };
+        let over = Some((field, v));
+        if kind == ToolKind::Fillet {
+            self.fillet_plan_with(sk, over).is_some()
+        } else {
+            self.chamfer_plan_with(sk, kind, over).is_some()
+        }
+    }
+
+    /// Wert für einen Zug am Griff von `from` (passt) nach `to`: `to` gerundet, wenn er passt,
+    /// sonst der größte passende Wert dazwischen (abgerundet), damit die Vorschau bleibt.
+    pub fn fit_grip_value(&self, sk: &Sketch, field: FieldKind, from: f64, to: f64) -> f64 {
+        let want = round_grip_value(to, false);
+        if self.grip_value_fits(sk, field, want) || !self.grip_value_fits(sk, field, from) {
+            return want;
+        }
+        // Zwischen dem passenden `from` und dem unpassenden `to` liegt die Grenze.
+        let (mut ok, mut bad) = (from, to);
+        for _ in 0..40 {
+            let mid = 0.5 * (ok + bad);
+            if self.grip_value_fits(sk, field, mid) {
+                ok = mid;
+            } else {
+                bad = mid;
+            }
+        }
+        let step = grip_step();
+        let n = ok / step;
+        // Zur passenden Seite runden: nach unten, wenn zu groß nicht passt, sonst nach oben.
+        let rounded = grip_steps_value(if bad > ok {
+            (n + 1e-9).floor()
+        } else {
+            (n - 1e-9).ceil()
+        });
+        if rounded >= step && self.grip_value_fits(sk, field, rounded) {
+            rounded
+        } else {
+            from
+        }
+    }
+
+    /// Das Feld, dessen Wert Rundung oder Fase nicht passen lässt (für „Wert zu groß“): sind
+    /// beide Kurven gewählt und gibt es keinen Plan, das aktive Längenfeld mit Wert, sonst das
+    /// erste mit Wert.
+    pub fn too_large_field(&self, sk: &Sketch) -> Option<FieldKind> {
+        use FieldKind as F;
+        let kind = self.planned_kind().filter(|k| k.is_fillet_or_chamfer())?;
+        if self.curve_picks().is_none() || self.fillet_run.is_some() {
+            return None;
+        }
+        let fits = if kind == ToolKind::Fillet {
+            self.fillet_plan_with(sk, None).is_some()
+        } else {
+            self.chamfer_plan_with(sk, kind, None).is_some()
+        };
+        if fits {
+            return None;
+        }
+        let lengths = [F::Radius, F::Distance, F::Distance2];
+        let typed =
+            |f: &&crate::sketch_input::DrawField| lengths.contains(&f.kind) && f.locked.is_some();
+        self.input
+            .fields
+            .get(self.input.active)
+            .filter(typed)
+            .or_else(|| self.input.fields.iter().find(typed))
+            .map(|f| f.kind)
+    }
+
     /// Stellt das Feld wieder her, wie es vor dem Zug war.
     pub(crate) fn restore_field(&mut self, before: crate::sketch_input::DrawField) {
         if let Some(f) = self.input.fields.iter_mut().find(|f| f.kind == before.kind) {
@@ -1001,12 +1109,18 @@ impl SketchSession {
     /// ([`fillet_default_radius`](Self::fillet_default_radius)). Der Zeiger ändert den Radius
     /// nicht (wie Fusion).
     fn fillet_plan_at(&self, sk: &Sketch, _at: DVec2) -> Option<FilletPlan> {
+        self.fillet_plan_with(sk, None)
+    }
+
+    /// Wie [`fillet_plan_at`](Self::fillet_plan_at), mit dem Wert `over` statt des Felds.
+    fn fillet_plan_with(&self, sk: &Sketch, over: Over) -> Option<FilletPlan> {
         let [a, b] = self.curve_picks()?;
         let radius = match self.fillet_run {
             Some((arc, r)) => sk.radius(arc).unwrap_or(r),
-            None => self
-                .input
-                .locked(FieldKind::Radius)
+            None => over
+                .filter(|(f, _)| *f == FieldKind::Radius)
+                .map(|(_, v)| v)
+                .or_else(|| self.input.locked(FieldKind::Radius))
                 .or_else(|| self.fillet_default_radius(sk))?,
         };
         sk.fillet_plan(a, b, radius)
@@ -1030,10 +1144,15 @@ impl SketchSession {
 
     /// Plan der Fase, für Vorschau und Klick: Längen aus den Feldern, sonst vom Zeiger; der Winkel
     /// aus dem Feld, sonst die Vorgabe.
-    fn chamfer_plan_at(&self, sk: &Sketch, kind: ToolKind, at: DVec2) -> Option<ChamferPlan> {
+    fn chamfer_plan_at(&self, sk: &Sketch, kind: ToolKind, _at: DVec2) -> Option<ChamferPlan> {
+        self.chamfer_plan_with(sk, kind, None)
+    }
+
+    /// Wie [`chamfer_plan_at`](Self::chamfer_plan_at), mit dem Wert `over` statt des Felds.
+    fn chamfer_plan_with(&self, sk: &Sketch, kind: ToolKind, over: Over) -> Option<ChamferPlan> {
         use FieldKind as F;
         let [a, b] = self.curve_picks()?;
-        let first = self.length_at(sk, F::Distance, at)?;
+        let first = self.length_at(sk, F::Distance, over)?;
         let shape = match kind {
             ToolKind::ChamferEqual => ChamferKind::Equal(first),
             ToolKind::ChamferDistanceAngle => ChamferKind::DistanceAngle(
@@ -1041,7 +1160,7 @@ impl SketchSession {
                 self.input.locked(F::Angle).unwrap_or(CHAMFER_ANGLE_DEFAULT),
             ),
             ToolKind::ChamferTwoDistances => {
-                ChamferKind::TwoDistances(first, self.length_at(sk, F::Distance2, at)?)
+                ChamferKind::TwoDistances(first, self.length_at(sk, F::Distance2, over)?)
             }
             _ => return None,
         };

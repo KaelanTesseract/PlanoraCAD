@@ -267,7 +267,7 @@ struct NumbersCache {
     numbers: Arc<Numbers>,
 }
 
-/// Nummer je Kreis (`None`: verloren).
+/// Nummer je Kreis (`None`: verloren). Kreise an ausgeblendeten Körpern fehlen: Sie ruhen.
 pub type Numbers = BTreeMap<BalloonId, Option<u32>>;
 
 /// Wie [`planora_feature::Document::balloon_numbers`], aus dem Zwischenspeicher von `ctx`.
@@ -285,7 +285,11 @@ pub fn numbers_cached(ctx: &egui::Context, state: &AppState, drawing: DrawingId)
         .drawing(drawing)
         .is_some_and(|d| !d.balloons.is_empty());
     let numbers = Arc::new(if has {
-        state.document.balloon_numbers(drawing)
+        let mut n = state.document.balloon_numbers(drawing);
+        for id in state.document.resting_balloons(drawing) {
+            n.remove(&id);
+        }
+        n
     } else {
         Numbers::new()
     });
@@ -312,7 +316,13 @@ pub fn balloon_list(
     if drawing.balloons.is_empty() {
         return Vec::new();
     }
-    balloon_marks(drawing, results, numbers)
+    // Kreise ohne Eintrag in `numbers` ruhen (ausgeblendeter Körper): nicht gezeichnet.
+    if drawing.balloons.iter().all(|b| numbers.contains_key(&b.id)) {
+        return balloon_marks(drawing, results, numbers);
+    }
+    let mut shown = drawing.clone();
+    shown.balloons.retain(|b| numbers.contains_key(&b.id));
+    balloon_marks(&shown, results, numbers)
 }
 
 /// `list` mit dem Kreis `id` am Versatz `offset` (beim Ziehen, bevor das Dokument geändert wird);

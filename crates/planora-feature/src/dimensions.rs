@@ -20,7 +20,7 @@ use planora_drawing::{
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::Solid;
 use planora_math::{DVec3, Tolerance};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::convert::Infallible;
 
 /// Höchstzahl der Nachkommastellen eines Maßes.
@@ -378,4 +378,37 @@ pub fn resolve_drawing_dimensions_views<'a, E>(
             .push((m.clone(), result));
     }
     Ok((out, keys))
+}
+
+/// Lässt Maße an ausgeblendeten Körpern ruhen. `dims` wurde gegen alle Körper `all`
+/// (eingeblendete und ausgeblendete) aufgelöst, wie vor dem Ausblenden. Ein Maß einer Ansicht
+/// ohne Schnitt ruht, wenn einer seiner Bezüge gegen die eingeblendeten Körper `shown` nicht
+/// oder anders aufgeht als gegen `all` (er hängt dann an einem ausgeblendeten Körper und würde
+/// sonst verloren gehen oder auf einen gleich gebauten Nachbarn springen). Ruhende Maße fallen
+/// aus `by_view` heraus und stehen in `resting`; eingeblendet kommen sie zurück.
+pub fn rest_hidden_dimensions(
+    d: &Drawing,
+    dims: &mut ResolvedDims,
+    shown: &[&Solid],
+    all: &[&Solid],
+) {
+    let tol = Tolerance::default();
+    let (cache_all, cache_shown) = (RefCache::new(), RefCache::new());
+    let mut resting = BTreeSet::new();
+    for (view, entries) in dims.by_view.iter_mut() {
+        if d.view(*view).is_none_or(|v| v.section.is_some()) {
+            continue;
+        }
+        entries.retain(|(spec, _)| {
+            let rests = spec.refs.iter().any(|r| {
+                let whole = resolve_geo_cached(all, r, &tol, &cache_all);
+                whole.is_ok() && resolve_geo_cached(shown, r, &tol, &cache_shown) != whole
+            });
+            if rests {
+                resting.insert(spec.id);
+            }
+            !rests
+        });
+    }
+    dims.resting.extend(resting);
 }

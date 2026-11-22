@@ -63,7 +63,7 @@ use planora_exchange::{
     ExchangeError, ExchangeMesh, ExportBody, Format, MeshReport, MeshTransform, PlacedSource,
     Progress, SolidSource, check_mesh, collect_body, export_file,
 };
-use planora_feature::{BodyRef, resolve_drawing_dimensions_views};
+use planora_feature::{BodyRef, resolve_drawing_dimensions_views, rest_hidden_dimensions};
 use planora_i18n::{Lang, tr, with_lang};
 use planora_kernel::Solid;
 use planora_mesh::{TessellationOptions, tessellate};
@@ -71,7 +71,7 @@ use planora_step::{
     MAX_NAME_CHARS, StepBody, StepError, StepOptions, check_body, display_name, export_step_file,
 };
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
@@ -1127,6 +1127,12 @@ pub struct PartsInput {
     pub cells: Vec<PartsCells>,
     /// Nummer je Kreis der Zeichnung; `None` oder fehlend heißt verloren.
     pub balloons: BTreeMap<BalloonId, Option<u32>>,
+    /// Kreise an ausgeblendeten Körpern: Sie ruhen (kommen nicht aufs Blatt und sind nicht
+    /// verloren), wie auf dem Bildschirm.
+    pub resting: BTreeSet<BalloonId>,
+    /// Die ausgeblendeten exakten Körper: Maße, die nur an ihnen hängen, ruhen (die Ansichten
+    /// zeichnen nur die eingeblendeten).
+    pub hidden: Arc<Vec<Solid>>,
     /// Die Ausgabe ist DXF. Gilt nur für ein Stücklistenblatt ohne Rahmen (Breitenzuschlag der
     /// Tabellentexte); mit Rahmen entscheidet [`FrameInput::dxf`].
     pub dxf: bool,
@@ -1148,6 +1154,8 @@ pub fn parts_input(state: &AppState, drawing: &Drawing) -> PartsInput {
     PartsInput {
         cells,
         balloons,
+        resting: state.document.resting_balloons(drawing.id),
+        hidden: Arc::default(),
         dxf: false,
     }
 }
@@ -1241,6 +1249,16 @@ fn prepare_counted(
     let with_dims = !drawing.dimensions.is_empty();
     let kinds_empty = keys.is_empty();
     progress.set_total((keys.len() as u64 + u64::from(with_dims)).max(1));
+    // Kreise an ausgeblendeten Körpern ruhen: Sie fehlen auf dem Blatt und sind nicht verloren.
+    let rested;
+    let drawing = if parts.resting.is_empty() {
+        drawing
+    } else {
+        let mut d = drawing.clone();
+        d.balloons.retain(|b| !parts.resting.contains(&b.id));
+        rested = d;
+        &rested
+    };
     let names = view_name_msgs(drawing);
     if let Some(m) = first_lost_balloon(drawing, &parts.balloons, &names) {
         return Err(m);
@@ -1303,7 +1321,15 @@ fn prepare_counted(
             });
             *lines_out = sheet_line_counts(drawing, &plain);
         };
-        let dims = match resolve(drawing, &refs, &cut, progress) {
+        // Maße werden gegen alle Körper aufgelöst (wie auf dem Bildschirm); die an
+        // ausgeblendeten Körpern ruhen danach.
+        let mut all = refs.clone();
+        all.extend(parts.hidden.iter());
+        let dims = match resolve(drawing, &all, &cut, progress) {
+            Ok(mut d) if !parts.hidden.is_empty() => {
+                rest_hidden_dimensions(drawing, &mut d, &refs, &all);
+                d
+            }
             Ok(d) => d,
             Err(DrawError::Cancelled) => return Err(cancelled()),
             Err(e) => {
@@ -1487,19 +1513,37 @@ fn default_drawing(state: &AppState) -> Option<DrawingId> {
     }
 }
 
-/// Exakte Körper als eigene Kopien für den Arbeitsthread und die Namen der Netz-Körper.
-fn drawing_bodies(state: &AppState) -> (Vec<(String, Solid)>, Vec<String>) {
+/// Körper einer Zeichnungsausgabe, als eigene Kopien für den Arbeitsthread.
+struct DrawingBodies {
+    /// Eingeblendete exakte Körper mit Namen (nur sie stehen in den Ansichten).
+    solids: Vec<(String, Solid)>,
+    /// Namen der eingeblendeten Netz-Körper (nicht gezeichnet, im Hinweis genannt).
+    meshes: Vec<String>,
+    /// Ausgeblendete exakte Körper: Maße an ihnen ruhen.
+    hidden: Arc<Vec<Solid>>,
+}
+
+/// Die Körper für die Ausgabe einer Zeichnung: Zeichnungen lassen ausgeblendete Körper weg, im
+/// Export wie auf dem Bildschirm (wie Fusion).
+fn drawing_bodies(state: &AppState) -> DrawingBodies {
     let mut solids = Vec::new();
     let mut meshes = Vec::new();
+    let mut hidden = Vec::new();
     for (i, b) in state.bodies.iter().enumerate() {
+        let shown = state.document.body_shown(b.source);
         let name = display_name(&b.name, i);
-        if b.kind == BodyKind::Mesh {
-            meshes.push(shorten_for_display(&name));
-        } else {
-            solids.push((name, b.solid.clone()));
+        match (b.kind == BodyKind::Mesh, shown) {
+            (true, true) => meshes.push(shorten_for_display(&name)),
+            (true, false) => {}
+            (false, true) => solids.push((name, b.solid.clone())),
+            (false, false) => hidden.push(b.solid.clone()),
         }
     }
-    (solids, meshes)
+    DrawingBodies {
+        solids,
+        meshes,
+        hidden: Arc::new(hidden),
+    }
 }
 
 /// Stand des Schreibens der Datei.
@@ -2082,7 +2126,11 @@ impl ExportDialog {
     /// Auftrag für die gewählte Zeichnung (SVG, DXF, PDF mit gewähltem Blatt).
     fn spawn_one(&self, state: &AppState, key: DrawKey) -> Option<DrawRun> {
         let drawing = self.current_drawing(state)?.clone();
-        let (solids, meshes) = drawing_bodies(state);
+        let DrawingBodies {
+            solids,
+            meshes,
+            hidden,
+        } = drawing_bodies(state);
         let (compute, resolve, format) = (self.compute, self.resolve, key.format);
         let frame = self.with_frame.then(|| FrameInput {
             project: state.document.project_info().cloned(),
@@ -2091,6 +2139,7 @@ impl ExportDialog {
         });
         let parts = PartsInput {
             dxf: format == DrawingFormat::Dxf,
+            hidden,
             ..parts_input(state, &drawing)
         };
         let is_list = matches!(drawing.kind, DrawingKind::PartsList { .. });
@@ -2134,7 +2183,11 @@ impl ExportDialog {
     /// Blattrahmen mit seiner Stellung im Dokument und eigene Stückliste, beides ohne
     /// DXF-Zuschlag. Der Hinweis auf Netz-Körper steht einmal (am ersten Ansichtenblatt).
     fn spawn_all(&self, state: &AppState, key: DrawKey) -> DrawRun {
-        let (solids, meshes) = drawing_bodies(state);
+        let DrawingBodies {
+            solids,
+            meshes,
+            hidden,
+        } = drawing_bodies(state);
         let project = state.document.project_info().cloned();
         let sheets: Vec<SheetJob> = state
             .document
@@ -2147,7 +2200,10 @@ impl ExportDialog {
                     ctx: context_or_single(state, d.id),
                     dxf: false,
                 }),
-                parts: parts_input(state, d),
+                parts: PartsInput {
+                    hidden: Arc::clone(&hidden),
+                    ..parts_input(state, d)
+                },
             })
             .collect();
         let total = sheets.len();

@@ -358,7 +358,9 @@ impl DimensionDialog {
             .get(&spec.view)
             .and_then(|list| list.iter().find(|(s, _)| s.id == self.dim))
             .map(|(_, r)| r);
+        let resting = dims.resting.contains(&self.dim);
         let value: Result<String, String> = match (lost_reason(result), result) {
+            _ if resting => Err(tr!("drawing-resting-hidden")),
             (None, Some(Ok(m))) => {
                 let mut plain = spec.clone();
                 plain.decimals = self.decimals;
