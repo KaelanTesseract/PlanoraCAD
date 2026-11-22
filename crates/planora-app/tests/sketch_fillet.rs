@@ -7,7 +7,7 @@ use eframe::App as _;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2};
 use planora_app::app::PlanoraApp;
 use planora_app::sketch_input::FieldKind as F;
-use planora_app::sketch_kinds::ToolKind;
+use planora_app::sketch_kinds::{GripMisfit, ToolKind};
 use planora_app::sketch_state::{Item, Snap, Tool};
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
@@ -1830,11 +1830,60 @@ fn a_typed_fillet_radius_that_does_not_fit_says_so() {
     type_in(&mut s, i, "100");
     play(&ctx, &mut s, vec![vec![]]);
     let se = s.sketch_session.as_ref().unwrap();
-    assert_eq!(se.kind_grip.over, Some(F::Radius), "Hinweis „Wert zu groß“");
+    assert_eq!(
+        se.kind_grip.over,
+        Some((F::Radius, GripMisfit::TooLarge)),
+        "Hinweis „Wert zu groß“"
+    );
     type_in(&mut s, i, "10");
     play(&ctx, &mut s, vec![vec![]]);
     let se = s.sketch_session.as_ref().unwrap();
     assert_eq!(se.kind_grip.over, None, "passt wieder");
+}
+
+#[test]
+fn a_typed_fillet_radius_near_zero_is_too_small() {
+    let ctx = context();
+    let mut s = corner();
+    choose(&mut s, ToolKind::Fillet);
+    play(&ctx, &mut s, vec![vec![]]);
+    raw_click(&ctx, &mut s, v(20.0, 0.0));
+    raw_click(&ctx, &mut s, v(0.0, 20.0));
+    let i = s
+        .sketch_session
+        .as_ref()
+        .unwrap()
+        .input
+        .fields
+        .iter()
+        .position(|f| f.kind == F::Radius)
+        .unwrap();
+    type_in(&mut s, i, "0.0000001");
+    play(&ctx, &mut s, vec![vec![]]);
+    let se = s.sketch_session.as_ref().unwrap();
+    assert_eq!(
+        se.kind_grip.over,
+        Some((F::Radius, GripMisfit::TooSmall)),
+        "fast 0 ist nicht zu groß"
+    );
+}
+
+#[test]
+fn a_chamfer_angle_that_never_fits_does_not_say_too_large() {
+    let ctx = context();
+    let mut s = rectangle();
+    chamfer_picks(&mut s, ToolKind::ChamferDistanceAngle, false);
+    play(&ctx, &mut s, vec![vec![]]);
+    type_in(&mut s, 0, "5");
+    type_in(&mut s, 1, "179");
+    play(&ctx, &mut s, vec![vec![]]);
+    let se = s.sketch_session.as_ref().unwrap();
+    assert_eq!(
+        se.kind_grip.over,
+        Some((F::Distance, GripMisfit::NoFit)),
+        "kein Abstand passt zu diesem Winkel"
+    );
+    assert_eq!(GripMisfit::NoFit.message(), t("sketch-grip-no-fit"));
 }
 
 #[test]

@@ -61,9 +61,31 @@ pub struct KindGripDrag {
 pub struct KindGripState {
     pub hot: Option<FieldKind>,
     pub drag: Option<KindGripDrag>,
-    /// Feld, dessen getippter Wert nicht passt (Rundung oder Fase ohne Vorschau): zeigt
-    /// „Wert zu groß“.
-    pub over: Option<FieldKind>,
+    /// Feld, dessen getippter Wert nicht passt (Rundung oder Fase ohne Vorschau), mit dem Grund
+    /// für die Meldung am Feld.
+    pub over: Option<(FieldKind, GripMisfit)>,
+}
+
+/// Warum ein getippter Wert von Rundung oder Fase nicht passt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GripMisfit {
+    /// Ein kleinerer Wert (ein Rundungsschritt) passt: „Wert zu groß“.
+    TooLarge,
+    /// Der Wert liegt unter einem Rundungsschritt: „Wert zu klein“.
+    TooSmall,
+    /// Auch der kleinste Wert passt nicht (etwa ein unpassender Fasenwinkel): „Passt hier nicht“.
+    NoFit,
+}
+
+impl GripMisfit {
+    /// Die Meldung am Feld.
+    pub fn message(self) -> String {
+        match self {
+            Self::TooLarge => tr!("sketch-grip-too-large"),
+            Self::TooSmall => tr!("sketch-grip-too-small"),
+            Self::NoFit => tr!("sketch-grip-no-fit"),
+        }
+    }
 }
 
 impl KindGrip {
@@ -1069,10 +1091,11 @@ impl SketchSession {
         }
     }
 
-    /// Das Feld, dessen Wert Rundung oder Fase nicht passen lässt (für „Wert zu groß“): sind
-    /// beide Kurven gewählt und gibt es keinen Plan, das aktive Längenfeld mit Wert, sonst das
-    /// erste mit Wert.
-    pub fn too_large_field(&self, sk: &Sketch) -> Option<FieldKind> {
+    /// Das Feld, dessen Wert Rundung oder Fase nicht passen lässt, mit dem Grund: sind beide
+    /// Kurven gewählt und gibt es keinen Plan, das aktive Längenfeld mit Wert, sonst das erste
+    /// mit Wert. Zu klein unter einem Rundungsschritt; zu groß, wenn ein Schritt passt; sonst
+    /// passt es hier nicht.
+    pub fn too_large_field(&self, sk: &Sketch) -> Option<(FieldKind, GripMisfit)> {
         use FieldKind as F;
         let kind = self.planned_kind().filter(|k| k.is_fillet_or_chamfer())?;
         if self.curve_picks().is_none() || self.fillet_run.is_some() {
@@ -1089,12 +1112,22 @@ impl SketchSession {
         let lengths = [F::Radius, F::Distance, F::Distance2];
         let typed =
             |f: &&crate::sketch_input::DrawField| lengths.contains(&f.kind) && f.locked.is_some();
-        self.input
+        let field = self
+            .input
             .fields
             .get(self.input.active)
             .filter(typed)
-            .or_else(|| self.input.fields.iter().find(typed))
-            .map(|f| f.kind)
+            .or_else(|| self.input.fields.iter().find(typed))?;
+        let (kind, value) = (field.kind, field.locked?);
+        let step = grip_step();
+        let why = if value < step * (1.0 - 1e-9) {
+            GripMisfit::TooSmall
+        } else if self.grip_value_fits(sk, kind, step) {
+            GripMisfit::TooLarge
+        } else {
+            GripMisfit::NoFit
+        };
+        Some((kind, why))
     }
 
     /// Stellt das Feld wieder her, wie es vor dem Zug war.
