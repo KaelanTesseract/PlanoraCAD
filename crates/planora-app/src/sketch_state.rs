@@ -512,6 +512,44 @@ fn frame_is_worse(report: &SolveReport, baseline: &SolveReport) -> bool {
             .any(|c| !baseline.conflicting.contains(c))
 }
 
+/// Meldung für einen Zug, der nicht geht, mit dem Bericht `report` des Bilds und dem Bericht
+/// `baseline` beim Greifen (falls bekannt): Ist die Skizze nur deshalb nicht lösbar, weil die
+/// Lage eines Musters nicht geht, nennt sie den Grund (etwa parallele Richtungslinien). War das
+/// schon beim Greifen so, oder gibt es einen Widerspruch, die allgemeine Meldung.
+pub fn drag_blocked_message(report: Option<&SolveReport>, baseline: Option<&SolveReport>) -> Msg {
+    let reason = report
+        .filter(|r| r.status == SolveStatus::NotConverged)
+        .and_then(|r| r.pattern_problem)
+        .filter(|_| baseline.is_none_or(|b| b.pattern_problem.is_none()));
+    match reason {
+        Some(p) => crate::msg!("sketch-drag-blocked-pattern", reason = p.message()),
+        None => crate::msg!("sketch-drag-blocked"),
+    }
+}
+
+/// Meldung, wenn eine neue Abhängigkeit `action` die Skizze nicht lösbar macht: Liegt das nur an
+/// der Lage eines Musters, die vorher (`before`) noch ging, nennt sie den Grund (etwa parallele
+/// Richtungslinien), sonst die allgemeine Meldung (Reste der Härtungen, Handtest).
+pub fn apply_unsolved_message(
+    action: impl Into<crate::msg::MsgArg>,
+    report: &SolveReport,
+    before: Option<&SolveReport>,
+) -> Msg {
+    let action = action.into();
+    let reason = Some(report)
+        .filter(|r| r.status == SolveStatus::NotConverged)
+        .and_then(|r| r.pattern_problem)
+        .filter(|_| before.is_none_or(|b| b.pattern_problem.is_none()));
+    match reason {
+        Some(p) => crate::msg!(
+            "sketch-apply-unsolved-pattern",
+            action = action,
+            reason = p.message()
+        ),
+        None => crate::msg!("sketch-apply-unsolved", action = action),
+    }
+}
+
 /// Gleichen sich die Werte zweier Stände derselben Skizze bis auf die Toleranz?
 fn same_values(a: &Sketch, b: &Sketch) -> bool {
     let linear = a.tolerance().linear;
@@ -2550,7 +2588,8 @@ impl SketchSession {
             plane: None,
         }]) {
             Ok(report) => {
-                self.message = (!status_ok(&report)).then(|| crate::msg!("sketch-drag-blocked"));
+                self.message =
+                    (!status_ok(&report)).then(|| drag_blocked_message(Some(&report), None));
                 self.last_report = Some(report);
             }
             Err(e) => self.message = Some(err(e)),
@@ -2619,9 +2658,12 @@ impl SketchSession {
                 }
                 self.message = None;
             }
-            _ => {
+            other => {
                 *sk = before;
-                self.message = Some(crate::msg!("sketch-drag-blocked"));
+                self.message = Some(drag_blocked_message(
+                    other.ok().as_ref(),
+                    Some(&drag.baseline),
+                ));
             }
         }
     }
@@ -2995,9 +3037,10 @@ impl SketchSession {
                             "sketch-apply-conflict",
                             action = action.label_msg()
                         )),
-                        Some(_) => Err(crate::msg!(
-                            "sketch-apply-unsolved",
-                            action = action.label_msg()
+                        Some(_) => Err(apply_unsolved_message(
+                            action.label_msg(),
+                            &report,
+                            before.as_ref(),
                         )),
                         None => {
                             se.warn_if_unsolved();
@@ -3106,7 +3149,11 @@ impl SketchSession {
             Some(SolveStatus::Conflicting) => {
                 Err(crate::msg!("sketch-apply-conflict", action = label.clone()))
             }
-            Some(_) => Err(crate::msg!("sketch-apply-unsolved", action = label.clone())),
+            Some(_) => Err(apply_unsolved_message(
+                label.clone(),
+                &report,
+                before.as_ref(),
+            )),
             None => Ok(()),
         };
         se.guard_length(sk, id, old, &unsolved, direct)?;
@@ -3769,13 +3816,19 @@ impl SketchSession {
     }
 
     /// Text und Schweregrad des Status zum Bericht `report`.
-    fn status_of(report: &SolveReport) -> (String, Severity) {
+    pub fn status_of(report: &SolveReport) -> (String, Severity) {
         match report.status {
             SolveStatus::Conflicting => (
                 tr!("sketch-status-conflict", n = report.conflicting.len()),
                 Severity::Error,
             ),
-            SolveStatus::NotConverged => (tr!("sketch-status-unsolvable"), Severity::Error),
+            SolveStatus::NotConverged => match report.pattern_problem {
+                Some(p) => (
+                    tr!("sketch-status-unsolvable-pattern", reason = p.message()),
+                    Severity::Error,
+                ),
+                None => (tr!("sketch-status-unsolvable"), Severity::Error),
+            },
             SolveStatus::Solved => {
                 let mut text = match report.dof {
                     0 => tr!("sketch-status-solved"),

@@ -288,3 +288,153 @@ fn add_constraint_groups_scale_linearly() {
     // Linear: etwa 4, quadratisch: etwa 16.
     assert!(ratio < 8.0, "nicht linear: Verhältnis {ratio:.1}");
 }
+
+/// Reste der Härtungen (2026-11-22): Wird das Gitter erst beim Lösen ungültig (die Richtungslinie
+/// liegt danach parallel), nennt der Bericht den Grund.
+#[test]
+fn grid_failing_while_solving_names_the_reason() {
+    let mut s = sketch();
+    let r = s.add_rectangle(v(0.0, 0.0), v(10.0, 6.0)).unwrap();
+    let a = s.add_point(0.0, 30.0).unwrap();
+    let b = s.add_point(5.0, 40.0).unwrap();
+    let dir = s.add_line(a, b).unwrap();
+    let mut p = plan(r.lines.to_vec(), [2, 2], [15.0, 10.0]);
+    p.kind = PatternKind::Rect {
+        dirs: [PatternDir::SketchX, PatternDir::Line(dir)],
+        extent: [false, false],
+        symmetric: [false, false],
+    };
+    s.add_pattern(&p).unwrap();
+    let ok = s.solve();
+    assert_eq!(ok.status, SolveStatus::Solved);
+    assert_eq!(ok.pattern_problem, None);
+    // Die Richtungslinie waagerecht: parallel zur Skizzen-X-Richtung.
+    s.set_point_xy(b, 20.0, 30.0).unwrap();
+    let bad = s.solve();
+    assert_eq!(bad.status, SolveStatus::NotConverged);
+    assert_eq!(
+        bad.pattern_problem,
+        Some(PatternProblem::ParallelDirections)
+    );
+    // Wieder schräg: kein Grund mehr.
+    s.set_point_xy(b, 5.0, 40.0).unwrap();
+    let again = s.solve();
+    assert_eq!(again.status, SolveStatus::Solved);
+    assert_eq!(again.pattern_problem, None);
+}
+
+/// Skizze mit Rechteckmuster (3×1) und die Ecke der Vorlage samt ihren Exemplaren.
+fn arc_cycle_setup() -> (Sketch, PointId, PointId, PointId) {
+    let mut s = sketch();
+    let r = s.add_rectangle(v(0.0, 0.0), v(10.0, 6.0)).unwrap();
+    let id = s
+        .add_pattern(&plan(r.lines.to_vec(), [3, 1], [20.0, 10.0]))
+        .unwrap();
+    let corner = r.points[0];
+    let q1 = instance_point(&s, id, corner, [1, 0]);
+    let q2 = instance_point(&s, id, corner, [2, 0]);
+    (s, corner, q1, q2)
+}
+
+/// Reste der Härtungen (2026-11-22): Ein abgelehnter Bogen (Vorlage ↔ eigenes Exemplar) lässt die
+/// Skizze genau wie vorher, auch ihren Stand.
+#[test]
+fn a_refused_arc_leaves_the_sketch_unchanged() {
+    let (mut s, corner, q1, q2) = arc_cycle_setup();
+    s.solve();
+    let data = s.to_data();
+    let revision = s.revision();
+    let e = s.add_arc(corner, q1, q2).unwrap_err();
+    assert!(e.to_string().contains("eigenen Exemplar"), "{e}");
+    assert_eq!(s.to_data(), data);
+    assert_eq!(s.revision(), revision, "der Stand bleibt");
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    // Danach geht ein erlaubter Bogen wie gewohnt.
+    let m = s.add_point(0.0, 50.0).unwrap();
+    let a = s.add_point(5.0, 50.0).unwrap();
+    let b = s.add_point(0.0, 55.0).unwrap();
+    s.add_arc(m, a, b).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+}
+
+/// Reste der Härtungen (2026-11-22): Nach erlaubten Bögen und neuen Punkten (die Gruppen der
+/// Schleifenprüfung werden dabei fortgeführt, nicht neu gebaut) erkennt die Prüfung Schleifen
+/// weiter, über einen Bogen wie über eine Abhängigkeit.
+#[test]
+fn carried_cycle_groups_still_find_loops() {
+    let (mut s, corner, q1, q2) = arc_cycle_setup();
+    for i in 0..5 {
+        let y = 50.0 + 10.0 * f64::from(i);
+        let m = s.add_point(0.0, y).unwrap();
+        let a = s.add_point(5.0, y).unwrap();
+        let b = s.add_point(0.0, y + 5.0).unwrap();
+        s.add_arc(m, a, b).unwrap();
+    }
+    // Ein erlaubter Bogen, der ein Exemplar nur liest (Mitte frei, Enden auf Exemplaren).
+    let free = s.add_point(30.0, 40.0).unwrap();
+    s.add_arc(free, q1, q2).unwrap();
+    // Eine Abhängigkeit von der Vorlagenecke zum freien Mittelpunkt schlösse die Schleife über
+    // diesen Bogen (zuerst: eine Ablehnung verwirft die Gruppen, danach würden sie neu gebaut).
+    let e = s.add_constraint(K::Coincident(corner, free)).unwrap_err();
+    assert!(e.to_string().contains("Exemplar"), "{e}");
+    // Ebenso ein Bogen um die Vorlagenecke mit Enden auf Exemplaren.
+    let e = s.add_arc(corner, q1, q2).unwrap_err();
+    assert!(e.to_string().contains("eigenen Exemplar"), "{e}");
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+}
+
+/// Zeit für `n` Bögen an einer Skizze mit Muster aus vielen Kurven.
+fn add_arcs_ms(n: usize) -> f64 {
+    let mut s = sketch();
+    let mut sources = Vec::new();
+    for i in 0..20 {
+        let x = i as f64 * 12.0;
+        sources.extend(s.add_rectangle(v(x, 0.0), v(x + 10.0, 6.0)).unwrap().lines);
+    }
+    s.add_pattern(&plan(sources, [10, 4], [300.0, 10.0]))
+        .unwrap();
+    // Wie beim Anlegen von Exemplaren: Punkte und Bogen abwechselnd.
+    let t = Instant::now();
+    for i in 0..n {
+        let y = 100.0 + i as f64 * 10.0;
+        let m = s.add_point(0.0, y).unwrap();
+        let a = s.add_point(5.0, y).unwrap();
+        let b = s.add_point(0.0, y + 5.0).unwrap();
+        s.add_arc(m, a, b).unwrap();
+    }
+    t.elapsed().as_secs_f64() * 1000.0
+}
+
+/// Reste der Härtungen (2026-11-22): Mit Mustern kopiert ein Bogen die Skizze nicht mehr.
+#[test]
+#[ignore = "Zeitmessung; im Release laufen lassen: cargo test --release -- --ignored"]
+fn adding_arcs_with_a_pattern_does_not_copy_the_sketch() {
+    let ms = (0..3).map(|_| add_arcs_ms(200)).fold(f64::MAX, f64::min);
+    println!("200 Bögen bei 3200 Musterkurven: {ms:.2} ms");
+    assert!(ms < 20.0, "zu langsam: {ms:.2} ms");
+}
+
+/// Prüferfund K1 (2026-11-22): Mehr Exemplare über die Anzahl (die Exemplare enden mit einem
+/// Bogen) dürfen keine überholten Gruppen der Schleifenprüfung hinterlassen: Eine Abhängigkeit
+/// vom neuen Exemplar zur Vorlage schließt eine Schleife und wird abgelehnt.
+#[test]
+fn more_instances_keep_the_loop_check_current() {
+    let mut s = sketch();
+    let c = s.add_point(0.0, 0.0).unwrap();
+    let a = s.add_point(5.0, 0.0).unwrap();
+    let b = s.add_point(0.0, 5.0).unwrap();
+    let arc = s.add_arc(c, a, b).unwrap();
+    let id = s
+        .add_pattern(&plan(vec![arc], [2, 1], [20.0, 10.0]))
+        .unwrap();
+    // Gruppen ablegen (wie nach jeder Abhängigkeit) und dann die Anzahl erhöhen.
+    let x = s.add_point(0.0, 40.0).unwrap();
+    let y = s.add_point(5.0, 41.0).unwrap();
+    s.add_constraint(K::Distance(x, y, 5.0)).unwrap();
+    let count = s.pattern(id).unwrap().values[0];
+    s.set_constraint_value(count, 3.0).unwrap();
+    assert_eq!(s.pattern(id).unwrap().instances.len(), 2, "drei Lagen");
+    let centre = instance_point(&s, id, c, [2, 0]);
+    let e = s.add_constraint(K::Coincident(centre, c)).unwrap_err();
+    assert!(e.to_string().contains("Exemplar"), "{e}");
+}

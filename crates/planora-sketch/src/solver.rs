@@ -26,7 +26,7 @@ use crate::constraint::{ConstraintId, ConstraintKind, SHARED_END_TANGENT_DRIFT};
 use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
-use crate::pattern::PATTERN_ROUNDS;
+use crate::pattern::{PATTERN_ROUNDS, PatternProblem};
 use crate::sparse::{
     Envelope, SparseRows, analyze_rows_sparse, envelope_cholesky_solve, rcm_order,
 };
@@ -189,6 +189,9 @@ pub struct SolveReport {
     /// Zahl der Gruppen, die in diesem Lauf tatsächlich gerechnet wurden; die übrigen kamen
     /// unverändert aus dem Zwischenspeicher (siehe Moduldoku).
     pub group_solves: usize,
+    /// Die Lage eines Musters ging nach dem Lösen nicht (dann `NotConverged`): der erste Grund,
+    /// etwa parallele Richtungslinien.
+    pub pattern_problem: Option<PatternProblem>,
 }
 
 /// Weiche Zusatzbedingung `weight·(x[var] − target)` (zum Ziehen).
@@ -1353,7 +1356,9 @@ impl Sketch {
         let mut rounds = 1;
         loop {
             let refresh = self.refresh_patterns();
-            if refresh.failed && report.status == SolveStatus::Solved {
+            // Die letzte Nachführung entscheidet: Sie steht am Ende jeder Runde.
+            report.pattern_problem = refresh.failed;
+            if refresh.failed.is_some() && report.status == SolveStatus::Solved {
                 report.status = SolveStatus::NotConverged;
             }
             if !(refresh.moved && reads) {
@@ -1373,6 +1378,7 @@ impl Sketch {
                 drag_failed: report.drag_failed || next.drag_failed,
                 iterations: report.iterations.max(next.iterations),
                 group_solves: report.group_solves + next.group_solves,
+                pattern_problem: None,
                 ..next
             };
         }
@@ -1723,6 +1729,7 @@ impl Sketch {
                 free_curves,
                 iterations,
                 group_solves,
+                pattern_problem: None,
             },
             reads_patterns,
         )

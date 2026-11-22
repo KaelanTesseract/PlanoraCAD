@@ -74,6 +74,51 @@ impl CycleGroups {
         g
     }
 
+    /// Beschreiben beide dieselben Gruppen (Zerlegung, Eingänge und gelesene Muster je Gruppe,
+    /// gehaltene Variablen, Kanten)? `fresh` ist frisch gebaut; `self` darf kürzer sein (danach
+    /// nur angehängte Variablen, die zu keiner Gruppe gehören). Nur für den Abgleich im
+    /// Debug-Lauf (Reste der Härtungen: fortgeführte Gruppen gegen einen Neubau).
+    #[cfg(debug_assertions)]
+    fn same_as(&self, fresh: &CycleGroups) -> bool {
+        let sorted = |v: Option<&Vec<PatternId>>| {
+            let mut v = v.cloned().unwrap_or_default();
+            v.sort();
+            v
+        };
+        let n = self.parent.len();
+        if n > fresh.parent.len() || self.held != fresh.held || self.edges != fresh.edges {
+            return false;
+        }
+        let mut pair: HashMap<usize, usize> = HashMap::new();
+        let mut back: HashMap<usize, usize> = HashMap::new();
+        for v in 0..fresh.parent.len() {
+            let b = fresh.root(v);
+            if v >= n {
+                // Angehängt: allein und ohne Rolle in einem Muster.
+                if b != v || fresh.in_constraint[v] || fresh.input_of.contains_key(&v) {
+                    return false;
+                }
+                if fresh.output_of.contains_key(&v) {
+                    return false;
+                }
+                continue;
+            }
+            let a = self.root(v);
+            if *pair.entry(a).or_insert(b) != b || *back.entry(b).or_insert(a) != a {
+                return false;
+            }
+            if self.in_constraint[v] != fresh.in_constraint[v]
+                || sorted(self.input_of.get(&v)) != sorted(fresh.input_of.get(&v))
+                || sorted(self.output_of.get(&v)) != sorted(fresh.output_of.get(&v))
+                || sorted(self.inputs.get(&a)) != sorted(fresh.inputs.get(&b))
+                || sorted(self.reads.get(&a)) != sorted(fresh.reads.get(&b))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     fn root(&self, mut v: usize) -> usize {
         while self.parent[v] != v {
             v = self.parent[v];
@@ -259,7 +304,16 @@ impl Sketch {
     /// Die Gruppen der Schleifenprüfung zum jetzigen Stand: aus dem Zwischenspeicher oder neu.
     fn cycle_groups(&self) -> Arc<CycleGroups> {
         match &self.cycle_groups {
-            Some(g) if g.revision == self.revision() => Arc::clone(g),
+            Some(g) if g.revision == self.revision() => {
+                // Fortgeführte Gruppen müssen einem Neubau gleichen; ändert ein Befehl Muster
+                // oder Abhängigkeiten ohne neuen Stand, fällt das hier in jedem Test auf.
+                #[cfg(debug_assertions)]
+                debug_assert!(
+                    g.same_as(&CycleGroups::build(self)),
+                    "cycle groups stale at an unchanged revision"
+                );
+                Arc::clone(g)
+            }
             _ => Arc::new(CycleGroups::build(self)),
         }
     }
@@ -271,6 +325,47 @@ impl Sketch {
             return;
         }
         let g = self.cycle_groups();
+        self.cycle_groups = Some(g);
+    }
+
+    /// Seit dem Stand `before` wurden nur Variablen, Punkte oder Kurven angehängt: Die Gruppen
+    /// gelten weiter (neue Variablen liegen hinter ihnen und gehören zu keiner Gruppe), sonst
+    /// baute die nächste Prüfung sie neu (Reste der Härtungen nach Skizzen 5).
+    pub(crate) fn carry_cycle_groups(&mut self, before: u64) {
+        let now = self.revision();
+        if let Some(g) = &mut self.cycle_groups
+            && g.revision == before
+        {
+            Arc::make_mut(g).revision = now;
+        }
+    }
+
+    /// Seit dem Stand `before` wurden nur Variablen, Punkte, Kurven und die Abhängigkeiten `ks`
+    /// angehängt (Anlegen einer Kurve mit ihren internen Abhängigkeiten): die Gruppen mit `ks`
+    /// fortführen statt neu bauen.
+    pub(crate) fn follow_appended(&mut self, before: u64, ks: &[crate::constraint::ConstraintId]) {
+        let Some(mut g) = self.cycle_groups.take() else {
+            return;
+        };
+        if g.revision != before {
+            return;
+        }
+        let groups = Arc::make_mut(&mut g);
+        let n = self.vars.len();
+        let start = groups.parent.len();
+        groups.parent.extend(start..n);
+        groups.in_constraint.resize(n, false);
+        for &id in ks {
+            let c = &self.constraints[id];
+            if c.alive
+                && c.enabled
+                && !c.driven
+                && let Some(all) = self.constraint_locals(id, &self.vars)
+            {
+                groups.add_locals(&all);
+            }
+        }
+        groups.revision = self.revision();
         self.cycle_groups = Some(g);
     }
 

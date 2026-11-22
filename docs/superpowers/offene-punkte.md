@@ -3497,3 +3497,16 @@ Zurückgestellt (Prüfung 2026-11-22, klein):
 - Die Maßzahl im Export-Status zählt vor der Rechnung ruhende Maße mit, danach nicht.
 - Der Netz-Hinweis unter der Zeichnung nennt ausgeblendete Netz-Körper, der Export nicht mehr.
 - `resting_balloons` baut die Körperliste zweimal.
+
+## Reste der Härtungen nach Skizzen 5 (2026-11-22)
+
+Kurzentwurf: `specs/2026-11-22-haertung-reste-design.md`. Schließt die drei Grenzen aus Skizzen 12, Task 13 (oben).
+
+- **Gitterfehler beim Lösen:** `SolveReport.pattern_problem` trägt den Grund der letzten Nachführung (etwa `ParallelDirections`). Ein abgelehnter Zug meldet „Das lässt sich nicht dorthin ziehen.“ mit dem Grund (`sketch_state::drag_blocked_message`), der Status „Nicht lösbar: …“ (`sketch-status-unsolvable-pattern`). Die Zugregeln sind unverändert.
+- **Bogen mit Mustern:** `with_internal_checked` kopiert in 2D nicht mehr (`append_mark`/`cut_back`, Stand und Lösungsspeicher zurück). Die Gruppen der Schleifenprüfung werden über `add_point` (`carry_cycle_groups`) und das Anlegen der Kurve (`follow_appended`) fortgeführt statt je Bogen neu gebaut. 200 Bögen bei 3200 Musterkurven (release): 194 ms → 1 ms (`adding_arcs_with_a_pattern_does_not_copy_the_sketch`, `--ignored`). Mit Anheben in 3D bleibt die Kopie (`apply_lift` ändert Vorhandenes); `add_point3` führt die Gruppen nicht fort.
+- **Freiheitsgrade im Sonderfall:** Test `pattern::tests::a_stale_pattern_group_does_not_count_its_freedom` (Schleife per `push_internal` erzwungen, `Vertical` zwischen Vorlage und Exemplar). **Grenze:** `free_points` nennt die Punkte der überholten Gruppe weiter, obwohl ihre Freiheitsgrade nicht zählen.
+- **Prüferfunde (frischer Prüfer, 2026-11-22):**
+  - K1 behoben: `sync_pattern` hängte Exemplare an, ohne den Stand zu ändern; fortgeführte Gruppen galten weiter, eine Schleife zum neuen Exemplar wurde angenommen. Jetzt endet `sync_pattern` immer mit `touch_structure` (Test `more_instances_keep_the_loop_check_current`). Dazu prüft `cycle_groups()` im Debug-Lauf jede gespeicherte Gruppe gegen einen Neubau (`CycleGroups::same_as`), so deckt die ganze Testsammlung das Fortführen ab.
+  - W1 behoben: Punktzug und 3D-Zug nennen den Grund ebenfalls (`a_point_drag_that_lays_the_direction_parallel_names_the_reason`).
+  - W2 behoben: Der Grund steht nur bei „nicht lösbar“ und nur, wenn das Muster beim Greifen noch ging; ein Widerspruch wird nicht verdeckt. Meldung in einer Zeile: „Das lässt sich nicht dorthin ziehen: …“.
+  - Zurückgestellt (klein): Der Grund steht als fertiger Text in der Meldung und wechselt bei stehender Meldung nicht die Sprache; kein Rücknahmetest für elliptischen Bogen und die 3D-Bögen; der Freiheitsgrad-Test zeigt das Erreichen von `max_rounds` nicht eigens; nach einer Ablehnung werden die Gruppen verworfen statt zurückgegeben; die Schwelle des Messtests (20 ms) hängt vom Rechner ab.

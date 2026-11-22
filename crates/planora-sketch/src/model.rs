@@ -443,14 +443,18 @@ impl Sketch {
     pub fn add_point(&mut self, x: f64, y: f64) -> Result<PointId, SketchError> {
         finite(x, || tr!("sketch-err-what-x"))?;
         finite(y, || tr!("sketch-err-what-y"))?;
+        let before = self.revision;
         let (xi, yi) = (self.new_var(x), self.new_var(y));
-        Ok(self.points.push(PointData {
+        let id = self.points.push(PointData {
             x: xi,
             y: yi,
             z: None,
             construction: false,
             alive: true,
-        }))
+        });
+        // Nur angehängt: Die Gruppen der Schleifenprüfung gelten weiter (Reste der Härtungen).
+        self.carry_cycle_groups(before);
+        Ok(id)
     }
 
     /// Neuer 3D-Punkt (Skizzen 10). Er bekommt immer eine z-Variable, auch bei z = 0.
@@ -614,7 +618,7 @@ impl Sketch {
         {
             return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
-        self.with_internal_checked(|s| {
+        self.with_internal_checked(true, |s| {
             let id = s.push_curve(CurveKind::Arc { center, start, end });
             let k = s.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
             (id, vec![k])
@@ -626,20 +630,44 @@ impl Sketch {
     /// ein Bogen um einen Vorlagenpunkt mit Enden auf einem Exemplar, wie der Fang sie anbietet):
     /// Die Exemplare folgten der Vorlage, die Vorlage wieder dem Bogen, und der Löser liefe nie
     /// zusammen. Dann bleibt die Skizze unverändert.
+    ///
+    /// `appends_only`: `make` hängt nur an (kein Anheben in 3D). Dann genügt zum Zurücknehmen das
+    /// Abschneiden statt einer Kopie der ganzen Skizze (Reste der Härtungen nach Skizzen 5).
     fn with_internal_checked(
         &mut self,
+        appends_only: bool,
         make: impl FnOnce(&mut Sketch) -> (CurveId, Vec<crate::constraint::ConstraintId>),
     ) -> Result<CurveId, SketchError> {
         if self.patterns().next().is_none() {
             return Ok(make(self).0);
         }
-        self.atomically(|s| {
-            let (id, ks) = make(s);
-            if ks.iter().any(|&k| s.check_activation_cycle(k).is_err()) {
-                return Err(SketchError::InvalidInput(tr!("sketch-pattern-cycle-arc")));
-            }
-            Ok(id)
-        })
+        let refused = || SketchError::InvalidInput(tr!("sketch-pattern-cycle-arc"));
+        if !appends_only {
+            return self.atomically(|s| {
+                let (id, ks) = make(s);
+                if ks.iter().any(|&k| s.check_activation_cycle(k).is_err()) {
+                    return Err(refused());
+                }
+                Ok(id)
+            });
+        }
+        // Die Gruppen der Schleifenprüfung zum jetzigen Stand; `make` führt sie fort (Anhängen und
+        // `push_internal`), statt dass die Prüfung sie neu baut.
+        self.ensure_cycle_groups();
+        let mark = self.append_mark();
+        // `make` leert den Zwischenspeicher ohnehin (neue Struktur); bei Ablehnung kommt er zurück.
+        let (revision, cache) = (self.revision, std::mem::take(&mut self.solve_cache));
+        let (id, ks) = make(self);
+        self.follow_appended(revision, &ks);
+        if ks.iter().any(|&k| self.check_activation_cycle(k).is_err()) {
+            self.cut_back(mark);
+            self.revision = revision;
+            self.solve_cache = cache;
+            // Die Gruppen enthalten die abgelehnte Abhängigkeit: verwerfen.
+            self.cycle_groups = None;
+            return Err(refused());
+        }
+        Ok(id)
     }
 
     /// Ellipse um `center` mit großer Halbachse `major` (Vektor) und kleiner Halbachse `minor`
@@ -702,7 +730,7 @@ impl Sketch {
             return self.add_elliptic_arc3(center, major.extend(0.0), minor, start, end, DVec3::Z);
         }
         self.check_elliptic_arc(center, major, minor, start, end)?;
-        self.with_internal_checked(|s| {
+        self.with_internal_checked(true, |s| {
             let (ax, ay, mi) = (s.new_var(major.x), s.new_var(major.y), s.new_var(minor));
             let (id, k) = s.push_elliptic_arc(center, (ax, ay, None), mi, start, end);
             (id, vec![k])
@@ -1310,7 +1338,7 @@ impl Sketch {
             return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
         let lifted = self.check_lift_for_curve(&pts)?;
-        self.with_internal_checked(|s| {
+        self.with_internal_checked(lifted.is_empty(), |s| {
             s.apply_lift(&lifted);
             let id = s.push_curve(CurveKind::Arc { center, start, end });
             s.curves[id].normal = Some(n);
@@ -1363,7 +1391,7 @@ impl Sketch {
             return self.add_ellipse(center, a.truncate(), minor);
         };
         let lifted = self.check_lift_for_curve(&[center])?;
-        self.with_internal_checked(|s| {
+        self.with_internal_checked(lifted.is_empty(), |s| {
             s.apply_lift(&lifted);
             let (ax, ay, az, mi) = (
                 s.new_var(a.x),
@@ -1413,7 +1441,7 @@ impl Sketch {
             return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
         let lifted = self.check_lift_for_curve(&pts)?;
-        self.with_internal_checked(|s| {
+        self.with_internal_checked(lifted.is_empty(), |s| {
             s.apply_lift(&lifted);
             let (ax, ay, az, mi) = (
                 s.new_var(a.x),
