@@ -74,6 +74,51 @@ impl CycleGroups {
         g
     }
 
+    /// Beschreiben beide dieselben Gruppen (Zerlegung, Eingänge und gelesene Muster je Gruppe,
+    /// gehaltene Variablen, Kanten)? `fresh` ist frisch gebaut; `self` darf kürzer sein (danach
+    /// nur angehängte Variablen, die zu keiner Gruppe gehören). Nur für den Abgleich im
+    /// Debug-Lauf (Reste der Härtungen: fortgeführte Gruppen gegen einen Neubau).
+    #[cfg(debug_assertions)]
+    fn same_as(&self, fresh: &CycleGroups) -> bool {
+        let sorted = |v: Option<&Vec<PatternId>>| {
+            let mut v = v.cloned().unwrap_or_default();
+            v.sort();
+            v
+        };
+        let n = self.parent.len();
+        if n > fresh.parent.len() || self.held != fresh.held || self.edges != fresh.edges {
+            return false;
+        }
+        let mut pair: HashMap<usize, usize> = HashMap::new();
+        let mut back: HashMap<usize, usize> = HashMap::new();
+        for v in 0..fresh.parent.len() {
+            let b = fresh.root(v);
+            if v >= n {
+                // Angehängt: allein und ohne Rolle in einem Muster.
+                if b != v || fresh.in_constraint[v] || fresh.input_of.contains_key(&v) {
+                    return false;
+                }
+                if fresh.output_of.contains_key(&v) {
+                    return false;
+                }
+                continue;
+            }
+            let a = self.root(v);
+            if *pair.entry(a).or_insert(b) != b || *back.entry(b).or_insert(a) != a {
+                return false;
+            }
+            if self.in_constraint[v] != fresh.in_constraint[v]
+                || sorted(self.input_of.get(&v)) != sorted(fresh.input_of.get(&v))
+                || sorted(self.output_of.get(&v)) != sorted(fresh.output_of.get(&v))
+                || sorted(self.inputs.get(&a)) != sorted(fresh.inputs.get(&b))
+                || sorted(self.reads.get(&a)) != sorted(fresh.reads.get(&b))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     fn root(&self, mut v: usize) -> usize {
         while self.parent[v] != v {
             v = self.parent[v];
@@ -259,7 +304,16 @@ impl Sketch {
     /// Die Gruppen der Schleifenprüfung zum jetzigen Stand: aus dem Zwischenspeicher oder neu.
     fn cycle_groups(&self) -> Arc<CycleGroups> {
         match &self.cycle_groups {
-            Some(g) if g.revision == self.revision() => Arc::clone(g),
+            Some(g) if g.revision == self.revision() => {
+                // Fortgeführte Gruppen müssen einem Neubau gleichen; ändert ein Befehl Muster
+                // oder Abhängigkeiten ohne neuen Stand, fällt das hier in jedem Test auf.
+                #[cfg(debug_assertions)]
+                debug_assert!(
+                    g.same_as(&CycleGroups::build(self)),
+                    "Gruppen der Schleifenprüfung überholt, obwohl der Stand gleich ist"
+                );
+                Arc::clone(g)
+            }
             _ => Arc::new(CycleGroups::build(self)),
         }
     }

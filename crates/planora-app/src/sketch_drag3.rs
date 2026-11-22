@@ -98,7 +98,8 @@ impl SketchSession {
         let before = sk.clone();
         match sk.drag(&drags) {
             Ok(report) => {
-                self.message = (!status_ok(&report)).then(|| crate::msg!("sketch-drag-blocked"));
+                self.message = (!status_ok(&report))
+                    .then(|| crate::sketch_state::drag_blocked_message(Some(&report), None));
                 self.last_report = Some(report);
             }
             Err(e) => {

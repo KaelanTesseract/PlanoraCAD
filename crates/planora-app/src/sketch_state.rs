@@ -512,15 +512,17 @@ fn frame_is_worse(report: &SolveReport, baseline: &SolveReport) -> bool {
             .any(|c| !baseline.conflicting.contains(c))
 }
 
-/// Meldung für ein abgelehntes Bild eines Zugs mit dem Bericht `report` dieses Bilds: Ging die
-/// Lage eines Musters nicht, nennt sie den Grund (etwa parallele Richtungslinien), sonst die
-/// Abhängigkeiten allgemein.
-pub fn drag_blocked_message(report: Option<&SolveReport>) -> Msg {
-    match report.and_then(|r| r.pattern_problem) {
-        Some(p) => Msg::Join(vec![
-            crate::msg!("sketch-drag-blocked-pattern"),
-            Msg::Raw(p.message()),
-        ]),
+/// Meldung für einen Zug, der nicht geht, mit dem Bericht `report` des Bilds und dem Bericht
+/// `baseline` beim Greifen (falls bekannt): Ist die Skizze nur deshalb nicht lösbar, weil die
+/// Lage eines Musters nicht geht, nennt sie den Grund (etwa parallele Richtungslinien). War das
+/// schon beim Greifen so, oder gibt es einen Widerspruch, die allgemeine Meldung.
+pub fn drag_blocked_message(report: Option<&SolveReport>, baseline: Option<&SolveReport>) -> Msg {
+    let reason = report
+        .filter(|r| r.status == SolveStatus::NotConverged)
+        .and_then(|r| r.pattern_problem)
+        .filter(|_| baseline.is_none_or(|b| b.pattern_problem.is_none()));
+    match reason {
+        Some(p) => crate::msg!("sketch-drag-blocked-pattern", reason = p.message()),
         None => crate::msg!("sketch-drag-blocked"),
     }
 }
@@ -2563,7 +2565,8 @@ impl SketchSession {
             plane: None,
         }]) {
             Ok(report) => {
-                self.message = (!status_ok(&report)).then(|| crate::msg!("sketch-drag-blocked"));
+                self.message =
+                    (!status_ok(&report)).then(|| drag_blocked_message(Some(&report), None));
                 self.last_report = Some(report);
             }
             Err(e) => self.message = Some(err(e)),
@@ -2634,7 +2637,10 @@ impl SketchSession {
             }
             other => {
                 *sk = before;
-                self.message = Some(drag_blocked_message(other.ok().as_ref()));
+                self.message = Some(drag_blocked_message(
+                    other.ok().as_ref(),
+                    Some(&drag.baseline),
+                ));
             }
         }
     }

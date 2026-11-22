@@ -413,3 +413,28 @@ fn adding_arcs_with_a_pattern_does_not_copy_the_sketch() {
     println!("200 Bögen bei 3200 Musterkurven: {ms:.2} ms");
     assert!(ms < 20.0, "zu langsam: {ms:.2} ms");
 }
+
+/// Prüferfund K1 (2026-11-22): Mehr Exemplare über die Anzahl (die Exemplare enden mit einem
+/// Bogen) dürfen keine überholten Gruppen der Schleifenprüfung hinterlassen: Eine Abhängigkeit
+/// vom neuen Exemplar zur Vorlage schließt eine Schleife und wird abgelehnt.
+#[test]
+fn more_instances_keep_the_loop_check_current() {
+    let mut s = sketch();
+    let c = s.add_point(0.0, 0.0).unwrap();
+    let a = s.add_point(5.0, 0.0).unwrap();
+    let b = s.add_point(0.0, 5.0).unwrap();
+    let arc = s.add_arc(c, a, b).unwrap();
+    let id = s
+        .add_pattern(&plan(vec![arc], [2, 1], [20.0, 10.0]))
+        .unwrap();
+    // Gruppen ablegen (wie nach jeder Abhängigkeit) und dann die Anzahl erhöhen.
+    let x = s.add_point(0.0, 40.0).unwrap();
+    let y = s.add_point(5.0, 41.0).unwrap();
+    s.add_constraint(K::Distance(x, y, 5.0)).unwrap();
+    let count = s.pattern(id).unwrap().values[0];
+    s.set_constraint_value(count, 3.0).unwrap();
+    assert_eq!(s.pattern(id).unwrap().instances.len(), 2, "drei Lagen");
+    let centre = instance_point(&s, id, c, [2, 0]);
+    let e = s.add_constraint(K::Coincident(centre, c)).unwrap_err();
+    assert!(e.to_string().contains("Exemplar"), "{e}");
+}

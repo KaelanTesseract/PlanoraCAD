@@ -1100,10 +1100,11 @@ impl Sketch {
         self.patterns[id]
             .instances
             .sort_by_key(|inst| order[&inst.at]);
-        if self.patterns[id].suppressed != suppressed {
-            self.patterns[id].suppressed = suppressed;
-            self.touch_structure();
-        }
+        self.patterns[id].suppressed = suppressed;
+        // Exemplare, Reihenfolge oder Abwahl haben sich womöglich geändert, ohne dass danach eine
+        // Variable dazukam: neuer Stand, sonst gälten fortgeführte Gruppen der Schleifenprüfung
+        // weiter (Prüferfund K1, Reste der Härtungen).
+        self.touch_structure();
         Ok(edit)
     }
 
