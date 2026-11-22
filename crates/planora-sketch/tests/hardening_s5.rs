@@ -288,3 +288,37 @@ fn add_constraint_groups_scale_linearly() {
     // Linear: etwa 4, quadratisch: etwa 16.
     assert!(ratio < 8.0, "nicht linear: Verhältnis {ratio:.1}");
 }
+
+/// Reste der Härtungen (2026-11-22): Wird das Gitter erst beim Lösen ungültig (die Richtungslinie
+/// liegt danach parallel), nennt der Bericht den Grund.
+#[test]
+fn grid_failing_while_solving_names_the_reason() {
+    let mut s = sketch();
+    let r = s.add_rectangle(v(0.0, 0.0), v(10.0, 6.0)).unwrap();
+    let a = s.add_point(0.0, 30.0).unwrap();
+    let b = s.add_point(5.0, 40.0).unwrap();
+    let dir = s.add_line(a, b).unwrap();
+    let mut p = plan(r.lines.to_vec(), [2, 2], [15.0, 10.0]);
+    p.kind = PatternKind::Rect {
+        dirs: [PatternDir::SketchX, PatternDir::Line(dir)],
+        extent: [false, false],
+        symmetric: [false, false],
+    };
+    s.add_pattern(&p).unwrap();
+    let ok = s.solve();
+    assert_eq!(ok.status, SolveStatus::Solved);
+    assert_eq!(ok.pattern_problem, None);
+    // Die Richtungslinie waagerecht: parallel zur Skizzen-X-Richtung.
+    s.set_point_xy(b, 20.0, 30.0).unwrap();
+    let bad = s.solve();
+    assert_eq!(bad.status, SolveStatus::NotConverged);
+    assert_eq!(
+        bad.pattern_problem,
+        Some(PatternProblem::ParallelDirections)
+    );
+    // Wieder schräg: kein Grund mehr.
+    s.set_point_xy(b, 5.0, 40.0).unwrap();
+    let again = s.solve();
+    assert_eq!(again.status, SolveStatus::Solved);
+    assert_eq!(again.pattern_problem, None);
+}

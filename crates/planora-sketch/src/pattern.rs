@@ -62,8 +62,9 @@ impl std::fmt::Debug for PreviewScratch {
 pub(crate) struct PatternRefresh {
     /// Ein Wert hat sich geändert (dann neuer Stand).
     pub moved: bool,
-    /// Die Lage eines lebenden Musters ging nicht; seine Exemplare stehen noch an der alten Lage.
-    pub failed: bool,
+    /// Die Lage eines lebenden Musters ging nicht (der erste Grund); seine Exemplare stehen noch
+    /// an der alten Lage.
+    pub failed: Option<PatternProblem>,
 }
 
 /// Richtung eines Rechteckmusters: die Achsen der Skizze, eine Linie (folgt ihr) oder, nur als
@@ -541,14 +542,17 @@ impl Sketch {
     pub(crate) fn refresh_patterns(&mut self) -> PatternRefresh {
         let ids: Vec<PatternId> = self.patterns().map(|(id, _)| id).collect();
         let mut writes: Vec<(usize, f64)> = Vec::new();
-        let mut failed = false;
+        let mut failed = None;
         for id in ids {
             let Some(plan) = self.pattern_plan(id) else {
                 continue;
             };
-            let Ok(lattice) = self.pattern_lattice(&plan) else {
-                failed = true;
-                continue;
+            let lattice = match self.pattern_lattice(&plan) {
+                Ok(lattice) => lattice,
+                Err(problem) => {
+                    failed.get_or_insert(problem);
+                    continue;
+                }
             };
             let lattice: HashMap<[i32; 2], Similarity> = lattice.into_iter().collect();
             let d = &self.patterns[id];

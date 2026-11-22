@@ -512,6 +512,19 @@ fn frame_is_worse(report: &SolveReport, baseline: &SolveReport) -> bool {
             .any(|c| !baseline.conflicting.contains(c))
 }
 
+/// Meldung für ein abgelehntes Bild eines Zugs mit dem Bericht `report` dieses Bilds: Ging die
+/// Lage eines Musters nicht, nennt sie den Grund (etwa parallele Richtungslinien), sonst die
+/// Abhängigkeiten allgemein.
+pub fn drag_blocked_message(report: Option<&SolveReport>) -> Msg {
+    match report.and_then(|r| r.pattern_problem) {
+        Some(p) => Msg::Join(vec![
+            crate::msg!("sketch-drag-blocked-pattern"),
+            Msg::Raw(p.message()),
+        ]),
+        None => crate::msg!("sketch-drag-blocked"),
+    }
+}
+
 /// Gleichen sich die Werte zweier Stände derselben Skizze bis auf die Toleranz?
 fn same_values(a: &Sketch, b: &Sketch) -> bool {
     let linear = a.tolerance().linear;
@@ -2619,9 +2632,9 @@ impl SketchSession {
                 }
                 self.message = None;
             }
-            _ => {
+            other => {
                 *sk = before;
-                self.message = Some(crate::msg!("sketch-drag-blocked"));
+                self.message = Some(drag_blocked_message(other.ok().as_ref()));
             }
         }
     }
@@ -3769,13 +3782,19 @@ impl SketchSession {
     }
 
     /// Text und Schweregrad des Status zum Bericht `report`.
-    fn status_of(report: &SolveReport) -> (String, Severity) {
+    pub fn status_of(report: &SolveReport) -> (String, Severity) {
         match report.status {
             SolveStatus::Conflicting => (
                 tr!("sketch-status-conflict", n = report.conflicting.len()),
                 Severity::Error,
             ),
-            SolveStatus::NotConverged => (tr!("sketch-status-unsolvable"), Severity::Error),
+            SolveStatus::NotConverged => match report.pattern_problem {
+                Some(p) => (
+                    tr!("sketch-status-unsolvable-pattern", reason = p.message()),
+                    Severity::Error,
+                ),
+                None => (tr!("sketch-status-unsolvable"), Severity::Error),
+            },
             SolveStatus::Solved => {
                 let mut text = match report.dof {
                     0 => tr!("sketch-status-solved"),
