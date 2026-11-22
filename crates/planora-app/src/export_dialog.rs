@@ -56,8 +56,8 @@ use planora_drawing::sheet_marks::{
 };
 use planora_drawing::{
     BalloonId, DrawBody, DrawError, Drawing, DrawingFormat, DrawingId, DrawingKind, PartsCells,
-    SectionData, Sheet, ViewId, ViewKey, ViewLines, Visibility, compute_section, compute_view,
-    export_drawing_file, export_pdf_file,
+    SectionData, Sheet, ViewId, ViewKey, ViewLines, Visibility, compute_section_keyed,
+    compute_view, export_drawing_file, export_pdf_file,
 };
 use planora_exchange::{
     ExchangeError, ExchangeMesh, ExportBody, Format, MeshReport, MeshTransform, PlacedSource,
@@ -1011,6 +1011,7 @@ type KeyedLines = (ViewLines, Option<SectionData>);
 /// ein Abbruch von `outer` wird weitergereicht. `None`, wenn die Rechnung abstürzt.
 fn compute_watched(
     solids: &[(String, Solid)],
+    keys: &[usize],
     key: ViewKey,
     compute: ComputeFn,
     outer: &Progress,
@@ -1030,8 +1031,10 @@ fn compute_watched(
                     .collect();
                 match key {
                     ViewKey::Plain(kind) => compute(&refs, kind, &inner).map(|l| (l, None)),
-                    ViewKey::Section(plane) => compute_section(&refs, &plane, compute, &inner)
-                        .map(|s| (s.lines, Some(s.data))),
+                    ViewKey::Section(plane) => {
+                        compute_section_keyed(&refs, keys, &plane, compute, &inner)
+                            .map(|s| (s.lines, Some(s.data)))
+                    }
                 }
             })
         });
@@ -1137,6 +1140,10 @@ pub struct PartsInput {
     /// trägt ihre Schnittfläche): Maße, die nur an ihnen hängen, ruhen (die Ansichten zeichnen nur
     /// die eingeblendeten).
     pub hidden: Arc<Vec<(usize, Solid)>>,
+    /// Je eingeblendetem exakten Körper (Reihenfolge der Körper der Ausgabe) seine Stelle unter
+    /// allen exakten Körpern: Herkunft seiner Schnittfläche wie auf dem Bildschirm. Leer heißt
+    /// die Reihenfolge selbst.
+    pub keys: Arc<Vec<usize>>,
     /// Die Ausgabe ist DXF. Gilt nur für ein Stücklistenblatt ohne Rahmen (Breitenzuschlag der
     /// Tabellentexte); mit Rahmen entscheidet [`FrameInput::dxf`].
     pub dxf: bool,
@@ -1160,6 +1167,7 @@ pub fn parts_input(state: &AppState, drawing: &Drawing) -> PartsInput {
         balloons,
         resting: state.document.resting_balloons(drawing.id),
         hidden: Arc::default(),
+        keys: Arc::default(),
         dxf: false,
     }
 }
@@ -1270,7 +1278,7 @@ fn prepare_counted(
     let mut lines: Vec<(ViewKey, KeyedLines)> = Vec::with_capacity(keys.len());
     for key in keys {
         progress.check().map_err(|_| cancelled())?;
-        match compute_watched(solids, key, compute, progress) {
+        match compute_watched(solids, &parts.keys, key, compute, progress) {
             None => return Err(lost_msg()),
             Some(Ok(l)) => lines.push((key, l)),
             Some(Err(DrawError::Cancelled)) => return Err(cancelled()),
@@ -1528,6 +1536,8 @@ struct DrawingBodies {
     meshes: Vec<String>,
     /// Ausgeblendete exakte Körper mit ihrer Stelle unter allen exakten: Maße an ihnen ruhen.
     hidden: Arc<Vec<(usize, Solid)>>,
+    /// Stelle jedes eingeblendeten exakten Körpers unter allen exakten (Schnittflächen).
+    keys: Arc<Vec<usize>>,
 }
 
 /// Die Körper für die Ausgabe einer Zeichnung: Zeichnungen lassen ausgeblendete Körper weg, im
@@ -1536,6 +1546,7 @@ fn drawing_bodies(state: &AppState) -> DrawingBodies {
     let mut solids = Vec::new();
     let mut meshes = Vec::new();
     let mut hidden = Vec::new();
+    let mut keys = Vec::new();
     let mut exact = 0;
     for (i, b) in state.bodies.iter().enumerate() {
         let shown = state.document.body_shown(b.source);
@@ -1543,7 +1554,10 @@ fn drawing_bodies(state: &AppState) -> DrawingBodies {
         match (b.kind == BodyKind::Mesh, shown) {
             (true, true) => meshes.push(shorten_for_display(&name)),
             (true, false) => {}
-            (false, true) => solids.push((name, b.solid.clone())),
+            (false, true) => {
+                solids.push((name, b.solid.clone()));
+                keys.push(exact);
+            }
             (false, false) => hidden.push((exact, b.solid.clone())),
         }
         exact += usize::from(b.kind != BodyKind::Mesh);
@@ -1552,6 +1566,7 @@ fn drawing_bodies(state: &AppState) -> DrawingBodies {
         solids,
         meshes,
         hidden: Arc::new(hidden),
+        keys: Arc::new(keys),
     }
 }
 
@@ -2139,6 +2154,7 @@ impl ExportDialog {
             solids,
             meshes,
             hidden,
+            keys,
         } = drawing_bodies(state);
         let (compute, resolve, format) = (self.compute, self.resolve, key.format);
         let frame = self.with_frame.then(|| FrameInput {
@@ -2149,6 +2165,7 @@ impl ExportDialog {
         let parts = PartsInput {
             dxf: format == DrawingFormat::Dxf,
             hidden,
+            keys,
             ..parts_input(state, &drawing)
         };
         let is_list = matches!(drawing.kind, DrawingKind::PartsList { .. });
@@ -2196,6 +2213,7 @@ impl ExportDialog {
             solids,
             meshes,
             hidden,
+            keys,
         } = drawing_bodies(state);
         let project = state.document.project_info().cloned();
         let sheets: Vec<SheetJob> = state
@@ -2211,6 +2229,7 @@ impl ExportDialog {
                 }),
                 parts: PartsInput {
                     hidden: Arc::clone(&hidden),
+                    keys: Arc::clone(&keys),
                     ..parts_input(state, d)
                 },
             })

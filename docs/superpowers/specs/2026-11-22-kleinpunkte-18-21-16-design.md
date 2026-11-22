@@ -53,9 +53,13 @@ Go.
 - **Fund zu 21:** Die Schnittfläche trägt als Herkunft die Stelle des Körpers in der Liste der
   Ansicht. Wurde ein Körper davor ausgeblendet, verschoben sich die Stellen, und Maße an
   Schnittflächen späterer, sichtbarer Körper gingen verloren (schon vorher so). Entscheidung:
-  Bezüge behandeln Schnittflächen untereinander als gleich (`refs::same_tag`); welcher Körper
-  gemeint ist, entscheidet der Hinweispunkt wie bei gleich gebauten Körpern. Betrifft nur
-  Zeichnungen, denn nur Schnittkörper tragen solche Flächen.
+  Jeder Körper schneidet mit seiner Stelle unter allen exakten Körpern
+  (`compute_section_keyed`, Bildschirm und Export); ohne Ausgeblendete ist das dieselbe Zahl wie
+  bisher, alte Zeichnungen rechnen gleich. Verworfen: Schnittflächen beim Zuordnen als gleich
+  behandeln; dann hing sich ein Maß nach dem Löschen einer Bohrung still an den frei gewordenen
+  Zylinder (Test `export_resolves_section_dims`).
+- **Mittelebene nach Prüfung:** Die Fern-Regel gilt nur unter einem Winkel mit Sinus < 1e-6; schräge
+  Ebenen mit fernen Ursprüngen bleiben die Winkelhalbierende.
 - **Regel zu 21 wie ohne Schnitt:** Ein Maß ruht, wenn ein Bezug gegen den ganzen Schnitt (mit
   den ausgeblendeten Körpern) aufgeht, gegen den eingeblendeten aber nicht oder anders. Darum
   werden die ausgeblendeten Körper geschnitten, sobald die Schnittansicht Maße hat (nicht erst,

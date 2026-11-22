@@ -16,7 +16,7 @@ use planora_drawing::dimension::DimId;
 use planora_drawing::sheet_frame::{REV_VISIBLE, sheet_layout};
 use planora_drawing::{
     BalloonId, Basis, DrawBody, DrawError, Drawing, DrawingId, MAX_SECTIONS, Projection, Scale,
-    SectionData, Sheet, ViewId, ViewKey, ViewKind, ViewLines, ViewSpec, compute_section,
+    SectionData, Sheet, ViewId, ViewKey, ViewKind, ViewLines, ViewSpec, compute_section_keyed,
     compute_view,
 };
 use planora_drawing::{GAP_MM, align_dir};
@@ -204,13 +204,22 @@ fn shown_bodies(bodies: &[Body], document: &Document) -> Vec<bool> {
         .collect()
 }
 
-fn exact_copies(bodies: &[Body], shown: &[bool]) -> Vec<(String, Solid)> {
-    bodies
+/// Kopien der eingeblendeten exakten Körper mit Anzeigenamen, dazu je Kopie ihre Stelle unter
+/// allen exakten Körpern (Herkunft ihrer Schnittfläche, unabhängig vom Ausblenden anderer).
+fn exact_copies_keyed(bodies: &[Body], shown: &[bool]) -> (Vec<(String, Solid)>, Vec<usize>) {
+    let mut keys = Vec::new();
+    let solids = bodies
         .iter()
         .enumerate()
-        .filter(|(i, b)| b.kind != BodyKind::Mesh && shown.get(*i).copied().unwrap_or(true))
-        .map(|(i, b)| (display_name(&b.name, i), b.solid.clone()))
-        .collect()
+        .filter(|(_, b)| b.kind != BodyKind::Mesh)
+        .enumerate()
+        .filter(|(_, (i, _))| shown.get(*i).copied().unwrap_or(true))
+        .map(|(k, (i, b))| {
+            keys.push(k);
+            (display_name(&b.name, i), b.solid.clone())
+        })
+        .collect();
+    (solids, keys)
 }
 
 impl DrawingUi {
@@ -429,7 +438,7 @@ impl DrawingUi {
     /// Startet die Berechnung eines Schlüssels (Ansichtsart oder Schnittebene); ohne exakte
     /// Körper steht die Meldung sofort fest.
     fn start(&mut self, bodies: &[Body], shown: &[bool], key: ViewKey) -> EntryState {
-        let solids = exact_copies(bodies, shown);
+        let (solids, keys) = exact_copies_keyed(bodies, shown);
         if solids.is_empty() {
             let e = if !shown.iter().any(|s| *s) {
                 DrawError::NoBodies
@@ -450,9 +459,8 @@ impl DrawingUi {
                 .collect();
             match key {
                 ViewKey::Plain(kind) => compute(&refs, kind, p).map(|l| (l, None)),
-                ViewKey::Section(plane) => {
-                    compute_section(&refs, &plane, compute, p).map(|s| (s.lines, Some(s.data)))
-                }
+                ViewKey::Section(plane) => compute_section_keyed(&refs, &keys, &plane, compute, p)
+                    .map(|s| (s.lines, Some(s.data))),
             }
         });
         self.spawned += 1;

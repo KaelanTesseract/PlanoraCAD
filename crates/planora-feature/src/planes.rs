@@ -359,9 +359,13 @@ fn angle_frame(origin: DVec3, dir: DVec3, reference: DVec3, angle_deg: f64) -> F
     }
 }
 
-/// Weiter als so weit (mm, 1 km) von beiden Ebenen weg zählt eine Schnittgerade nicht: Das Paar
-/// gilt als parallel, sonst landete der Ursprung der Mittelebene fern jedes Modells.
+/// Weiter als so weit (mm, 1 km) von beiden Ebenen weg zählt die Schnittgerade fast paralleler
+/// Ebenen (Winkel unter [`MID_FAR_SIN`]) nicht: Das Paar gilt als parallel, sonst landete der
+/// Ursprung der Mittelebene fern jedes Modells.
 const MID_FAR_MM: f64 = 1e6;
+
+/// Sinus des Winkels, unter dem zwei Ebenen mit ferner Schnittgerade als parallel gelten.
+const MID_FAR_SIN: f64 = 1e-6;
 
 /// Mittelebene zweier Ebenen: parallel (auch fast parallel, deren Schnittgerade weiter als
 /// [`MID_FAR_MM`] von beiden Ursprüngen läge) ⇒ in der Mitte mit der Lage von `a`; sonst die
@@ -391,7 +395,7 @@ fn mid_frame(a: &Frame, b: &Frame, tol: &Tolerance) -> Result<Frame, FeatureErro
         let r = o - p;
         (r - x * r.dot(x)).length()
     };
-    if off(a.origin) > MID_FAR_MM && off(b.origin) > MID_FAR_MM {
+    if d.length() < MID_FAR_SIN && off(a.origin) > MID_FAR_MM && off(b.origin) > MID_FAR_MM {
         return parallel();
     }
     let z = (a.z - b.z).normalize();
@@ -545,6 +549,21 @@ mod tests {
         };
         let m = mid_frame(&a, &b, &tol).unwrap();
         assert!(m.origin.length() > 1000.0, "{}", m.origin);
+        // Schräge Ebenen mit fernen Ursprüngen bleiben die Winkelhalbierende.
+        let far = Frame {
+            origin: DVec3::new(0.0, 5e6, 0.0),
+            ..StandardPlane::XY.frame()
+        };
+        let side = Frame {
+            origin: DVec3::new(0.0, 0.0, 5e6),
+            ..StandardPlane::XZ.frame()
+        };
+        let m = mid_frame(&far, &side, &tol).unwrap();
+        assert!(
+            (m.z.dot(far.z).abs() - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-9,
+            "{}",
+            m.z
+        );
     }
 
     #[test]

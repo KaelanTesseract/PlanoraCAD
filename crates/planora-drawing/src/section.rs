@@ -478,9 +478,24 @@ pub struct SectionLines {
 }
 
 /// Schneidet jeden Körper an `plane` (S4) und rechnet die Ansicht `plane.kind` mit `view` aus
-/// den behaltenen Körpern. Fortschritt: ein Schritt je Körper vor der Ansichtsrechnung.
+/// den behaltenen Körpern. Fortschritt: ein Schritt je Körper vor der Ansichtsrechnung. Die
+/// Schnittfläche von `bodies[i]` trägt die Herkunft `SECTION_ORIGIN_MIN + i`.
 pub fn compute_section(
     bodies: &[DrawBody],
+    plane: &SectionPlane,
+    view: ViewFn,
+    progress: &Progress,
+) -> Result<SectionLines, DrawError> {
+    compute_section_keyed(bodies, &[], plane, view, progress)
+}
+
+/// Wie [`compute_section`]; die Schnittfläche von `bodies[i]` trägt die Herkunft
+/// `SECTION_ORIGIN_MIN + keys[i]` (fehlt `keys[i]`, dann `i`). So behält ein Körper seine
+/// Schnittflächen-Herkunft, wenn ein Körper davor ausgeblendet ist (`keys` = Stelle unter allen
+/// exakten Körpern); Maße an der Schnittfläche bleiben dann gültig.
+pub fn compute_section_keyed(
+    bodies: &[DrawBody],
+    keys: &[usize],
     plane: &SectionPlane,
     view: ViewFn,
     progress: &Progress,
@@ -495,7 +510,7 @@ pub fn compute_section(
         return Err(DrawError::Unsupported(tr!("drawing-err-section-normal")));
     }
     progress.set_total(bodies.len() as u64);
-    let data = cut_all(bodies, plane, progress)?;
+    let data = cut_all(bodies, keys, plane, progress)?;
     match view_of(bodies, &data, plane.kind, view, progress) {
         Ok(lines) => Ok(SectionLines { lines, data }),
         // Knapp neben einer Bohrungsachse (etwa 5e-5 bis 1e-3 mm) liegen Kante der Schnittfläche
@@ -512,7 +527,7 @@ pub fn compute_section(
             };
             // Scheitert schon das Schneiden an der verschobenen Ebene (etwa weil ein knapp
             // gestreifter Körper dort ganz wegfällt), gilt die erste Meldung; nur Abbrechen geht vor.
-            let mut again = match cut_all(bodies, &shifted, progress) {
+            let mut again = match cut_all(bodies, keys, &shifted, progress) {
                 Ok(d) => d,
                 Err(DrawError::Cancelled) => return Err(DrawError::Cancelled),
                 Err(_) => return Err(first),
@@ -565,6 +580,7 @@ fn view_of(
 /// Schneidet alle Körper an genau dieser Ebene (S4).
 fn cut_all(
     bodies: &[DrawBody],
+    keys: &[usize],
     plane: &SectionPlane,
     progress: &Progress,
 ) -> Result<SectionData, DrawError> {
@@ -575,7 +591,8 @@ fn cut_all(
     let mut nudged = false;
     for (i, b) in bodies.iter().enumerate() {
         progress.check()?;
-        let out = cut_body(b.solid, i, plane, &tol)
+        let key = keys.get(i).copied().unwrap_or(i);
+        let out = cut_body(b.solid, key, plane, &tol)
             .map_err(|_| DrawError::SectionFailed(b.name.clone()))?;
         match out {
             CutOutcome::Kept => {
