@@ -95,8 +95,14 @@ fn grip_step() -> f64 {
 pub fn round_grip_value(v: f64, down: bool) -> f64 {
     let step = grip_step();
     let n = v / step;
-    let n = if down { (n + 1e-9).floor() } else { n.round() };
-    (n * step).max(step)
+    let n = if down { (n + 1e-9).floor() } else { n.round() }.max(1.0);
+    match planora_i18n::current_unit() {
+        // Zoll zeigt das Feld ohnehin mit höchstens sechs Stellen.
+        planora_i18n::DisplayUnit::Zoll => n * step,
+        // Geteilt statt mal 0,01: trifft die nächste darstellbare Zahl, sonst zeigt das
+        // Feld „0,35000000000000003“.
+        _ => n / 100.0,
+    }
 }
 
 /// Eine Art, eine Form zu zeichnen.

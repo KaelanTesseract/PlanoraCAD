@@ -1853,3 +1853,21 @@ fn a_dragged_value_in_inches_has_three_places() {
         );
     });
 }
+
+#[test]
+fn a_rounded_value_in_mm_shows_at_most_two_places() {
+    with_unit(DisplayUnit::Millimeter, || {
+        for i in 1..5000 {
+            let raw = f64::from(i) * 0.0137;
+            for down in [false, true] {
+                let v = planora_app::sketch_kinds::round_grip_value(raw, down);
+                let text = planora_app::formula_field::value_field_text(v, ParamUnit::Length);
+                let places = text
+                    .split([',', '.'])
+                    .nth(1)
+                    .map_or(0, |d| d.chars().count());
+                assert!(places <= 2, "{raw} → {v} → {text:?}");
+            }
+        }
+    });
+}
