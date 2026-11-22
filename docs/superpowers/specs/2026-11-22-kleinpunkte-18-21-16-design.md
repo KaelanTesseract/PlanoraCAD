@@ -47,3 +47,16 @@ gegen ungeschnittene Körper prüfen), entschieden wie oben.
 
 Je Punkt ein Test, der vorher scheitert; volle Prüfung unter Windows und WSL; Handtest nur nach
 Go.
+
+## Nachtrag beim Bau (2026-11-22)
+
+- **Fund zu 21:** Die Schnittfläche trägt als Herkunft die Stelle des Körpers in der Liste der
+  Ansicht. Wurde ein Körper davor ausgeblendet, verschoben sich die Stellen, und Maße an
+  Schnittflächen späterer, sichtbarer Körper gingen verloren (schon vorher so). Entscheidung:
+  Bezüge behandeln Schnittflächen untereinander als gleich (`refs::same_tag`); welcher Körper
+  gemeint ist, entscheidet der Hinweispunkt wie bei gleich gebauten Körpern. Betrifft nur
+  Zeichnungen, denn nur Schnittkörper tragen solche Flächen.
+- **Regel zu 21 wie ohne Schnitt:** Ein Maß ruht, wenn ein Bezug gegen den ganzen Schnitt (mit
+  den ausgeblendeten Körpern) aufgeht, gegen den eingeblendeten aber nicht oder anders. Darum
+  werden die ausgeblendeten Körper geschnitten, sobald die Schnittansicht Maße hat (nicht erst,
+  wenn eines scheitert), damit ein Maß nicht still auf einen gleich gebauten Nachbarn springt.

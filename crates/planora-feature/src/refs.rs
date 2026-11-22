@@ -189,11 +189,25 @@ pub(crate) fn face_candidates_cached<'a>(
         .iter()
         .enumerate()
         .flat_map(|(bi, &s)| {
-            s.faces_with_tag(&tag)
-                .into_iter()
-                .map(move |f| (bi, f, cache.face_probe(s, f, tol)))
+            let tag = &tag;
+            s.faces
+                .iter()
+                .filter(move |(_, f)| f.tag.as_ref().is_some_and(|t| same_tag(t, tag)))
+                .map(move |(f, _)| (bi, f, cache.face_probe(s, f, tol)))
         })
         .collect()
+}
+
+/// Trägt eine Fläche die gesuchte Marke? Schnittflächen einer Schnittansicht (Herkunft ab
+/// `SECTION_ORIGIN_MIN`) gelten untereinander als gleich: Ihre Herkunft ist die Stelle des
+/// Körpers in der Liste der Ansicht, und die ändert sich, wenn ein Körper davor ausgeblendet
+/// wird. Welcher Körper gemeint ist, entscheidet dann der Hinweispunkt.
+fn same_tag(face: &FaceTag, want: &FaceTag) -> bool {
+    use planora_drawing::section::SECTION_ORIGIN_MIN;
+    face == want
+        || (face.origin >= SECTION_ORIGIN_MIN
+            && want.origin >= SECTION_ORIGIN_MIN
+            && face.role == want.role)
 }
 
 /// Verweis auf eine Kante über die beiden angrenzenden Flächen und einen Hinweispunkt.
@@ -301,7 +315,12 @@ pub(crate) fn edge_candidates_cached<'a>(
     let (ta, tb) = (r.a.tag(), r.b.tag());
     let mut candidates = Vec::new();
     for (bi, &s) in solids.iter().enumerate() {
-        let has = |f: Id<Face>, t: &FaceTag| s.faces.get(f).and_then(|f| f.tag.as_ref()) == Some(t);
+        let has = |f: Id<Face>, t: &FaceTag| {
+            s.faces
+                .get(f)
+                .and_then(|f| f.tag.as_ref())
+                .is_some_and(|x| same_tag(x, t))
+        };
         let uses = cache.edge_uses(s);
         for (&edge, faces) in uses.iter() {
             let matches = faces.iter().enumerate().any(|(i, &fa)| {
