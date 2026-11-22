@@ -96,9 +96,14 @@ pub fn round_grip_value(v: f64, down: bool) -> f64 {
     let step = grip_step();
     let n = v / step;
     let n = if down { (n + 1e-9).floor() } else { n.round() }.max(1.0);
+    grip_steps_value(n)
+}
+
+/// Wert (mm) von `n` Rundungsschritten der Anzeigeeinheit.
+fn grip_steps_value(n: f64) -> f64 {
     match planora_i18n::current_unit() {
         // Zoll zeigt das Feld ohnehin mit höchstens sechs Stellen.
-        planora_i18n::DisplayUnit::Zoll => n * step,
+        planora_i18n::DisplayUnit::Zoll => n * grip_step(),
         // Geteilt statt mal 0,01: trifft die nächste darstellbare Zahl, sonst zeigt das
         // Feld „0,35000000000000003“.
         _ => n / 100.0,
@@ -1052,11 +1057,11 @@ impl SketchSession {
         let step = grip_step();
         let n = ok / step;
         // Zur passenden Seite runden: nach unten, wenn zu groß nicht passt, sonst nach oben.
-        let rounded = if bad > ok {
-            (n + 1e-9).floor() * step
+        let rounded = grip_steps_value(if bad > ok {
+            (n + 1e-9).floor()
         } else {
-            (n - 1e-9).ceil() * step
-        };
+            (n - 1e-9).ceil()
+        });
         if rounded >= step && self.grip_value_fits(sk, field, rounded) {
             rounded
         } else {

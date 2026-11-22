@@ -1791,6 +1791,21 @@ fn a_grip_drag_past_the_lines_stops_at_the_largest_fillet() {
         (39.9..=40.0 + 1e-9).contains(&r),
         "größter passender Radius, nicht {r}"
     );
+    let text = &s
+        .sketch_session
+        .as_ref()
+        .unwrap()
+        .input
+        .fields
+        .iter()
+        .find(|f| f.kind == F::Radius)
+        .unwrap()
+        .text;
+    let places = text
+        .split([',', '.'])
+        .nth(1)
+        .map_or(0, |d| d.chars().count());
+    assert!(places <= 2, "höchstens zwei Stellen im Feld: {text:?}");
     assert_eq!(grips(&s).len(), 1, "die Vorschau bleibt");
     assert_eq!(stage(&s), 2);
 }
