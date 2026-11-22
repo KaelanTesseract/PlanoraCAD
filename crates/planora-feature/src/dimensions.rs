@@ -412,3 +412,61 @@ pub fn rest_hidden_dimensions(
     }
     dims.resting.extend(resting);
 }
+
+/// Wie [`rest_hidden_dimensions`] für Schnittansichten: `view_solids` sind die geschnittenen
+/// eingeblendeten Körper je Ansicht (gegen sie wurden ihre Maße aufgelöst), `hidden` die
+/// ausgeblendeten exakten Körper (ungeschnitten) mit ihrer Stelle unter allen exakten Körpern
+/// (die Nummer trägt die Herkunft ihrer Schnittfläche, wie vor dem Ausblenden). Hat eine Schnittansicht Maße, werden die
+/// ausgeblendeten Körper an ihrer Ebene geschnitten; ein Maß ruht, wenn einer seiner Bezüge gegen
+/// den ganzen Schnitt aufgeht, gegen den eingeblendeten aber nicht oder anders (er hängt an einem
+/// ausgeblendeten Körper, auch an dessen Schnittfläche). Ein Körper, dessen Schnitt scheitert,
+/// zählt nicht.
+pub fn rest_hidden_section_dimensions(
+    d: &Drawing,
+    dims: &mut ResolvedDims,
+    view_solids: &BTreeMap<ViewId, Vec<&Solid>>,
+    hidden: &[(usize, &Solid)],
+) {
+    use planora_drawing::section::{CutOutcome, cut_body};
+    if hidden.is_empty() {
+        return;
+    }
+    let tol = Tolerance::default();
+    let mut resting = BTreeSet::new();
+    for (view, entries) in dims.by_view.iter_mut() {
+        let Some((spec, kind)) = d
+            .view(*view)
+            .and_then(|v| v.section.as_ref().map(|s| (s, v.kind)))
+        else {
+            continue;
+        };
+        let Some(shown) = view_solids.get(view).filter(|_| !entries.is_empty()) else {
+            continue;
+        };
+        let plane = spec.plane(kind);
+        let cut: Vec<Solid> = hidden
+            .iter()
+            .filter_map(|&(i, s)| match cut_body(s, i, &plane, &tol).ok()? {
+                CutOutcome::Kept => Some(s.clone()),
+                CutOutcome::Removed => None,
+                CutOutcome::Cut { solid, .. } => Some(solid),
+            })
+            .collect();
+        if cut.is_empty() {
+            continue;
+        }
+        let all: Vec<&Solid> = shown.iter().copied().chain(cut.iter()).collect();
+        let (cache_all, cache_shown) = (RefCache::new(), RefCache::new());
+        entries.retain(|(spec, _)| {
+            let rests = spec.refs.iter().any(|r| {
+                let whole = resolve_geo_cached(&all, r, &tol, &cache_all);
+                whole.is_ok() && resolve_geo_cached(shown, r, &tol, &cache_shown) != whole
+            });
+            if rests {
+                resting.insert(spec.id);
+            }
+            !rests
+        });
+    }
+    dims.resting.extend(resting);
+}

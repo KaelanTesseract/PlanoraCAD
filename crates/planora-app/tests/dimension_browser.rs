@@ -839,3 +839,80 @@ fn a_dimension_on_a_hidden_body_is_listed_as_resting_not_lost() {
         shot.text
     );
 }
+
+#[test]
+fn a_section_dimension_on_a_hidden_body_is_listed_as_resting_not_lost() {
+    use planora_drawing::section::{CutOutcome, SectionPlane, cut_body};
+    let mut st = AppState::new();
+    st.create_box(DVec3::new(10.0, 20.0, 30.0)).unwrap();
+    let b = st.create_box(DVec3::new(10.0, 20.0, 30.0)).unwrap();
+    let d = st
+        .document
+        .add_drawing("Blatt 1", A4_QUER, Projection::First)
+        .unwrap();
+    let top = st
+        .document
+        .add_view(
+            d,
+            ViewKind::Top,
+            Scale { num: 1, den: 1 },
+            Placement::Free { x: 100.0, y: 200.0 },
+            None,
+        )
+        .unwrap();
+    let (lo, hi) = st.bodies[1].bounds;
+    let y = 0.5 * (lo.y + hi.y);
+    let mut sec = None;
+    st.document
+        .update_drawing(d, |dr| {
+            sec = Some(dr.add_section(top, ViewKind::Front, y, 60.0).unwrap());
+        })
+        .unwrap();
+    let sec = sec.unwrap();
+    // Bezüge auf die Schnittkanten des zweiten Quaders (der danach ausgeblendet wird).
+    let tol = Tolerance::default();
+    let plane = SectionPlane {
+        kind: ViewKind::Front,
+        offset: y,
+    };
+    let CutOutcome::Cut { solid: cut, .. } =
+        cut_body(&st.bodies[1].solid, 1, &plane, &tol).unwrap()
+    else {
+        panic!("der Quader wird geschnitten");
+    };
+    let at = |x: f64| {
+        let (id, _) = cut
+            .edges
+            .iter()
+            .find(|(_, e)| {
+                let p = cut.vertices.get(e.start).unwrap().point;
+                let q = cut.vertices.get(e.end).unwrap().point;
+                e.start != e.end && near(p.x, x) && near(q.x, x) && near(p.y, y) && near(q.y, y)
+            })
+            .expect("Schnittkante");
+        GeoRef::Edge(geo_ref_for_edge(&cut, id, &tol).unwrap())
+    };
+    st.document
+        .add_dimension(d, spec(sec, DimKind::Horizontal, vec![at(lo.x), at(hi.x)]))
+        .unwrap();
+    let mut v = st.document.visibility().clone();
+    v.bodies.insert(planora_drawing::BodyKey {
+        feature: b.0,
+        index: 0,
+    });
+    st.document.set_visibility(v);
+    st.drawing_ui.open(d);
+    let mut h = Harness::new();
+    // Der Schnitt rechnet im Hintergrund: warten, bis das Maß kein „?“ mehr zeigt.
+    let mut shot = h.idle(&mut st);
+    for _ in 0..500 {
+        st.drawing_ui.tick(&st.bodies, &st.document, true);
+        shot = h.idle(&mut st);
+        if shot.find("?").is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let row = shot.find("Körper ausgeblendet").expect("ruhende Zeile");
+    assert_ne!(row.color, ERROR_COLOR, "nicht rot");
+}

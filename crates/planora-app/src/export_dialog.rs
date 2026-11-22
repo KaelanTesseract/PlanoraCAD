@@ -63,7 +63,10 @@ use planora_exchange::{
     ExchangeError, ExchangeMesh, ExportBody, Format, MeshReport, MeshTransform, PlacedSource,
     Progress, SolidSource, check_mesh, collect_body, export_file,
 };
-use planora_feature::{BodyRef, resolve_drawing_dimensions_views, rest_hidden_dimensions};
+use planora_feature::{
+    BodyRef, resolve_drawing_dimensions_views, rest_hidden_dimensions,
+    rest_hidden_section_dimensions,
+};
 use planora_i18n::{Lang, tr, with_lang};
 use planora_kernel::Solid;
 use planora_mesh::{TessellationOptions, tessellate};
@@ -1130,9 +1133,10 @@ pub struct PartsInput {
     /// Kreise an ausgeblendeten Körpern: Sie ruhen (kommen nicht aufs Blatt und sind nicht
     /// verloren), wie auf dem Bildschirm.
     pub resting: BTreeSet<BalloonId>,
-    /// Die ausgeblendeten exakten Körper: Maße, die nur an ihnen hängen, ruhen (die Ansichten
-    /// zeichnen nur die eingeblendeten).
-    pub hidden: Arc<Vec<Solid>>,
+    /// Die ausgeblendeten exakten Körper mit ihrer Stelle unter allen exakten Körpern (die Nummer
+    /// trägt ihre Schnittfläche): Maße, die nur an ihnen hängen, ruhen (die Ansichten zeichnen nur
+    /// die eingeblendeten).
+    pub hidden: Arc<Vec<(usize, Solid)>>,
     /// Die Ausgabe ist DXF. Gilt nur für ein Stücklistenblatt ohne Rahmen (Breitenzuschlag der
     /// Tabellentexte); mit Rahmen entscheidet [`FrameInput::dxf`].
     pub dxf: bool,
@@ -1324,10 +1328,13 @@ fn prepare_counted(
         // Maße werden gegen alle Körper aufgelöst (wie auf dem Bildschirm); die an
         // ausgeblendeten Körpern ruhen danach.
         let mut all = refs.clone();
-        all.extend(parts.hidden.iter());
+        all.extend(parts.hidden.iter().map(|(_, s)| s));
         let dims = match resolve(drawing, &all, &cut, progress) {
             Ok(mut d) if !parts.hidden.is_empty() => {
                 rest_hidden_dimensions(drawing, &mut d, &refs, &all);
+                let hidden: Vec<(usize, &Solid)> =
+                    parts.hidden.iter().map(|(i, s)| (*i, s)).collect();
+                rest_hidden_section_dimensions(drawing, &mut d, &cut, &hidden);
                 d
             }
             Ok(d) => d,
@@ -1519,8 +1526,8 @@ struct DrawingBodies {
     solids: Vec<(String, Solid)>,
     /// Namen der eingeblendeten Netz-Körper (nicht gezeichnet, im Hinweis genannt).
     meshes: Vec<String>,
-    /// Ausgeblendete exakte Körper: Maße an ihnen ruhen.
-    hidden: Arc<Vec<Solid>>,
+    /// Ausgeblendete exakte Körper mit ihrer Stelle unter allen exakten: Maße an ihnen ruhen.
+    hidden: Arc<Vec<(usize, Solid)>>,
 }
 
 /// Die Körper für die Ausgabe einer Zeichnung: Zeichnungen lassen ausgeblendete Körper weg, im
@@ -1529,6 +1536,7 @@ fn drawing_bodies(state: &AppState) -> DrawingBodies {
     let mut solids = Vec::new();
     let mut meshes = Vec::new();
     let mut hidden = Vec::new();
+    let mut exact = 0;
     for (i, b) in state.bodies.iter().enumerate() {
         let shown = state.document.body_shown(b.source);
         let name = display_name(&b.name, i);
@@ -1536,8 +1544,9 @@ fn drawing_bodies(state: &AppState) -> DrawingBodies {
             (true, true) => meshes.push(shorten_for_display(&name)),
             (true, false) => {}
             (false, true) => solids.push((name, b.solid.clone())),
-            (false, false) => hidden.push(b.solid.clone()),
+            (false, false) => hidden.push((exact, b.solid.clone())),
         }
+        exact += usize::from(b.kind != BodyKind::Mesh);
     }
     DrawingBodies {
         solids,
