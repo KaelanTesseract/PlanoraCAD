@@ -591,6 +591,19 @@ pub fn drawing_tool_wanted(ctx: &egui::Context) -> Option<f32> {
     stored(ctx, drawing_tool_width_key())
 }
 
+/// Rechtecke der sichtbaren schwebenden Seitenfelder (links, rechts, Skizzenleiste) aus dem
+/// letzten Bild; die Wertefelder am Zeiger weichen ihnen aus.
+pub(crate) fn side_rects(ctx: &egui::Context) -> [Option<egui::Rect>; 3] {
+    [left_id(), right_id(), sketch_side_id()].map(|id| {
+        ctx.memory(|m| {
+            m.areas()
+                .is_visible(&egui::LayerId::new(egui::Order::Middle, id))
+                .then(|| m.area_rect(id))
+                .flatten()
+        })
+    })
+}
+
 /// Tatsächlich belegte Rechtecke der sichtbaren Felder, je mit Namen (für Tests). Gelesen wird
 /// der Stand, den egui am Ende des vorigen Bildes gespeichert hat; nach einem Bild also die
 /// Felder dieses Bildes. Die Seitenfelder sind so hoch wie ihr Inhalt, höchstens wie die Spalte.

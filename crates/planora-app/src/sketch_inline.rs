@@ -52,19 +52,38 @@ fn widget_id(ctx: &egui::Context, kind: FieldKind) -> Option<egui::Id> {
 }
 
 /// Linke obere Ecke des Felds `row` von `rows` für den Zeiger `anchor`: rechts unterhalb des
-/// Zeigers, am Rand nach links beziehungsweise oben geklappt.
-fn field_pos(rect: Rect, anchor: Pos2, width: f32, row: usize, rows: usize) -> Pos2 {
-    let x = if anchor.x + POINTER_GAP + width > rect.right() {
-        anchor.x - POINTER_GAP - width
-    } else {
-        anchor.x + POINTER_GAP
-    };
+/// Zeigers, am Rand nach links beziehungsweise oben geklappt. Läge der Block der Felder über
+/// einer schwebenden Leiste aus `avoid`, wechselt er die Seite des Zeigers, wenn er dort frei ist.
+pub fn field_pos(
+    rect: Rect,
+    anchor: Pos2,
+    width: f32,
+    row: usize,
+    rows: usize,
+    avoid: &[Rect],
+) -> Pos2 {
+    let right = anchor.x + POINTER_GAP;
+    let left = anchor.x - POINTER_GAP - width;
     let block = rows as f32 * ROW_STEP;
     let top = if anchor.y + POINTER_GAP + block > rect.bottom() {
         anchor.y - POINTER_GAP - block
     } else {
         anchor.y + POINTER_GAP
     };
+    let covers = |x: f32| {
+        let r = Rect::from_min_size(pos2(x, top), egui::vec2(width, block));
+        avoid.iter().any(|a| a.intersects(r))
+    };
+    let mut x = if right + width > rect.right() {
+        left
+    } else {
+        right
+    };
+    let other = if x == right { left } else { right };
+    let other_fits = other >= rect.left() && other + width <= rect.right();
+    if covers(x) && other_fits && !covers(other) {
+        x = other;
+    }
     pos2(x, top + row as f32 * ROW_STEP)
 }
 
@@ -247,6 +266,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
         rect,
         anchor,
         fixed,
+        avoid: crate::shell_panels::side_rects(&ctx),
     };
     let first = draw_rows(&ctx, se, sf, &scope, place, &[]);
     let (enter, esc, typed) = (first.enter, first.esc, first.typed);
@@ -300,6 +320,8 @@ struct Place {
     rect: Rect,
     anchor: Pos2,
     fixed: Option<(Pos2, Vec2)>,
+    /// Schwebende Leisten, denen die Felder am Zeiger ausweichen.
+    avoid: [Option<Rect>; 3],
 }
 
 /// Was die Felder eines Durchgangs gemeldet haben.
@@ -338,7 +360,9 @@ fn draw_rows(
         rect,
         anchor,
         fixed,
+        avoid,
     } = place;
+    let avoid: Vec<Rect> = avoid.into_iter().flatten().collect();
     let mut drawn = Vec::new();
     let rows = se.input.fields.len();
     let (mut enter, mut esc, mut typed) = (false, false, false);
@@ -374,7 +398,7 @@ fn draw_rows(
         let response = egui::Area::new(area_id(kind))
             .fixed_pos(match fixed {
                 Some((at, away)) => pattern_field_pos(rect, at, away, width, i, rows),
-                None => field_pos(rect, anchor, width, i, rows),
+                None => field_pos(rect, anchor, width, i, rows, &avoid),
             })
             .order(Order::Foreground)
             // Am Zeiger nehmen die Felder keine Maus an (sie liefen ihr sonst in den Weg); am
