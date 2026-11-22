@@ -395,3 +395,23 @@ fn section_lists_and_acts() {
     assert!(!shot.has(&section()));
     assert!(!shot.has(&empty_text()));
 }
+
+#[test]
+fn a_balloon_on_a_hidden_body_is_listed_as_resting_not_lost() {
+    let Fixture { mut st, bolt, .. } = fixture();
+    let mut v = st.document.visibility().clone();
+    v.bodies.insert(key(bolt));
+    st.document.set_visibility(v);
+    let mut h = Harness::new(false);
+    let shot = h.idle(&mut st);
+    let rows = h.rows();
+    assert!(
+        rows.contains(&"Körper ausgeblendet".to_string()),
+        "{rows:?}"
+    );
+    assert!(
+        !rows.contains(&row_text(None, "")),
+        "nicht „Teil fehlt“: {rows:?}"
+    );
+    assert!(shot.has("Pos. 1 – Platte"));
+}

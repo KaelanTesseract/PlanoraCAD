@@ -82,7 +82,14 @@ fn groups_of(ctx: &egui::Context, state: &AppState, drawing: DrawingId) -> Vec<G
                 .iter()
                 .filter(|b| b.view == v.id)
                 .map(|b| {
-                    let n = numbers.get(&b.id).copied().flatten();
+                    // Ohne Eintrag ruht der Kreis (Körper ausgeblendet): neutral, nicht verloren.
+                    let Some(&n) = numbers.get(&b.id) else {
+                        return BalloonRow {
+                            id: b.id,
+                            text: tr!("drawing-resting-hidden"),
+                            lost: false,
+                        };
+                    };
                     let name = n
                         .and_then(|n| (n as usize).checked_sub(1))
                         .and_then(|i| cells.get(i))

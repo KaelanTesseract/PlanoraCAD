@@ -880,3 +880,82 @@ fn resolve_against_cut_solids() {
             .contains_key(&sec)
     );
 }
+
+/// Zwei gleiche Körper mit gleichen Markierungen (verschobene Kopie): Ist der Körper eines Maßes
+/// ausgeblendet, ruht das Maß. Es springt nicht auf die gleich markierte Kante des Nachbarn.
+#[test]
+fn a_dimension_on_a_hidden_twin_rests_instead_of_jumping() {
+    let (a, c) = (10.0, 20.0);
+    let mut d = Document::new();
+    d.add_feature(
+        "Quader",
+        FeatureKind::Box {
+            size: DVec3::new(a, 30.0, c),
+            origin: DVec3::ZERO,
+        },
+    )
+    .unwrap();
+    let id = d.add_drawing("Blatt", A4, Projection::First).unwrap();
+    let front = d.add_view(id, ViewKind::Front, S11, FREE, None).unwrap();
+    let one = d.visible_bodies()[0].solid.clone();
+    let shift = DVec3::new(100.0, 0.0, 0.0);
+    let twin = one
+        .transformed(&planora_math::DMat4::from_translation(shift))
+        .unwrap();
+    let v = DVec3::new;
+    let edge = |p: DVec3, q: DVec3| {
+        GeoRef::Edge(
+            geo_ref_for_edge(
+                &twin,
+                line_edge(&twin, p + shift, q + shift),
+                &Tolerance::default(),
+            )
+            .unwrap(),
+        )
+    };
+    let m = spec(
+        front,
+        DimKind::Horizontal,
+        vec![
+            edge(v(0.0, 0.0, 0.0), v(0.0, 0.0, c)),
+            edge(v(a, 0.0, 0.0), v(a, 0.0, c)),
+        ],
+    );
+    let dim = d.add_dimension(id, m).unwrap();
+    let drawing = d.drawing(id).unwrap().clone();
+    let all = [&one, &twin];
+    let shown = [&one];
+    // Gegen den eingeblendeten allein ginge das Maß auf, aber am falschen Körper.
+    let (alone, _) = resolve_drawing_dimensions_views(
+        &drawing,
+        &shown,
+        &std::collections::BTreeMap::new(),
+        || Ok::<(), std::convert::Infallible>(()),
+    )
+    .unwrap();
+    assert!(
+        alone.by_view[&front][0].1.is_ok(),
+        "Sprung auf den Nachbarn"
+    );
+    let (mut dims, _) = resolve_drawing_dimensions_views(
+        &drawing,
+        &all,
+        &std::collections::BTreeMap::new(),
+        || Ok::<(), std::convert::Infallible>(()),
+    )
+    .unwrap();
+    rest_hidden_dimensions(&drawing, &mut dims, &shown, &all);
+    assert!(dims.resting.contains(&dim), "das Maß ruht");
+    assert!(dims.by_view.values().flatten().all(|e| e.0.id != dim));
+    // Beide eingeblendet: nichts ruht.
+    let (mut dims, _) = resolve_drawing_dimensions_views(
+        &drawing,
+        &all,
+        &std::collections::BTreeMap::new(),
+        || Ok::<(), std::convert::Infallible>(()),
+    )
+    .unwrap();
+    rest_hidden_dimensions(&drawing, &mut dims, &all, &all);
+    assert!(dims.resting.is_empty());
+    assert!(dims.by_view[&front][0].1.is_ok());
+}

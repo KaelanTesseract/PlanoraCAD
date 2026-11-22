@@ -3428,6 +3428,7 @@ drawing-dim-err-not-across = Die Kante steht nicht quer zum Maß.
 drawing-dim-err-not-visible = Der Bezug ist in dieser Ansicht nicht zu sehen.
 drawing-dim-err-ambiguous = Der Bezug ist nicht eindeutig.
 drawing-dim-err-lost = Der Bezug wurde nicht gefunden: { $reason }
+drawing-resting-hidden = Körper ausgeblendet
 drawing-dim-err-isometric = In der Isometrie gibt es keine Maße.
 drawing-dim-err-too-many = Es gibt zu viele Maße in dieser Zeichnung.
 drawing-dim-err-invalid = Das Maß ist ungültig: { $reason }

@@ -380,35 +380,35 @@ pub fn resolve_drawing_dimensions_views<'a, E>(
     Ok((out, keys))
 }
 
-/// Lässt Maße ruhen, die nur wegen ausgeblendeter Körper keinen Bezug haben: `dims` wurde gegen
-/// die eingeblendeten Körper aufgelöst; ein verlorenes Maß einer Ansicht ohne Schnitt, dessen
-/// Bezüge sich gegen `all` (eingeblendete und ausgeblendete Körper) alle auflösen lassen, fällt
-/// aus `dims` heraus. Es gilt dann weder als aufgelöst noch als verloren und wird nicht
-/// gezeichnet; wieder eingeblendet kommt es zurück. Gibt die Kennungen der ruhenden Maße.
+/// Lässt Maße an ausgeblendeten Körpern ruhen. `dims` wurde gegen alle Körper `all`
+/// (eingeblendete und ausgeblendete) aufgelöst, wie vor dem Ausblenden. Ein Maß einer Ansicht
+/// ohne Schnitt ruht, wenn einer seiner Bezüge gegen die eingeblendeten Körper `shown` nicht
+/// oder anders aufgeht als gegen `all` (er hängt dann an einem ausgeblendeten Körper und würde
+/// sonst verloren gehen oder auf einen gleich gebauten Nachbarn springen). Ruhende Maße fallen
+/// aus `by_view` heraus und stehen in `resting`; eingeblendet kommen sie zurück.
 pub fn rest_hidden_dimensions(
     d: &Drawing,
     dims: &mut ResolvedDims,
+    shown: &[&Solid],
     all: &[&Solid],
-) -> BTreeSet<DimId> {
+) {
     let tol = Tolerance::default();
-    let cache = RefCache::new();
+    let (cache_all, cache_shown) = (RefCache::new(), RefCache::new());
     let mut resting = BTreeSet::new();
     for (view, entries) in dims.by_view.iter_mut() {
         if d.view(*view).is_none_or(|v| v.section.is_some()) {
             continue;
         }
-        entries.retain(|(spec, result)| {
-            let lost = matches!(result, Err(DimError::Lost(_)));
-            let rests = lost
-                && spec
-                    .refs
-                    .iter()
-                    .all(|r| resolve_geo_cached(all, r, &tol, &cache).is_ok());
+        entries.retain(|(spec, _)| {
+            let rests = spec.refs.iter().any(|r| {
+                let whole = resolve_geo_cached(all, r, &tol, &cache_all);
+                whole.is_ok() && resolve_geo_cached(shown, r, &tol, &cache_shown) != whole
+            });
             if rests {
                 resting.insert(spec.id);
             }
             !rests
         });
     }
-    resting
+    dims.resting.extend(resting);
 }

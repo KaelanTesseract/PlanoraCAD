@@ -3445,6 +3445,7 @@ drawing-dim-err-not-across = The edge is not across the dimension.
 drawing-dim-err-not-visible = The reference cannot be seen in this view.
 drawing-dim-err-ambiguous = The reference is not unique.
 drawing-dim-err-lost = The reference was not found: { $reason }
+drawing-resting-hidden = Body hidden
 drawing-dim-err-isometric = There are no dimensions in the isometric view.
 drawing-dim-err-too-many = There are too many dimensions in this drawing.
 drawing-dim-err-invalid = The dimension is not valid: { $reason }

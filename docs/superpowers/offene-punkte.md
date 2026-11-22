@@ -3486,3 +3486,14 @@ Grenzen und Annahmen:
 - Ebenen-Griffe ohne Fang und mit fester Bildschirmlänge: wie Fusion, kein Umbau.
 - SVG einfügen legt die Mitte der Datei auf den Ursprung und verschiebt dann um X/Y-Abstand; der Handtest-Verdacht „X-Abstand wirkt nicht“ war keiner.
 - Ein Maß ruht nur in Ansichten ohne Schnitt und nur, wenn alle seine Bezüge an vorhandenen Körpern hängen; ein Maß zwischen einem ein- und einem ausgeblendeten Körper ruht ebenfalls.
+- Ruhende Maße und Kreise stehen in den Listen „Maße“ und „Positionen“ neutral als „Körper ausgeblendet“, nicht rot.
+- Maße werden gegen alle Körper aufgelöst und ruhen, wenn ein Bezug gegen die eingeblendeten anders oder gar nicht aufgeht; so springt ein Maß nicht auf einen gleich gebauten Nachbarkörper.
+
+Zurückgestellt (Prüfung 2026-11-22, klein):
+- „Wert zu groß“ erscheint auch, wenn ein Plan aus anderem Grund fehlt (Wert fast 0, Ellipse/Spline ohne Lösung, unpassender Fasenwinkel).
+- Der Griffzug sucht die Grenze in jedem Bild neu (bis zu 43 Pläne); einmal je Zug würde reichen.
+- Felder am Zeiger entscheiden die Seite je Zeile mit eigener Breite; verschieden breite Zeilen können sich trennen, nahe der Leiste kann der Block springen.
+- In Schnittansichten ruhen Maße an ausgeblendeten Körpern nicht (bleiben verloren).
+- Die Maßzahl im Export-Status zählt vor der Rechnung ruhende Maße mit, danach nicht.
+- Der Netz-Hinweis unter der Zeichnung nennt ausgeblendete Netz-Körper, der Export nicht mehr.
+- `resting_balloons` baut die Körperliste zweimal.

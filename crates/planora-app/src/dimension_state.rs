@@ -285,9 +285,9 @@ impl DimensionUi {
                     .into_iter()
                     .map(|b| &b.solid)
                     .collect();
-                // Aufgelöst wird gegen die eingeblendeten Körper (wie die Ansichten); Maße, die
-                // nur an ausgeblendeten hängen, ruhen danach.
-                let solids: Vec<&Solid> = all
+                // Aufgelöst wird gegen alle Körper (gleiche Zuordnung wie vor dem Ausblenden);
+                // Maße an ausgeblendeten Körpern ruhen danach (die Ansichten zeigen sie nicht).
+                let shown_solids: Vec<&Solid> = all
                     .iter()
                     .zip(&shown)
                     .filter(|(_, s)| **s)
@@ -297,13 +297,13 @@ impl DimensionUi {
                     .iter()
                     .map(|(v, data)| (*v, data.solids.iter().collect()))
                     .collect();
-                match resolve_drawing_dimensions_views(d, &solids, &view_solids, || {
+                match resolve_drawing_dimensions_views(d, &all, &view_solids, || {
                     Ok::<(), Infallible>(())
                 }) {
                     Ok((mut dims, new_keys)) => {
                         keys.extend(new_keys);
-                        if solids.len() < all.len() {
-                            rest_hidden_dimensions(d, &mut dims, &all);
+                        if shown_solids.len() < all.len() {
+                            rest_hidden_dimensions(d, &mut dims, &shown_solids, &all);
                         }
                         dims
                     }

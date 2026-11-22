@@ -1321,12 +1321,13 @@ fn prepare_counted(
             });
             *lines_out = sheet_line_counts(drawing, &plain);
         };
-        let dims = match resolve(drawing, &refs, &cut, progress) {
-            // Maße, die nur an ausgeblendeten Körpern hängen, ruhen (wie auf dem Bildschirm).
+        // Maße werden gegen alle Körper aufgelöst (wie auf dem Bildschirm); die an
+        // ausgeblendeten Körpern ruhen danach.
+        let mut all = refs.clone();
+        all.extend(parts.hidden.iter());
+        let dims = match resolve(drawing, &all, &cut, progress) {
             Ok(mut d) if !parts.hidden.is_empty() => {
-                let mut all = refs.clone();
-                all.extend(parts.hidden.iter());
-                rest_hidden_dimensions(drawing, &mut d, &all);
+                rest_hidden_dimensions(drawing, &mut d, &refs, &all);
                 d
             }
             Ok(d) => d,
@@ -1512,10 +1513,19 @@ fn default_drawing(state: &AppState) -> Option<DrawingId> {
     }
 }
 
-/// Eingeblendete exakte Körper als eigene Kopien für den Arbeitsthread, die Namen der
-/// eingeblendeten Netz-Körper und die ausgeblendeten exakten Körper (ihre Maße ruhen).
-/// Zeichnungen lassen ausgeblendete Körper weg, im Export wie auf dem Bildschirm (wie Fusion).
-fn drawing_bodies(state: &AppState) -> (Vec<(String, Solid)>, Vec<String>, Arc<Vec<Solid>>) {
+/// Körper einer Zeichnungsausgabe, als eigene Kopien für den Arbeitsthread.
+struct DrawingBodies {
+    /// Eingeblendete exakte Körper mit Namen (nur sie stehen in den Ansichten).
+    solids: Vec<(String, Solid)>,
+    /// Namen der eingeblendeten Netz-Körper (nicht gezeichnet, im Hinweis genannt).
+    meshes: Vec<String>,
+    /// Ausgeblendete exakte Körper: Maße an ihnen ruhen.
+    hidden: Arc<Vec<Solid>>,
+}
+
+/// Die Körper für die Ausgabe einer Zeichnung: Zeichnungen lassen ausgeblendete Körper weg, im
+/// Export wie auf dem Bildschirm (wie Fusion).
+fn drawing_bodies(state: &AppState) -> DrawingBodies {
     let mut solids = Vec::new();
     let mut meshes = Vec::new();
     let mut hidden = Vec::new();
@@ -1529,7 +1539,11 @@ fn drawing_bodies(state: &AppState) -> (Vec<(String, Solid)>, Vec<String>, Arc<V
             (false, false) => hidden.push(b.solid.clone()),
         }
     }
-    (solids, meshes, Arc::new(hidden))
+    DrawingBodies {
+        solids,
+        meshes,
+        hidden: Arc::new(hidden),
+    }
 }
 
 /// Stand des Schreibens der Datei.
@@ -2112,7 +2126,11 @@ impl ExportDialog {
     /// Auftrag für die gewählte Zeichnung (SVG, DXF, PDF mit gewähltem Blatt).
     fn spawn_one(&self, state: &AppState, key: DrawKey) -> Option<DrawRun> {
         let drawing = self.current_drawing(state)?.clone();
-        let (solids, meshes, hidden) = drawing_bodies(state);
+        let DrawingBodies {
+            solids,
+            meshes,
+            hidden,
+        } = drawing_bodies(state);
         let (compute, resolve, format) = (self.compute, self.resolve, key.format);
         let frame = self.with_frame.then(|| FrameInput {
             project: state.document.project_info().cloned(),
@@ -2165,7 +2183,11 @@ impl ExportDialog {
     /// Blattrahmen mit seiner Stellung im Dokument und eigene Stückliste, beides ohne
     /// DXF-Zuschlag. Der Hinweis auf Netz-Körper steht einmal (am ersten Ansichtenblatt).
     fn spawn_all(&self, state: &AppState, key: DrawKey) -> DrawRun {
-        let (solids, meshes, hidden) = drawing_bodies(state);
+        let DrawingBodies {
+            solids,
+            meshes,
+            hidden,
+        } = drawing_bodies(state);
         let project = state.document.project_info().cloned();
         let sheets: Vec<SheetJob> = state
             .document

@@ -797,3 +797,45 @@ fn pending_question_is_dropped_when_its_target_disappears() {
     h.idle(&mut st);
     assert!(st.pending_delete_dimension.is_none());
 }
+
+#[test]
+fn a_dimension_on_a_hidden_body_is_listed_as_resting_not_lost() {
+    let mut st = AppState::new();
+    st.create_box(DVec3::new(10.0, 20.0, 30.0)).unwrap();
+    let b = st.create_box(DVec3::new(10.0, 20.0, 30.0)).unwrap();
+    let d = st
+        .document
+        .add_drawing("Blatt 1", A4_QUER, Projection::First)
+        .unwrap();
+    let front = st
+        .document
+        .add_view(
+            d,
+            ViewKind::Front,
+            Scale { num: 1, den: 1 },
+            Placement::Free { x: 100.0, y: 100.0 },
+            None,
+        )
+        .unwrap();
+    let refs = width_refs(&st, 1);
+    st.document
+        .add_dimension(d, spec(front, DimKind::Horizontal, refs))
+        .unwrap();
+    let mut v = st.document.visibility().clone();
+    v.bodies.insert(planora_drawing::BodyKey {
+        feature: b.0,
+        index: 0,
+    });
+    st.document.set_visibility(v);
+    st.drawing_ui.open(d);
+    st.drawing_ui.tick(&st.bodies, &st.document, true);
+    let mut h = Harness::new();
+    let shot = h.idle(&mut st);
+    let row = shot.find("Körper ausgeblendet").expect("ruhende Zeile");
+    assert_ne!(row.color, ERROR_COLOR, "nicht rot");
+    assert!(
+        shot.find("?").is_none(),
+        "kein Fragezeichen:\n{}",
+        shot.text
+    );
+}

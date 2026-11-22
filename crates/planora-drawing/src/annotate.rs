@@ -53,7 +53,7 @@ use crate::sheet::SheetTransform;
 use crate::sheet_frame::SheetPen;
 use planora_i18n::{DisplayUnit, localize_decimal};
 use planora_math::DVec2;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 /// Texthöhe der Maßzahlen.
@@ -203,6 +203,9 @@ pub type DimEntry = (DimSpec, Result<Measured, DimError>);
 pub struct ResolvedDims {
     pub by_view: BTreeMap<ViewId, Vec<DimEntry>>,
     pub last_known: BTreeMap<DimId, Anchor>,
+    /// Maße an ausgeblendeten Körpern: Sie ruhen (stehen nicht in `by_view`, sind weder
+    /// gemessen noch verloren).
+    pub resting: BTreeSet<DimId>,
 }
 
 /// Text eines Maßes: Haupttext (Höhe `DIM_TEXT_H`) und optional zwei gestapelte Zeilen

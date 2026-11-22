@@ -194,6 +194,15 @@ fn groups_of(state: &mut AppState, drawing: DrawingId) -> Vec<Group> {
                     let result = entries
                         .and_then(|list| list.iter().find(|(s, _)| s.id == m.id))
                         .map(|(_, r)| r);
+                    // Ein ruhendes Maß (Körper ausgeblendet) ist weder gemessen noch verloren.
+                    if dims.resting.contains(&m.id) {
+                        return DimRow {
+                            id: m.id,
+                            kind: m.kind,
+                            text: tr!("drawing-resting-hidden"),
+                            lost: None,
+                        };
+                    }
                     DimRow {
                         id: m.id,
                         kind: m.kind,

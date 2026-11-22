@@ -1065,6 +1065,7 @@ fn resolved(entries: Entries, last_known: BTreeMap<DimId, Anchor>) -> ResolvedDi
     ResolvedDims {
         by_view: entries,
         last_known,
+        ..ResolvedDims::default()
     }
 }
 
