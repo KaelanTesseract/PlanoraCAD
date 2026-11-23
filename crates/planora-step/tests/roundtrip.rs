@@ -927,10 +927,10 @@ fn kernel_cannot_cut(s: &Solid, e: &str) -> bool {
     })
 }
 
-/// Der Kernel lehnt das Abziehen des Stabs auch von seinem eigenen Kegelstumpf und Ring ab: Das
-/// ist eine Grenze des Kernels, kein Befund des Lesers.
+/// Früher lehnte der Kernel das Abziehen des Stabs von seinem eigenen Kegelstumpf und Ring ab;
+/// seit C15 (allgemeine Lage) schneidet er Ebene mit Kegel und Torus auch schräg.
 #[test]
-fn the_kernel_refuses_plane_with_cone_or_torus_itself() {
+fn the_kernel_cuts_plane_with_cone_or_torus_itself() {
     let frustum = k()
         .boolean(
             &k().make_cone(10.0, 20.0).unwrap(),
@@ -946,10 +946,10 @@ fn the_kernel_refuses_plane_with_cone_or_torus_itself() {
         DMat4::from_translation(DVec3::new(30.0, 0.0, 0.0)) * DMat4::from_rotation_x(PI / 2.0),
     );
     for (s, kind) in [(&frustum, "Kegel"), (&ring, "Torus")] {
-        let e = k()
+        let r = k()
             .boolean(s, &bar_through(s), BoolOp::Difference)
-            .expect_err(kind);
-        assert_eq!(e.to_string(), plane_refusal(kind));
+            .unwrap_or_else(|e| panic!("{kind}: {e}"));
+        validate(&r).unwrap_or_else(|e| panic!("{kind}: {e}"));
     }
 }
 

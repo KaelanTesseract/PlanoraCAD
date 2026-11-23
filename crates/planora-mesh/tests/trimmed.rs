@@ -150,6 +150,8 @@ fn cone_cut_by_a_box() {
     assert!(rel(v, expect) < 0.01, "{v} vs {expect}");
 }
 
+/// Gleich dicke, sich kreuzende Zylinder: benannte Ablehnung (seit C15 vom Schnittrechner der
+/// Freiformflächen, vorher „nicht unterstützt“).
 #[test]
 fn unsupported_pair_is_a_clear_error() {
     let a = k().make_cylinder(2.0, 10.0).unwrap();
@@ -158,10 +160,10 @@ fn unsupported_pair_is_a_clear_error() {
     let b = k()
         .transform(&k().make_cylinder(2.0, 10.0).unwrap(), &rot)
         .unwrap();
-    assert!(matches!(
-        k().boolean(&a, &b, BoolOp::Union),
-        Err(BooleanError::UnsupportedIntersection { .. })
-    ));
+    match k().boolean(&a, &b, BoolOp::Union) {
+        Err(BooleanError::FreeformLimit(msg)) => assert!(msg.contains("Zylinder"), "{msg}"),
+        other => panic!("{:?}", other.map(|_| ())),
+    }
 }
 
 #[test]

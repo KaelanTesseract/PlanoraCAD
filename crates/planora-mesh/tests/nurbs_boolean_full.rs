@@ -4,7 +4,7 @@
 mod nurbs_common;
 
 use nurbs_common::*;
-use planora_kernel::boolean::{BoolOp, BooleanError, boolean};
+use planora_kernel::boolean::{BoolOp, boolean};
 use planora_kernel::{Kernel, Profile, ProfileLoop, Segment, Solid, Surface, UvRect, validate};
 use planora_math::nurbs::{NurbsCurve, NurbsSurface};
 use planora_math::{DMat4, DVec2, DVec3, Frame, PI, TAU};
@@ -377,9 +377,8 @@ fn integrate(a: f64, b: f64, n: usize, f: impl Fn(f64) -> f64) -> f64 {
 
 #[test]
 fn a_rounded_puck_with_a_nurbs_torus_patch_is_cut_by_a_box() {
-    // Das analytische Torusstück kann gegen Ebenen nicht geschnitten werden
-    // („Der Schnitt von Torus mit Ebene wird noch nicht unterstützt“); als Freiformfläche geht
-    // es. Bezugsvolumen aus der Profilgleichung (numerische Integration).
+    // Das Torusstück als Freiformfläche und (seit C15, allgemeine Lage) auch analytisch gegen die
+    // Ebenen des Quaders. Bezugsvolumen aus der Profilgleichung (numerische Integration).
     let (n, a) = (rounded_puck(true), rounded_puck(false));
     validate(&n).unwrap();
     let v_puck = integrate(0.0, 1.0, 4000, |z| PI * puck_radius(z).powi(2));
@@ -390,10 +389,6 @@ fn a_rounded_puck_with_a_nurbs_torus_patch_is_cut_by_a_box() {
     );
     // Quader x ∈ [2,5; 10,5], y ∈ [−1, 1], z ∈ [−0,8; 0,6] durch den gerundeten Rand
     let boxx = box_solid(DVec3::new(8.0, 2.0, 1.4), DVec3::new(2.5, -1.0, -0.8));
-    assert!(matches!(
-        boolean(&a, &boxx, BoolOp::Difference, &tol()),
-        Err(BooleanError::UnsupportedIntersection { .. })
-    ));
     let common = integrate(0.0, 0.6, 600, |z| {
         integrate(-1.0, 1.0, 600, |y| {
             let x = (puck_radius(z).powi(2) - y * y).max(0.0).sqrt();
@@ -410,6 +405,13 @@ fn a_rounded_puck_with_a_nurbs_torus_patch_is_cut_by_a_box() {
         let v = checked_volume(&r);
         assert!(rel(v, expect) < 3e-3, "{op:?}: {v} statt {expect}");
         assert!(count_nurbs_faces(&r) >= 1, "{op:?}");
+        let ra =
+            boolean(&a, &boxx, op, &tol()).unwrap_or_else(|e| panic!("analytisch {op:?}: {e}"));
+        let va = checked_volume(&ra);
+        assert!(
+            rel(va, expect) < 3e-3,
+            "analytisch {op:?}: {va} statt {expect}"
+        );
     }
 }
 

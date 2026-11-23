@@ -68,8 +68,11 @@ fn a_box_stacked_flush_on_a_box_imprints_its_footprint() {
     assert_eq!(total(&fb), 0);
 }
 
+/// Gleich dicke Zylinder, deren Achsen sich kreuzen: Seit C15 rechnet der Schnittrechner der
+/// Freiformflächen solche Paare; an der Berührstelle gleicher Radien lehnt er mit benanntem Grund
+/// ab (wie bei gleich dicken Freiformzylindern).
 #[test]
-fn perpendicular_cylinders_are_unsupported() {
+fn crossing_equal_cylinders_are_refused_with_a_reason() {
     let a = k().make_cylinder(2.0, 10.0).unwrap();
     let rot =
         DMat4::from_translation(DVec3::new(-5.0, 0.0, 5.0)) * DMat4::from_rotation_y(PI / 2.0);
@@ -77,8 +80,8 @@ fn perpendicular_cylinders_are_unsupported() {
         .transform(&k().make_cylinder(2.0, 10.0).unwrap(), &rot)
         .unwrap();
     match imprint(&a, &b, &tol()) {
-        Err(BooleanError::UnsupportedIntersection { a, b }) => {
-            assert_eq!((a, b), ("Zylinder", "Zylinder"));
+        Err(BooleanError::FreeformLimit(msg)) => {
+            assert!(msg.contains("Zylinder mit Zylinder"), "{msg}");
         }
         other => panic!("{other:?}"),
     }

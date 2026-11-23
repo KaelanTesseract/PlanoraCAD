@@ -563,36 +563,30 @@ fn retry_is_refused_when_another_body_would_get_a_cut_face() {
 
 #[test]
 fn retry_whose_cut_fails_keeps_the_first_message() {
-    // „Rolle“ (Zylinder r 30 mit gerundeter Oberkante) beginnt 0,0005 mm hinter der Ebene: an der
-    // Ebene ganz behalten, an der verschobenen Ebene ginge der Schnitt durch die Rundung (Torus mit
-    // Ebene kann der Kernel nicht). Statt „lässt sich der Schnitt nicht berechnen“ bleibt die
-    // erste Meldung.
-    use planora_kernel::blend::{BlendEdge, BlendKind, BlendRequest};
-    let roll = k().make_cylinder(30.0, 20.0).unwrap();
-    let rim = roll
-        .edges
+    // „Rolle“ beginnt 0,0005 mm hinter der Ebene: an der Ebene ganz behalten, an der verschobenen
+    // Ebene schlägt der Schnitt fehl. Statt „lässt sich der Schnitt nicht berechnen“ bleibt die
+    // erste Meldung. (Bis C15 war die Rolle ein Zylinder mit gerundeter Oberkante, deren Torus der
+    // Kernel nicht mit Ebenen schneiden konnte; das geht jetzt. Darum scheitert der Schnitt hier an
+    // einem ungültigen Körper: eine Seitenfläche liegt 1 mm neben ihren Kanten.)
+    let mut roll = boxs(10.0, 10.0, 10.0);
+    let side = roll
+        .faces
         .iter()
-        .find(|(_, e)| {
-            matches!(e.curve, Curve::Circle { .. }) && (e.curve.point(e.t0).z - 20.0).abs() < 1e-9
+        .find(|(_, f)| {
+            matches!(f.surface, planora_kernel::Surface::Plane { frame } if frame.z.x.abs() > 0.5)
         })
         .map(|(id, _)| id)
         .unwrap();
-    let req = BlendRequest {
-        edges: vec![BlendEdge {
-            edge: rim,
-            first_face: None,
-        }],
-        kind: BlendKind::Fillet { radius: 5.0 },
-        tangent_chain: false,
-    };
-    let mut roll = k().blend(&roll, &req).unwrap().solid;
+    if let planora_kernel::Surface::Plane { frame } = &mut roll.faces[side].surface {
+        frame.origin.x += 1.0;
+    }
     roll.assign_origin(7);
-    let roll = moved(&roll, 50.0, 35.0005, 0.0);
+    let roll = moved(&roll, 50.0, 5.0005, 0.0);
     // Ohne Zweitversuch scheitert der Kernel an der verschobenen Ebene wirklich:
     let shifted = plane(ViewKind::Front, 5.0 + SECTION_NUDGE_MM);
     assert!(
         cut_body(&roll, 1, &shifted, &planora_math::Tolerance::default()).is_err(),
-        "Testaufbau: Schnitt durch die Rundung muss scheitern"
+        "Testaufbau: Schnitt durch den ungültigen Körper muss scheitern"
     );
     let s = boxs(20.0, 10.0, 5.0);
     let e = compute_section(
