@@ -63,6 +63,13 @@ fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64, near_eps: f64) -> Ra
         return RayVote::Unusable;
     };
     let mut blocked = false;
+    // Freiformkante: Sie liegt nur auf `NURBS_EDGE_TOL` genau auf ihren Flächen; ein flach
+    // streifender Strahl träfe eine eigene Fläche erst hinter `OWN_EPS` (C15b).
+    let own_eps = if own.contains(&FREEFORM_STROKE) {
+        own_eps.max(near_eps)
+    } else {
+        own_eps
+    };
     for h in hits.iter().filter(|h| {
         !(h.body == body && own.contains(&h.face) && h.s <= own_eps)
             && !(h.body == body
@@ -81,6 +88,9 @@ fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64, near_eps: f64) -> Ra
         RayVote::Free
     }
 }
+
+/// Marke in der Liste der eigenen Flächen: Der Strich ist eine Freiformkante (C15b).
+pub const FREEFORM_STROKE: usize = usize::MAX;
 
 /// Kennung einer Nachbarfläche in der Liste der eigenen Flächen eines Strichs (Index plus diese
 /// Marke): eine Fläche, die über eine Freiformkante an einer eigenen Fläche hängt (C15b).

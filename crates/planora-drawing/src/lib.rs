@@ -253,6 +253,11 @@ pub fn compute_view_unmerged(
         let mut own = edge_faces[body].own_faces(s);
         let neighbors = edge_faces[body].freeform_neighbors(bodies[body].solid, &own);
         own.extend(neighbors.iter().map(|f| f | visibility::NEIGHBOR_FLAG));
+        if matches!(s.origin, StrokeOrigin::Edge { .. })
+            && matches!(s.curve, planora_kernel::Curve::Nurbs(_))
+        {
+            own.push(visibility::FREEFORM_STROKE);
+        }
         let name = stroke_name(bodies, s);
         // Angepasste Umriss-Splines: Prüfstrahlen vom Punkt des wahren Umrisses.
         let outline = match (&s.origin, &s.curve) {
