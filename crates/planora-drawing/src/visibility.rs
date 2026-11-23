@@ -599,43 +599,29 @@ impl MergeGrid {
 /// Proben je Stück für [`flat_spline_tips`].
 const FLAT_TIP_SAMPLES: usize = 64;
 
-/// Umkehrstellen einer Freiformkante, deren Bild flach wie eine Strecke ist (alle Proben
-/// höchstens `thin` neben der Geraden durch die Enden des Bilds, etwa eine ebene Schnittkurve in
-/// allgemeiner Lage, deren Ebene die Blickrichtung enthält, C15): Dort kehrt das Bild um und
-/// läge sonst zweimal über sich selbst (wie bei [`tip_params`] für Kreise). Echt innerhalb
-/// `(a, b)`, auf die Rechengenauigkeit gesucht.
-fn flat_spline_tips(s: &Stroke, basis: &Basis, thin: f64, a: f64, b: f64) -> Vec<f64> {
+/// Umkehrstellen des Bilds einer Freiformkante (C15): Stellen, an denen die Bildgeschwindigkeit
+/// auf null fällt und das Bild auf sich selbst zurückläuft – etwa eine ebene Schnittkurve, deren
+/// Ebene die Blickrichtung enthält, oder eine Kante auf einer von der Seite gesehenen Zylinder-
+/// wand. Dort läge das Bild sonst zweimal über sich selbst (wie bei [`tip_params`] für Kreise).
+/// Gesucht an den Proben, an denen die Bildrichtung umschlägt; die Stelle der kleinsten
+/// Bildgeschwindigkeit dazwischen auf die Rechengenauigkeit. Echt innerhalb `(a, b)`.
+fn flat_spline_tips(s: &Stroke, basis: &Basis, _thin: f64, a: f64, b: f64) -> Vec<f64> {
     if !matches!(s.curve, Curve::Nurbs(_)) || b <= a {
         return Vec::new();
     }
-    let ts: Vec<f64> = (0..=FLAT_TIP_SAMPLES)
-        .map(|i| a + (b - a) * i as f64 / FLAT_TIP_SAMPLES as f64)
-        .collect();
+    let n = FLAT_TIP_SAMPLES;
+    let ts: Vec<f64> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).collect();
     let ps: Vec<DVec2> = ts.iter().map(|&t| s.point2(basis, t)).collect();
-    // Richtung des Bilds: weitester Punkt vom Anfang (die Enden können zusammenfallen).
-    let far = ps
-        .iter()
-        .copied()
-        .max_by(|x, y| x.distance(ps[0]).total_cmp(&y.distance(ps[0])))
-        .unwrap_or(ps[0]);
-    let len = far.distance(ps[0]);
-    if !(len > thin && len.is_finite()) {
-        return Vec::new();
-    }
-    let w = (far - ps[0]) / len;
-    if ps.iter().any(|p| (*p - ps[0]).perp_dot(w).abs() > thin) {
-        return Vec::new();
-    }
-    let along = |t: f64| (s.point2(basis, t) - ps[0]).dot(w);
-    let vs: Vec<f64> = ps.iter().map(|p| (*p - ps[0]).dot(w)).collect();
+    let h = 1e-7 * (b - a);
+    let speed = |t: f64| (s.point2(basis, t + h) - s.point2(basis, t - h)).length() / (2.0 * h);
     let mut out = Vec::new();
-    for i in 1..FLAT_TIP_SAMPLES {
-        for sign in [1.0, -1.0] {
-            if sign * vs[i] >= sign * vs[i - 1] && sign * vs[i] > sign * vs[i + 1] {
-                let t = golden_extreme(&|t| sign * along(t), ts[i - 1], ts[i + 1]);
-                if t > a && t < b {
-                    out.push(t);
-                }
+    for i in 1..n {
+        // Die Bildrichtung schlägt um: Die Sehnen vor und nach der Probe zeigen gegeneinander.
+        let (d0, d1) = (ps[i] - ps[i - 1], ps[i + 1] - ps[i]);
+        if d0.dot(d1) < 0.0 {
+            let t = golden_extreme(&|t| -speed(t), ts[i - 1], ts[i + 1]);
+            if t > a && t < b {
+                out.push(t);
             }
         }
     }
@@ -706,9 +692,11 @@ fn trim_covered(
     // Paare mit einem angepassten Umriss: Gleichheitsabstand `SILHOUETTE_TOL + near` (angepasst
     // gegen genau) bzw. `2·SILHOUETTE_TOL + near` (zwei angepasste); genaue Paare behalten `near`.
     // Freiformkanten (etwa Schnittkurven in allgemeiner Lage, C15) liegen nur auf
-    // `NURBS_EDGE_TOL` genau auf ihren Flächen: Sie tragen diese Genauigkeit bei (Klasse 1).
+    // `NURBS_EDGE_TOL` genau auf ihren Flächen: Sie tragen `2·NURBS_EDGE_TOL` bei (Klasse 1).
     let tol_unit = geom_tol(extent);
-    let extra = [0.0, NURBS_EDGE_TOL, SILHOUETTE_TOL];
+    // Eine Freiformkante liegt bis `NURBS_EDGE_TOL` neben jeder ihrer Flächen; zwei Hälften
+    // derselben Schnittkurve, die im Bild zusammenfallen, also bis `2·NURBS_EDGE_TOL` auseinander.
+    let extra = [0.0, 2.0 * NURBS_EDGE_TOL, SILHOUETTE_TOL];
     let class_of = |st: &Stroke| -> usize {
         if is_fitted(st) {
             2

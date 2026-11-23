@@ -352,7 +352,7 @@ pub fn check_lines(solids: &[&Solid], kind: ViewKind, v: &ViewLines) -> Report {
     // Genauigkeit; (f) bleibt bei der engen Toleranz (die Bibliothek legt Freiformkanten im
     // Rahmen von `NURBS_EDGE_TOL` zusammen, nicht weiter).
     let gap_cover = if freeform_edges {
-        cover.max(4.0 * planora_kernel::NURBS_EDGE_TOL)
+        cover.max(8.0 * planora_kernel::NURBS_EDGE_TOL)
     } else {
         cover
     };
