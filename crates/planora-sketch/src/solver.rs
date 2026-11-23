@@ -1401,7 +1401,9 @@ impl Sketch {
         let (groups, _) = self.build_groups_holding(held, None);
         let mut violated = false;
         let failed_before = report.conflicting.clone();
-        // Freie Variablen überholter Gruppen: Sie zählen nicht, also auch nicht in den Listen.
+        // Variablen überholter Gruppen: Ihre Freiheit zählt nicht, also auch nicht in den Listen.
+        // Alle Variablen der Gruppe, nicht nur die an den jetzigen Werten freien: Der Lauf kann
+        // seine freien Variablen an anderen Werten (aus dem Zwischenspeicher) bestimmt haben.
         let mut stale_free: Vec<usize> = Vec::new();
         for g in groups.iter().filter(|g| !g.pattern_reads.is_empty()) {
             // Eine Gruppe, die im letzten Lauf schon scheiterte, hat keine Freiheitsgrade
@@ -1423,9 +1425,8 @@ impl Sketch {
                 }
             }
             if stale && counted {
-                let analysis = self.analyze(g, &self.vars);
-                report.dof = report.dof.saturating_sub(analysis.dof);
-                stale_free.extend(analysis.free_vars);
+                report.dof = report.dof.saturating_sub(self.analyze(g, &self.vars).dof);
+                stale_free.extend(g.vars.iter().copied());
             }
         }
         if stale_free.iter().any(|v| report.free_vars.contains(v)) {

@@ -178,3 +178,29 @@ fn an_applied_constraint_names_the_pattern_reason() {
         );
     });
 }
+
+/// Prüferfund zu den Resten von Punkt 8: Auch der Grund mit Werten („zu viele“) wechselt die
+/// Sprache und behält seine Zahlen.
+#[test]
+fn a_reason_with_values_follows_the_language() {
+    use planora_app::msg::Msg;
+    use planora_app::sketch_state::pattern_reason;
+    use planora_sketch::pattern::{PATTERN_MAX_CURVES, PatternProblem};
+    let m = with_lang(&german(), || {
+        Msg::Id(
+            "sketch-drag-blocked-pattern",
+            vec![("reason", pattern_reason(PatternProblem::TooMany))],
+        )
+    });
+    let curves = PATTERN_MAX_CURVES.to_string();
+    with_lang(&german(), || {
+        let text = m.text();
+        assert!(text.contains("Zu viele Exemplare"), "{text:?}");
+        assert!(text.contains(&curves), "{text:?}");
+    });
+    with_lang(&english(), || {
+        let text = m.text();
+        assert!(text.contains("Too many instances"), "{text:?}");
+        assert!(text.contains(&curves), "{text:?}");
+    });
+}

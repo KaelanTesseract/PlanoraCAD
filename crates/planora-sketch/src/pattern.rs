@@ -1449,6 +1449,35 @@ mod tests {
         d.instances.iter().find(|i| i.at == at).unwrap().points[k]
     }
 
+    /// Prüferfund zu den Resten von Punkt 8: Die Ids aus [`PatternProblem::key`] stehen nicht in
+    /// `tr!`, die Quelltextprüfung der Sprachdateien sieht sie also nicht. Jede muss in beiden
+    /// Sprachen einen Text haben.
+    #[test]
+    fn every_pattern_problem_key_has_a_text() {
+        use PatternProblem::*;
+        let all = [
+            Empty,
+            TooMany,
+            ZeroStep,
+            BadDirection,
+            ParallelDirections,
+            InstanceAsSource,
+            Cycle,
+            InstanceOnly,
+            FixedSpline,
+            Text,
+            NotIn3d,
+        ];
+        for lang in [planora_i18n::german(), planora_i18n::english()] {
+            planora_i18n::with_lang(&lang, || {
+                for p in all {
+                    let text = planora_i18n::t(p.key());
+                    assert_ne!(text, p.key(), "{p:?} ohne Text");
+                }
+            });
+        }
+    }
+
     /// Reste der Härtungen nach Skizzen 5 (2026-11-22): Eine Schleife zwischen Vorlage und
     /// eigenem Exemplar (hier erzwungen, an der Prüfung vorbei) läuft nie zusammen. Nach den
     /// Musterrunden ist die Gruppe, die das Exemplar liest, überholt: Sie macht „nicht lösbar“
