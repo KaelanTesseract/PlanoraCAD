@@ -466,7 +466,7 @@ fn escape_cancels_while_the_overlay_has_focus() {
     {
         ctx.run_ui(input(events, false), |ui| {
             // Gleiche Kennung wie in `show_overlay` (gleiches `ui`).
-            let id = ui.id().with("planora-sketch-overlay");
+            let id = ui.scope_id().with("planora-sketch-overlay");
             if i == 1 {
                 ui.memory_mut(|m| m.request_focus(id));
             }

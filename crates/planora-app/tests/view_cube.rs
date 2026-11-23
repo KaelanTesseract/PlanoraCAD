@@ -533,6 +533,7 @@ fn dragging_on_the_cube_orbits() {
                     unit: egui::MouseWheelUnit::Point,
                     delta: vec2(0.0, 40.0),
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: Modifiers::NONE,
                 },
             ],
@@ -629,7 +630,7 @@ fn stale_drag_flag_is_ignored_without_a_pressed_pointer() {
     frame(&ctx, &mut s, vec![]);
     frame(&ctx, &mut s, vec![]);
     let at = point_of(&s, iso()).unwrap();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("planora-view-cube-dragged"), true));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("planora-view-cube-dragged"), true));
     let sh = shot(&frame(&ctx, &mut s, vec![moved(at)]));
     assert!(
         sh.polys.iter().any(|(_, f)| *f == colors.highlight_hover),
@@ -796,6 +797,7 @@ fn wheel_over_cube_and_home_zooms_without_orbit() {
                     unit: egui::MouseWheelUnit::Point,
                     delta: vec2(0.0, 40.0),
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: Modifiers::NONE,
                 },
             ],

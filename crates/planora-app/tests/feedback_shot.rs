@@ -98,11 +98,17 @@ fn timeout_shows_dialog_again_with_failed_hint() {
 }
 
 #[test]
-fn foreign_screenshot_events_are_ignored() {
-    assert!(is_our_shot(&shot_user_data()));
-    assert!(!is_our_shot(&egui::UserData::default()));
-    assert!(!is_our_shot(&egui::UserData::new("anderes_bild")));
-    assert!(!is_our_shot(&egui::UserData::new(42_u32)));
+fn a_screenshot_arrives_only_through_its_own_request() {
+    // egui 0.37: Das Bild kommt über den Rückruf der Anforderung in die Ablage, einmal.
+    let ctx = egui::Context::default();
+    let inbox = ShotInbox::default();
+    assert!(inbox.take().is_none());
+    let cb = inbox.request(&ctx);
+    cb.clone().complete(Arc::new(dummy(2, 3)));
+    // Ein zweites Abliefern derselben Anforderung bleibt folgenlos.
+    cb.complete(Arc::new(dummy(9, 9)));
+    assert_eq!(inbox.take().map(|i| i.size), Some([2, 3]));
+    assert!(inbox.take().is_none(), "nur einmal");
     // Ohne Anforderung bleibt ein Bild unbeachtet.
     let mut f = ShotFlow::default();
     assert_eq!(f.received(Arc::new(dummy(1, 1))), ShotStep::Nothing);

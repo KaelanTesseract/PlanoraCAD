@@ -719,6 +719,7 @@ fn alt_wheel_and_alt_after_a_held_button_are_no_taps() {
             delta: egui::vec2(0.0, 1.0),
             modifiers: Modifiers::ALT,
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
         }],
     );
     assert_eq!(tap_frame(&ctx, &mut tap, Modifiers::NONE, vec![]), None);

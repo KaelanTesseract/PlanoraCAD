@@ -16,11 +16,11 @@ use egui::PointerButton;
 use super::{Action, Binding, Gesture, Keymap, MouseButton};
 
 fn current_id() -> egui::Id {
-    egui::Id::new("planora-keymap-current")
+    egui::Id::unique("planora-keymap-current")
 }
 
 fn wheel_modifiers_id() -> egui::Id {
-    egui::Id::new("planora-keymap-wheel-modifiers")
+    egui::Id::unique("planora-keymap-wheel-modifiers")
 }
 
 /// Legt die Belegung für die Ansichten dieses (und der folgenden) Bilder ab.

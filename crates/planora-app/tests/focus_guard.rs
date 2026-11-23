@@ -38,7 +38,7 @@ fn frame(ctx: &egui::Context, draw: impl FnMut(&mut egui::Ui)) {
 fn focus_on_an_undrawn_widget_is_released_at_frame_end() {
     let ctx = context();
     frame(&ctx, |_| {});
-    let ghost = Id::new("nie gezeichnet");
+    let ghost = Id::unique("nie gezeichnet");
     frame(&ctx, |ui| {
         ui.label("etwas");
         ui.ctx().memory_mut(|m| m.request_focus(ghost));

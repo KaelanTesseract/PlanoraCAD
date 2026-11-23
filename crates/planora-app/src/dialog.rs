@@ -213,7 +213,7 @@ impl<'a> Dialog<'a> {
     pub fn new(title: impl Into<String>, size: DialogSize) -> Self {
         let title = title.into();
         Dialog {
-            id: egui::Id::new(&title),
+            id: egui::Id::unique(&title),
             title,
             size,
             open: None,
@@ -640,7 +640,7 @@ fn show_own_window<R>(
         wanted = Some(needed.min(limit).ceil());
         let area = ui.interact(
             ui.min_rect(),
-            ui.id().with("dialog_abgedockt_flaeche"),
+            ui.scope_id().with("dialog_abgedockt_flaeche"),
             egui::Sense::hover(),
         );
         (out.inner, area)
@@ -783,7 +783,7 @@ fn header_icon(ui: &mut egui::Ui, icon: Icon, label: String) -> bool {
     // Der Knopf trägt nur ein Symbol aus der Symbolschrift; sein eigener Name wäre ein
     // unlesbares Zeichen. Diese zweite Angabe ersetzt ihn durch den Namen (etwa „Schließen“)
     // für Bildschirmleser.
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
     theme::focus_ring(ui, &response);
     response.clicked()
 }

@@ -142,6 +142,7 @@ impl Rig {
                     unit: egui::MouseWheelUnit::Point,
                     delta: vec2(0.0, 40.0),
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: mods,
                 },
             ],
@@ -518,8 +519,11 @@ fn a_click_is_not_a_drag_gesture() {
                 ..Default::default()
             },
             |ui| {
-                let resp =
-                    ui.interact(area, egui::Id::new("fläche"), egui::Sense::click_and_drag());
+                let resp = ui.interact(
+                    area,
+                    egui::Id::unique("fläche"),
+                    egui::Sense::click_and_drag(),
+                );
                 seen.push(mouse::drag_action(
                     &km,
                     ui,

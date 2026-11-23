@@ -85,7 +85,7 @@ impl CurvatureDialog {
         let (mut ok, mut cancel) = (false, false);
         Dialog::new(tr!("curvature-dialog-title"), DialogSize::Prompt)
             .dock_key("curvature_display")
-            .id(egui::Id::new("curvature_display_dialog"))
+            .id(egui::Id::unique("curvature_display_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::Grid::new("curvature_display_fields")

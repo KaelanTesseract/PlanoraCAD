@@ -120,7 +120,7 @@ fn all(seen: &[common::Seen]) -> String {
 
 fn insert_menu_frame<'a>(ws: &'a mut Workspace) -> impl FnMut(&egui::Context) + 'a {
     move |ctx| {
-        egui::Area::new(egui::Id::new("einfuegen"))
+        egui::Area::new(egui::Id::unique("einfuegen"))
             .fixed_pos(Pos2::new(20.0, 20.0))
             .show(ctx, |ui| {
                 ui.set_width(280.0);
@@ -137,7 +137,7 @@ fn insert_menu_has_three_entries_after_create() {
     let mut shell = ShellState::default();
     let mut screen = Screen::new(1920.0, 1080.0);
     let seen = screen.settle(3, &mut |ctx: &egui::Context| {
-        egui::Area::new(egui::Id::new("leiste"))
+        egui::Area::new(egui::Id::unique("leiste"))
             .fixed_pos(Pos2::ZERO)
             .show(ctx, |ui| {
                 ui.set_width(1800.0);

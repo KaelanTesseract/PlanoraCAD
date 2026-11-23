@@ -427,7 +427,7 @@ impl IsoDialog {
         let mut clear_point = false;
         Dialog::new(tr!("action-sketch-isoparametric"), DialogSize::Normal)
             .dock_key("sketch_isoparametric")
-            .id(egui::Id::new("isoparametric_dialog"))
+            .id(egui::Id::unique("isoparametric_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::Grid::new("isoparametric_fields")

@@ -516,7 +516,7 @@ pub fn section_header(ui: &mut egui::Ui, title: &str, height: f32) -> egui::Resp
         ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::hover());
     // Selbst gezeichnet: die Überschrift für Bildschirmleser als Beschriftung melden.
     let enabled = ui.is_enabled();
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, title));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, enabled, title));
     if ui.is_rect_visible(rect) {
         ui.painter()
             .rect_filled(rect, frame.corner_radius, frame.fill);
@@ -575,7 +575,7 @@ pub fn text_field_enabled(
         ui,
         enabled,
         edit.min_size(vec2(0.0, FIELD_H))
-            .vertical_align(egui::Align::Center),
+            .align(egui::Align2::LEFT_CENTER),
     )
 }
 
@@ -649,12 +649,7 @@ impl egui::Widget for Toggle<'_> {
             response.mark_changed();
         }
         response.widget_info(|| {
-            egui::WidgetInfo::selected(
-                egui::WidgetType::Checkbox,
-                ui.is_enabled(),
-                *on,
-                galley.text(),
-            )
+            egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, galley.text())
         });
         if ui.is_rect_visible(rect) {
             let p = palette(ui.visuals().dark_mode);

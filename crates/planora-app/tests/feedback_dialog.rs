@@ -1193,6 +1193,7 @@ fn fits_at_1920x1080_and_does_not_panic_at_800x600() {
                 unit: egui::MouseWheelUnit::Point,
                 delta: vec2(0.0, -200.0),
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
                 modifiers: NONE,
             },
         ]);
@@ -1283,27 +1284,30 @@ fn texts_are_plain_language() {
 fn shot_requests(r: &Rig) -> usize {
     r.viewport
         .iter()
-        .filter(|c| {
-            matches!(c, egui::ViewportCommand::Screenshot(d)
-                if planora_app::feedback_shot::is_our_shot(d))
-        })
+        .filter(|c| matches!(c, egui::ViewportCommand::Screenshot(_)))
         .count()
 }
 
-fn screenshot_event(w: usize, h: usize, data: egui::UserData) -> Event {
-    Event::Screenshot {
-        viewport_id: egui::ViewportId::ROOT,
-        user_data: data,
-        image: Arc::new(egui::ColorImage::new(
-            [w, h],
-            vec![egui::Color32::from_rgb(10, 20, 30); w * h],
-        )),
-    }
+/// Liefert das Bild zur letzten Anforderung ab, wie es die Anbindung tut (egui 0.37: Rückruf).
+fn deliver_shot(r: &Rig, w: usize, h: usize) {
+    let cb = r
+        .viewport
+        .iter()
+        .rev()
+        .find_map(|c| match c {
+            egui::ViewportCommand::Screenshot(cb) => Some(cb.clone()),
+            _ => None,
+        })
+        .expect("ein Bild angefordert");
+    cb.complete(Arc::new(egui::ColorImage::new(
+        [w, h],
+        vec![egui::Color32::from_rgb(10, 20, 30); w * h],
+    )));
 }
 
 #[test]
 fn app_sends_viewport_screenshot_command_after_one_hidden_frame() {
-    use planora_app::feedback_shot::{SHOT_FILE, preview_line, shot_user_data};
+    use planora_app::feedback_shot::{SHOT_FILE, preview_line};
     let mut r = Rig::new("planora-fb-bild");
     r.open_with_context();
     assert!(r.sees(&title()));
@@ -1342,11 +1346,12 @@ fn app_sends_viewport_screenshot_command_after_one_hidden_frame() {
     assert_eq!(shot_requests(&r), 1);
     r.frame(vec![]);
     assert!(!r.sees(&title()), "verborgen, solange gewartet wird");
-    // Ein fremdes Bild ändert nichts.
-    r.frame(vec![screenshot_event(5, 5, egui::UserData::new("fremd"))]);
+    // Ein Bild ohne Bild-Ergebnis ändert nichts.
+    r.frame(vec![]);
     assert!(!r.sees(&title()));
     // Das eigene Bild kommt: Fenster wieder da, Vorschau mit Größe, Häkchen gesetzt.
-    r.frame(vec![screenshot_event(64, 48, shot_user_data())]);
+    deliver_shot(&r, 64, 48);
+    r.frame(vec![]);
     r.settle();
     assert!(r.sees(&title()), "wieder gezeigt");
     assert!(r.fb().is_checked(Part::Bild));

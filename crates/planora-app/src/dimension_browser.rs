@@ -334,7 +334,7 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     let mut open = true;
     Dialog::new(tr!("tree-confirm-title"), DialogSize::Prompt)
         .dock_key("dimension_delete")
-        .id(egui::Id::new("planora-delete-dimension"))
+        .id(egui::Id::unique("planora-delete-dimension"))
         .open(&mut open)
         .show(ctx, |ui| {
             ui.label(plan.text.text());

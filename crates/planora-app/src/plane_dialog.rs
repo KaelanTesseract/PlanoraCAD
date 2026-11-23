@@ -875,7 +875,7 @@ impl PlaneDialog {
         let scope = state.document.param_scope();
         let mut field_error = None;
         let mut field_enter = false;
-        let id = egui::Id::new(("plane_dialog", self.editing()));
+        let id = egui::Id::unique(("plane_dialog", self.editing()));
         Dialog::new(self.title(), DialogSize::Normal)
             .dock_key(self.command.dock_key())
             .id(id)

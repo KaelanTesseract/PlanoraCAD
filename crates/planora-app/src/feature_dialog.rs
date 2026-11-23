@@ -727,7 +727,7 @@ impl FeatureDialog {
         }
         Dialog::new(tr!("edit-title", name = &self.name), DialogSize::Normal)
             .dock_key(dock_key_of(&self.kind))
-            .id(egui::Id::new(("feature_dialog", self.id)))
+            .id(egui::Id::unique(("feature_dialog", self.id)))
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.weak(self.kind.label());
@@ -790,7 +790,7 @@ impl FeatureDialog {
                                             );
                                             r.widget_info(|| {
                                                 egui::WidgetInfo::labeled(
-                                                    egui::WidgetType::TextEdit,
+                                                    egui::Role::TextInput,
                                                     true,
                                                     label.as_str(),
                                                 )

@@ -58,6 +58,7 @@ fn wheel(dy: f32) -> Event {
         unit: egui::MouseWheelUnit::Point,
         delta: vec2(0.0, dy),
         phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
         modifiers: Modifiers::NONE,
     }
 }
@@ -88,7 +89,7 @@ fn frame(ctx: &egui::Context, s: &mut AppState, events: Vec<Event>, text: bool) 
     let mut name = String::from("Feld");
     ctx.run_ui(input(events), |ui| {
         viewport::show_in(ui, s, Some(FREE));
-        egui::Area::new(egui::Id::new("test-field"))
+        egui::Area::new(egui::Id::unique("test-field"))
             .order(egui::Order::Middle)
             .movable(false)
             .fixed_pos(FIELD.min)
@@ -259,7 +260,7 @@ fn dialogs_stay_above_fields() {
     frames.push(vec![]);
     for (i, events) in frames.into_iter().enumerate() {
         ctx.run_ui(input(events), |ui| {
-            egui::Area::new(egui::Id::new("test-field"))
+            egui::Area::new(egui::Id::unique("test-field"))
                 .order(egui::Order::Middle)
                 .movable(false)
                 .fixed_pos(field.min)

@@ -49,7 +49,7 @@ pub fn show_ask(
 ) -> Option<Answer> {
     let mut answer = None;
     Dialog::new(ask_title(plugin), DialogSize::Prompt)
-        .id(egui::Id::new("planora_plugin_ask"))
+        .id(egui::Id::unique("planora_plugin_ask"))
         .fixed()
         .show(ctx, |ui| {
             ui.label(right_text(plugin, right, hosts));
@@ -116,7 +116,7 @@ pub fn show_banners(
         return None;
     }
     let mut action = None;
-    egui::Area::new(egui::Id::new("planora_plugin_banners"))
+    egui::Area::new(egui::Id::unique("planora_plugin_banners"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 40.0))
         .movable(false)
@@ -251,7 +251,7 @@ pub fn show_install(
     let m = &offer.package.manifest;
     let mut choice = None;
     Dialog::new(tr!("plugin-install-title"), DialogSize::Prompt)
-        .id(egui::Id::new("planora_plugin_install"))
+        .id(egui::Id::unique("planora_plugin_install"))
         .fixed()
         .show(ctx, |ui| {
             let dark = ui.visuals().dark_mode;
@@ -362,7 +362,7 @@ pub fn new_rights_text(rights: &[Right], hosts: &[String]) -> Option<String> {
 pub fn show_update(ctx: &egui::Context, view: &UpdateView, locked: bool) -> Option<UpdateChoice> {
     let mut choice = None;
     Dialog::new(tr!("plugin-update-title"), DialogSize::Prompt)
-        .id(egui::Id::new("planora_plugin_update"))
+        .id(egui::Id::unique("planora_plugin_update"))
         .fixed()
         .show(ctx, |ui| {
             let dark = ui.visuals().dark_mode;

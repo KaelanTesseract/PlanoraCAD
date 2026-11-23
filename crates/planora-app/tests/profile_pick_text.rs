@@ -260,7 +260,7 @@ fn click_at(
     } else {
         "extrude"
     };
-    if let Some(r) = ctx.memory(|mem| mem.area_rect(egui::Id::new(("create_dialog", key)))) {
+    if let Some(r) = ctx.memory(|mem| mem.area_rect(egui::Id::unique(("create_dialog", key)))) {
         assert!(!r.contains(p), "{at:?} liegt unter dem Dialog");
     }
     for (events, mods) in click_events(p, m) {

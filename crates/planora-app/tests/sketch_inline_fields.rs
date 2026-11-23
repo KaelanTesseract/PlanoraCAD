@@ -132,7 +132,7 @@ impl Overlay {
         let mut gesture = false;
         let mut overlay_id = egui::Id::NULL;
         let out = self.ctx.run_ui(raw, |ui| {
-            overlay_id = ui.id().with("planora-sketch-overlay");
+            overlay_id = ui.scope_id().with("planora-sketch-overlay");
             if panel {
                 sketch_panel::show(ui.ctx(), s);
             }

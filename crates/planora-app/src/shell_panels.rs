@@ -36,19 +36,19 @@ use planora_kernel::BoolOp;
 const TABS_UNWRAPPED: f32 = 100_000.0;
 
 fn top_id() -> egui::Id {
-    egui::Id::new("planora-field-top")
+    egui::Id::unique("planora-field-top")
 }
 
 fn left_id() -> egui::Id {
-    egui::Id::new("planora-field-left")
+    egui::Id::unique("planora-field-left")
 }
 
 fn right_id() -> egui::Id {
-    egui::Id::new("planora-field-right")
+    egui::Id::unique("planora-field-right")
 }
 
 fn status_id() -> egui::Id {
-    egui::Id::new("planora-field-status")
+    egui::Id::unique("planora-field-status")
 }
 
 /// Kennung des Texts der Statuszeile (Tab-Halt für die Bedienhilfe).
@@ -57,41 +57,41 @@ pub fn status_text_id() -> egui::Id {
 }
 
 fn bottom_id() -> egui::Id {
-    egui::Id::new("planora-field-bottom")
+    egui::Id::unique("planora-field-bottom")
 }
 
 fn banner_id() -> egui::Id {
-    egui::Id::new("planora-field-banner")
+    egui::Id::unique("planora-field-banner")
 }
 
 /// Werkzeugleiste des Skizzenmodus (gezeichnet von [`crate::sketch_panel::show`]).
 pub(crate) fn sketch_strip_id() -> egui::Id {
-    egui::Id::new("planora-field-sketch-strip")
+    egui::Id::unique("planora-field-sketch-strip")
 }
 
 /// Skizzenfeld rechts (gezeichnet von [`crate::sketch_panel::show`]).
 pub(crate) fn sketch_side_id() -> egui::Id {
-    egui::Id::new("planora-field-sketch-side")
+    egui::Id::unique("planora-field-sketch-side")
 }
 
 /// Fußfeld des Skizzenmodus (gezeichnet von [`crate::sketch_panel::show`]).
 pub(crate) fn sketch_foot_id() -> egui::Id {
-    egui::Id::new("planora-field-sketch-foot")
+    egui::Id::unique("planora-field-sketch-foot")
 }
 
 /// Werkzeugfeld der Zeichnung (gezeichnet von [`crate::drawing_view::show_with`]).
 pub(crate) fn drawing_tool_id() -> egui::Id {
-    egui::Id::new("planora-field-drawing-tool")
+    egui::Id::unique("planora-field-drawing-tool")
 }
 
 /// Ansichtsfeld der Zeichnung rechts (gezeichnet von [`crate::drawing_view::show_with`]).
 pub(crate) fn drawing_view_id() -> egui::Id {
-    egui::Id::new("planora-field-drawing-view")
+    egui::Id::unique("planora-field-drawing-view")
 }
 
 /// Hinweisfeld der Zeichnung unten (gezeichnet von [`crate::drawing_view::show_with`]).
 pub(crate) fn drawing_hint_id() -> egui::Id {
-    egui::Id::new("planora-field-drawing-hint")
+    egui::Id::unique("planora-field-drawing-hint")
 }
 
 /// Gemerkte Wunschbreite des Werkzeugfelds der Zeichnung (beide Zeilen ohne Rollen, mit Rand).
@@ -340,9 +340,7 @@ fn text_field(
                 Some(ref h) => format!("{text}. {h}"),
                 None => text.clone(),
             };
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, &label)
-            });
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, enabled, &label));
             let elided = galley.elided;
             ui.painter().galley(r.min, galley, color);
             if elided {
@@ -576,7 +574,7 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
 }
 
 fn layout_key() -> egui::Id {
-    egui::Id::new("planora-field-layout")
+    egui::Id::unique("planora-field-layout")
 }
 
 /// Geometrie der Felder aus dem letzten Bild (für Tests).
@@ -1069,7 +1067,7 @@ fn chip(
     );
     let size = vec2(galley.size().x + 2.0 * theme::SPACE_2, theme::ROW_H);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     if ui.is_rect_visible(rect) {
         let fade = |c: egui::Color32| if enabled { c } else { c.gamma_multiply(0.45) };
         let shown = theme::chip_fill(

@@ -558,6 +558,7 @@ fn capturing_a_mouse_gesture_needs_a_drag_or_wheel_not_a_click() {
         delta: vec2(0.0, 1.0),
         modifiers: NONE,
         phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
     }]);
     r.settle();
     assert!(r.sees(&drag_now()));
@@ -598,6 +599,7 @@ fn capturing_a_mouse_gesture_needs_a_drag_or_wheel_not_a_click() {
             delta: vec2(0.0, -1.0),
             modifiers: alt,
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
         }],
         alt,
     );
@@ -1013,6 +1015,7 @@ fn a_conflict_below_the_last_visible_row_is_scrolled_into_view() {
                     delta: vec2(0.0, -3.0),
                     modifiers: NONE,
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
                 },
             ]);
         }

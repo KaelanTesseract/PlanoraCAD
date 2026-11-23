@@ -249,7 +249,7 @@ pub(crate) struct LabelFont {
 }
 
 fn label_font_id() -> egui::Id {
-    egui::Id::new("planora-cube-label-font")
+    egui::Id::unique("planora-cube-label-font")
 }
 
 /// Schrift der Flächenbeschriftung und ihr Maßstab (Würfeleinheiten je Schriftpunkt): So groß,
@@ -445,7 +445,7 @@ fn paint_cube(
 }
 
 fn cube_drag_id() -> egui::Id {
-    egui::Id::new("planora-view-cube-dragged")
+    egui::Id::unique("planora-view-cube-dragged")
 }
 
 /// Hat die Primärtaste auf dem Würfel gedrückt gehalten und der Zeiger sich dabei mehr als
@@ -515,11 +515,11 @@ fn fit_camera(state: &mut AppState, rect: Rect, free: Option<Rect>) {
 
 /// Je Fenster (Hauptfenster, abgedocktes Fenster): Fokus und Eingabe hat jedes für sich.
 fn keyboard_focus_id(viewport: egui::ViewportId) -> egui::Id {
-    egui::Id::new(("planora-keyboard-focus-last-frame", viewport))
+    egui::Id::unique(("planora-keyboard-focus-last-frame", viewport))
 }
 
 fn not_typing_ids_key() -> egui::Id {
-    egui::Id::new("planora-focus-not-typing")
+    egui::Id::unique("planora-focus-not-typing")
 }
 
 /// Meldet ein Widget, das den Tastaturfokus annimmt (Tab-Halt, z. B. die Statuszeile für die
@@ -547,11 +547,11 @@ pub(crate) fn keyboard_taken(ctx: &egui::Context) -> bool {
 }
 
 fn draw_field_ids_key() -> egui::Id {
-    egui::Id::new("planora-draw-field-ids")
+    egui::Id::unique("planora-draw-field-ids")
 }
 
 fn history_focus_id(viewport: egui::ViewportId) -> egui::Id {
-    egui::Id::new(("planora-history-focus-last-frame", viewport))
+    egui::Id::unique(("planora-history-focus-last-frame", viewport))
 }
 
 /// Meldet ein Feld am Zeiger beim Zeichnen ([`crate::sketch_inline`]): Es liest Tasten wie jedes
@@ -615,7 +615,7 @@ pub fn drawn_this_frame(ctx: &egui::Context, id: egui::Id) -> bool {
 }
 
 fn deferred_focus_id(viewport: egui::ViewportId) -> egui::Id {
-    egui::Id::new(("planora-deferred-focus", viewport))
+    egui::Id::unique(("planora-deferred-focus", viewport))
 }
 
 /// Fokus-Schutz am Bildende (Ruling H1-5): egui 0.36 gibt den Fokus ungefiltert an den
@@ -651,7 +651,7 @@ fn guard_focus(ctx: &egui::Context) {
 }
 
 fn child_typing_id() -> egui::Id {
-    egui::Id::new("planora-child-typing-for-history")
+    egui::Id::unique("planora-child-typing-for-history")
 }
 
 /// Tippt in einem abgedockten Fenster ein Eingabefeld (in diesem oder im vorigen Bild des
@@ -838,7 +838,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     // gezogen; das Loslassen löst dann keinen Regionsklick aus.
     let cube_response = ui.interact(
         cube,
-        ui.id().with("planora-view-cube"),
+        ui.scope_id().with("planora-view-cube"),
         Sense::click_and_drag(),
     );
     let cube_dragging = cube_drag_active(ui, &cube_response);
@@ -873,12 +873,12 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     }
     let home_response = ui.interact(
         home_rect(cube),
-        ui.id().with("planora-view-home"),
+        ui.scope_id().with("planora-view-home"),
         Sense::click_and_drag(),
     );
     home_response.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            egui::Role::Button,
             true,
             planora_i18n::tr!("view-home-label"),
         )

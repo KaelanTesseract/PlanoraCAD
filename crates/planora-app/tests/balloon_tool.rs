@@ -843,6 +843,7 @@ impl App {
                 unit: egui::MouseWheelUnit::Point,
                 delta: vec2(0.0, dy),
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
                 modifiers: Modifiers::NONE,
             },
         ]);

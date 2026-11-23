@@ -132,7 +132,7 @@ impl Open {
 
 /// Rechtecke der Bedienelemente im Fenster `title` (letztes Bild).
 fn widgets(screen: &Screen, title: &str) -> Vec<Rect> {
-    let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(title));
+    let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(title));
     screen.ctx.viewport(|v| {
         v.prev_pass
             .widgets

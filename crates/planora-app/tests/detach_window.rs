@@ -32,7 +32,7 @@ fn tree_window<'a>(
     events: &'a RefCell<Vec<WindowEvent>>,
 ) -> impl FnMut(&egui::Context) + 'a {
     move |ctx| {
-        egui::Area::new(egui::Id::new("haupt")).show(ctx, |ui| {
+        egui::Area::new(egui::Id::unique("haupt")).show(ctx, |ui| {
             ui.label("Hauptfenster");
         });
         let (r, ev) = detach::show_window(ctx, &mut state.borrow_mut(), spec(), |ui| {
@@ -840,7 +840,7 @@ fn alt_f4_on_fixed_prompt_over_field_reports_cancel() {
         }
     };
     s.settle(3, &mut f);
-    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::new("Frage"));
+    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::unique("Frage"));
     assert!(s.child_runs(sub) > 0, "Unterdialog im eigenen Fenster");
     assert!(
         find(&s.child_seen(sub), &glyph(Icon::Close)).is_none(),

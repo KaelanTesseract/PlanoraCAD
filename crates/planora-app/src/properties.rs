@@ -126,7 +126,7 @@ pub fn show_content(ui: &mut egui::Ui, state: &mut AppState) {
 /// damit sich das Feld auch kurz leeren lässt (leere Namen sind ungültig und werden nicht
 /// übernommen). Liefert einen neuen, gültigen Namen.
 fn name_field(ui: &mut egui::Ui, id: Option<FeatureId>, current: &str) -> Option<String> {
-    let key = egui::Id::new(("feature_name", id));
+    let key = egui::Id::unique(("feature_name", id));
     let mut name = ui
         .data(|d| d.get_temp::<String>(key))
         .unwrap_or_else(|| current.to_string());
@@ -187,7 +187,7 @@ fn xyz_fields(
     speed: f64,
 ) -> bool {
     ui.label(label);
-    let stacked_key = egui::Id::new(("planora-xyz-stacked", key));
+    let stacked_key = egui::Id::unique(("planora-xyz-stacked", key));
     let stacked = ui
         .data(|d| d.get_temp::<bool>(stacked_key))
         .unwrap_or(false);
@@ -199,7 +199,7 @@ fn xyz_fields(
     let mut one = |ui: &mut egui::Ui, axis: usize, v: &mut f64| {
         let r = ui
             .scope_builder(
-                egui::UiBuilder::new().id(egui::Id::new(("planora-xyz", key, axis))),
+                egui::UiBuilder::new().scope_id(egui::Id::unique(("planora-xyz", key, axis))),
                 |ui| {
                     ui.spacing_mut().interact_size.x = w;
                     ui.spacing_mut().button_padding.x = theme::SPACE_1;
@@ -832,7 +832,7 @@ fn stand(state: &AppState) -> (u64, u64) {
 }
 
 fn mesh_draft_id(fid: FeatureId, key: FieldKey) -> egui::Id {
-    egui::Id::new(("mesh-formula", fid, key))
+    egui::Id::unique(("mesh-formula", fid, key))
 }
 
 /// Ein Formelfeld des Netz-Körpers: Feld, Bezeichnung, Einheit und gespeicherter Text (Formel,

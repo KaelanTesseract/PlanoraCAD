@@ -1224,7 +1224,7 @@ fn fifty_bodies_keep_the_buttons_reachable() {
 
 fn menu_frame<'a>(ws: &'a mut Workspace) -> impl FnMut(&egui::Context) + 'a {
     move |ctx| {
-        egui::Area::new(egui::Id::new("menue"))
+        egui::Area::new(egui::Id::unique("menue"))
             .fixed_pos(Pos2::new(20.0, 20.0))
             .show(ctx, |ui| {
                 ui.set_width(280.0);

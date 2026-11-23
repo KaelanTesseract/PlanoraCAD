@@ -84,7 +84,7 @@ impl BooleanDialog {
         let (mut run, mut cancel) = (false, false);
         Dialog::new(tr!("boolean-title"), DialogSize::Normal)
             .dock_key("boolean")
-            .id(egui::Id::new("boolean_dialog"))
+            .id(egui::Id::unique("boolean_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {
                 let names: Vec<String> = state.bodies.iter().map(|b| b.name.clone()).collect();

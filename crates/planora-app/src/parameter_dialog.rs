@@ -475,7 +475,7 @@ impl ParameterDialog {
         let table_h = (ctx.content_rect().height() - 260.0).clamp(120.0, TABLE_MAX_H);
         let shown = Dialog::new(title(), DialogSize::Wide)
             .dock_key("parameters")
-            .id(egui::Id::new("parameter_dialog"))
+            .id(egui::Id::unique("parameter_dialog"))
             .open(&mut open)
             .show_with_footer(
                 ctx,
@@ -601,7 +601,10 @@ impl ParameterDialog {
                     }
                 }
             });
-            self.scroll = (output.state.offset.y, output.inner_rect.height());
+            self.scroll = (
+                output.state.unclamped_offset().y,
+                output.inner_rect.height(),
+            );
         });
         // Ein Feld mit Entwurf, das aus dem Bild gerollt ist, verliert die Tastatur ohne
         // „verlassen“: Sein Entwurf wird übernommen wie beim Verlassen.
@@ -805,7 +808,7 @@ fn row_ui(
     });
     labelled(
         &name,
-        egui::WidgetType::TextEdit,
+        egui::Role::TextInput,
         enabled,
         &field_label(&tr!("param-col-name"), &p.name),
     );
@@ -864,7 +867,7 @@ fn row_ui(
     });
     labelled(
         &art,
-        egui::WidgetType::ComboBox,
+        egui::Role::ComboBox,
         enabled,
         &field_label(&tr!("param-col-kind"), &p.name),
     );
@@ -882,7 +885,7 @@ fn row_ui(
     });
     labelled(
         &comment,
-        egui::WidgetType::TextEdit,
+        egui::Role::TextInput,
         enabled,
         &field_label(&tr!("param-col-comment"), &p.name),
     );
@@ -902,7 +905,7 @@ fn row_ui(
     })
     .on_hover_text(delete_row());
     // Das Symbol ist ein Zeichen der Symbolschrift; Bildschirmleser hören „Zeile löschen“.
-    labelled(&delete, egui::WidgetType::Button, enabled, &delete_row());
+    labelled(&delete, egui::Role::Button, enabled, &delete_row());
     follow_focus(&delete);
     theme::focus_ring(ui, &delete);
     if delete.clicked() {
@@ -912,7 +915,7 @@ fn row_ui(
 }
 
 /// Gibt einem Bedienelement einen Namen für Bildschirmleser.
-fn labelled(response: &egui::Response, kind: egui::WidgetType, enabled: bool, label: &str) {
+fn labelled(response: &egui::Response, kind: egui::Role, enabled: bool, label: &str) {
     response.widget_info(|| egui::WidgetInfo::labeled(kind, enabled, label));
 }
 

@@ -326,7 +326,7 @@ pub fn show(
     };
     let area = notice_area(ctx.content_rect());
     Dialog::new(heading, DialogSize::Normal)
-        .id(egui::Id::new(WINDOW_ID))
+        .id(egui::Id::unique(WINDOW_ID))
         .bottom_right_in(area)
         .open(&mut open)
         .show_with_footer(
@@ -502,7 +502,7 @@ pub fn show_after_update(
         DialogSize::Wide,
     )
     .dock_key("update_done")
-    .id(egui::Id::new(DONE_WINDOW_ID))
+    .id(egui::Id::unique(DONE_WINDOW_ID))
     .center_on_open()
     .open(&mut open)
     .show_with_footer(

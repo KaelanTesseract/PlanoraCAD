@@ -25,7 +25,7 @@ pub fn card_row(
     if cards.is_empty() {
         return rects;
     }
-    let id = ui.id().with(("card_row", id_salt));
+    let id = ui.scope_id().with(("card_row", id_salt));
     let min_height: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
     let mut tallest = 0.0f32;
     ui.columns(cards.len(), |columns| {

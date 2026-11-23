@@ -825,7 +825,7 @@ pub(crate) fn field_row_with(
         FieldValue::Auto => String::new(),
     };
     let custom = matches!(value, FieldValue::Text(_));
-    let line_id = egui::Id::new(("planora-sheet-warn-line", &id));
+    let line_id = egui::Id::unique(("planora-sheet-warn-line", &id));
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
             theme::text_field(

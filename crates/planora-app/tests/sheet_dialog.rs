@@ -305,6 +305,7 @@ impl H {
                 unit: egui::MouseWheelUnit::Point,
                 delta: vec2(-40.0, 0.0),
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
                 modifiers: Modifiers::NONE,
             };
             self.frame(vec![Event::PointerMoved(at), wheel]);
@@ -377,6 +378,7 @@ impl H {
                 unit: egui::MouseWheelUnit::Point,
                 delta: vec2(0.0, dy),
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
                 modifiers: Modifiers::NONE,
             },
         ]);

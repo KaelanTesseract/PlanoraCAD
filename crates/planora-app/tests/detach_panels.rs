@@ -422,7 +422,7 @@ fn rename_from_undocked_tree_opens_over_tree_window() {
     assert!(rig.state().rename_draft.is_some(), "Umbenennen offen");
     let main = rig.settle(3);
 
-    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::new("Umbenennen"));
+    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::unique("Umbenennen"));
     assert!(rig.screen.child_runs(sub) > 0, "eigenes Fenster");
     let seen = rig.screen.child_seen(sub);
     assert!(find(&seen, "Umbenennen").is_some(), "{}", join(&seen));
@@ -493,7 +493,7 @@ fn delete_prompt_from_drawing_view_stays_in_main() {
     let tree = detach::viewport_id(Place::Tree);
     let child = rig.screen.child_seen(tree);
     assert!(find(&child, "Rückfrage").is_none(), "{}", join(&child));
-    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::new("planora-delete-drawing"));
+    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::unique("planora-delete-drawing"));
     assert_eq!(rig.screen.child_runs(sub), 0, "kein Unterdialog");
     assert!(rig.screen.child_runs(tree) > 0, "Baum bleibt abgedockt");
 }
@@ -655,7 +655,7 @@ fn rename_from_tree_window_survives_a_tab_switch() {
     let entry = center_of(&rig.screen.child_seen(tree), "Umbenennen");
     rig.click_child(tree, entry, PointerButton::Primary);
     assert!(rig.state().rename_draft.is_some());
-    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::new("Umbenennen"));
+    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::unique("Umbenennen"));
     rig.settle(2);
     assert!(rig.screen.child_runs(sub) > 0);
 

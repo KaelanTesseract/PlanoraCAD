@@ -391,6 +391,7 @@ fn wheel_over_the_cube_zooms_in_sketch_mode_without_orbit() {
                 unit: egui::MouseWheelUnit::Point,
                 delta: vec2(0.0, 40.0),
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
                 modifiers: egui::Modifiers::NONE,
             },
         ],

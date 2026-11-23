@@ -54,7 +54,7 @@ const WINDOW_ID: &str = "planora_shortcuts_window";
 
 /// Kennung des Suchfelds (Fokus beim Öffnen; für Tests).
 pub fn search_id() -> egui::Id {
-    egui::Id::new("planora_shortcuts_search")
+    egui::Id::unique("planora_shortcuts_search")
 }
 
 /// Zustand der Übersicht zwischen den Bildern (gehört der App).
@@ -99,7 +99,8 @@ pub enum OverviewEvent {
 /// Abgedockt liest die Übersicht Esc im eigenen Fenster ([`show`]); Esc im Hauptfenster bleibt
 /// dann dem Hauptfenster.
 pub fn take_escape(ctx: &egui::Context, state: &mut OverviewState, prompt_open: bool) {
-    if !state.open || prompt_open || crate::dialog::shown_detached(ctx, egui::Id::new(WINDOW_ID)) {
+    if !state.open || prompt_open || crate::dialog::shown_detached(ctx, egui::Id::unique(WINDOW_ID))
+    {
         return;
     }
     if escape_in(ctx, state) {
@@ -146,7 +147,7 @@ pub fn show(ctx: &egui::Context, ws: &Workspace, state: &mut OverviewState) -> O
     let km = &ws.keymap;
     Dialog::new(title(), DialogSize::Wide)
         .dock_key("shortcuts")
-        .id(egui::Id::new(WINDOW_ID))
+        .id(egui::Id::unique(WINDOW_ID))
         .center_on_open()
         .open(&mut open)
         .show_with_footer(

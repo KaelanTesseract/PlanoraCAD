@@ -181,7 +181,7 @@ impl LostProjectionsDialog {
         let mut dim_rest = self.dim_rest;
         Dialog::new(tr!("lost-dialog-title"), DialogSize::Prompt)
             .dock_key("lost_projections")
-            .id(egui::Id::new("lost_projections_dialog"))
+            .id(egui::Id::unique("lost_projections_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {
                 // Abgedockt läuft der Inhalt evtl. mehrmals je Bild: Die Aktion wird nur gesetzt,

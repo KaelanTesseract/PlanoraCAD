@@ -661,7 +661,7 @@ fn starts_number(e: &egui::Event) -> bool {
 }
 
 fn menu_id() -> egui::Id {
-    egui::Id::new("planora-triad-menu")
+    egui::Id::unique("planora-triad-menu")
 }
 
 /// Lage des Winkelfelds der Triade aus dem letzten Bild, solange es offen ist.
@@ -671,7 +671,7 @@ pub(crate) fn angle_field_rect(ctx: &egui::Context, se: &SketchSession) -> Optio
 }
 
 fn field_id() -> egui::Id {
-    egui::Id::new("planora-triad-angle")
+    egui::Id::unique("planora-triad-angle")
 }
 
 /// Punkt in der Drehebene um `axis` (durch den Ursprung) unter `pointer`, als Vektor vom Ursprung.

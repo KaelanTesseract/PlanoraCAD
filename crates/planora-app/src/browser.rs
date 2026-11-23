@@ -47,7 +47,7 @@ pub fn error_color(dark: bool) -> Color32 {
 }
 
 fn tree_ink_id() -> egui::Id {
-    egui::Id::new("planora-browser-tree-ink")
+    egui::Id::unique("planora-browser-tree-ink")
 }
 
 /// Schriftfarben des durchsichtigen Baums, solange [`show_in_panel`] zeichnet, sonst `None`.
@@ -689,15 +689,15 @@ fn status_view(
 }
 
 fn rows_id() -> egui::Id {
-    egui::Id::new("planora-browser-rows")
+    egui::Id::unique("planora-browser-rows")
 }
 
 fn folders_id() -> egui::Id {
-    egui::Id::new("planora-browser-folders")
+    egui::Id::unique("planora-browser-folders")
 }
 
 fn eyes_id() -> egui::Id {
-    egui::Id::new("planora-browser-eyes")
+    egui::Id::unique("planora-browser-eyes")
 }
 
 /// Namen und Rechtecke (volle Zeilenbreite) der im letzten Bild gezeichneten Zeilen: Körper,
@@ -905,7 +905,7 @@ fn folder_header(ui: &mut egui::Ui, folder: Folder, open: bool) -> egui::Respons
     let enabled = ui.is_enabled();
     response.widget_info(|| {
         egui::WidgetInfo::selected(
-            egui::WidgetType::CollapsingHeader,
+            egui::Role::DisclosureTriangle,
             enabled,
             open,
             folder.label(),
@@ -1138,7 +1138,7 @@ fn open_prompts(state: &AppState) -> PromptSet {
 /// Rückfragen, die im abgedockten Baum entstanden sind, je Tab (`instance`; bleibt, bis sie zu
 /// sind, auch über einen Tab-Wechsel).
 fn tree_hosted_id(state: &AppState) -> egui::Id {
-    egui::Id::new(("planora-tree-prompts-in-tree-window", state.instance))
+    egui::Id::unique(("planora-tree-prompts-in-tree-window", state.instance))
 }
 
 fn tree_hosted(ctx: &egui::Context, state: &AppState) -> PromptSet {
@@ -1351,7 +1351,7 @@ fn eye_at_covered(
     texts: (String, String),
 ) -> bool {
     let weak = ui.visuals().weak_text_color();
-    let e = ui.interact(eye, ui.id().with(key), Sense::click());
+    let e = ui.interact(eye, ui.scope_id().with(key), Sense::click());
     remember(ui, eyes_id(), (name.to_string(), eye));
     let hovered = e.hovered() && ui.is_enabled();
     let glyph = if hidden { Icon::Hidden } else { Icon::Visible };
@@ -1542,7 +1542,7 @@ fn group_row(
     let rect = egui::Rect::from_min_max(full.min + vec2(indent, 0.0), full.max);
     let enabled = ui.is_enabled();
     resp.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, enabled, open, &name)
+        egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, enabled, open, &name)
     });
     let p = theme::palette(ui.visuals().dark_mode);
     let hovered = resp.hovered() && enabled;
@@ -1609,7 +1609,7 @@ fn group_row(
     let caret_rect = egui::Rect::from_min_max(rect.min, egui::pos2(eye_x, rect.max.y));
     let caret = ui.interact(
         caret_rect,
-        ui.id().with(("caret-group", g.0)),
+        ui.scope_id().with(("caret-group", g.0)),
         Sense::click(),
     );
     let eye_rect =
@@ -2216,7 +2216,7 @@ pub fn edit(state: &mut AppState, id: FeatureId) {
 
 /// Kleines Fenster „Umbenennen“ mit Textfeld.
 fn rename_window(ctx: &egui::Context, state: &mut AppState) {
-    let field = egui::Id::new("planora-tree-rename-field");
+    let field = egui::Id::unique("planora-tree-rename-field");
     let Some((_, name)) = state.rename_draft.as_mut() else {
         crate::dialog::forget_name_field(ctx, field);
         return;
@@ -2267,7 +2267,7 @@ pub fn apply_group_rename(state: &mut AppState) -> Result<(), String> {
 
 /// Kleines Fenster „Umbenennen“ einer Skizzengruppe mit Textfeld.
 fn group_rename_window(ctx: &egui::Context, state: &mut AppState) {
-    let field = egui::Id::new("planora-tree-group-rename-field");
+    let field = egui::Id::unique("planora-tree-group-rename-field");
     let Some((_, name)) = state.group_rename_draft.as_mut() else {
         crate::dialog::forget_name_field(ctx, field);
         return;

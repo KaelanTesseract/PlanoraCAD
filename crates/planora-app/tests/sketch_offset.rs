@@ -355,7 +355,7 @@ impl Rig {
 
     /// Nimmt dem Feld am Zeiger den Fokus: Er liegt danach auf einer Fläche, die nicht tippt.
     fn focus_elsewhere(&mut self) {
-        let id = egui::Id::new("planora-test-surface");
+        let id = egui::Id::unique("planora-test-surface");
         self.surface = Some(id);
         planora_app::viewport::focus_is_not_typing(&self.ctx, id);
         self.frame(vec![]);

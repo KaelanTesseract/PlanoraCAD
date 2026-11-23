@@ -55,7 +55,7 @@ struct Rig {
 
 /// Kennung des Textfelds [`Rig::main_field`].
 fn main_field_id() -> egui::Id {
-    egui::Id::new("detach_keys_hauptfeld")
+    egui::Id::unique("detach_keys_hauptfeld")
 }
 
 impl Rig {
@@ -112,7 +112,7 @@ impl Rig {
         let field = &mut self.main_field;
         self.screen.frame_ui(events, &mut |ui| {
             if let Some(text) = field.as_mut() {
-                egui::Area::new(egui::Id::new("detach_keys_hauptfeld_flaeche"))
+                egui::Area::new(egui::Id::unique("detach_keys_hauptfeld_flaeche"))
                     .fixed_pos(pos2(900.0, 500.0))
                     .show(ui.ctx(), |ui| {
                         ui.add(egui::TextEdit::singleline(text).id(main_field_id()));
@@ -363,7 +363,7 @@ fn typing_in_undocked_field_does_not_trigger_shortcuts() {
     let entry = center_of(&rig.screen.child_seen(tree), "Umbenennen");
     rig.click_child(tree, entry, PointerButton::Primary);
     rig.settle(2);
-    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::new("Umbenennen"));
+    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::unique("Umbenennen"));
     let seen = rig.screen.child_seen(sub);
     let field = center_of(&seen, "Quader 1");
     rig.click_child(sub, field, PointerButton::Primary);
@@ -625,7 +625,7 @@ fn delete_key_in_undocked_tree_opens_prompt_over_tree_window() {
     );
     let main = rig.settle(3);
     let title = planora_i18n::tr!("tree-confirm-title");
-    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::new(title.as_str()));
+    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::unique(title.as_str()));
     assert!(
         rig.screen.child_runs(sub) > 0,
         "Unterdialog über dem Baumfenster"
