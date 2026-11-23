@@ -192,6 +192,9 @@ pub struct SolveReport {
     /// Die Lage eines Musters ging nach dem Lösen nicht (dann `NotConverged`): der erste Grund,
     /// etwa parallele Richtungslinien.
     pub pattern_problem: Option<PatternProblem>,
+    /// Freie Variablen, aus denen `free_points` und `free_curves` entstanden (intern: damit eine
+    /// überholte Gruppe nach den Musterrunden ihre Punkte wieder herausnehmen kann).
+    pub(crate) free_vars: HashSet<usize>,
 }
 
 /// Weiche Zusatzbedingung `weight·(x[var] − target)` (zum Ziehen).
@@ -1398,6 +1401,10 @@ impl Sketch {
         let (groups, _) = self.build_groups_holding(held, None);
         let mut violated = false;
         let failed_before = report.conflicting.clone();
+        // Variablen überholter Gruppen: Ihre Freiheit zählt nicht, also auch nicht in den Listen.
+        // Alle Variablen der Gruppe, nicht nur die an den jetzigen Werten freien: Der Lauf kann
+        // seine freien Variablen an anderen Werten (aus dem Zwischenspeicher) bestimmt haben.
+        let mut stale_free: Vec<usize> = Vec::new();
         for g in groups.iter().filter(|g| !g.pattern_reads.is_empty()) {
             // Eine Gruppe, die im letzten Lauf schon scheiterte, hat keine Freiheitsgrade
             // beigetragen.
@@ -1419,7 +1426,14 @@ impl Sketch {
             }
             if stale && counted {
                 report.dof = report.dof.saturating_sub(self.analyze(g, &self.vars).dof);
+                stale_free.extend(g.vars.iter().copied());
             }
+        }
+        if stale_free.iter().any(|v| report.free_vars.contains(v)) {
+            for v in &stale_free {
+                report.free_vars.remove(v);
+            }
+            (report.free_points, report.free_curves) = self.free_lists(&report.free_vars);
         }
         if violated && report.status == SolveStatus::Solved {
             report.status = SolveStatus::NotConverged;
@@ -1683,6 +1697,28 @@ impl Sketch {
                 dof += 1;
             }
         }
+        let (free_points, free_curves) = self.free_lists(&free_vars);
+        (
+            SolveReport {
+                drag_failed,
+                status,
+                dof,
+                redundant,
+                conflicting,
+                free_points,
+                free_curves,
+                iterations,
+                group_solves,
+                pattern_problem: None,
+                free_vars,
+            },
+            reads_patterns,
+        )
+    }
+
+    /// Freie Punkte und Kurven zu den freien Variablen `free_vars`; Exemplare gelten als frei,
+    /// wenn ihre Vorlage frei ist (nur für die Farbe).
+    fn free_lists(&self, free_vars: &HashSet<usize>) -> (Vec<PointId>, Vec<CurveId>) {
         let mut free_points: Vec<PointId> = self
             .points()
             .filter(|(_, p)| free_vars.contains(&p.x) || free_vars.contains(&p.y))
@@ -1718,21 +1754,7 @@ impl Sketch {
                 free_curves.push(copy);
             }
         }
-        (
-            SolveReport {
-                drag_failed,
-                status,
-                dof,
-                redundant,
-                conflicting,
-                free_points,
-                free_curves,
-                iterations,
-                group_solves,
-                pattern_problem: None,
-            },
-            reads_patterns,
-        )
+        (free_points, free_curves)
     }
 
     /// Zieht Punkte zu Zielpositionen; harte Abhängigkeiten bleiben erfüllt. Der Solver startet

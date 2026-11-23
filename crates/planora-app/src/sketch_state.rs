@@ -522,9 +522,24 @@ pub fn drag_blocked_message(report: Option<&SolveReport>, baseline: Option<&Solv
         .and_then(|r| r.pattern_problem)
         .filter(|_| baseline.is_none_or(|b| b.pattern_problem.is_none()));
     match reason {
-        Some(p) => crate::msg!("sketch-drag-blocked-pattern", reason = p.message()),
+        Some(p) => crate::msg!("sketch-drag-blocked-pattern", reason = pattern_reason(p)),
         None => crate::msg!("sketch-drag-blocked"),
     }
+}
+
+/// Grund eines Musterproblems als Schlüssel (nicht als fertiger Text): So wechselt eine stehende
+/// Meldung mit der Sprache (Reste von Punkt 8).
+pub fn pattern_reason(p: planora_sketch::pattern::PatternProblem) -> crate::msg::MsgArg {
+    use planora_sketch::pattern::{PATTERN_MAX_CURVES, PATTERN_MAX_INSTANCES, PatternProblem};
+    let m = match p {
+        PatternProblem::TooMany => crate::msg!(
+            "sketch-pattern-too-many",
+            max = PATTERN_MAX_INSTANCES.to_string(),
+            curves = PATTERN_MAX_CURVES.to_string()
+        ),
+        other => Msg::Id(other.key(), Vec::new()),
+    };
+    crate::msg::MsgArg::Msg(Box::new(m))
 }
 
 /// Meldung, wenn eine neue Abhängigkeit `action` die Skizze nicht lösbar macht: Liegt das nur an
@@ -544,7 +559,7 @@ pub fn apply_unsolved_message(
         Some(p) => crate::msg!(
             "sketch-apply-unsolved-pattern",
             action = action,
-            reason = p.message()
+            reason = pattern_reason(p)
         ),
         None => crate::msg!("sketch-apply-unsolved", action = action),
     }

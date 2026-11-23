@@ -318,6 +318,15 @@ impl Sketch {
         }
     }
 
+    /// Für Tests: Liegen Gruppen der Schleifenprüfung zum jetzigen Stand bereit, sodass die
+    /// nächste Prüfung sie nicht neu baut?
+    #[doc(hidden)]
+    pub fn cycle_groups_ready(&self) -> bool {
+        self.cycle_groups
+            .as_ref()
+            .is_some_and(|g| g.revision == self.revision())
+    }
+
     /// Legt die Gruppen der Schleifenprüfung für den jetzigen Stand an, falls sie fehlen (vor dem
     /// Anlegen einer Abhängigkeit, die sie danach mit [`Sketch::follow_cycle_groups`] fortführt).
     pub(crate) fn ensure_cycle_groups(&mut self) {
@@ -367,6 +376,47 @@ impl Sketch {
         }
         groups.revision = self.revision();
         self.cycle_groups = Some(g);
+    }
+
+    /// Schlössen eben angehängte Abhängigkeiten mit den Variablen `sets` (je Abhängigkeit) eine
+    /// Schleife? Probe gegen die Gruppen zum Stand `before` (vor dem Anhängen), ohne sie zu
+    /// ändern; neue Variablen gehören zu keinem Muster und zählen dabei nicht.
+    ///
+    /// Die Mengen werden gemeinsam geprüft, als eine Gruppe. Das ist nur genau, wenn sie über
+    /// gemeinsame, nicht gehaltene Variablen zusammenhängen (wie die internen Abhängigkeiten
+    /// einer Kurve über ihre Punkte); sonst, und ohne Gruppen zu `before`, `None`.
+    pub(crate) fn appended_closes_cycle(&self, before: u64, sets: &[Vec<usize>]) -> Option<bool> {
+        let g = self
+            .cycle_groups
+            .as_ref()
+            .filter(|g| g.revision == before)?;
+        let open = |v: &usize| !g.held.contains(v);
+        // Zusammenhang: Ausgehend von der ersten Menge alle anschließen, die eine freie Variable
+        // mit dem Erreichten teilen.
+        let mut reached: HashSet<usize> = HashSet::new();
+        let mut joined = vec![false; sets.len()];
+        if let Some(first) = sets.first() {
+            reached.extend(first.iter().copied().filter(open));
+            joined[0] = true;
+        }
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for (i, set) in sets.iter().enumerate() {
+                if !joined[i] && set.iter().any(|v| open(v) && reached.contains(v)) {
+                    reached.extend(set.iter().copied().filter(open));
+                    joined[i] = true;
+                    grew = true;
+                }
+            }
+        }
+        if joined.iter().any(|j| !j) {
+            return None;
+        }
+        let mut all: Vec<usize> = sets.iter().flatten().copied().collect();
+        all.sort_unstable();
+        all.dedup();
+        Some(g.closes_cycle(&all))
     }
 
     /// Nach dem Anlegen der Abhängigkeit `id` (ohne andere Änderung seit dem Stand `before`): die

@@ -232,24 +232,34 @@ pub enum PatternProblem {
 }
 
 impl PatternProblem {
+    /// Id der Meldung in den Sprachdateien. Nur [`PatternProblem::TooMany`] braucht Werte
+    /// (`max` = [`PATTERN_MAX_INSTANCES`], `curves` = [`PATTERN_MAX_CURVES`]). Damit kann die
+    /// Oberfläche den Grund als Schlüssel halten, der mit der Sprache wechselt (Reste von Punkt 8).
+    pub fn key(self) -> &'static str {
+        match self {
+            PatternProblem::Empty => "sketch-pattern-empty",
+            PatternProblem::TooMany => "sketch-pattern-too-many",
+            PatternProblem::ZeroStep => "sketch-pattern-zero-step",
+            PatternProblem::BadDirection => "sketch-pattern-direction",
+            PatternProblem::ParallelDirections => "sketch-pattern-grid-parallel",
+            PatternProblem::InstanceAsSource => "sketch-pattern-instance-source",
+            PatternProblem::Cycle => "sketch-pattern-cycle",
+            PatternProblem::InstanceOnly => "sketch-pattern-instance-only",
+            PatternProblem::FixedSpline => "sketch-fixed-spline-no-copy",
+            PatternProblem::Text => "sketch-text-no-pattern",
+            PatternProblem::NotIn3d => "sketch-err-tool-not-in-3d",
+        }
+    }
+
     /// Meldung für die Oberfläche.
     pub fn message(self) -> String {
         match self {
-            PatternProblem::Empty => tr!("sketch-pattern-empty"),
             PatternProblem::TooMany => tr!(
                 "sketch-pattern-too-many",
                 max = PATTERN_MAX_INSTANCES.to_string(),
                 curves = PATTERN_MAX_CURVES.to_string()
             ),
-            PatternProblem::ZeroStep => tr!("sketch-pattern-zero-step"),
-            PatternProblem::BadDirection => tr!("sketch-pattern-direction"),
-            PatternProblem::ParallelDirections => tr!("sketch-pattern-grid-parallel"),
-            PatternProblem::InstanceAsSource => tr!("sketch-pattern-instance-source"),
-            PatternProblem::Cycle => tr!("sketch-pattern-cycle"),
-            PatternProblem::InstanceOnly => tr!("sketch-pattern-instance-only"),
-            PatternProblem::FixedSpline => tr!("sketch-fixed-spline-no-copy"),
-            PatternProblem::Text => tr!("sketch-text-no-pattern"),
-            PatternProblem::NotIn3d => tr!("sketch-err-tool-not-in-3d"),
+            other => planora_i18n::t(other.key()),
         }
     }
 
@@ -1439,6 +1449,35 @@ mod tests {
         d.instances.iter().find(|i| i.at == at).unwrap().points[k]
     }
 
+    /// Prüferfund zu den Resten von Punkt 8: Die Ids aus [`PatternProblem::key`] stehen nicht in
+    /// `tr!`, die Quelltextprüfung der Sprachdateien sieht sie also nicht. Jede muss in beiden
+    /// Sprachen einen Text haben.
+    #[test]
+    fn every_pattern_problem_key_has_a_text() {
+        use PatternProblem::*;
+        let all = [
+            Empty,
+            TooMany,
+            ZeroStep,
+            BadDirection,
+            ParallelDirections,
+            InstanceAsSource,
+            Cycle,
+            InstanceOnly,
+            FixedSpline,
+            Text,
+            NotIn3d,
+        ];
+        for lang in [planora_i18n::german(), planora_i18n::english()] {
+            planora_i18n::with_lang(&lang, || {
+                for p in all {
+                    let text = planora_i18n::t(p.key());
+                    assert_ne!(text, p.key(), "{p:?} ohne Text");
+                }
+            });
+        }
+    }
+
     /// Reste der Härtungen nach Skizzen 5 (2026-11-22): Eine Schleife zwischen Vorlage und
     /// eigenem Exemplar (hier erzwungen, an der Prüfung vorbei) läuft nie zusammen. Nach den
     /// Musterrunden ist die Gruppe, die das Exemplar liest, überholt: Sie macht „nicht lösbar“
@@ -1469,6 +1508,22 @@ mod tests {
         assert_eq!(report.dof, 4, "die überholte Gruppe zählt nicht");
         assert!(report.free_points.contains(&free));
         assert!(report.free_points.contains(&b));
+        // Reste von Punkt 8: Passend dazu nennt die Liste den Punkt der überholten Gruppe nicht,
+        // auch nicht sein Exemplar oder die Linie.
+        assert!(
+            !report.free_points.contains(&a),
+            "a gehört zur überholten Gruppe"
+        );
+        assert!(
+            !report.free_points.contains(&q),
+            "Exemplar folgt seiner Vorlage"
+        );
+        // Die Musterrunden liefen bis zur Höchstzahl (jede Runde rechnet die Gruppe neu).
+        assert!(
+            report.group_solves >= PATTERN_ROUNDS,
+            "nur {} Gruppenläufe",
+            report.group_solves
+        );
     }
 
     /// Eine Skizze, die schon ein Muster Q in einer Schleife hält (nur über eine Entwicklerdatei

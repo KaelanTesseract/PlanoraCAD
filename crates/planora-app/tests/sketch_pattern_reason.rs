@@ -6,7 +6,7 @@ use planora_app::sketch_state::{
 };
 use planora_app::state::{AppState, StandardPlane};
 use planora_feature::SketchPlane;
-use planora_i18n::{german, with_lang};
+use planora_i18n::{english, german, with_lang};
 use planora_math::{DVec2, Frame, Tolerance};
 use planora_sketch::model::Sketch;
 use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan};
@@ -70,6 +70,32 @@ fn a_blocked_drag_names_the_pattern_reason() {
         let mut conflict = report.clone();
         conflict.status = SolveStatus::Conflicting;
         assert_eq!(drag_blocked_message(Some(&conflict), None).text(), general);
+    });
+}
+
+/// Reste von Punkt 8 (2026-11-23): Die stehende Meldung trägt den Grund als Schlüssel und wechselt
+/// mit der Sprache, auch wenn sie unter einer anderen Sprache entstand.
+#[test]
+fn the_blocked_reason_follows_the_language() {
+    let report = parallel_report();
+    let mut good = report.clone();
+    good.status = SolveStatus::Solved;
+    good.pattern_problem = None;
+    let (drag, apply) = with_lang(&german(), || {
+        (
+            drag_blocked_message(Some(&report), None),
+            apply_unsolved_message("Waagerecht", &report, Some(&good)),
+        )
+    });
+    with_lang(&english(), || {
+        for m in [&drag, &apply] {
+            let text = m.text();
+            assert!(text.contains("parallel"), "{text:?}");
+            assert!(
+                !text.contains("Richtungslinien"),
+                "Grund noch deutsch: {text:?}"
+            );
+        }
     });
 }
 
@@ -150,5 +176,31 @@ fn an_applied_constraint_names_the_pattern_reason() {
             apply_unsolved_message("Waagerecht", &report, Some(&report)).text(),
             "„Waagerecht“ ließ sich nicht lösen"
         );
+    });
+}
+
+/// Prüferfund zu den Resten von Punkt 8: Auch der Grund mit Werten („zu viele“) wechselt die
+/// Sprache und behält seine Zahlen.
+#[test]
+fn a_reason_with_values_follows_the_language() {
+    use planora_app::msg::Msg;
+    use planora_app::sketch_state::pattern_reason;
+    use planora_sketch::pattern::{PATTERN_MAX_CURVES, PatternProblem};
+    let m = with_lang(&german(), || {
+        Msg::Id(
+            "sketch-drag-blocked-pattern",
+            vec![("reason", pattern_reason(PatternProblem::TooMany))],
+        )
+    });
+    let curves = PATTERN_MAX_CURVES.to_string();
+    with_lang(&german(), || {
+        let text = m.text();
+        assert!(text.contains("Zu viele Exemplare"), "{text:?}");
+        assert!(text.contains(&curves), "{text:?}");
+    });
+    with_lang(&english(), || {
+        let text = m.text();
+        assert!(text.contains("Too many instances"), "{text:?}");
+        assert!(text.contains(&curves), "{text:?}");
     });
 }
