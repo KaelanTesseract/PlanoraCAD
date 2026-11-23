@@ -386,7 +386,12 @@ fn carried_cycle_groups_still_find_loops() {
 /// Prüft, dass `refuse` an der Skizze aus [`arc_cycle_setup`] scheitert und sie samt Stand
 /// unverändert lässt; liefert den Fehlertext.
 fn refusal_leaves_unchanged(
-    refuse: impl FnOnce(&mut Sketch, PointId, PointId, PointId) -> Result<CurveId, planora_sketch::SketchError>,
+    refuse: impl FnOnce(
+        &mut Sketch,
+        PointId,
+        PointId,
+        PointId,
+    ) -> Result<CurveId, planora_sketch::SketchError>,
 ) -> String {
     let (mut s, corner, q1, q2) = arc_cycle_setup();
     s.solve();
@@ -486,7 +491,10 @@ fn adding_arcs_with_a_pattern_does_not_copy_the_sketch() {
     // (gemessen 2026-11-23: 0,9 ms gegen 7,6 ms).
     let copies = (0..3).map(|_| clone_ms(200)).fold(f64::MAX, f64::min);
     println!("200 Bögen bei 3200 Musterkurven: {ms:.2} ms, 200 Kopien: {copies:.2} ms");
-    assert!(ms * 4.0 < copies, "zu langsam: {ms:.2} ms gegen {copies:.2} ms");
+    assert!(
+        ms * 4.0 < copies,
+        "zu langsam: {ms:.2} ms gegen {copies:.2} ms"
+    );
 }
 
 /// Zeit für `n` Kopien der Skizze aus [`add_arcs_ms`] (ohne Bögen).
