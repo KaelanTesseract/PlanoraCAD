@@ -26,7 +26,19 @@ Kanten liegt der Berührpunkt nur auf 1e-5 mm genau; die unsichere Zone wird `�
    Fällen rund 25 → 2.)
 2. Danach die übrigen Fälle einzeln nach Ursache: Abbrüche, falsch sichtbare/verdeckte Stücke,
    Punktüberdeckungen am Ende zweier Stücke derselben Kante.
-3. Verworfen nach Probe: Prüfstrahlen vom wahren Schnittpunkt der beiden Flächen starten (machte
+3. Umgesetzt nach Ursache (Stand 2026-11-23):
+   - Treffer auf eigenen Flächen zählen an Freiformkanten bis `√(2·E·NURBS_EDGE_TOL)` nicht;
+     sind alle Strahlen unbrauchbar, folgt ein zweiter Satz mit Kippung 1e-3; an Freiformkanten
+     verdeckt der erste Innentreffer; Ecken auf Flächen mit Freiformrand nach Umlaufzahl.
+   - Streift jeder Strahl den Rand einer fremden Fläche davor (steile Schnittkurve auf einer Wand,
+     die man von der Kante sieht, im Bild auf dem Randkreis der Deckfläche), gilt die Stelle als
+     verdeckt: Die vordere Kante wird dort gezeichnet, und ist sie verdeckt, ist es die Stelle
+     dahinter auch.
+   - Zusammenlegen: Freiformkanten an Umkehrstellen im Bild geteilt; Gleichheitsabstand
+     `2·NURBS_EDGE_TOL` je Freiformkante; zusätzliche Teilstellen, wo eine Freiformkante den
+     Gleichheitsabstand ohne Umrisszuschlag über- oder unterschreitet (tangential am Umriss);
+     Freiformstücke unter `10·NURBS_EDGE_TOL` Bildlänge fallen weg.
+4. Verworfen nach Probe: Prüfstrahlen vom wahren Schnittpunkt der beiden Flächen starten (machte
    mehr Abbrüche).
 
 ## Ziel und Prüfung
@@ -38,4 +50,5 @@ Prüfer, Handtest nur nach Go.
 ## Grenze
 
 Was sich mit vertretbarem Aufwand nicht lösen lässt (Beinahe-Berührungen aus dem 0,5-mm-Raster),
-lege ich mit Messwerten vor, bevor ich etwas ausnehme.
+lege ich mit Messwerten vor, bevor ich etwas ausnehme. Ergebnis: nichts ausgenommen; Zufallsreihe
+26/26, keine Abbrüche in 1400 Ansichten, sieben realistische Fälle ohne Fehler.

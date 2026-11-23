@@ -408,7 +408,10 @@ pub fn face_boundaries_3d(mesh: &Mesh, extent: f64) -> Vec<(DVec3, DVec3)> {
             r.first_index as usize,
             (r.first_index + r.index_count) as usize,
         );
-        for t in mesh.indices[a..b.min(mesh.indices.len())].chunks_exact(3) {
+        for t in mesh.indices[a..b.min(mesh.indices.len())]
+            .as_chunks::<3>()
+            .0
+        {
             let w = [
                 weld(mesh.positions[t[0] as usize]),
                 weld(mesh.positions[t[1] as usize]),
