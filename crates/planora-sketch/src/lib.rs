@@ -68,7 +68,7 @@ pub use helpers::{RectIds, plane_of_face};
 pub use import::{InsertOptions, InsertReport, Placement, preview_polylines};
 pub use model::{
     CurveData, CurveId, CurveKind, HandleCurvature, LineStyle, PointData, PointId, Sketch,
-    SplineHandle,
+    SplineHandle, ValueSnapshot,
 };
 pub use pattern::{
     CircularMode, PatternData, PatternDir, PatternId, PatternInstance, PatternKind, PatternPlan,

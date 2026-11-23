@@ -238,12 +238,31 @@ pub struct Sketch {
 /// Längen der Listen einer Skizze, siehe [`Sketch::append_mark`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AppendMark {
-    vars: usize,
+    pub(crate) vars: usize,
     points: usize,
     curves: usize,
     constraints: usize,
     patterns: usize,
     texts: usize,
+}
+
+/// Wertestand einer Skizze (C12, 2026-11-23): Werte, Stand, Lösungsspeicher und Gruppen der
+/// Schleifenprüfung. Damit lässt sich ein Lauf, der nur Werte ändert, ohne Kopie der ganzen Skizze
+/// zurücknehmen (siehe [`Sketch::value_snapshot`]).
+#[derive(Clone, Debug)]
+pub struct ValueSnapshot {
+    vars: Vec<f64>,
+    revision: u64,
+    pub(crate) solve_cache: SolveCache,
+    cycle_groups: Option<Arc<crate::pattern_cycles::CycleGroups>>,
+    pub(crate) mark: AppendMark,
+}
+
+impl ValueSnapshot {
+    /// Die gesicherten Werte.
+    pub fn variables(&self) -> &[f64] {
+        &self.vars
+    }
 }
 
 /// Quelle eindeutiger Stände: Jede Änderung irgendeiner Skizze bekommt eine neue Nummer, so
@@ -374,6 +393,55 @@ impl Sketch {
         self.patterns.truncate(mark.patterns);
         self.texts.truncate(mark.texts);
         self.touch_structure();
+    }
+
+    /// Sichert den Wertestand (C12): günstiger als eine Kopie der Skizze, wenn danach nur Werte
+    /// geändert werden (Ziehen, Lösen).
+    pub fn value_snapshot(&self) -> ValueSnapshot {
+        ValueSnapshot {
+            vars: self.vars.clone(),
+            revision: self.revision,
+            solve_cache: self.solve_cache.clone(),
+            cycle_groups: self.cycle_groups.clone(),
+            mark: self.append_mark(),
+        }
+    }
+
+    /// Setzt den Wertestand `s` zurück: gleiche Werte, gleicher Stand, gleiche gemerkte
+    /// Ergebnisse. Gilt nur, wenn seitdem nur Werte geändert wurden (im Debug-Lauf geprüft an den
+    /// Längen der Listen).
+    pub fn restore_values(&mut self, s: ValueSnapshot) {
+        debug_assert!(
+            {
+                let now = self.append_mark();
+                (
+                    now.vars,
+                    now.points,
+                    now.curves,
+                    now.constraints,
+                    now.patterns,
+                    now.texts,
+                ) == (
+                    s.mark.vars,
+                    s.mark.points,
+                    s.mark.curves,
+                    s.mark.constraints,
+                    s.mark.patterns,
+                    s.mark.texts,
+                )
+            },
+            "restore_values after a structural change"
+        );
+        self.restore_snapshot(s);
+    }
+
+    /// Wie [`restore_values`](Self::restore_values) ohne Prüfung: nach `cut_back` und dem
+    /// Zurückschalten aller Abhängigkeiten ist der Aufbau wieder der alte.
+    pub(crate) fn restore_snapshot(&mut self, s: ValueSnapshot) {
+        self.vars = s.vars;
+        self.revision = s.revision;
+        self.solve_cache = s.solve_cache;
+        self.cycle_groups = s.cycle_groups;
     }
 
     /// Setzt den Stand auf `r` zurück, nachdem eine gescheiterte Änderung alle Werte wieder
