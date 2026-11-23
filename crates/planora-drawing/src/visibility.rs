@@ -913,6 +913,21 @@ mod tests {
             v(vec![hit(5e-5, 3, HitClass::Boundary)]),
             RayVote::Free
         ));
+        assert!(matches!(
+            v(vec![hit(0.001, 3, HitClass::Inside)]),
+            RayVote::Blocked
+        ));
+        // Eine Freiformkante: Treffer auf eigenen Flächen zählen bis `near_eps` nicht.
+        let own_ff = [3, FREEFORM_STROKE];
+        let w = |h: Vec<crate::raycast::Hit>| vote(Ray::Hits(h), &own_ff, 0, own_eps, near);
+        assert!(matches!(
+            w(vec![hit(0.001, 3, HitClass::Inside)]),
+            RayVote::Free
+        ));
+        assert!(matches!(
+            w(vec![hit(0.05, 3, HitClass::Inside)]),
+            RayVote::Blocked
+        ));
     }
 
     fn line(y: f64, edge: usize) -> Stroke {
