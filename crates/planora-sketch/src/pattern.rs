@@ -1479,6 +1479,22 @@ mod tests {
         assert_eq!(report.dof, 4, "die überholte Gruppe zählt nicht");
         assert!(report.free_points.contains(&free));
         assert!(report.free_points.contains(&b));
+        // Reste von Punkt 8: Passend dazu nennt die Liste den Punkt der überholten Gruppe nicht,
+        // auch nicht sein Exemplar oder die Linie.
+        assert!(
+            !report.free_points.contains(&a),
+            "a gehört zur überholten Gruppe"
+        );
+        assert!(
+            !report.free_points.contains(&q),
+            "Exemplar folgt seiner Vorlage"
+        );
+        // Die Musterrunden liefen bis zur Höchstzahl (jede Runde rechnet die Gruppe neu).
+        assert!(
+            report.group_solves >= PATTERN_ROUNDS,
+            "nur {} Gruppenläufe",
+            report.group_solves
+        );
     }
 
     /// Eine Skizze, die schon ein Muster Q in einer Schleife hält (nur über eine Entwicklerdatei
