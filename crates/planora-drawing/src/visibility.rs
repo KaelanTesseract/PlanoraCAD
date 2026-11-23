@@ -46,6 +46,9 @@ enum RayVote {
     Free,
     Blocked,
     Unusable,
+    /// Unbrauchbar wegen eines Randtreffers auf einer fremden Fläche (weder eigene noch
+    /// Nachbarfläche): Die Stelle liegt im Bild auf einer Randkante davor.
+    Grazing,
 }
 
 /// Zählt einen Strahlwurf; über `MAX_RAY_TESTS` → `TooComplex`.
@@ -84,7 +87,15 @@ fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64, near_eps: f64) -> Ra
                 && h.s <= near_eps)
     }) {
         match h.class {
-            HitClass::Boundary => return RayVote::Unusable,
+            HitClass::Boundary => {
+                let mine = h.body == body
+                    && (own.contains(&h.face) || own.contains(&(h.face | NEIGHBOR_FLAG)));
+                return if mine {
+                    RayVote::Unusable
+                } else {
+                    RayVote::Grazing
+                };
+            }
             // An Freiformkanten (C15b): Ein Innentreffer vor jedem Randtreffer verdeckt die Stelle,
             // was dahinter kommt, ist ohne Belang (die Treffer sind nach `s` sortiert).
             HitClass::Inside if freeform => return RayVote::Blocked,
@@ -137,6 +148,7 @@ fn sample_counted(
         &[TILT]
     };
     let mut blocked = false;
+    let mut all_grazing = true;
     for &tilt in tilts {
         for k in 0..TILT_DIRECTIONS {
             let phi = k as f64 * std::f64::consts::TAU / TILT_DIRECTIONS as f64;
@@ -146,14 +158,21 @@ fn sample_counted(
             match vote(ray, own, body, own_eps, near_eps(extent)) {
                 RayVote::Free => return Ok(Some(true)),
                 RayVote::Blocked => blocked = true,
-                RayVote::Unusable => {}
+                RayVote::Unusable => all_grazing = false,
+                RayVote::Grazing => {}
             }
         }
         if blocked {
             break;
         }
     }
-    Ok(blocked.then_some(false))
+    // Freiformkante, an der jeder Strahl den Rand einer fremden Fläche davor streift (C15b):
+    // Die Stelle liegt im Bild auf deren Randkante, etwa eine steile Schnittkurve auf einer
+    // Wand, die man von der Kante sieht, unter dem Randkreis der Deckfläche. Die vordere Kante
+    // wird dort gezeichnet; ist sie verdeckt, ist es die Stelle dahinter auch. „Verdeckt“
+    // überlässt die Linie der vorderen Kante (das Zusammenfassen nimmt das verdeckte Stück
+    // unter einer sichtbaren weg).
+    Ok((blocked || (freeform && all_grazing)).then_some(false))
 }
 
 /// Ergebnis an einer Stelle: Some(true) = sichtbar, Some(false) = verdeckt, None = unbrauchbar.
@@ -720,6 +739,18 @@ fn trim_covered(
                 .collect()
         })
         .collect();
+    // Wie `pair_images`, aber ohne den Zuschlag angepasster Umrisse (Suche der Übergänge an
+    // Freiformkanten, C15b).
+    let scan_images: Vec<Vec<Images>> = (0..3)
+        .map(|a| {
+            (0..3)
+                .map(|b| {
+                    let e = |c: usize| if c == 2 { 0.0 } else { extra[c] };
+                    Images::new(basis, r, extent, (e(a) + e(b) + near) / tol_unit)
+                })
+                .collect()
+        })
+        .collect();
     let fitted: Vec<bool> = pieces
         .iter()
         .map(|p| is_fitted(&strokes[p.stroke]))
@@ -785,11 +816,16 @@ fn trim_covered(
             // Freiformkante (C15b): Sie kann das andere Stück im Bild berühren und dort ein Stück
             // weit innerhalb des Gleichheitsabstands laufen (Schnittkurve tangential am Umriss);
             // dann auch an den Stellen teilen, an denen sie diesen Abstand verlässt.
-            let freeform_pair =
-                matches!(ps.curve, Curve::Nurbs(_)) || matches!(qs.curve, Curve::Nurbs(_));
+            // Nur echte Freiformkanten (Klasse 1), nicht angepasste Umrisse.
+            // Gesucht wird mit dem Gleichheitsabstand ohne den Zuschlag angepasster Umrisse
+            // (`scan_images`): Sonst fiele die ganze Berührzone einer Schnittkante am Umriss bis
+            // `SILHOUETTE_TOL` weg, und dort fehlte eine Linie, die neben der anderen liegt.
+            let freeform_pair = class[idx] == 1 || q_class == 1;
+            let scan = &scan_images[class[idx]][q_class];
+            let mut scan_cuts: Vec<f64> = Vec::new();
             if freeform_pair {
                 let near_at = |t: f64| -> Result<bool, DrawError> {
-                    Ok(!images.feet(qs, images.point(&ps, t)?)?.is_empty())
+                    Ok(!scan.feet(qs, scan.point(&ps, t)?)?.is_empty())
                 };
                 for &(a, b) in &open {
                     let ts: Vec<f64> = (0..=COVER_SCAN)
@@ -808,12 +844,13 @@ fn trim_covered(
                                     hi = mid;
                                 }
                             }
-                            cuts.push(0.5 * (lo + hi));
+                            scan_cuts.push(0.5 * (lo + hi));
                         }
                         prev = now;
                     }
                 }
             }
+            cuts.extend(&scan_cuts);
             if cuts.is_empty() && !ends_near {
                 continue;
             }
@@ -836,12 +873,16 @@ fn trim_covered(
                     }
                     // An einer Übergangsstelle (oben per Halbierung gesucht) liegt der Abstand
                     // genau auf der Grenze; dort knapp innerhalb des Teilbereichs prüfen.
+                    // Ein Teilbereich an einer solchen Stelle gilt nur mit dem engeren Abstand
+                    // als bedeckt.
                     let inset = if freeform_pair { COVER_INSET } else { 0.0 };
+                    let at_scan = scan_cuts.contains(&x) || scan_cuts.contains(&y);
+                    let test = if at_scan { scan } else { images };
                     let mut covered = true;
                     for f in COVER_FRACTIONS {
                         let f = inset + (1.0 - 2.0 * inset) * f;
-                        let pt = images.point(&ps, x + f * (y - x))?;
-                        if images.feet(qs, pt)?.is_empty() {
+                        let pt = test.point(&ps, x + f * (y - x))?;
+                        if test.feet(qs, pt)?.is_empty() {
                             covered = false;
                             break;
                         }
@@ -970,7 +1011,7 @@ mod tests {
         ));
         assert!(matches!(
             v(vec![hit(0.001, 6, HitClass::Boundary)]),
-            RayVote::Unusable
+            RayVote::Grazing
         ));
         assert!(matches!(
             v(vec![hit(0.001, 5, HitClass::Inside)]),
@@ -1007,8 +1048,35 @@ mod tests {
         assert!(matches!(w(both()), RayVote::Blocked));
         assert!(matches!(
             vote(Ray::Hits(both()), &[3], 0, own_eps, near),
-            RayVote::Unusable
+            RayVote::Grazing
         ));
+    }
+
+    /// Gibt für jeden Strahl dieselben Treffer zurück.
+    struct Fixed(Vec<crate::raycast::Hit>);
+    impl Caster for Fixed {
+        fn cast(&self, _: DVec3, _: DVec3, _: f64) -> Ray {
+            Ray::Hits(self.0.clone())
+        }
+    }
+
+    /// C15b: Streift an einer Freiformkante jeder Strahl den Rand einer fremden Fläche davor,
+    /// liegt die Stelle im Bild auf deren Randkante: verdeckt (die vordere Kante wird dort
+    /// gezeichnet). Bei genauen Kanten und bei Randtreffern auf eigenen oder Nachbarflächen
+    /// bleibt die Stelle unentschieden.
+    #[test]
+    fn grazing_a_front_rim_hides_a_freeform_stroke() {
+        let basis = Basis::of(ViewKind::Top);
+        let n = Cell::new(0);
+        let at = |hits: Vec<crate::raycast::Hit>, own: &[usize]| {
+            sample_counted(&Fixed(hits), &basis, DVec3::ZERO, own, 0, 10.0, &n).unwrap()
+        };
+        let rim = || vec![hit(0.01, 13, HitClass::Boundary)];
+        assert_eq!(at(rim(), &[1, 5, FREEFORM_STROKE]), Some(false));
+        assert_eq!(at(rim(), &[1, 5 | NEIGHBOR_FLAG]), Some(false));
+        assert_eq!(at(rim(), &[1, 5]), None);
+        let own_rim = || vec![hit(0.5, 5, HitClass::Boundary)];
+        assert_eq!(at(own_rim(), &[1, 5, FREEFORM_STROKE]), None);
     }
 
     fn line(y: f64, edge: usize) -> Stroke {
