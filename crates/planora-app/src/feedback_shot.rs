@@ -65,7 +65,7 @@ pub enum ShotPhase {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShotStep {
     Nothing,
-    /// [`egui::ViewportCommand::Screenshot`] mit [`shot_user_data`] schicken.
+    /// [`egui::ViewportCommand::Screenshot`] mit [`ShotInbox::request`] schicken.
     RequestScreenshot,
     /// Das Fenster „Rückmeldung“ wieder zeigen.
     ShowDialogAgain,
@@ -130,18 +130,36 @@ impl ShotFlow {
 
 /// Ablage für das angeforderte Bild (egui 0.37): Der Rückruf der Anforderung legt das Bild hier
 /// ab, das nächste Bild der App holt es mit [`ShotInbox::take`]. Fremde Bilder kommen nicht an,
-/// denn jeder Rückruf gehört genau zu einer Anforderung.
+/// denn jeder Rückruf gehört genau zu einer Anforderung; ein verspätetes Bild einer älteren
+/// Anforderung (nach Zeitüberschreitung neu angefordert) wird verworfen.
 #[derive(Clone, Debug, Default)]
-pub struct ShotInbox(Arc<std::sync::Mutex<Option<Arc<egui::ColorImage>>>>);
+pub struct ShotInbox(Arc<std::sync::Mutex<InboxSlot>>);
+
+#[derive(Debug, Default)]
+struct InboxSlot {
+    /// Nummer der jüngsten Anforderung.
+    latest: u64,
+    image: Option<Arc<egui::ColorImage>>,
+}
 
 impl ShotInbox {
-    /// Rückruf für [`egui::ViewportCommand::Screenshot`]: legt das Bild ab und fordert ein neues
-    /// Bild der App an (egui tut das von selbst nicht).
+    /// Rückruf für [`egui::ViewportCommand::Screenshot`]: legt das Bild ab, wenn es zur jüngsten
+    /// Anforderung gehört, und fordert ein neues Bild der App an (egui tut das von selbst nicht).
     pub fn request(&self, ctx: &egui::Context) -> egui::ScreenshotCallback {
+        let number = match self.0.lock() {
+            Ok(mut slot) => {
+                slot.latest += 1;
+                slot.image = None;
+                slot.latest
+            }
+            Err(_) => 0,
+        };
         let (inbox, ctx) = (self.clone(), ctx.clone());
         egui::ScreenshotCallback::new(move |img| {
-            if let Ok(mut slot) = inbox.0.lock() {
-                *slot = Some(img);
+            if let Ok(mut slot) = inbox.0.lock()
+                && slot.latest == number
+            {
+                slot.image = Some(img);
             }
             ctx.request_repaint();
         })
@@ -149,7 +167,7 @@ impl ShotInbox {
 
     /// Das abgelegte Bild, falls eines da ist (nur einmal).
     pub fn take(&self) -> Option<Arc<egui::ColorImage>> {
-        self.0.lock().ok().and_then(|mut s| s.take())
+        self.0.lock().ok().and_then(|mut s| s.image.take())
     }
 }
 

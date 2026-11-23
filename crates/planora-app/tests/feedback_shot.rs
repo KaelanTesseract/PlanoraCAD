@@ -109,6 +109,13 @@ fn a_screenshot_arrives_only_through_its_own_request() {
     cb.complete(Arc::new(dummy(9, 9)));
     assert_eq!(inbox.take().map(|i| i.size), Some([2, 3]));
     assert!(inbox.take().is_none(), "nur einmal");
+    // Ein verspätetes Bild einer älteren Anforderung zählt nicht mehr.
+    let old_request = inbox.request(&ctx);
+    let new_request = inbox.request(&ctx);
+    old_request.complete(Arc::new(dummy(4, 4)));
+    assert!(inbox.take().is_none(), "altes Bild verworfen");
+    new_request.complete(Arc::new(dummy(5, 6)));
+    assert_eq!(inbox.take().map(|i| i.size), Some([5, 6]));
     // Ohne Anforderung bleibt ein Bild unbeachtet.
     let mut f = ShotFlow::default();
     assert_eq!(f.received(Arc::new(dummy(1, 1))), ShotStep::Nothing);
