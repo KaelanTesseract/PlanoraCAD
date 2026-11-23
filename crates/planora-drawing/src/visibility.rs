@@ -21,7 +21,7 @@ use crate::raycast::{Caster, HitClass, Ray};
 use crate::stroke::{Stroke, StrokeOrigin};
 use crate::{Piece, Visibility};
 use planora_exchange::Progress;
-use planora_kernel::Curve;
+use planora_kernel::{Curve, NURBS_EDGE_TOL};
 use planora_math::{DVec2, DVec3};
 use std::cell::Cell;
 
@@ -532,6 +532,76 @@ impl MergeGrid {
     }
 }
 
+/// Proben je Stück für [`flat_spline_tips`].
+const FLAT_TIP_SAMPLES: usize = 64;
+
+/// Umkehrstellen einer Freiformkante, deren Bild flach wie eine Strecke ist (alle Proben
+/// höchstens `thin` neben der Geraden durch die Enden des Bilds, etwa eine ebene Schnittkurve in
+/// allgemeiner Lage, deren Ebene die Blickrichtung enthält, C15): Dort kehrt das Bild um und
+/// läge sonst zweimal über sich selbst (wie bei [`tip_params`] für Kreise). Echt innerhalb
+/// `(a, b)`, auf die Rechengenauigkeit gesucht.
+fn flat_spline_tips(s: &Stroke, basis: &Basis, thin: f64, a: f64, b: f64) -> Vec<f64> {
+    if !matches!(s.curve, Curve::Nurbs(_)) || b <= a {
+        return Vec::new();
+    }
+    let ts: Vec<f64> = (0..=FLAT_TIP_SAMPLES)
+        .map(|i| a + (b - a) * i as f64 / FLAT_TIP_SAMPLES as f64)
+        .collect();
+    let ps: Vec<DVec2> = ts.iter().map(|&t| s.point2(basis, t)).collect();
+    // Richtung des Bilds: weitester Punkt vom Anfang (die Enden können zusammenfallen).
+    let far = ps
+        .iter()
+        .copied()
+        .max_by(|x, y| x.distance(ps[0]).total_cmp(&y.distance(ps[0])))
+        .unwrap_or(ps[0]);
+    let len = far.distance(ps[0]);
+    if !(len > thin && len.is_finite()) {
+        return Vec::new();
+    }
+    let w = (far - ps[0]) / len;
+    if ps.iter().any(|p| (*p - ps[0]).perp_dot(w).abs() > thin) {
+        return Vec::new();
+    }
+    let along = |t: f64| (s.point2(basis, t) - ps[0]).dot(w);
+    let vs: Vec<f64> = ps.iter().map(|p| (*p - ps[0]).dot(w)).collect();
+    let mut out = Vec::new();
+    for i in 1..FLAT_TIP_SAMPLES {
+        for sign in [1.0, -1.0] {
+            if sign * vs[i] >= sign * vs[i - 1] && sign * vs[i] > sign * vs[i + 1] {
+                let t = golden_extreme(&|t| sign * along(t), ts[i - 1], ts[i + 1]);
+                if t > a && t < b {
+                    out.push(t);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Stelle des größten Werts von `f` auf `[lo, hi]` (Goldener Schnitt; `f` dort eingipflig).
+fn golden_extreme(f: &dyn Fn(f64) -> f64, mut lo: f64, mut hi: f64) -> f64 {
+    const R: f64 = 0.618_033_988_749_894_8;
+    let mut x1 = hi - R * (hi - lo);
+    let mut x2 = lo + R * (hi - lo);
+    let (mut f1, mut f2) = (f(x1), f(x2));
+    for _ in 0..80 {
+        if f1 < f2 {
+            lo = x1;
+            x1 = x2;
+            f1 = f2;
+            x2 = lo + R * (hi - lo);
+            f2 = f(x2);
+        } else {
+            hi = x2;
+            x2 = x1;
+            f2 = f1;
+            x1 = hi - R * (hi - lo);
+            f1 = f(x1);
+        }
+    }
+    if f1 >= f2 { x1 } else { x2 }
+}
+
 /// Schritt 2 von [`merge_pieces`]: entfernt von jedem Stück die Teile, die ranghöhere,
 /// schon behaltene Stücke im Bild bedecken (siehe dort).
 fn trim_covered(
@@ -550,7 +620,16 @@ fn trim_covered(
     let mut split = Vec::with_capacity(pieces.len());
     for p in pieces {
         let mut a = p.t0;
-        for t in tip_params(&strokes[p.stroke], basis, thin, p.t0, p.t1) {
+        let mut tips = tip_params(&strokes[p.stroke], basis, thin, p.t0, p.t1);
+        tips.extend(flat_spline_tips(
+            &strokes[p.stroke],
+            basis,
+            thin + 2.0 * SILHOUETTE_TOL,
+            p.t0,
+            p.t1,
+        ));
+        tips.sort_by(f64::total_cmp);
+        for t in tips {
             split.push(Piece { t0: a, t1: t, ..p });
             a = t;
         }
@@ -562,21 +641,42 @@ fn trim_covered(
     let near = images.near();
     // Paare mit einem angepassten Umriss: Gleichheitsabstand `SILHOUETTE_TOL + near` (angepasst
     // gegen genau) bzw. `2·SILHOUETTE_TOL + near` (zwei angepasste); genaue Paare behalten `near`.
+    // Freiformkanten (etwa Schnittkurven in allgemeiner Lage, C15) liegen nur auf
+    // `NURBS_EDGE_TOL` genau auf ihren Flächen: Sie tragen diese Genauigkeit bei (Klasse 1).
     let tol_unit = geom_tol(extent);
-    let wide_one = Images::new(basis, r, extent, (SILHOUETTE_TOL + near) / tol_unit);
-    let wide_two = Images::new(basis, r, extent, (2.0 * SILHOUETTE_TOL + near) / tol_unit);
+    let extra = [0.0, NURBS_EDGE_TOL, SILHOUETTE_TOL];
+    let class_of = |st: &Stroke| -> usize {
+        if is_fitted(st) {
+            2
+        } else if matches!(st.curve, Curve::Nurbs(_)) {
+            1
+        } else {
+            0
+        }
+    };
+    let pair_images: Vec<Vec<Images>> = (0..3)
+        .map(|a| {
+            (0..3)
+                .map(|b| Images::new(basis, r, extent, (extra[a] + extra[b] + near) / tol_unit))
+                .collect()
+        })
+        .collect();
     let fitted: Vec<bool> = pieces
         .iter()
         .map(|p| is_fitted(&strokes[p.stroke]))
         .collect();
-    let pad = |f: bool| if f { wide_two.near() } else { near };
+    let class: Vec<usize> = pieces
+        .iter()
+        .map(|p| class_of(&strokes[p.stroke]))
+        .collect();
+    let pad = |c: usize| near + 2.0 * extra[c];
     let mut boxes: Vec<(DVec2, DVec2)> = Vec::with_capacity(pieces.len());
     let mut depth: Vec<f64> = Vec::with_capacity(pieces.len());
     for (k, p) in pieces.iter().enumerate() {
         if k % MERGE_CHECK_EVERY == 0 {
             progress.check()?;
         }
-        let (lo, hi) = piece_stroke(strokes, p).bbox2(basis, pad(fitted[k]));
+        let (lo, hi) = piece_stroke(strokes, p).bbox2(basis, pad(class[k]));
         if !(lo.is_finite() && hi.is_finite()) {
             return Err(DrawError::NonFinite);
         }
@@ -607,12 +707,12 @@ fn trim_covered(
                 progress.check()?;
             }
             let qs = &kept[q].1;
-            let q_fitted = is_fitted(qs);
-            let (qlo, qhi) = qs.bbox2(basis, pad(q_fitted));
-            let images = match (fitted[idx], q_fitted) {
-                (false, false) => &images,
-                (true, true) => &wide_two,
-                _ => &wide_one,
+            let q_class = class_of(qs);
+            let (qlo, qhi) = qs.bbox2(basis, pad(q_class));
+            let images = if class[idx] == 0 && q_class == 0 {
+                &images
+            } else {
+                &pair_images[class[idx]][q_class]
             };
             if qlo.x > phi.x || plo.x > qhi.x || qlo.y > phi.y || plo.y > qhi.y {
                 continue;
@@ -685,7 +785,7 @@ fn trim_covered(
         for (a, b) in open {
             let piece = Piece { t0: a, t1: b, ..p };
             let st = piece_stroke(strokes, &piece);
-            let (lo, hi) = st.bbox2(basis, pad(fitted[idx]));
+            let (lo, hi) = st.bbox2(basis, pad(class[idx]));
             grid.insert(kept.len(), lo, hi);
             kept.push((piece, st));
         }
