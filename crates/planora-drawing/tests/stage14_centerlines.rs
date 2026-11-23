@@ -407,7 +407,17 @@ fn series_of_random_bodies_no_panic_and_centerlines_lie_on_the_axes() {
     for seed in 0..200u64 {
         let (s, csg) = random_body_csg(seed);
         let centers = prim_centers(&csg);
-        let tol = geom_tol(own_extent(&[&s]));
+        // Körper mit Schnittkanten in allgemeiner Lage (C15) tragen Freiformkanten, die nur auf
+        // `NURBS_EDGE_TOL` genau auf ihren Flächen liegen; daran messen sich auch die Achsenden.
+        let freeform = s
+            .edges
+            .iter()
+            .any(|(_, e)| matches!(e.curve, planora_kernel::Curve::Nurbs(_)));
+        let tol = if freeform {
+            geom_tol(own_extent(&[&s])).max(planora_kernel::NURBS_EDGE_TOL)
+        } else {
+            geom_tol(own_extent(&[&s]))
+        };
         for kind in ALL_VIEWS {
             let ls = lines(&s, kind);
             if kind == ViewKind::Isometric {
