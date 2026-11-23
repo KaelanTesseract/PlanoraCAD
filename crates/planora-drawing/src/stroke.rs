@@ -172,6 +172,22 @@ impl EdgeFaces {
         EdgeFaces { faces }
     }
 
+    /// Nachbarflächen über Freiformkanten: Flächen, die mit einer der Flächen `own` eine Kante
+    /// teilen, deren Kurve eine Freiformkurve ist (ohne `own` selbst).
+    pub fn freeform_neighbors(&self, solid: &Solid, own: &[usize]) -> Vec<usize> {
+        let mut out = Vec::new();
+        for ((_, e), fs) in solid.edges.iter().zip(&self.faces) {
+            if matches!(e.curve, planora_kernel::Curve::Nurbs(_))
+                && fs.iter().any(|f| own.contains(f))
+            {
+                out.extend(fs.iter().filter(|f| !own.contains(f)));
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// Eigene Flächen eines Strichs: bei einer Kante die anliegenden Flächen, bei einem Umriss
     /// seine Fläche.
     pub fn own_faces(&self, stroke: &Stroke) -> Vec<usize> {

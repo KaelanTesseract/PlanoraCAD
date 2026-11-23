@@ -55,17 +55,21 @@ fn count(counter: &Cell<u64>) -> Result<(), DrawError> {
     Ok(())
 }
 
-/// Ein Strahl: Treffer auf eigenen Flächen mit `s ≤ OWN_EPS` entfallen; bleibt ein Randtreffer,
-/// ist der Strahl unbrauchbar, sonst verdeckt ihn ein Innentreffer.
-fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64) -> RayVote {
+/// Ein Strahl: Treffer auf eigenen Flächen mit `s ≤ OWN_EPS` entfallen, ebenso Randtreffer auf
+/// Nachbarflächen über Freiformkanten mit `s ≤ near_eps` ([`NEIGHBOR_FLAG`]); bleibt ein
+/// Randtreffer, ist der Strahl unbrauchbar, sonst verdeckt ihn ein Innentreffer.
+fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64, near_eps: f64) -> RayVote {
     let Ray::Hits(hits) = ray else {
         return RayVote::Unusable;
     };
     let mut blocked = false;
-    for h in hits
-        .iter()
-        .filter(|h| !(h.body == body && own.contains(&h.face) && h.s <= own_eps))
-    {
+    for h in hits.iter().filter(|h| {
+        !(h.body == body && own.contains(&h.face) && h.s <= own_eps)
+            && !(h.body == body
+                && own.contains(&(h.face | NEIGHBOR_FLAG))
+                && matches!(h.class, HitClass::Boundary)
+                && h.s <= near_eps)
+    }) {
         match h.class {
             HitClass::Boundary => return RayVote::Unusable,
             HitClass::Inside => blocked = true,
@@ -76,6 +80,18 @@ fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64) -> RayVote {
     } else {
         RayVote::Free
     }
+}
+
+/// Kennung einer Nachbarfläche in der Liste der eigenen Flächen eines Strichs (Index plus diese
+/// Marke): eine Fläche, die über eine Freiformkante an einer eigenen Fläche hängt (C15b).
+pub const NEIGHBOR_FLAG: usize = 1 << 40;
+
+/// Bis zu diesem Abstand zählen Randtreffer auf Nachbarflächen ([`NEIGHBOR_FLAG`]) nicht:
+/// Endet ein Umriss oder eine Kante im Bild tangential auf einer Freiformkante, liegt deren
+/// Berührpunkt nur auf `NURBS_EDGE_TOL` genau, und die Prüfstrahlen streifen den Rand der
+/// Nachbarfläche auf einer Länge von etwa `√(2·R·NURBS_EDGE_TOL)` (C15b). Innentreffer zählen.
+fn near_eps(extent: f64) -> f64 {
+    (2.0 * extent.max(1e-9) * planora_kernel::NURBS_EDGE_TOL).sqrt()
 }
 
 /// Kippabstimmung an `p`, zählt die Strahlwürfe.
@@ -96,7 +112,8 @@ fn sample_counted(
         let phi = k as f64 * std::f64::consts::TAU / TILT_DIRECTIONS as f64;
         let dir = (eye + (basis.ex * phi.cos() + basis.ey * phi.sin()) * TILT).normalize();
         count(counter)?;
-        match vote(caster.cast(p, dir, min_s), own, body, own_eps) {
+        let ray = caster.cast(p, dir, min_s);
+        match vote(ray, own, body, own_eps, near_eps(extent)) {
             RayVote::Free => return Ok(Some(true)),
             RayVote::Blocked => blocked = true,
             RayVote::Unusable => {}
@@ -848,6 +865,45 @@ mod tests {
     use crate::model::ViewKind;
     use crate::stroke::StrokeOrigin;
     use planora_kernel::Curve;
+
+    fn hit(s: f64, face: usize, class: HitClass) -> crate::raycast::Hit {
+        crate::raycast::Hit {
+            s,
+            body: 0,
+            face,
+            class,
+        }
+    }
+
+    /// C15b: Randtreffer auf einer Nachbarfläche über eine Freiformkante zählen nahe dem Start
+    /// nicht; weiter weg, auf anderen Flächen oder im Inneren zählen sie.
+    #[test]
+    fn near_rim_hits_on_freeform_neighbours_are_ignored() {
+        let own = [3, 5 | NEIGHBOR_FLAG];
+        let (own_eps, near) = (1e-4, 0.02);
+        let v = |h: Vec<crate::raycast::Hit>| vote(Ray::Hits(h), &own, 0, own_eps, near);
+        assert!(matches!(
+            v(vec![hit(0.001, 5, HitClass::Boundary)]),
+            RayVote::Free
+        ));
+        assert!(matches!(
+            v(vec![hit(0.05, 5, HitClass::Boundary)]),
+            RayVote::Unusable
+        ));
+        assert!(matches!(
+            v(vec![hit(0.001, 6, HitClass::Boundary)]),
+            RayVote::Unusable
+        ));
+        assert!(matches!(
+            v(vec![hit(0.001, 5, HitClass::Inside)]),
+            RayVote::Blocked
+        ));
+        // Eigene Flächen wie bisher bis OWN_EPS.
+        assert!(matches!(
+            v(vec![hit(5e-5, 3, HitClass::Boundary)]),
+            RayVote::Free
+        ));
+    }
 
     fn line(y: f64, edge: usize) -> Stroke {
         Stroke {

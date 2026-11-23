@@ -250,7 +250,9 @@ pub fn compute_view_unmerged(
         progress.check()?;
         let s = &strokes[i];
         let body = origin_body(s);
-        let own = edge_faces[body].own_faces(s);
+        let mut own = edge_faces[body].own_faces(s);
+        let neighbors = edge_faces[body].freeform_neighbors(bodies[body].solid, &own);
+        own.extend(neighbors.iter().map(|f| f | visibility::NEIGHBOR_FLAG));
         let name = stroke_name(bodies, s);
         // Angepasste Umriss-Splines: Prüfstrahlen vom Punkt des wahren Umrisses.
         let outline = match (&s.origin, &s.curve) {
