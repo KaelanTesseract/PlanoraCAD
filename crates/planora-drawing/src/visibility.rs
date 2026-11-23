@@ -124,7 +124,22 @@ fn near_eps(extent: f64) -> f64 {
     (2.0 * extent.max(1e-9) * planora_kernel::NURBS_EDGE_TOL).sqrt()
 }
 
-/// Kippabstimmung an `p`, zählt die Strahlwürfe.
+/// Urteil der Kippabstimmung an einer Stelle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Sample {
+    /// Sichtbar (`true`) oder verdeckt.
+    Seen(bool),
+    /// Freiformkante, jeder Strahl streift den Rand einer fremden Fläche davor (C15b): Die
+    /// Stelle liegt im Bild auf deren Randkante, etwa eine steile Schnittkurve auf einer Wand,
+    /// die man von der Kante sieht, unter dem Randkreis der Deckfläche. Die vordere Kante wird
+    /// dort gezeichnet; ist sie verdeckt, ist es die Stelle dahinter auch. Gilt als verdeckt,
+    /// wenn keine Ausweichstelle entscheidet (das Zusammenfassen nimmt das verdeckte Stück unter
+    /// einer sichtbaren weg).
+    Grazing,
+    Unknown,
+}
+
+/// Kippabstimmung an `p` (verdeckt auch bei [`Sample::Grazing`]), zählt die Strahlwürfe.
 fn sample_counted(
     caster: &dyn Caster,
     basis: &Basis,
@@ -134,6 +149,25 @@ fn sample_counted(
     extent: f64,
     counter: &Cell<u64>,
 ) -> Result<Option<bool>, DrawError> {
+    Ok(
+        match sample_raw(caster, basis, p, own, body, extent, counter)? {
+            Sample::Seen(v) => Some(v),
+            Sample::Grazing => Some(false),
+            Sample::Unknown => None,
+        },
+    )
+}
+
+/// Kippabstimmung an `p`, zählt die Strahlwürfe.
+fn sample_raw(
+    caster: &dyn Caster,
+    basis: &Basis,
+    p: DVec3,
+    own: &[usize],
+    body: usize,
+    extent: f64,
+    counter: &Cell<u64>,
+) -> Result<Sample, DrawError> {
     let eye = basis.eye_dir();
     let min_s = self_eps(extent);
     let own_eps = own_eps(extent);
@@ -156,7 +190,7 @@ fn sample_counted(
             count(counter)?;
             let ray = caster.cast(p, dir, min_s);
             match vote(ray, own, body, own_eps, near_eps(extent)) {
-                RayVote::Free => return Ok(Some(true)),
+                RayVote::Free => return Ok(Sample::Seen(true)),
                 RayVote::Blocked => blocked = true,
                 RayVote::Unusable => all_grazing = false,
                 RayVote::Grazing => {}
@@ -166,13 +200,13 @@ fn sample_counted(
             break;
         }
     }
-    // Freiformkante, an der jeder Strahl den Rand einer fremden Fläche davor streift (C15b):
-    // Die Stelle liegt im Bild auf deren Randkante, etwa eine steile Schnittkurve auf einer
-    // Wand, die man von der Kante sieht, unter dem Randkreis der Deckfläche. Die vordere Kante
-    // wird dort gezeichnet; ist sie verdeckt, ist es die Stelle dahinter auch. „Verdeckt“
-    // überlässt die Linie der vorderen Kante (das Zusammenfassen nimmt das verdeckte Stück
-    // unter einer sichtbaren weg).
-    Ok((blocked || (freeform && all_grazing)).then_some(false))
+    Ok(if blocked {
+        Sample::Seen(false)
+    } else if freeform && all_grazing {
+        Sample::Grazing
+    } else {
+        Sample::Unknown
+    })
 }
 
 /// Ergebnis an einer Stelle: Some(true) = sichtbar, Some(false) = verdeckt, None = unbrauchbar.
@@ -205,7 +239,8 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    /// Urteil an der Stelle `f` des Stücks `[ta, tb]`; unbrauchbar → Ausweichstellen.
+    /// Urteil an der Stelle `f` des Stücks `[ta, tb]`; unbrauchbar → Ausweichstellen. Streift
+    /// an `f` jeder Strahl ([`Sample::Grazing`]) und entscheidet keine Ausweichstelle: verdeckt.
     fn judge(&self, ta: f64, tb: f64, f: f64) -> Result<Visibility, DrawError> {
         let candidates = std::iter::once(f).chain(
             SHIFTS
@@ -213,9 +248,10 @@ impl Ctx<'_> {
                 .map(|s| f + s)
                 .filter(|g| *g > 0.0 && *g < 1.0),
         );
-        for g in candidates {
+        let mut grazing = false;
+        for (k, g) in candidates.enumerate() {
             let p = (self.map)(self.stroke.point(ta + g * (tb - ta)));
-            let v = sample_counted(
+            match sample_raw(
                 self.caster,
                 self.basis,
                 p,
@@ -223,15 +259,15 @@ impl Ctx<'_> {
                 self.body,
                 self.extent,
                 self.counter,
-            )?;
-            if let Some(vis) = v {
-                let vis = if vis {
-                    Visibility::Visible
-                } else {
-                    Visibility::Hidden
-                };
-                return Ok(vis);
+            )? {
+                Sample::Seen(true) => return Ok(Visibility::Visible),
+                Sample::Seen(false) => return Ok(Visibility::Hidden),
+                Sample::Grazing if k == 0 => grazing = true,
+                _ => {}
             }
+        }
+        if grazing {
+            return Ok(Visibility::Hidden);
         }
         Err(DrawError::AmbiguousVisibility(self.name.to_string()))
     }
@@ -378,19 +414,17 @@ pub fn classify_range_mapped(
         min_width: BISECT_TOL * stroke.param_len(),
         map,
     };
-    // Sicherheitsnetz: Urteile knapp innerhalb der Enden (ohne Ausweichen; unbrauchbar → kein
-    // bekanntes Ende), damit ein Wechsel im äußeren Viertel nicht hinter drei gleichen
-    // Stützstellen verschwindet.
+    // Sicherheitsnetz: Urteile knapp innerhalb der Enden (ohne Ausweichen; unbrauchbar oder
+    // streifend → kein bekanntes Ende), damit ein Wechsel im äußeren Viertel nicht hinter drei
+    // gleichen Stützstellen verschwindet.
     let probe = |f: f64| -> Result<Option<Visibility>, DrawError> {
         let p = map(stroke.point(ta + f * (tb - ta)));
         Ok(
-            sample_counted(caster, basis, p, own, body, extent, counter)?.map(|v| {
-                if v {
-                    Visibility::Visible
-                } else {
-                    Visibility::Hidden
-                }
-            }),
+            match sample_raw(caster, basis, p, own, body, extent, counter)? {
+                Sample::Seen(true) => Some(Visibility::Visible),
+                Sample::Seen(false) => Some(Visibility::Hidden),
+                Sample::Grazing | Sample::Unknown => None,
+            },
         )
     };
     let (left, right) = (probe(END_PROBE)?, probe(1.0 - END_PROBE)?);
@@ -1077,6 +1111,56 @@ mod tests {
         assert_eq!(at(rim(), &[1, 5]), None);
         let own_rim = || vec![hit(0.5, 5, HitClass::Boundary)];
         assert_eq!(at(own_rim(), &[1, 5, FREEFORM_STROKE]), None);
+    }
+
+    /// Streift bis `x < 1.01` (fremder Rand bei `s` = 0,01), dahinter frei.
+    struct Split;
+    impl Caster for Split {
+        fn cast(&self, origin: DVec3, _: DVec3, _: f64) -> Ray {
+            if origin.x < 1.01 {
+                Ray::Hits(vec![hit(0.01, 13, HitClass::Boundary)])
+            } else {
+                Ray::Hits(Vec::new())
+            }
+        }
+    }
+
+    /// Prüferfund C15b: Die Streifregel greift erst, wenn auch die Ausweichstellen nichts
+    /// entscheiden; entscheidet keine, bleibt sie (verdeckt).
+    #[test]
+    fn grazing_yields_to_a_decided_shift() {
+        let basis = Basis::of(ViewKind::Top);
+        let n = Cell::new(0);
+        let st = line(0.0, 1);
+        let own = [1, FREEFORM_STROKE];
+        let id = |p: DVec3| p;
+        let ctx = |caster: &'static dyn Caster| Ctx {
+            caster,
+            basis: &basis,
+            stroke: &st,
+            own: &own,
+            body: 0,
+            extent: 10.0,
+            name: "S",
+            counter: &n,
+            min_width: 1e-9,
+            map: &id,
+        };
+        // Stelle x = 1,0 streift, die Ausweichstelle x ≈ 1,025 ist frei.
+        assert_eq!(
+            ctx(&Split).judge(0.0, 2.0, 0.5).unwrap(),
+            Visibility::Visible
+        );
+        // Überall streifend: verdeckt.
+        static ALL: Fixed2 = Fixed2;
+        assert_eq!(ctx(&ALL).judge(0.0, 2.0, 0.5).unwrap(), Visibility::Hidden);
+    }
+
+    struct Fixed2;
+    impl Caster for Fixed2 {
+        fn cast(&self, _: DVec3, _: DVec3, _: f64) -> Ray {
+            Ray::Hits(vec![hit(0.01, 13, HitClass::Boundary)])
+        }
     }
 
     fn line(y: f64, edge: usize) -> Stroke {
