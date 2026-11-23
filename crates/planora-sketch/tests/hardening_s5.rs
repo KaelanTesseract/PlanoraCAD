@@ -383,6 +383,38 @@ fn carried_cycle_groups_still_find_loops() {
     assert_eq!(s.solve().status, SolveStatus::Solved);
 }
 
+/// Prüft, dass `refuse` an der Skizze aus [`arc_cycle_setup`] scheitert und sie samt Stand
+/// unverändert lässt; liefert den Fehlertext.
+fn refusal_leaves_unchanged(
+    refuse: impl FnOnce(&mut Sketch, PointId, PointId, PointId) -> Result<CurveId, planora_sketch::SketchError>,
+) -> String {
+    let (mut s, corner, q1, q2) = arc_cycle_setup();
+    s.solve();
+    let data = s.to_data();
+    let revision = s.revision();
+    let e = refuse(&mut s, corner, q1, q2).unwrap_err().to_string();
+    assert_eq!(s.to_data(), data, "{e}");
+    assert_eq!(s.revision(), revision, "der Stand bleibt ({e})");
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    e
+}
+
+/// Reste von Punkt 8 (2026-11-23): Rücknahme beim elliptischen Bogen und den 3D-Bögen. Die
+/// 3D-Bögen erreichen die Schleifenprüfung an Mustern nie: Vorlagen- und Exemplarpunkte lassen
+/// sich nicht in den Raum heben, und diese Ablehnung kommt zuerst. Auch sie lässt alles stehen.
+#[test]
+fn refused_elliptic_and_3d_arcs_leave_the_sketch_unchanged() {
+    let e = refusal_leaves_unchanged(|s, c, a, b| s.add_elliptic_arc(c, v(30.0, 0.0), 5.0, a, b));
+    assert!(e.contains("eigenen Exemplar"), "{e}");
+    let x = planora_math::DVec3::X;
+    let e = refusal_leaves_unchanged(|s, c, a, b| s.add_arc3(c, a, b, x));
+    assert!(e.contains("3D werden"), "{e}");
+    let e = refusal_leaves_unchanged(|s, c, a, b| {
+        s.add_elliptic_arc3(c, planora_math::DVec3::Y * 30.0, 5.0, a, b, x)
+    });
+    assert!(e.contains("3D werden"), "{e}");
+}
+
 /// Reste von Punkt 8 (2026-11-23): Ein abgelehnter Bogen gibt die Gruppen der Schleifenprüfung
 /// zurück, statt sie zu verwerfen; die nächste Prüfung baut nicht neu.
 #[test]
@@ -448,8 +480,30 @@ fn add_arcs_ms(n: usize) -> f64 {
 #[ignore = "Zeitmessung; im Release laufen lassen: cargo test --release -- --ignored"]
 fn adding_arcs_with_a_pattern_does_not_copy_the_sketch() {
     let ms = (0..3).map(|_| add_arcs_ms(200)).fold(f64::MAX, f64::min);
-    println!("200 Bögen bei 3200 Musterkurven: {ms:.2} ms");
-    assert!(ms < 20.0, "zu langsam: {ms:.2} ms");
+    // Vergleich statt fester Zeit (Reste von Punkt 8): Der alte Weg kopierte die Skizze je Bogen;
+    // 200 Kopien derselben Skizze sind das Maß (der alte Weg brauchte mit Kopie und Neubau der
+    // Gruppen rund 25-mal so lange wie sie), der neue Weg muss viermal schneller sein
+    // (gemessen 2026-11-23: 0,9 ms gegen 7,6 ms).
+    let copies = (0..3).map(|_| clone_ms(200)).fold(f64::MAX, f64::min);
+    println!("200 Bögen bei 3200 Musterkurven: {ms:.2} ms, 200 Kopien: {copies:.2} ms");
+    assert!(ms * 4.0 < copies, "zu langsam: {ms:.2} ms gegen {copies:.2} ms");
+}
+
+/// Zeit für `n` Kopien der Skizze aus [`add_arcs_ms`] (ohne Bögen).
+fn clone_ms(n: usize) -> f64 {
+    let mut s = sketch();
+    let mut sources = Vec::new();
+    for i in 0..20 {
+        let x = i as f64 * 12.0;
+        sources.extend(s.add_rectangle(v(x, 0.0), v(x + 10.0, 6.0)).unwrap().lines);
+    }
+    s.add_pattern(&plan(sources, [10, 4], [300.0, 10.0]))
+        .unwrap();
+    let t = Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(s.clone());
+    }
+    t.elapsed().as_secs_f64() * 1000.0
 }
 
 /// Prüferfund K1 (2026-11-22): Mehr Exemplare über die Anzahl (die Exemplare enden mit einem

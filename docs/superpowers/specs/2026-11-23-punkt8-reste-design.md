@@ -27,7 +27,9 @@ wie bisher; Dateien ändern sich nicht.
 6. **`max_rounds`:** Der Freiheitsgrad-Test prüft, dass die Musterrunden bis zur Höchstzahl liefen
    (`group_solves`).
 7. **Messtest ohne feste Zeit:** 200 Bögen werden mit 200 Kopien der Skizze verglichen (der alte
-   Weg kopierte je Bogen); der neue Weg muss mindestens zehnmal schneller sein.
+   Weg kopierte je Bogen); der neue Weg muss mindestens viermal schneller sein (beim Bau
+   gemessen: 0,9 ms gegen 7,6 ms; die bloße Kopie ist billiger als gedacht, der alte Weg kostete
+   mit Neubau der Gruppen 194 ms).
 
 ## Ansätze
 
@@ -35,6 +37,14 @@ Zu 3 gab es eine Wahl: die Gruppen vor dem Anlegen kopieren (kostet je Bogen ein
 genau das, was die Härtung abgeschafft hat) oder vor dem Fortführen prüfen (gewählt, kostet
 nichts). Zu 4: den Bericht nachträglich aus Punkten raten (ungenau, weil x und y eines Punkts in
 verschiedenen Gruppen liegen können) oder die freien Variablen mitführen (gewählt).
+
+## Nachtrag beim Bau (2026-11-23)
+
+- **3D-Bögen:** Sie erreichen die Schleifenprüfung an Mustern nie, weil Vorlagen- und
+  Exemplarpunkte nicht in den Raum gehoben werden können und diese Ablehnung zuerst kommt. Der
+  Rücknahmetest prüft darum diese Ablehnung (Skizze und Stand unverändert).
+- **Prüfhilfe:** `Sketch::cycle_groups_ready()` (versteckt) zeigt in Tests, ob die nächste
+  Schleifenprüfung neu bauen müsste.
 
 ## Nachweis
 
