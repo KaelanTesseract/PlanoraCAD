@@ -11,7 +11,6 @@ use crate::state::AppState;
 use crate::{theme, viewport};
 use egui::{Event, ImeEvent, Key, Modifiers, Order, Pos2, Rect, Vec2, pos2};
 use planora_feature::SketchFeature;
-use planora_i18n::tr;
 
 /// Abstand des ersten Felds vom Zeiger, je Richtung.
 const POINTER_GAP: f32 = 24.0;
@@ -371,10 +370,12 @@ fn draw_rows(
         if skip.contains(&kind) {
             continue;
         }
-        let error = se.input.fields[i]
-            .error
-            .clone()
-            .or_else(|| (se.kind_grip.over == Some(kind)).then(|| tr!("sketch-grip-too-large")));
+        let error = se.input.fields[i].error.clone().or_else(|| {
+            se.kind_grip
+                .over
+                .filter(|(f, _)| *f == kind)
+                .map(|(_, why)| why.message())
+        });
         let has_keys = widget_id(ctx, kind).is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
         let mut text = if touched {
             se.input.fields[i].text.clone()

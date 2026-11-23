@@ -51,7 +51,7 @@ pub use pdf::{PdfMeta, pdf_bytes, write_pdf};
 pub use plain_dxf::{
     DxfUnit, PlainDxf, PlainEntity, PlainLayer, plain_dxf_string, write_plain_dxf,
 };
-pub use section::{SectionData, SectionLines, compute_section};
+pub use section::{SectionData, SectionLines, compute_section, compute_section_keyed};
 pub use sheet_frame::{
     CellLabel, PartsSpace, SheetLayout, SheetPen, TitleField, sheet_layout, sheet_layout_with,
 };

@@ -359,25 +359,45 @@ fn angle_frame(origin: DVec3, dir: DVec3, reference: DVec3, angle_deg: f64) -> F
     }
 }
 
-/// Mittelebene zweier Ebenen: parallel ⇒ in der Mitte mit der Lage von `a`; sonst die
+/// Weiter als so weit (mm, 1 km) von beiden Ebenen weg zählt die Schnittgerade fast paralleler
+/// Ebenen (Winkel unter [`MID_FAR_SIN`]) nicht: Das Paar gilt als parallel, sonst landete der
+/// Ursprung der Mittelebene fern jedes Modells.
+const MID_FAR_MM: f64 = 1e6;
+
+/// Sinus des Winkels, unter dem zwei Ebenen mit ferner Schnittgerade als parallel gelten.
+const MID_FAR_SIN: f64 = 1e-6;
+
+/// Mittelebene zweier Ebenen: parallel (auch fast parallel, deren Schnittgerade weiter als
+/// [`MID_FAR_MM`] von beiden Ursprüngen läge) ⇒ in der Mitte mit der Lage von `a`; sonst die
 /// Winkelhalbierende durch die Schnittgerade (gleicher vorzeichenbehafteter Abstand zu beiden,
 /// Normale zur Seite von `a`); deckungsgleich ⇒ Fehler.
 fn mid_frame(a: &Frame, b: &Frame, tol: &Tolerance) -> Result<Frame, FeatureError> {
-    let d = a.z.cross(b.z);
-    if d.length() < tol.angular.max(1e-9) {
+    let parallel = || {
         let dist = (b.origin - a.origin).dot(a.z);
         if dist.abs() <= tol.linear {
             return Err(FeatureError::InvalidInput(tr!("feature-plane-same")));
         }
-        return Ok(Frame {
+        Ok(Frame {
             origin: a.origin + a.z * (dist / 2.0),
             ..*a
-        });
+        })
+    };
+    let d = a.z.cross(b.z);
+    if d.length() < tol.angular.max(1e-9) {
+        return parallel();
     }
     // Punkt der Schnittgeraden (nächster zum Weltursprung).
     let (c1, c2) = (a.z.dot(a.origin), b.z.dot(b.origin));
     let p = (b.z.cross(d) * c1 + d.cross(a.z) * c2) / d.dot(d);
     let x = d.normalize();
+    // Abstand der Schnittgeraden (nicht nur des Punkts) zu den Ursprüngen.
+    let off = |o: DVec3| {
+        let r = o - p;
+        (r - x * r.dot(x)).length()
+    };
+    if d.length() < MID_FAR_SIN && off(a.origin) > MID_FAR_MM && off(b.origin) > MID_FAR_MM {
+        return parallel();
+    }
     let z = (a.z - b.z).normalize();
     Ok(Frame {
         origin: p,
@@ -387,12 +407,28 @@ fn mid_frame(a: &Frame, b: &Frame, tol: &Tolerance) -> Result<Frame, FeatureErro
     })
 }
 
-/// Ebene durch drei Punkte; kollinear (Dreiecksfläche ≤ tol²) ⇒ Fehler.
+/// Ebene durch drei Punkte; kollinear ⇒ Fehler: Der Abstand des dritten Punkts zur Geraden
+/// durch die beiden am weitesten entfernten ist höchstens `tol.linear` (unabhängig von der Länge
+/// der Strecke). Ursprung `p[0]`, x-Achse zu `p[1]`.
 fn three_point_frame(p: [DVec3; 3], tol: &Tolerance) -> Result<Frame, FeatureError> {
+    let collinear = || FeatureError::InvalidInput(tr!("feature-plane-collinear"));
+    let (i, j, k) = [(0, 1, 2), (1, 2, 0), (0, 2, 1)]
+        .into_iter()
+        .max_by(|x, y| {
+            let len = |(i, j, _): (usize, usize, usize)| (p[j] - p[i]).length_squared();
+            len(*x).total_cmp(&len(*y))
+        })
+        .unwrap_or((0, 1, 2));
+    let base = p[j] - p[i];
+    if base.length() <= tol.linear
+        || (p[k] - p[i]).cross(base).length() / base.length() <= tol.linear
+    {
+        return Err(collinear());
+    }
     let (u, v) = (p[1] - p[0], p[2] - p[0]);
     let n = u.cross(v);
-    if n.length() / 2.0 <= tol.linear * tol.linear || u.length() <= tol.linear {
-        return Err(FeatureError::InvalidInput(tr!("feature-plane-collinear")));
+    if u.length() <= tol.linear || n.length() == 0.0 {
+        return Err(collinear());
     }
     let x = u.normalize();
     let z = n.normalize();
@@ -483,6 +519,80 @@ mod tests {
         assert!((m.origin.z - 5.0).abs() < 1e-12);
         assert_eq!(m.z, DVec3::Z);
         assert!(mid_frame(&a, &a, &tol).is_err());
+    }
+
+    #[test]
+    fn nearly_parallel_planes_meet_in_the_middle() {
+        // Um 1e-8 rad gekippt: die Schnittgerade läge rund 1e9 mm weit draußen.
+        let tol = Tolerance::default();
+        let a = StandardPlane::XY.frame();
+        let e: f64 = 1e-8;
+        let z = DVec3::new(0.0, e.sin(), -e.cos());
+        let b = Frame {
+            origin: DVec3::new(0.0, 0.0, 10.0),
+            x: DVec3::X,
+            y: z.cross(DVec3::X),
+            z,
+        };
+        let m = mid_frame(&a, &b, &tol).unwrap();
+        assert!(m.origin.length() < 100.0, "{}", m.origin);
+        assert!((m.origin.z - 5.0).abs() < 1e-6, "{}", m.origin);
+        assert!((m.z - DVec3::Z).length() < 1e-6, "{}", m.z);
+        assert!(m.is_orthonormal(1e-12));
+        // Deutlich gekippt bleibt es die Winkelhalbierende durch die Schnittgerade.
+        let e: f64 = 1e-3;
+        let z = DVec3::new(0.0, e.sin(), -e.cos());
+        let b = Frame {
+            z,
+            y: z.cross(DVec3::X),
+            ..b
+        };
+        let m = mid_frame(&a, &b, &tol).unwrap();
+        assert!(m.origin.length() > 1000.0, "{}", m.origin);
+        // Schräge Ebenen mit fernen Ursprüngen bleiben die Winkelhalbierende.
+        let far = Frame {
+            origin: DVec3::new(0.0, 5e6, 0.0),
+            ..StandardPlane::XY.frame()
+        };
+        let side = Frame {
+            origin: DVec3::new(0.0, 0.0, 5e6),
+            ..StandardPlane::XZ.frame()
+        };
+        let m = mid_frame(&far, &side, &tol).unwrap();
+        assert!(
+            (m.z.dot(far.z).abs() - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-9,
+            "{}",
+            m.z
+        );
+    }
+
+    #[test]
+    fn nearly_collinear_points_are_refused() {
+        let tol = Tolerance::default();
+        // Dritter Punkt 1e-9 mm neben einer 1000-mm-Strecke.
+        let far = [
+            DVec3::ZERO,
+            DVec3::new(1000.0, 0.0, 0.0),
+            DVec3::new(500.0, 1e-9, 0.0),
+        ];
+        assert!(three_point_frame(far, &tol).is_err());
+        // Der mittlere Punkt liegt nicht immer in der Mitte der Liste.
+        let outside = [
+            DVec3::ZERO,
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(1000.0, 1e-8, 0.0),
+        ];
+        assert!(three_point_frame(outside, &tol).is_err());
+        // Knapp darüber geht es, mit Ursprung und x-Achse wie bisher.
+        let ok = [
+            DVec3::ZERO,
+            DVec3::new(1000.0, 0.0, 0.0),
+            DVec3::new(500.0, 1e-5, 0.0),
+        ];
+        let f = three_point_frame(ok, &tol).unwrap();
+        assert_eq!(f.origin, DVec3::ZERO);
+        assert!((f.x - DVec3::X).length() < 1e-12);
+        assert!((f.z - DVec3::Z).length() < 1e-9, "{}", f.z);
     }
 
     #[test]

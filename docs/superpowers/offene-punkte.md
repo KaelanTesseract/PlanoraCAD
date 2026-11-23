@@ -3490,10 +3490,10 @@ Grenzen und Annahmen:
 - Maße werden gegen alle Körper aufgelöst und ruhen, wenn ein Bezug gegen die eingeblendeten anders oder gar nicht aufgeht; so springt ein Maß nicht auf einen gleich gebauten Nachbarkörper.
 
 Zurückgestellt (Prüfung 2026-11-22, klein):
-- „Wert zu groß“ erscheint auch, wenn ein Plan aus anderem Grund fehlt (Wert fast 0, Ellipse/Spline ohne Lösung, unpassender Fasenwinkel).
+- ~~„Wert zu groß“ erscheint auch, wenn ein Plan aus anderem Grund fehlt (Wert fast 0, Ellipse/Spline ohne Lösung, unpassender Fasenwinkel).~~ Erledigt 2026-11-22 (Zweig `fix/kleinpunkte-18-21-16`): „Wert zu klein“, „Wert zu groß“, „Passt hier nicht“.
 - Der Griffzug sucht die Grenze in jedem Bild neu (bis zu 43 Pläne); einmal je Zug würde reichen.
 - Felder am Zeiger entscheiden die Seite je Zeile mit eigener Breite; verschieden breite Zeilen können sich trennen, nahe der Leiste kann der Block springen.
-- In Schnittansichten ruhen Maße an ausgeblendeten Körpern nicht (bleiben verloren).
+- ~~In Schnittansichten ruhen Maße an ausgeblendeten Körpern nicht (bleiben verloren).~~ Erledigt 2026-11-22 (Zweig `fix/kleinpunkte-18-21-16`).
 - Die Maßzahl im Export-Status zählt vor der Rechnung ruhende Maße mit, danach nicht.
 - Der Netz-Hinweis unter der Zeichnung nennt ausgeblendete Netz-Körper, der Export nicht mehr.
 - `resting_balloons` baut die Körperliste zweimal.
@@ -3511,3 +3511,17 @@ Kurzentwurf: `specs/2026-11-22-haertung-reste-design.md`. Schließt die drei Gre
   - W2 behoben: Der Grund steht nur bei „nicht lösbar“ und nur, wenn das Muster beim Greifen noch ging; ein Widerspruch wird nicht verdeckt. Meldung in einer Zeile: „Das lässt sich nicht dorthin ziehen: …“.
   - Zurückgestellt (klein): Der Grund steht als fertiger Text in der Meldung und wechselt bei stehender Meldung nicht die Sprache; kein Rücknahmetest für elliptischen Bogen und die 3D-Bögen; der Freiheitsgrad-Test zeigt das Erreichen von `max_rounds` nicht eigens; nach einer Ablehnung werden die Gruppen verworfen statt zurückgegeben; die Schwelle des Messtests (20 ms) hängt vom Rechner ab.
 - **Nachprüfung 2026-11-22 (alle offenen Punkte gegen ebf48731):** Weiter offen sind die Kopien der Skizze je Bild beim Kurvenzug (`curve_drag_to`), in `solve_holding`/`solve_holding_connected` und für Status und Freiheitsgrade (`sk.clone().solve()` in `sketch_state.rs`). Abhängigkeiten, Punkte und Bögen bauen die Gruppen nicht mehr neu.
+
+## Kleinpunkte 18, 21 und 16 (2026-11-22, Zweig `fix/kleinpunkte-18-21-16`)
+
+Kurzentwurf `specs/2026-11-22-kleinpunkte-18-21-16-design.md` (mit Nachtrag).
+
+- **18 Feldgrund:** `GripMisfit` (`sketch_kinds.rs`): unter einem Rundungsschritt „Wert zu klein“, passt ein Schritt „Wert zu groß“, sonst „Passt hier nicht“.
+- **21 Schnittansichten:** `rest_hidden_section_dimensions` schneidet ausgeblendete Körper an der Ebene der Ansicht; ein Maß ruht nach derselben Regel wie ohne Schnitt. Dazu behoben (schon vorher so): Das Ausblenden eines Körpers davor verschob die Herkunft der Schnittflächen späterer Körper, deren Schnittmaße gingen verloren. Jetzt schneidet jeder Körper mit seiner Stelle unter allen exakten Körpern (`compute_section_keyed`, Bildschirm und Export).
+- **16 Ebenen:** Drei Punkte gelten als kollinear, wenn der dritte höchstens `tol.linear` neben der Geraden durch die beiden äußeren liegt. Mittelebene: Unter Sinus 1e-6 und mit einer Schnittgeraden weiter als 1 km von beiden Ursprüngen gilt das Paar als parallel.
+- Zurückgestellt (Prüfer, klein):
+  - Mittelebene gleich orientierter Normalen steht senkrecht auf beiden (Altlast, `a.z - b.z`); nahe der Fern-Grenze springt sie. Fusion-Verhalten nicht geprüft.
+  - Drei Punkte mit Höhe zwischen 1e-12 und 1e-6 mm (bei langen Strecken) gingen früher durch und melden jetzt „kollinear“ (gewollt).
+  - Fase mit zwei Abständen: Der Grund steht am aktiven Feld, auch wenn das andere Feld zu groß ist (Altlast); „Wert zu klein“ auch, wenn ein kleiner Wert aus anderem Grund scheitert.
+  - Ausgeblendete Körper werden an der unverschobenen Ebene geschnitten, auch wenn die Ansicht verschoben rechnen musste (`SECTION_NUDGE_MM`).
+  - Kein Zoll-Test für „Wert zu klein“, kein Exporttest für das Ausblenden eines Körpers davor.

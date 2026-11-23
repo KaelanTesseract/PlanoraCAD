@@ -959,3 +959,94 @@ fn a_dimension_on_a_hidden_twin_rests_instead_of_jumping() {
     assert!(dims.resting.is_empty());
     assert!(dims.by_view[&front][0].1.is_ok());
 }
+
+/// Schnittansicht: Ein Maß an einer Schnittkante eines ausgeblendeten Körpers ruht, statt
+/// verloren zu gehen. Ein ausgeblendeter Körper, an dem der Bezug nicht aufgeht, trägt es nicht.
+#[test]
+fn a_section_dimension_on_a_hidden_body_rests() {
+    use std::collections::BTreeMap;
+    let (mut d, _) = holed_block();
+    let hidden = d.visible_bodies()[0].solid.clone();
+    let moved = |by: DVec3| {
+        hidden
+            .transformed(&planora_math::DMat4::from_translation(by))
+            .unwrap()
+    };
+    let shown = moved(DVec3::new(100.0, 0.0, 0.0));
+    // Ein Körper anderer Herkunft (nur ein Zylinder) trägt das Maß nicht.
+    let missed = {
+        let mut other = Document::new();
+        other
+            .add_feature(
+                "Rolle",
+                FeatureKind::Cylinder {
+                    radius: 30.0,
+                    height: 10.0,
+                    origin: DVec3::ZERO,
+                },
+            )
+            .unwrap();
+        other.visible_bodies()[0].solid.clone()
+    };
+    let id = d.add_drawing("Blatt", A4, Projection::First).unwrap();
+    let top = d
+        .add_view(
+            id,
+            ViewKind::Top,
+            S11,
+            Placement::Free { x: 100.0, y: 200.0 },
+            None,
+        )
+        .unwrap();
+    let mut sec = None;
+    d.update_drawing(id, |dr| {
+        sec = Some(dr.add_section(top, ViewKind::Front, 10.0, 40.0).unwrap());
+    })
+    .unwrap();
+    let sec = sec.unwrap();
+    let tol = Tolerance::default();
+    let v = DVec3::new;
+    let cut = cut_solids(&[&hidden], ViewKind::Front, 10.0);
+    let edge = |x: f64| {
+        GeoRef::Edge(
+            geo_ref_for_edge(
+                &cut[0],
+                line_edge(&cut[0], v(x, 10.0, 0.0), v(x, 10.0, 10.0)),
+                &tol,
+            )
+            .unwrap(),
+        )
+    };
+    let dim = d
+        .add_dimension(
+            id,
+            spec(sec, DimKind::Horizontal, vec![edge(16.0), edge(24.0)]),
+        )
+        .unwrap();
+    let dr = d.drawing(id).unwrap().clone();
+    let shown_cut = cut_solids(&[&shown], ViewKind::Front, 10.0);
+    let map: BTreeMap<ViewId, Vec<&Solid>> = BTreeMap::from([(sec, vec![&shown_cut[0]])]);
+    let resolve = || {
+        resolve_drawing_dimensions_views(&dr, &[&shown], &map, || {
+            Ok::<(), std::convert::Infallible>(())
+        })
+        .unwrap()
+        .0
+    };
+    let mut dims = resolve();
+    assert!(
+        dims.by_view[&sec][0].1.is_err(),
+        "gegen den eingeblendeten Schnitt geht es nicht auf"
+    );
+    rest_hidden_section_dimensions(&dr, &mut dims, &map, &[(0, &hidden)]);
+    assert!(dims.resting.contains(&dim), "das Maß ruht");
+    assert!(dims.by_view[&sec].is_empty());
+    let mut dims = resolve();
+    rest_hidden_section_dimensions(&dr, &mut dims, &map, &[(0, &missed)]);
+    assert!(dims.resting.is_empty());
+    assert!(dims.by_view[&sec][0].1.is_err(), "bleibt verloren");
+    // Ohne ausgeblendete Körper ändert sich nichts.
+    let mut dims = resolve();
+    rest_hidden_section_dimensions(&dr, &mut dims, &map, &[]);
+    assert!(dims.resting.is_empty());
+}

@@ -27,7 +27,7 @@ use planora_drawing::{
 };
 use planora_feature::{
     RefCache, geo_ref_for_edge_cached, geo_ref_for_face_cached, resolve_drawing_dimensions_views,
-    resolve_geo_cached, rest_hidden_dimensions,
+    resolve_geo_cached, rest_hidden_dimensions, rest_hidden_section_dimensions,
 };
 use planora_kernel::{Edge, Face, Id, Solid};
 use planora_math::{DVec2, Tolerance};
@@ -304,6 +304,16 @@ impl DimensionUi {
                         keys.extend(new_keys);
                         if shown_solids.len() < all.len() {
                             rest_hidden_dimensions(d, &mut dims, &shown_solids, &all);
+                            // Mit der Stelle unter allen exakten Körpern: Sie trägt die
+                            // Schnittfläche (wie vor dem Ausblenden).
+                            let hidden: Vec<(usize, &Solid)> = all
+                                .iter()
+                                .enumerate()
+                                .zip(&shown)
+                                .filter(|(_, s)| !**s)
+                                .map(|((i, b), _)| (i, *b))
+                                .collect();
+                            rest_hidden_section_dimensions(d, &mut dims, &view_solids, &hidden);
                         }
                         dims
                     }
