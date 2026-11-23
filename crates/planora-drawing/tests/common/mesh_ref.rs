@@ -16,6 +16,10 @@ pub const TILT_REF_DIRECTIONS: usize = 8;
 /// Mindestwinkel zwischen den Normalen zweier Dreiecke, ab dem ihre gemeinsame Kante eine
 /// Merkmalskante ist.
 pub const FEATURE_ANGLE_DEG: f64 = 20.0;
+
+/// Dreiecke, deren Höhe kleiner als dieser Anteil ihrer längsten Seite ist, gelten als Splitter
+/// und tragen keine Merkmalskanten bei (siehe [`feature_edges_3d`]).
+const SLIVER_REL: f64 = 1e-5;
 /// Rastergröße für die Vorauswahl der Dreiecke (je Bildachse).
 const GRID: usize = 128;
 /// `|n · d|` darunter: Dreieck von der Seite gesehen (weder Vorder- noch Rückseite).
@@ -282,6 +286,11 @@ pub fn ref_visibility(mesh: &Mesh, basis: &Basis, p: DVec3, extent: f64) -> Opti
 /// der Seite gesehenes Dreieck neben einem nicht von der Seite gesehenen zählt ebenso). Netzpunkte
 /// werden über ihre auf `1e-7 · extent` gerundeten Koordinaten verschweißt (jede Fläche hat im
 /// Netz eigene Punkte). Kanten mit einem oder mehr als zwei Dreiecken zählt `skipped`.
+///
+/// Ein Knick zählt nur zwischen Dreiecken **verschiedener** Flächen: Jede Fläche des Körpers ist
+/// glatt, ein Knick innerhalb einer Fläche ist ein Fehler des Netzes (etwa lange, schmale
+/// Dreiecke an der geraden Naht eines Kegels nahe der Spitze, C15). Umrisskanten zählen auch
+/// innerhalb einer Fläche.
 pub fn feature_edges_3d(mesh: &Mesh, basis: &Basis, extent: f64) -> (Vec<(DVec3, DVec3)>, usize) {
     let q = 1e-7 * extent;
     let key = |p: DVec3| {
@@ -299,11 +308,34 @@ pub fn feature_edges_3d(mesh: &Mesh, basis: &Basis, extent: f64) -> (Vec<(DVec3,
             pts.len() - 1
         })
     };
+    // Fläche je Dreieck (aus den Bereichen des Netzes).
+    let mut face_of_tri = vec![usize::MAX; mesh.indices.len() / 3];
+    for r in &mesh.face_ranges {
+        let (a, b) = (
+            r.first_index as usize / 3,
+            (r.first_index + r.index_count) as usize / 3,
+        );
+        for f in face_of_tri.iter_mut().take(b).skip(a) {
+            *f = r.face.index();
+        }
+    }
     let mut normals: Vec<DVec3> = Vec::new();
+    let mut faces: Vec<usize> = Vec::new();
     let mut edges: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
-    for t in triangles(mesh) {
+    for (ti, t) in triangles(mesh).enumerate() {
         let n = (t[1] - t[0]).cross(t[2] - t[0]);
         if n.length() == 0.0 || !n.is_finite() {
+            continue;
+        }
+        // Splitter (drei Punkte fast auf einer Geraden, etwa an der Spitze eines Kegels, dessen
+        // Netz die Spitze mit mehreren Punkten derselben Mantellinie verbindet): Ihre Normale ist
+        // Zufall und erzeugte falsche Umrisskanten (C15). Höhe unter `SLIVER_REL` der längsten
+        // Seite.
+        let longest = (t[1] - t[0])
+            .length()
+            .max((t[2] - t[1]).length())
+            .max((t[0] - t[2]).length());
+        if n.length() < SLIVER_REL * longest * longest {
             continue;
         }
         let w = [weld(t[0]), weld(t[1]), weld(t[2])];
@@ -312,6 +344,7 @@ pub fn feature_edges_3d(mesh: &Mesh, basis: &Basis, extent: f64) -> (Vec<(DVec3,
         }
         let k = normals.len();
         normals.push(n.normalize());
+        faces.push(face_of_tri.get(ti).copied().unwrap_or(usize::MAX));
         for (a, b) in [(w[0], w[1]), (w[1], w[2]), (w[2], w[0])] {
             edges.entry((a.min(b), a.max(b))).or_default().push(k);
         }
@@ -335,7 +368,7 @@ pub fn feature_edges_3d(mesh: &Mesh, basis: &Basis, extent: f64) -> (Vec<(DVec3,
             continue;
         }
         let (n0, n1) = (normals[tri[0]], normals[tri[1]]);
-        let sharp = n0.dot(n1) < cos_limit;
+        let sharp = n0.dot(n1) < cos_limit && faces[tri[0]] != faces[tri[1]];
         // Vorder- gegen Rückseite; liegt genau auf dem Umriss ein von der Seite gesehenes
         // Dreieck (n·d = 0, etwa ein Streifen symmetrisch um die Umrisslinie), sind seine
         // Kanten zu Vorder- oder Rückseiten die Umrisskanten des Netzes.
@@ -346,6 +379,56 @@ pub fn feature_edges_3d(mesh: &Mesh, basis: &Basis, extent: f64) -> (Vec<(DVec3,
         }
     }
     (out, skipped)
+}
+
+/// Grenzen zwischen zwei Flächen im Netz (Kanten zwischen Dreiecken verschiedener Flächen,
+/// verschweißt wie in [`feature_edges_3d`]), unabhängig vom Knickwinkel. Auch eine flache
+/// Körperkante (Flächen unter weniger als 20° zueinander, etwa Kegel gegen Zylinder in allgemeiner
+/// Lage, C15) ist eine gezeichnete Kante.
+pub fn face_boundaries_3d(mesh: &Mesh, extent: f64) -> Vec<(DVec3, DVec3)> {
+    let q = 1e-7 * extent;
+    let key = |p: DVec3| {
+        (
+            (p.x / q).round() as i64,
+            (p.y / q).round() as i64,
+            (p.z / q).round() as i64,
+        )
+    };
+    let mut ids: HashMap<(i64, i64, i64), usize> = HashMap::new();
+    let mut pts: Vec<DVec3> = Vec::new();
+    let mut weld = |p: DVec3| {
+        *ids.entry(key(p)).or_insert_with(|| {
+            pts.push(p);
+            pts.len() - 1
+        })
+    };
+    let mut edges: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    for r in &mesh.face_ranges {
+        let (a, b) = (
+            r.first_index as usize,
+            (r.first_index + r.index_count) as usize,
+        );
+        for t in mesh.indices[a..b.min(mesh.indices.len())].chunks_exact(3) {
+            let w = [
+                weld(mesh.positions[t[0] as usize]),
+                weld(mesh.positions[t[1] as usize]),
+                weld(mesh.positions[t[2] as usize]),
+            ];
+            for (x, y) in [(w[0], w[1]), (w[1], w[2]), (w[2], w[0])] {
+                if x != y {
+                    edges
+                        .entry((x.min(y), x.max(y)))
+                        .or_default()
+                        .push(r.face.index());
+                }
+            }
+        }
+    }
+    edges
+        .into_iter()
+        .filter(|(_, f)| f.iter().any(|x| *x != f[0]))
+        .map(|((a, b), _)| (pts[a], pts[b]))
+        .collect()
 }
 
 /// Merkmalskanten, projiziert (`(P·ex, P·ey)`).

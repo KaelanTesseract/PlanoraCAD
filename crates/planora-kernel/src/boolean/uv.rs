@@ -11,7 +11,7 @@ use crate::ids::Id;
 use crate::topology::{Face, FaceTag, Loop, Solid};
 use crate::validate::{NURBS_EDGE_TOL, edge_surface_tol};
 use planora_i18n::tr;
-use planora_math::{DVec2, DVec3, TAU, Tolerance, orient2d};
+use planora_math::{DVec2, DVec3, Tolerance, orient2d};
 use std::cell::Cell;
 
 /// Geometrische Beschreibung einer (ggf. beschnittenen) Fläche, unabhängig vom `Solid`.
@@ -79,9 +79,13 @@ fn unwrap_near(x: f64, reference: f64, period: f64) -> f64 {
     x + period * ((reference - x) / period).round()
 }
 
-/// Kleinster Sprung über einen Pol, bezogen auf die Periode (bei `TAU` genau 1e-9): darunter
-/// gilt der Zielwert als schon erreicht, und es folgt ein voller Umlauf.
-const POLE_JUMP_MIN_RATIO: f64 = 1e-9 / TAU;
+/// Kleinster Sprung über einen Pol, bezogen auf die Periode (1e-4, bei `TAU` etwa 0,036°):
+/// darunter gilt der Zielwert als schon erreicht, und es folgt ein voller Umlauf. Freiformkanten
+/// (Schnittkurven in allgemeiner Lage, C15) treffen die Naht nur auf `NURBS_EDGE_TOL` genau; nahe
+/// einer Kegelspitze ist das ein Winkel von einigen 1e-6 der Periode. Mit der früheren Schwelle
+/// (1e-9 rad) galt dieser Rest als gewollter kleiner Sprung, und die Schleife schloss schräg durch
+/// die Fläche (Taschenkegel mit Spitze im Körper, Zeichnungsreihe Startwert 160).
+const POLE_JUMP_MIN_RATIO: f64 = 1e-4;
 
 /// Sprung über einen Pol: von `u_at` in Richtung `dir` (±1) bis zum nächsten Wert, der
 /// `u_target` modulo der Periode entspricht (mindestens ein Stück, höchstens ein voller Umlauf).
@@ -355,5 +359,23 @@ fn winding_containment(f: &FaceGeom, polys: &[Vec<DVec2>], (u, v): (f64, f64)) -
         Containment::Inside
     } else {
         Containment::Outside
+    }
+}
+
+#[cfg(test)]
+mod pole_tests {
+    use super::*;
+    use planora_math::TAU;
+
+    /// C15: Kommt die Schleife an der Naht zum Pol und beginnt sie (genähert) knapp daneben,
+    /// geht der Sprung über den Pol einen vollen Umlauf, nicht nur den winzigen Rest.
+    #[test]
+    fn a_nearly_reached_seam_takes_a_full_turn_over_the_pole() {
+        let jump = pole_jump(-TAU, 6e-6, 1.0, Some(TAU));
+        assert!(jump.abs() < 1e-3, "zurück an der Naht: {jump}");
+        assert!(jump - (-TAU) > 0.5 * TAU, "voller Umlauf erwartet: {jump}");
+        // Ein echter Sprung über einen großen Winkel bleibt, wie er ist.
+        let jump = pole_jump(0.0, 1.0, 1.0, Some(TAU));
+        assert!((jump - 1.0).abs() < 1e-12, "{jump}");
     }
 }

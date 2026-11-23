@@ -316,12 +316,19 @@ pub fn check_lines(solids: &[&Solid], kind: ViewKind, v: &ViewLines) -> Report {
         }
     }
 
-    // (d) Keine Phantomlinien.
+    // (d) Keine Phantomlinien: Jedes Stück liegt an einer Merkmalskante oder an einer Grenze
+    // zweier Flächen im Netz (flache Körperkanten unter 20° sind auch Kanten, C15).
+    let bounds: Vec<(DVec2, DVec2)> = meshes
+        .iter()
+        .flat_map(|m| super::mesh_ref::face_boundaries_3d(m, extent))
+        .map(|(a, b)| (proj(&basis, a), proj(&basis, b)))
+        .collect();
     for (k, p) in v.pieces.iter().enumerate() {
         let s = &v.strokes[p.stroke];
         let m = proj(&basis, s.curve.point(0.5 * (p.t0 + p.t1)));
         let d = feats
             .iter()
+            .chain(&bounds)
             .map(|(a, b)| seg_dist(m, *a, *b))
             .fold(f64::INFINITY, f64::min);
         if d > near {
