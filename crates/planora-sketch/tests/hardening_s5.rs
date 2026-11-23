@@ -374,13 +374,51 @@ fn carried_cycle_groups_still_find_loops() {
     let free = s.add_point(30.0, 40.0).unwrap();
     s.add_arc(free, q1, q2).unwrap();
     // Eine Abhängigkeit von der Vorlagenecke zum freien Mittelpunkt schlösse die Schleife über
-    // diesen Bogen (zuerst: eine Ablehnung verwirft die Gruppen, danach würden sie neu gebaut).
+    // diesen Bogen (zuerst; danach prüft der Bogen gegen die zurückgegebenen Gruppen).
     let e = s.add_constraint(K::Coincident(corner, free)).unwrap_err();
     assert!(e.to_string().contains("Exemplar"), "{e}");
     // Ebenso ein Bogen um die Vorlagenecke mit Enden auf Exemplaren.
     let e = s.add_arc(corner, q1, q2).unwrap_err();
     assert!(e.to_string().contains("eigenen Exemplar"), "{e}");
     assert_eq!(s.solve().status, SolveStatus::Solved);
+}
+
+/// Reste von Punkt 8 (2026-11-23): Ein abgelehnter Bogen gibt die Gruppen der Schleifenprüfung
+/// zurück, statt sie zu verwerfen; die nächste Prüfung baut nicht neu.
+#[test]
+fn a_refused_arc_keeps_the_cycle_groups() {
+    let (mut s, corner, q1, q2) = arc_cycle_setup();
+    let m = s.add_point(0.0, 50.0).unwrap();
+    let a = s.add_point(5.0, 50.0).unwrap();
+    let b = s.add_point(0.0, 55.0).unwrap();
+    s.add_arc(m, a, b).unwrap();
+    assert!(
+        s.cycle_groups_ready(),
+        "nach einem erlaubten Bogen fortgeführt"
+    );
+    s.add_arc(corner, q1, q2).unwrap_err();
+    assert!(s.cycle_groups_ready(), "nach der Ablehnung zurückgegeben");
+    // Die Prüfung erkennt die Schleife weiter.
+    s.add_arc(corner, q1, q2).unwrap_err();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+}
+
+/// Reste von Punkt 8 (2026-11-23): `add_point3` führt die Gruppen fort wie `add_point`.
+#[test]
+fn adding_3d_points_keeps_the_cycle_groups() {
+    let (mut s, corner, q1, q2) = arc_cycle_setup();
+    let m = s.add_point(0.0, 50.0).unwrap();
+    let a = s.add_point(5.0, 50.0).unwrap();
+    let b = s.add_point(0.0, 55.0).unwrap();
+    s.add_arc(m, a, b).unwrap();
+    assert!(s.cycle_groups_ready());
+    s.add_point3(planora_math::DVec3::new(1.0, 2.0, 3.0))
+        .unwrap();
+    assert!(
+        s.cycle_groups_ready(),
+        "3D-Punkt angehängt, Gruppen gelten weiter"
+    );
+    s.add_arc(corner, q1, q2).unwrap_err();
 }
 
 /// Zeit für `n` Bögen an einer Skizze mit Muster aus vielen Kurven.

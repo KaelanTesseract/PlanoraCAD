@@ -462,14 +462,18 @@ impl Sketch {
         finite(p.x, || tr!("sketch-err-what-x"))?;
         finite(p.y, || tr!("sketch-err-what-y"))?;
         finite(p.z, || tr!("sketch-err-what-z"))?;
+        let before = self.revision;
         let (xi, yi, zi) = (self.new_var(p.x), self.new_var(p.y), self.new_var(p.z));
-        Ok(self.points.push(PointData {
+        let id = self.points.push(PointData {
             x: xi,
             y: yi,
             z: Some(zi),
             construction: false,
             alive: true,
-        }))
+        });
+        // Nur angehängt: Die Gruppen der Schleifenprüfung gelten weiter (Reste von Punkt 8).
+        self.carry_cycle_groups(before);
+        Ok(id)
     }
 
     /// Lage in der Draufsicht; bei einem 3D-Punkt (x, y).
@@ -658,13 +662,34 @@ impl Sketch {
         // `make` leert den Zwischenspeicher ohnehin (neue Struktur); bei Ablehnung kommt er zurück.
         let (revision, cache) = (self.revision, std::mem::take(&mut self.solve_cache));
         let (id, ks) = make(self);
-        self.follow_appended(revision, &ks);
-        if ks.iter().any(|&k| self.check_activation_cycle(k).is_err()) {
+        // Erst proben, dann fortführen: Bei einer Ablehnung bleiben die Gruppen zum alten Stand
+        // unverändert und gelten nach dem Zurücknehmen weiter (Reste von Punkt 8).
+        let sets: Vec<Vec<usize>> = ks
+            .iter()
+            .filter_map(|&k| self.evaluate(k, &self.vars).map(|ev| ev.locals))
+            .collect();
+        let refuse = match self.appended_closes_cycle(revision, &sets) {
+            Some(closes) => {
+                if !closes {
+                    self.follow_appended(revision, &ks);
+                }
+                closes
+            }
+            None => {
+                // Die Abhängigkeiten hängen nicht zusammen: einzeln wie bisher prüfen.
+                self.follow_appended(revision, &ks);
+                let closes = ks.iter().any(|&k| self.check_activation_cycle(k).is_err());
+                if closes {
+                    // Die Gruppen enthalten die abgelehnte Abhängigkeit: verwerfen.
+                    self.cycle_groups = None;
+                }
+                closes
+            }
+        };
+        if refuse {
             self.cut_back(mark);
             self.revision = revision;
             self.solve_cache = cache;
-            // Die Gruppen enthalten die abgelehnte Abhängigkeit: verwerfen.
-            self.cycle_groups = None;
             return Err(refused());
         }
         Ok(id)
