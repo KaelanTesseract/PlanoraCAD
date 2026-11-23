@@ -370,6 +370,9 @@ pub fn classify_range_mapped(
 pub const COINCIDENT_FACTOR: f64 = 1024.0;
 /// Vielfaches von `geom_tol`: Stücke mit kürzerer Bildlänge entfallen.
 pub const TINY_FACTOR: f64 = 64.0;
+/// Vielfaches von `NURBS_EDGE_TOL`: In Ansichten mit Freiformkanten entfallen Stücke mit kürzerer
+/// Bildlänge (C15b).
+pub const FREEFORM_TINY_FACTOR: f64 = 4.0;
 /// Abschnitte für die Bildlänge eines Stücks.
 const LENGTH_SAMPLES: usize = 16;
 /// Abbruchprüfung je so vielen Stücken bzw. Paaren.
@@ -416,7 +419,17 @@ pub fn merge_pieces(
     let tol = geom_tol(extent);
     let pieces = join_adjacent(strokes, sorted(pieces), progress)?;
     let pieces = trim_covered(strokes, pieces, basis, extent, progress)?;
-    let pieces = drop_tiny(strokes, pieces, basis, TINY_FACTOR * tol, progress)?;
+    // Mit Freiformkanten (C15b): Stücke kürzer als ihre Genauigkeit sind Rechenreste an Ecken
+    // (etwa am Ende eines Bogens, der auf eine Freiformkante trifft).
+    let freeform = strokes
+        .iter()
+        .any(|s| matches!(s.curve, Curve::Nurbs(_)) && !is_fitted(s));
+    let tiny = if freeform {
+        (TINY_FACTOR * tol).max(FREEFORM_TINY_FACTOR * NURBS_EDGE_TOL)
+    } else {
+        TINY_FACTOR * tol
+    };
+    let pieces = drop_tiny(strokes, pieces, basis, tiny, progress)?;
     join_adjacent(strokes, pieces, progress)
 }
 
