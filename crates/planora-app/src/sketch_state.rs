@@ -2653,7 +2653,8 @@ impl SketchSession {
             && drag.rim.is_none()
             && drag.rho.is_none()
             && !drag.carry
-            && drag.aim.is_none();
+            && drag.aim.is_none()
+            && sk.only_values_change_when_solving();
         let before = if plain {
             DragBackup::Values(sk.value_snapshot())
         } else {
@@ -3864,8 +3865,6 @@ impl SketchSession {
         Self::status_of(&report)
     }
 
-    /// Wie [`status`](Self::status), legt aber einen an einer Kopie gelösten Bericht in der
-    /// Sitzung ab (siehe [`status_report`](Self::status_report)); für die Anzeige je Bild.
     /// Freiheitsgrade von `sk`, frisch gerechnet (nicht aus einem möglicherweise älteren Bericht):
     /// aus dem Zwischenspeicher der Statuszeile, wenn er genau zu diesem Stand gehört (dort ebenso
     /// an einer Kopie gelöst), sonst an einer Kopie (C12).
@@ -3876,6 +3875,8 @@ impl SketchSession {
         }
     }
 
+    /// Wie [`status`](Self::status), legt aber einen an einer Kopie gelösten Bericht in der
+    /// Sitzung ab (siehe [`status_report`](Self::status_report)); für die Anzeige je Bild.
     pub fn status_cached(&mut self, sk: &Sketch) -> (String, Severity) {
         let report = self.status_report(sk);
         Self::status_of(&report)

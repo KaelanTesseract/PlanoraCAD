@@ -598,6 +598,11 @@ impl Sketch {
     /// ([`ValueSnapshot`](crate::model::ValueSnapshot)) wiederhergestellt. Ergebnis bitgleich zu
     /// [`solve_holding_cloning`](Self::solve_holding_cloning).
     pub fn solve_holding(&mut self, hold: &[PointId]) -> bool {
+        // Die Nachführung der Texte beim Lösen kann den Aufbau ändern (Stücke neu anlegen, Punkte
+        // heben); das nähme `cut_back` nicht zurück. Mit Texten darum auf der Kopie (Prüferfund).
+        if !self.only_values_change_when_solving() {
+            return self.solve_holding_cloning(hold);
+        }
         // Der Lösungsspeicher fällt mit dem ersten Festpunkt ohnehin weg: nehmen statt kopieren.
         let cache = std::mem::take(&mut self.solve_cache);
         let mut snap = self.value_snapshot();
@@ -698,6 +703,9 @@ impl Sketch {
     /// sie ist. Schaltet die fremden Abhängigkeiten an Ort und Stelle ab und danach wieder an
     /// (C12, statt Kopie).
     pub(crate) fn solve_holding_connected(&mut self, hold: &[PointId]) -> bool {
+        if !self.only_values_change_when_solving() {
+            return self.solve_holding_connected_cloning(hold);
+        }
         let other = self.foreign_constraints(hold);
         let cache = std::mem::take(&mut self.solve_cache);
         let mut snap = self.value_snapshot();
@@ -741,6 +749,13 @@ impl Sketch {
         self.vars = trial.vars;
         self.touch_values();
         true
+    }
+
+    /// Ändern Lösen und Ziehen an dieser Skizze nur Werte (C12)? Nicht, sobald sie einen Text hat:
+    /// Dessen Nachführung kann Stücke neu anlegen oder Punkte heben. Dann taugt ein
+    /// [`ValueSnapshot`](crate::model::ValueSnapshot) nicht zum Zurücksetzen.
+    pub fn only_values_change_when_solving(&self) -> bool {
+        self.texts().next().is_none()
     }
 
     /// Eingeschaltete Abhängigkeiten außerhalb der Zusammenhangsgruppen von `hold`.

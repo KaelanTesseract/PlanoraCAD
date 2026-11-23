@@ -35,6 +35,17 @@ bleiben, nur schneller.
 6. **Status und Freiheitsgrade:** `dof_of` nimmt den Bericht aus dem Zwischenspeicher der Sitzung,
    wenn er zum Stand passt; sonst wie bisher. (`status_cached` ist schon je Stand gespeichert.)
 
+## Nachtrag nach der Prüfung (2026-11-23)
+
+- **Texte:** Die Nachführung der Texte beim Lösen (`refresh_texts`/`sync_text`) kann den Aufbau
+  ändern (Stücke neu, Punkte gehoben). Mit einem Text in der Skizze nehmen `solve_holding`,
+  `solve_holding_connected` und der Kurvenzug darum den alten Weg mit Kopie
+  (`Sketch::only_values_change_when_solving`).
+- **Längentabelle des Textpfads** (`texts[t].walk`) gehört nicht zum Wertestand; harmlos, weil
+  `Walk::fits` sie vor jeder Nutzung prüft (und mit Text gilt ohnehin der Kopie-Weg).
+- **Panik mitten im Lauf:** kein Aufräum-Wächter; eine Panik beendet heute das Programm (kein
+  `catch_unwind` um Skizzenbefehle). Zurückgestellt.
+
 ## Prüfung
 
 Vergleichstests alter gegen neuer Weg (Erfolg, Scheitern, Ablehnung beim Anheften), Daten
