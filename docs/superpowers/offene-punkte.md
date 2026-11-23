@@ -3552,3 +3552,13 @@ Kurzentwurf `specs/2026-11-23-punkt8-reste-design.md`, Plan `plans/2026-11-23-pu
 - Dialograhmen rückt den Inhalt 1 px weiter ein; bei 800 × 600 brechen die Schnellzugriffe im Dateifenster um (Tests angepasst).
 - deny: zbus-Ausnahmen (RUSTSEC-2026-0370/0371/0372) weiter nötig, accesskit_unix nutzt zbus 5. Erlaubnis BSL-1.0 wird nicht mehr gebraucht (Warnung, harmlos).
 - Offen: Unter Ubuntu-Wayland Kopieren/Einfügen prüfen (Zwischenablage jetzt über arboard/wl-clipboard-rs); andere Rollbereiche mit gesetztem Versatz beim Handtest beobachten.
+
+## C15: Schnitte in allgemeiner Lage (2026-11-23, Zweig `feature/c15-allgemeine-lage`, nicht gemergt)
+
+- Kernel: Paare ohne exakten Weg (schräge Zylinder, Kegel und Torus in allgemeiner Lage, Zylinder/Kegel neben der Kugelmitte) rechnet der Freiform-Schnittrechner mit einer exakt als NURBS dargestellten Fläche (`boolean/general.rs`, Bereich aus den Randpunkten der Fläche, Kegel nie über die Spitze). Sieben Fusion-Fälle in `planora-mesh/tests/general_position.rs`; 200 Zufallskörper stimmen im Volumen mit dem Formelmodell.
+- Kernel: Polsprung in `uv.rs` mit Schwelle 1e-4 der Periode (Schleife über die Naht zur Kegelspitze, aus genäherter Kante knapp neben der Naht).
+- Zeichnung: Achsbereich an Freiformkanten genau; ebene Freiformkanten, deren Ebene die Blickrichtung enthält, an der Umkehrstelle geteilt; Freiformkanten tragen beim Zusammenlegen `NURBS_EDGE_TOL` bei. Prüfnetz der Tests: Knicke nur zwischen Flächen, Splitter (Kegelspitze) ausgenommen, flache Körperkanten zählen für (d).
+- **Offen (groß): Sichtbarkeit an genäherten Kanten.** Bei Körpern mit Freiformkanten bricht die Ansicht oft mit „Sichtbarkeit nicht eindeutig“ ab (auch bei den sieben realistischen Fällen, je nach Ansicht), oder Stücke nahe solchen Kanten sind falsch sichtbar/verdeckt. Muster: exakte Umrisse und Kanten analytischer Flächen enden an Freiformkanten oder laufen dicht daneben; die Strahlprüfung (`raycast.rs`, `visibility.rs`) entscheidet dort nicht. Zufallsreihe `stage8_merge_series` noch 22 Fehler, rund 30 von 1400 Ansichten abgebrochen.
+- Offen: Netz an Kegelspitzen (Splitterdreiecke entlang einer Mantellinie, auch bei rein analytischen Körpern); Prüfnetz geht inzwischen darum herum.
+- Offen: Beinahe-Berührungen aus dem 0,5-mm-Raster (Schnittkurve schmiegt sich an einen Randkreis, Splitterfläche dazwischen).
+
