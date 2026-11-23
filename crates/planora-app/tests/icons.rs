@@ -19,7 +19,7 @@ fn icon_font_bytes() -> Vec<u8> {
     let defs = fonts::definitions();
     let chain = &defs.families[&fonts::icons()];
     assert_eq!(chain.len(), 1, "Symbolfamilie hat genau eine Schrift");
-    defs.font_data[&chain[0]].font.to_vec()
+    (*defs.font_data[&chain[0]].font).as_ref().to_vec()
 }
 
 #[test]

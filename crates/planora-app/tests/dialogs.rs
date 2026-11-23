@@ -330,7 +330,7 @@ impl Case {
 
     fn id(&self, rig: &Rig) -> Id {
         self.id
-            .unwrap_or_else(|| Id::new(("feature_dialog", rig.fid)))
+            .unwrap_or_else(|| Id::unique(("feature_dialog", rig.fid)))
     }
 }
 
@@ -341,11 +341,11 @@ fn tab_id(rig: &mut Rig) -> u64 {
 /// Feste Kennung des Fensters zu seinem (deutschen) Titel; die Fenster hängen nicht am Titel.
 fn model_window_id(title: &str) -> Option<Id> {
     Some(match title {
-        "Quader erzeugen" => Id::new(("create_dialog", "box")),
-        "Zylinder erzeugen" => Id::new(("create_dialog", "cylinder")),
-        "Skizze extrudieren" => Id::new(("create_dialog", "extrude")),
-        "Skizze drehen" => Id::new(("create_dialog", "revolve")),
-        "Boolesche Operation" => Id::new("boolean_dialog"),
+        "Quader erzeugen" => Id::unique(("create_dialog", "box")),
+        "Zylinder erzeugen" => Id::unique(("create_dialog", "cylinder")),
+        "Skizze extrudieren" => Id::unique(("create_dialog", "extrude")),
+        "Skizze drehen" => Id::unique(("create_dialog", "revolve")),
+        "Boolesche Operation" => Id::unique("boolean_dialog"),
         "Verrunden" => BlendDialog::fillet().window_id(),
         "Fase" => BlendDialog::chamfer().window_id(),
         _ => return None,
@@ -378,7 +378,7 @@ fn prompt_case(
     Case {
         name,
         title,
-        id: Some(Id::new(("planora_prompt", key))),
+        id: Some(Id::unique(("planora_prompt", key))),
         class: DialogSize::Prompt,
         closable: false,
         open: Box::new(open),
@@ -395,7 +395,7 @@ fn project_case(
     Case {
         name,
         title,
-        id: Some(Id::new(("planora_projects_dialog", key.to_string()))),
+        id: Some(Id::unique(("planora_projects_dialog", key.to_string()))),
         class: DialogSize::Prompt,
         closable: false,
         // Die Fenster der Aktionen zeichnet das Fenster Projekte: es ist dabei offen.
@@ -418,7 +418,7 @@ fn app_window_case(
     Case {
         name,
         title,
-        id: Some(Id::new(id)),
+        id: Some(Id::unique(id)),
         class: DialogSize::File,
         closable: true,
         open: Box::new(open),
@@ -511,7 +511,7 @@ fn cases() -> Vec<Case> {
         Case {
             name: "Baum umbenennen",
             title: "Umbenennen",
-            id: Some(Id::new("Umbenennen")),
+            id: Some(Id::unique("Umbenennen")),
             class: DialogSize::Prompt,
             closable: true,
             open: Box::new(|r| {
@@ -523,7 +523,7 @@ fn cases() -> Vec<Case> {
         Case {
             name: "Baum löschen",
             title: "Rückfrage",
-            id: Some(Id::new("Rückfrage")),
+            id: Some(Id::unique("Rückfrage")),
             class: DialogSize::Prompt,
             closable: true,
             open: Box::new(|r| {
@@ -536,7 +536,7 @@ fn cases() -> Vec<Case> {
         Case {
             name: "Zeichnung umbenennen",
             title: "Umbenennen",
-            id: Some(Id::new("planora-rename-drawing")),
+            id: Some(Id::unique("planora-rename-drawing")),
             class: DialogSize::Prompt,
             closable: true,
             open: Box::new(|r| {
@@ -548,7 +548,7 @@ fn cases() -> Vec<Case> {
         Case {
             name: "Zeichnung löschen",
             title: "Rückfrage",
-            id: Some(Id::new("planora-delete-drawing")),
+            id: Some(Id::unique("planora-delete-drawing")),
             class: DialogSize::Prompt,
             closable: true,
             open: Box::new(|r| {
@@ -560,7 +560,7 @@ fn cases() -> Vec<Case> {
         Case {
             name: "Maß löschen",
             title: "Rückfrage",
-            id: Some(Id::new("planora-delete-dimension")),
+            id: Some(Id::unique("planora-delete-dimension")),
             class: DialogSize::Prompt,
             closable: true,
             open: Box::new(|r| {
@@ -577,7 +577,7 @@ fn cases() -> Vec<Case> {
         Case {
             name: "Blattangaben",
             title: "Blattangaben",
-            id: Some(Id::new("Blattangaben")),
+            id: Some(Id::unique("Blattangaben")),
             class: DialogSize::Wide,
             closable: true,
             open: Box::new(|r| {
@@ -636,7 +636,7 @@ fn cases() -> Vec<Case> {
         Case {
             name: "Kommentar ändern",
             title: "Kommentar ändern",
-            id: Some(Id::new("Kommentar ändern")),
+            id: Some(Id::unique("Kommentar ändern")),
             class: DialogSize::Prompt,
             closable: false,
             open: Box::new(|r| {
@@ -648,7 +648,7 @@ fn cases() -> Vec<Case> {
         Case {
             name: "Version löschen",
             title: "Löschen",
-            id: Some(Id::new("Löschen")),
+            id: Some(Id::unique("Löschen")),
             class: DialogSize::Prompt,
             closable: false,
             open: Box::new(|r| {
@@ -1011,7 +1011,7 @@ fn dialogs_in_all_modes_above_fields() {
         }
         rig.settle(4);
         // Ein Hinweis ist in jedem Modus möglich, der Quader-Dialog nur außerhalb der Skizze.
-        let mut ids = vec![Id::new(("planora_prompt", "notice"))];
+        let mut ids = vec![Id::unique(("planora_prompt", "notice"))];
         rig.app.ws_mut().prompt = Some(Prompt::Notice("Hinweis".into()));
         if mode != "Skizze" {
             rig.app.ws_mut().active_tab_mut().dialog = Some(CreateDialog::Box {
@@ -1019,7 +1019,7 @@ fn dialogs_in_all_modes_above_fields() {
                 y: 2.0,
                 z: 3.0,
             });
-            ids.push(Id::new(("create_dialog", "box")));
+            ids.push(Id::unique(("create_dialog", "box")));
         }
         rig.settle(6);
         let ids_all = ids.clone();

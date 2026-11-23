@@ -308,7 +308,7 @@ pub fn pattern_offsets(dx: &str, dy: &str) -> (Option<f64>, Option<f64>) {
 }
 
 fn panel_id() -> egui::Id {
-    egui::Id::new("planora-sketch-panel")
+    egui::Id::unique("planora-sketch-panel")
 }
 
 /// Maßfeld für das bestehende Maß `id`: zeigt die Formel, sonst den Wert (Winkel in Grad,
@@ -977,9 +977,8 @@ fn strip_button(
     let (rect, response) =
         ui.allocate_exact_size(egui::Vec2::splat(shell::STRIP_BUTTON), egui::Sense::click());
     let enabled = ui.is_enabled();
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, label)
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, label));
     if ui.is_rect_visible(rect) {
         let p = theme::palette(dark);
         let hovered = response.hovered();
@@ -1055,7 +1054,7 @@ struct SideInput<'a> {
 /// Inhaltshöhe und sichtbare Höhe des Skizzenfelds im letzten Bild (nur für Tests).
 #[doc(hidden)]
 pub fn side_scroll_extent(ctx: &egui::Context) -> Option<(f32, f32)> {
-    ctx.data(|d| d.get_temp(egui::Id::new("planora-sketch-side-extent")))
+    ctx.data(|d| d.get_temp(egui::Id::unique("planora-sketch-side-extent")))
 }
 
 /// Skizzenfeld rechts (Spaltenbreite 250): Inhalt in einer senkrechten ScrollArea, höchstens so
@@ -1098,7 +1097,7 @@ fn side_field(
         // Für Tests: Inhaltshöhe und sichtbare Höhe des Skizzenfelds.
         let extent = (out.content_size.y, out.inner_rect.height());
         ui.ctx()
-            .data_mut(|d| d.insert_temp(egui::Id::new("planora-sketch-side-extent"), extent));
+            .data_mut(|d| d.insert_temp(egui::Id::unique("planora-sketch-side-extent"), extent));
     };
     if undocked {
         let title = tr!("panel-sketch-side");
@@ -2276,7 +2275,7 @@ fn value_editor(
                     .id_salt(VALUE_FIELD_ID)
                     .desired_width(VALUE_WIDTH),
             );
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, &title));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, &title));
             ui.label(editor.unit.suffix());
             r
         })
@@ -2611,7 +2610,7 @@ fn formula_row(ui: &mut egui::Ui, formula: &str) -> egui::Response {
             .on_hover_text(tr!("sketch-fx-hint"));
         let fx_label = list_fx_label();
         fx.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &fx_label)
+            egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &fx_label)
         });
         theme::focus_ring(ui, &fx);
         ui.add(egui::Label::new(RichText::new(formula).color(p.text_secondary)).truncate());

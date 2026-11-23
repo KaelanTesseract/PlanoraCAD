@@ -839,6 +839,7 @@ fn every_button_is_reachable_at_narrow_widths() {
                 unit: egui::MouseWheelUnit::Point,
                 delta: vec2(-40.0, 0.0),
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
                 modifiers: Modifiers::NONE,
             }],
             false,

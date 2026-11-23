@@ -72,7 +72,7 @@ pub fn image(
     bytes: &[u8],
     size: f32,
 ) -> Option<egui::Image<'static>> {
-    let id = egui::Id::new(("planora-logo", key));
+    let id = egui::Id::unique(("planora-logo", key));
     let texture = match ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         Some(t) => t,
         None => {

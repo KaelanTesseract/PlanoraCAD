@@ -152,6 +152,7 @@ fn wheel(dy: f32) -> Event {
         unit: egui::MouseWheelUnit::Point,
         delta: vec2(0.0, dy),
         phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
         modifiers: Modifiers::NONE,
     }
 }
@@ -913,6 +914,7 @@ fn tool_field_texts_are_reachable_by_scrolling_at_800x600() {
             unit: egui::MouseWheelUnit::Point,
             delta: vec2(-40.0, 0.0),
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers: Modifiers::NONE,
         };
         app_frame(&c, &mut app, size, vec![moved(p), ev]);

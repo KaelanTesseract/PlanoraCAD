@@ -211,7 +211,7 @@ impl CaptureState {
 }
 
 fn capturing_id() -> egui::Id {
-    egui::Id::new("planora-keymap-capturing")
+    egui::Id::unique("planora-keymap-capturing")
 }
 
 /// Erfassen die Einstellungen gerade eine Belegung? Dann löst keine Taste und keine Mausgeste

@@ -1,5 +1,6 @@
 //! Bild vom Fenster für eine Rückmeldung: das Fenster „Rückmeldung“ ein Bild lang verbergen,
-//! über [`egui::ViewportCommand::Screenshot`] ein Bild anfordern, das Ergebnis behalten und das
+//! über [`egui::ViewportCommand::Screenshot`] ein Bild anfordern (seit egui 0.37 mit Rückruf, der
+//! das Bild in eine [`ShotInbox`] legt), das Ergebnis behalten und das
 //! Fenster wieder zeigen. Das Bild bleibt im Speicher, bis die Testerin auf „Im Browser öffnen“
 //! klickt; erst dann landet es als [`SHOT_FILE`] im Rückmeldungsordner.
 
@@ -17,8 +18,6 @@ pub const SHOT_TIMEOUT: Duration = Duration::from_secs(3);
 pub fn shot_failed() -> String {
     planora_i18n::tr!("feedback-shot-failed")
 }
-/// Kennung an der Bildanforderung, damit fremde Bilder nicht verwechselt werden.
-pub const FEEDBACK_SHOT_TAG: &str = "planora_feedback_bild";
 
 /// Kodiert `img` als PNG (RGBA, 8 Bit).
 pub fn encode_png(img: &egui::ColorImage) -> Result<Vec<u8>, String> {
@@ -66,7 +65,7 @@ pub enum ShotPhase {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShotStep {
     Nothing,
-    /// [`egui::ViewportCommand::Screenshot`] mit [`shot_user_data`] schicken.
+    /// [`egui::ViewportCommand::Screenshot`] mit [`ShotInbox::request`] schicken.
     RequestScreenshot,
     /// Das Fenster „Rückmeldung“ wieder zeigen.
     ShowDialogAgain,
@@ -129,17 +128,47 @@ impl ShotFlow {
     }
 }
 
-/// Die Kennung für die Bildanforderung.
-pub fn shot_user_data() -> egui::UserData {
-    egui::UserData::new(FEEDBACK_SHOT_TAG)
+/// Ablage für das angeforderte Bild (egui 0.37): Der Rückruf der Anforderung legt das Bild hier
+/// ab, das nächste Bild der App holt es mit [`ShotInbox::take`]. Fremde Bilder kommen nicht an,
+/// denn jeder Rückruf gehört genau zu einer Anforderung; ein verspätetes Bild einer älteren
+/// Anforderung (nach Zeitüberschreitung neu angefordert) wird verworfen.
+#[derive(Clone, Debug, Default)]
+pub struct ShotInbox(Arc<std::sync::Mutex<InboxSlot>>);
+
+#[derive(Debug, Default)]
+struct InboxSlot {
+    /// Nummer der jüngsten Anforderung.
+    latest: u64,
+    image: Option<Arc<egui::ColorImage>>,
 }
 
-/// Gehört das Bild-Ereignis mit `data` zu dieser Rückmeldung?
-pub fn is_our_shot(data: &egui::UserData) -> bool {
-    data.data
-        .as_ref()
-        .and_then(|d| d.downcast_ref::<&str>())
-        .is_some_and(|tag| *tag == FEEDBACK_SHOT_TAG)
+impl ShotInbox {
+    /// Rückruf für [`egui::ViewportCommand::Screenshot`]: legt das Bild ab, wenn es zur jüngsten
+    /// Anforderung gehört, und fordert ein neues Bild der App an (egui tut das von selbst nicht).
+    pub fn request(&self, ctx: &egui::Context) -> egui::ScreenshotCallback {
+        let number = match self.0.lock() {
+            Ok(mut slot) => {
+                slot.latest += 1;
+                slot.image = None;
+                slot.latest
+            }
+            Err(_) => 0,
+        };
+        let (inbox, ctx) = (self.clone(), ctx.clone());
+        egui::ScreenshotCallback::new(move |img| {
+            if let Ok(mut slot) = inbox.0.lock()
+                && slot.latest == number
+            {
+                slot.image = Some(img);
+            }
+            ctx.request_repaint();
+        })
+    }
+
+    /// Das abgelegte Bild, falls eines da ist (nur einmal).
+    pub fn take(&self) -> Option<Arc<egui::ColorImage>> {
+        self.0.lock().ok().and_then(|mut s| s.image.take())
+    }
 }
 
 /// Text der Vorschau zum Bild.

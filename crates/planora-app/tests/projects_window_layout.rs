@@ -447,7 +447,7 @@ fn the_primary_button_keeps_its_size() {
         theme::apply(&screen.ctx, dark);
         let rect = std::cell::Cell::new(None);
         let mut draw = |ctx: &egui::Context| {
-            egui::Area::new(egui::Id::new("knopf"))
+            egui::Area::new(egui::Id::unique("knopf"))
                 .fixed_pos(pos2(20.0, 20.0))
                 .show(ctx, |ui| {
                     rect.set(Some(

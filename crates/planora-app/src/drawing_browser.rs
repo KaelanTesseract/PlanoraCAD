@@ -585,7 +585,7 @@ fn run(state: &mut AppState, action: Action, read_only: bool) {
 
 /// Kleines Fenster „Umbenennen“ mit Textfeld und rotem Fehlertext.
 pub(crate) fn rename_window(ctx: &egui::Context, state: &mut AppState) {
-    let field = egui::Id::new("planora-rename-drawing-field");
+    let field = egui::Id::unique("planora-rename-drawing-field");
     let Some((id, mut name)) = state.rename_drawing_draft.clone() else {
         crate::dialog::forget_name_field(ctx, field);
         return;
@@ -599,7 +599,7 @@ pub(crate) fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     let mut open = true;
     Dialog::new(tr!("tree-rename"), DialogSize::Prompt)
         .dock_key("drawing_rename")
-        .id(egui::Id::new("planora-rename-drawing"))
+        .id(egui::Id::unique("planora-rename-drawing"))
         .open(&mut open)
         .show(ctx, |ui| {
             if crate::dialog::name_field(ui, field, &mut name) {
@@ -641,7 +641,7 @@ pub(crate) fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     let mut open = true;
     Dialog::new(tr!("tree-confirm-title"), DialogSize::Prompt)
         .dock_key("drawing_delete")
-        .id(egui::Id::new("planora-delete-drawing"))
+        .id(egui::Id::unique("planora-delete-drawing"))
         .open(&mut open)
         .show(ctx, |ui| {
             ui.label(plan.text.text());

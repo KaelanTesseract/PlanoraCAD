@@ -265,7 +265,7 @@ fn about_dialog_fits_the_smallest_window() {
     let mut app = new_app();
     open_about(&c, &mut app, SMALL);
     settle(&c, &mut app, SMALL);
-    let id = egui::Id::new(about_dialog::title().as_str());
+    let id = egui::Id::unique(about_dialog::title().as_str());
     let rect = c.memory(|m| m.area_rect(id)).expect("Dialog gezeigt");
     let window = Rect::from_min_size(Pos2::ZERO, SMALL);
     assert!(window.contains_rect(rect), "{rect:?} im Fenster");

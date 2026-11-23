@@ -431,7 +431,7 @@ fn focus_on_a_widget_blocks_only_the_space_key() {
         ("skizze.werkzeug_wiederholen", &[]),
     ]);
     let ctx = egui::Context::default();
-    let id = egui::Id::new("knopf");
+    let id = egui::Id::unique("knopf");
     let mut button = |ui: &mut egui::Ui| {
         let r = ui.push_id(id, |ui| ui.button("Knopf")).inner;
         r.request_focus();

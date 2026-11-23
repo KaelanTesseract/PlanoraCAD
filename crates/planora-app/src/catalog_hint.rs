@@ -39,7 +39,7 @@ pub fn show(ctx: &egui::Context, dark: bool) -> Option<HintAction> {
     let mut action = None;
     let mut open = true;
     Dialog::new(title(), DialogSize::Prompt)
-        .id(egui::Id::new(WINDOW_ID))
+        .id(egui::Id::unique(WINDOW_ID))
         .fixed()
         .center_on_open()
         .open(&mut open)

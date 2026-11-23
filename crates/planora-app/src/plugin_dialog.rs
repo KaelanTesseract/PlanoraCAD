@@ -105,7 +105,7 @@ impl OpenPluginDialog {
 
     /// Die Id des Fensters (sprachunabhängig, je Plug-in und Dialog).
     pub fn window_id(&self) -> egui::Id {
-        egui::Id::new(("planora_plugin_dialog", &self.plugin, &self.spec.id))
+        egui::Id::unique(("planora_plugin_dialog", &self.plugin, &self.spec.id))
     }
 }
 

@@ -452,7 +452,7 @@ impl BlendDialog {
     /// Sprachwechsel nicht springt, und nicht von der gewählten Art, damit es beim Wechsel
     /// zwischen Rundung und Fase stehen bleibt).
     pub fn window_id(&self) -> egui::Id {
-        egui::Id::new(("blend_dialog", self.opened_as_fillet))
+        egui::Id::unique(("blend_dialog", self.opened_as_fillet))
     }
 
     /// Die Meldung im Fenster in der aktuellen Sprache.

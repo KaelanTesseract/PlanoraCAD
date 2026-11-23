@@ -493,7 +493,7 @@ fn mode_card(
     } else {
         Sense::click()
     };
-    let response = ui.interact(rect, ui.id().with(("mode-card", all_users)), sense);
+    let response = ui.interact(rect, ui.scope_id().with(("mode-card", all_users)), sense);
     let stroke = if selected {
         Stroke::new(1.0, p.accent)
     } else if response.hovered() && !wizard.locked {

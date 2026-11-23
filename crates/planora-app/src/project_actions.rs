@@ -324,7 +324,10 @@ fn label(path: &NodePath) -> String {
 
 fn dialog_window(title: &str, key: &str) -> Dialog<'static> {
     Dialog::new(title, DialogSize::Prompt)
-        .id(egui::Id::new(("planora_projects_dialog", key.to_string())))
+        .id(egui::Id::unique((
+            "planora_projects_dialog",
+            key.to_string(),
+        )))
         .fixed()
 }
 

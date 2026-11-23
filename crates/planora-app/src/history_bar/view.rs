@@ -29,7 +29,7 @@ const HOVER_ROWS: usize = 2;
 
 /// Kennung des Felds (auch für [`crate::shell_panels::field_rects`]).
 pub(crate) fn bar_id() -> egui::Id {
-    egui::Id::new("planora-field-history")
+    egui::Id::unique("planora-field-history")
 }
 
 fn rects_key() -> egui::Id {
@@ -520,9 +520,8 @@ fn step_button(
     let response = ui.interact(rect, id, egui::Sense::click());
     let enabled = ui.is_enabled();
     let selected = state.selected_feature == Some(v.id);
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, &v.name)
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, &v.name));
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         let radius = egui::CornerRadius::same(theme::RADIUS_SM);
@@ -700,7 +699,7 @@ fn marker(
     let enabled = ui.is_enabled();
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Slider,
+            egui::Role::Slider,
             enabled,
             tr!("history-marker-label", pos = bar.pos, len = bar.len()),
         )

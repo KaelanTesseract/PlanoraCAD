@@ -241,12 +241,12 @@ pub fn screen_line(width: u32, height: u32) -> String {
 
 /// Kennung des Fensters (für Lage und Größe in Tests).
 pub fn window_id() -> egui::Id {
-    egui::Id::new(WINDOW_ID)
+    egui::Id::unique(WINDOW_ID)
 }
 
 /// Kennung der aufklappbaren Vorschau von `part` (unabhängig von der Sprache).
 pub fn preview_id(part: Part) -> egui::Id {
-    egui::Id::new(("planora_feedback_vorschau", part.heading()))
+    egui::Id::unique(("planora_feedback_vorschau", part.heading()))
 }
 
 /// Was beim Öffnen über das Programm bekannt ist (Schnappschuss; ändert sich nicht, solange
@@ -1026,7 +1026,7 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
         .show(ui, |ui| {
             read_only_text(
                 ui,
-                egui::Id::new("planora_feedback_adresse_text"),
+                egui::Id::unique("planora_feedback_adresse_text"),
                 &url,
                 ADDRESS_MAX_H,
             );
@@ -1086,7 +1086,7 @@ fn after_send(
         .show(ui, |ui| {
             read_only_text(
                 ui,
-                egui::Id::new("planora_feedback_adresse_geschickt_text"),
+                egui::Id::unique("planora_feedback_adresse_geschickt_text"),
                 &sent.url,
                 ADDRESS_MAX_H,
             );

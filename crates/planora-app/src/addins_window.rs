@@ -292,7 +292,7 @@ impl AddinsWindow {
         let mut toggles = BTreeMap::new();
         let response = Dialog::new(title(), DialogSize::File)
             .dock_key("addins")
-            .id(egui::Id::new(WINDOW_ID))
+            .id(egui::Id::unique(WINDOW_ID))
             .center_on_open()
             .open(&mut open)
             .show_with_footer(

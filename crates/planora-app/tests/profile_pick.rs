@@ -110,7 +110,7 @@ fn screen(s: &AppState, id: FeatureId, p: DVec2) -> egui::Pos2 {
 
 /// Rechteck des Dialogfensters „Skizze extrudieren“ (im vorigen Bild).
 fn dialog_rect(ctx: &egui::Context) -> egui::Rect {
-    ctx.memory(|m| m.area_rect(egui::Id::new(("create_dialog", "extrude"))))
+    ctx.memory(|m| m.area_rect(egui::Id::unique(("create_dialog", "extrude"))))
         .expect("Dialog gezeichnet")
 }
 

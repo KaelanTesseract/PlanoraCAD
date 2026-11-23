@@ -909,6 +909,7 @@ fn panning_and_wheel_zoom_change_only_the_sheet_view() {
             unit: egui::MouseWheelUnit::Point,
             delta: vec2(0.0, 120.0),
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
             modifiers: Modifiers::NONE,
         }],
     );

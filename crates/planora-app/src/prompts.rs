@@ -41,7 +41,7 @@ pub fn show(ctx: &egui::Context, ws: &mut Workspace) {
 /// Mittiges, festes Fenster für eine Rückfrage.
 fn window(ctx: &egui::Context, key: &str, title: &str, add_contents: impl FnMut(&mut egui::Ui)) {
     Dialog::new(title, DialogSize::Prompt)
-        .id(egui::Id::new(("planora_prompt", key)))
+        .id(egui::Id::unique(("planora_prompt", key)))
         .fixed()
         .show(ctx, add_contents);
 }

@@ -189,6 +189,11 @@ pub struct ParameterDialog {
     focus_new: Option<ParamId>,
     /// Rollstand im letzten Bild (Versatz, Höhe des Ausschnitts).
     scroll: (f32, f32),
+    /// Höhe des Inhalts im letzten Bild: Grenze, an der egui 0.37 einen gesetzten Versatz als
+    /// Überrollen zurückfedern lässt (C13).
+    scroll_content: f32,
+    /// Die neue Zeile wartete schon ein Bild, bis der Inhalt sie mitzählt.
+    focus_waited: bool,
     /// Rechteck im letzten Bild (für Tests).
     pub last_rect: Option<egui::Rect>,
     /// Anzeigeeinheit der Zeilen; nach dem Umstellen lädt das Fenster neu.
@@ -206,6 +211,8 @@ impl ParameterDialog {
             editing: None,
             focus_new: None,
             scroll: (0.0, 0.0),
+            scroll_content: 0.0,
+            focus_waited: false,
             last_rect: None,
             unit: current_unit(),
         };
@@ -475,7 +482,7 @@ impl ParameterDialog {
         let table_h = (ctx.content_rect().height() - 260.0).clamp(120.0, TABLE_MAX_H);
         let shown = Dialog::new(title(), DialogSize::Wide)
             .dock_key("parameters")
-            .id(egui::Id::new("parameter_dialog"))
+            .id(egui::Id::unique("parameter_dialog"))
             .open(&mut open)
             .show_with_footer(
                 ctx,
@@ -565,7 +572,17 @@ impl ParameterDialog {
             if let Some(i) = target
                 && let Some(offset) = offset_showing(i, self.scroll)
             {
-                area = area.vertical_scroll_offset(offset);
+                // egui 0.37 misst den Versatz an den Grenzen des letzten Bilds; liegt er darüber
+                // (die neue Zeile zählte noch nicht mit), federt der Bereich zurück. Dann ein Bild
+                // warten, bis der Inhalt die Zeile enthält (höchstens einmal).
+                let max = (self.scroll_content - self.scroll.1).max(0.0);
+                if offset > max + 0.5 && !self.focus_waited {
+                    self.focus_new = focus_new;
+                    self.focus_waited = true;
+                } else {
+                    area = area.vertical_scroll_offset(offset);
+                    self.focus_waited = false;
+                }
             }
             let rows = &mut self.rows;
             let output = theme::scroll_area_viewport(ui, area, |ui, viewport| {
@@ -601,7 +618,8 @@ impl ParameterDialog {
                     }
                 }
             });
-            self.scroll = (output.state.offset.y, output.inner_rect.height());
+            self.scroll = (output.state.clamped_offset().y, output.inner_rect.height());
+            self.scroll_content = output.content_size.y;
         });
         // Ein Feld mit Entwurf, das aus dem Bild gerollt ist, verliert die Tastatur ohne
         // „verlassen“: Sein Entwurf wird übernommen wie beim Verlassen.
@@ -805,7 +823,7 @@ fn row_ui(
     });
     labelled(
         &name,
-        egui::WidgetType::TextEdit,
+        egui::Role::TextInput,
         enabled,
         &field_label(&tr!("param-col-name"), &p.name),
     );
@@ -864,7 +882,7 @@ fn row_ui(
     });
     labelled(
         &art,
-        egui::WidgetType::ComboBox,
+        egui::Role::ComboBox,
         enabled,
         &field_label(&tr!("param-col-kind"), &p.name),
     );
@@ -882,7 +900,7 @@ fn row_ui(
     });
     labelled(
         &comment,
-        egui::WidgetType::TextEdit,
+        egui::Role::TextInput,
         enabled,
         &field_label(&tr!("param-col-comment"), &p.name),
     );
@@ -902,7 +920,7 @@ fn row_ui(
     })
     .on_hover_text(delete_row());
     // Das Symbol ist ein Zeichen der Symbolschrift; Bildschirmleser hören „Zeile löschen“.
-    labelled(&delete, egui::WidgetType::Button, enabled, &delete_row());
+    labelled(&delete, egui::Role::Button, enabled, &delete_row());
     follow_focus(&delete);
     theme::focus_ring(ui, &delete);
     if delete.clicked() {
@@ -912,7 +930,7 @@ fn row_ui(
 }
 
 /// Gibt einem Bedienelement einen Namen für Bildschirmleser.
-fn labelled(response: &egui::Response, kind: egui::WidgetType, enabled: bool, label: &str) {
+fn labelled(response: &egui::Response, kind: egui::Role, enabled: bool, label: &str) {
     response.widget_info(|| egui::WidgetInfo::labeled(kind, enabled, label));
 }
 

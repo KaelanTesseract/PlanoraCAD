@@ -802,7 +802,7 @@ impl SurfaceProjectDialog {
         let ready = self.ok_enabled();
         Dialog::new(tr!("action-sketch-project-to-surface"), DialogSize::Normal)
             .dock_key("sketch_project_to_surface")
-            .id(egui::Id::new("surface_project_dialog"))
+            .id(egui::Id::unique("surface_project_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::Grid::new("surface_project_fields")
@@ -1018,7 +1018,7 @@ impl IntersectionCurveDialog {
         let ready = self.ok_enabled();
         Dialog::new(tr!("action-sketch-intersection-curve"), DialogSize::Normal)
             .dock_key("sketch_intersection_curve")
-            .id(egui::Id::new("intersection_curve_dialog"))
+            .id(egui::Id::unique("intersection_curve_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::Grid::new("intersection_curve_fields")

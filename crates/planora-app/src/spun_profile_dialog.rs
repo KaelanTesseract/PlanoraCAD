@@ -404,7 +404,7 @@ impl SpunProfileDialog {
         let mut clear_axis = false;
         Dialog::new(tr!("action-sketch-spun-profile"), DialogSize::Normal)
             .dock_key("sketch_spun_profile")
-            .id(egui::Id::new("spun_profile_dialog"))
+            .id(egui::Id::unique("spun_profile_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {
                 egui::Grid::new("spun_profile_fields")

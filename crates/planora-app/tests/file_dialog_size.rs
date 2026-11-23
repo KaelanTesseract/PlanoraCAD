@@ -132,7 +132,7 @@ impl Open {
 
 /// Rechtecke der Bedienelemente im Fenster `title` (letztes Bild).
 fn widgets(screen: &Screen, title: &str) -> Vec<Rect> {
-    let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(title));
+    let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique(title));
     screen.ctx.viewport(|v| {
         v.prev_pass
             .widgets
@@ -181,8 +181,9 @@ fn all_rows_share_the_dialog_width_even_with_long_names() {
             // Kopfzeile (Schließen-Symbol), Ordnerfeld und Dateiname enden am rechten Rand.
             let close = planora_app::icons::glyph(planora_app::icons::Icon::Close).to_string();
             let close = find(&seen, &close).expect("Schließen-Symbol").rect;
+            // Knopfrand 8 px; seit egui 0.37 rückt der Rahmen den Inhalt 1 px weiter ein.
             assert!(
-                (close.right() - inner_right).abs() <= 8.0,
+                (close.right() - inner_right).abs() <= 9.0,
                 "{what}: Schließen-Symbol bei {close:?}, Inhalt bis {inner_right}"
             );
             let reaching = inside
@@ -191,7 +192,14 @@ fn all_rows_share_the_dialog_width_even_with_long_names() {
                 .count();
             assert!(reaching >= 3, "{what}: zu wenige Zeilen bis zum Rand");
             // Jede Listenzeile geht über die ganze Breite (bis zur Rollleiste der Liste).
-            for name in ["Ordner 00", "Ordner 02"] {
+            // Bei 800 × 600 brechen die Schnellzugriffe seit egui 0.37 in zwei Zeilen um, die dritte
+            // Ordnerzeile liegt dann unter dem Rand der Liste (Prüfgröße ist 1920 × 1080).
+            let names: &[&str] = if h >= 1000.0 {
+                &["Ordner 00", "Ordner 02"]
+            } else {
+                &["Ordner 00"]
+            };
+            for &name in names {
                 let text = find(&seen, name).unwrap_or_else(|| panic!("{what}: {name}"));
                 let row = inside
                     .iter()

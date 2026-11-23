@@ -284,7 +284,7 @@ impl<'a> FormulaField<'a> {
         unit: ParamUnit,
     ) -> Self {
         FormulaField {
-            id_salt: egui::Id::new(id_salt),
+            id_salt: egui::Id::unique(id_salt),
             text,
             unit,
             width: 90.0,
@@ -375,11 +375,7 @@ impl<'a> FormulaField<'a> {
                         .on_hover_text(fx_hint())
                         .on_disabled_hover_text(fx_hint());
                     fx.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            enabled && valid,
-                            fx_label(),
-                        )
+                        egui::WidgetInfo::labeled(egui::Role::Button, enabled && valid, fx_label())
                     });
                     if fx.clicked()
                         && let Some(Ok(v)) = result
@@ -398,7 +394,7 @@ impl<'a> FormulaField<'a> {
                 );
                 if let Some(l) = &label {
                     response.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, enabled, l)
+                        egui::WidgetInfo::labeled(egui::Role::TextInput, enabled, l)
                     });
                 }
                 match &result {

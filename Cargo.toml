@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.0.2-dev.4"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "GPL-3.0-only"
 publish = false
 authors = ["Dennis Guse"]
@@ -39,9 +39,9 @@ bytemuck = { version = "1", features = ["derive"] }
 proptest = "1"
 # Die in egui eingebauten Standardschriften (OFL/Ubuntu-Lizenz) sind abgeschaltet;
 # stattdessen wird Roboto (Apache-2.0) mitgeliefert, siehe crates/planora-app/assets/fonts.
-eframe = { version = "0.36", default-features = false, features = ["accesskit", "links", "wayland", "web_screen_reader", "wgpu", "x11"] }
-egui = { version = "0.36", default-features = false }
-egui-wgpu = "0.36"
+eframe = { version = "0.37", default-features = false, features = ["accesskit", "links", "wayland", "web_screen_reader", "wgpu", "x11"] }
+egui = { version = "0.37", default-features = false }
+egui-wgpu = "0.37"
 # eframe aktiviert die Standardfunktionen von winit nur über sein Feature "default";
 # da das wegen der Schriften abgeschaltet ist, werden sie hier gleichwertig angefordert.
 winit = "0.30"

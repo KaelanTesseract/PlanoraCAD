@@ -26,7 +26,7 @@ fn texts_id(key: &str, instance: u64) -> egui::Id {
 /// Kennung der Texte in einer Anzeigeeinheit: Nach dem Umstellen gelten die getippten Texte
 /// (in der alten Einheit) nicht mehr, das Fenster zeigt wieder die Vorgaben.
 fn texts_id_in(key: &str, instance: u64, unit: planora_i18n::DisplayUnit) -> egui::Id {
-    let id = egui::Id::new(("create-formulas", key)).with(instance);
+    let id = egui::Id::unique(("create-formulas", key)).with(instance);
     match unit {
         planora_i18n::DisplayUnit::Millimeter => id,
         u => id.with(u.id()),
@@ -325,7 +325,7 @@ impl CreateDialog {
         }
         Dialog::new(title, DialogSize::Normal)
             .dock_key(key)
-            .id(egui::Id::new(("create_dialog", key)))
+            .id(egui::Id::unique(("create_dialog", key)))
             .open(&mut open)
             .show(ctx, |ui| {
                 match self {

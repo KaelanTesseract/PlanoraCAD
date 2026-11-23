@@ -272,7 +272,7 @@ pub type Numbers = BTreeMap<BalloonId, Option<u32>>;
 
 /// Wie [`planora_feature::Document::balloon_numbers`], aus dem Zwischenspeicher von `ctx`.
 pub fn numbers_cached(ctx: &egui::Context, state: &AppState, drawing: DrawingId) -> Arc<Numbers> {
-    let id = egui::Id::new("planora-balloon-numbers");
+    let id = egui::Id::unique("planora-balloon-numbers");
     let edit = state.document.edit_count();
     if let Some(c) = ctx
         .data(|d| d.get_temp::<NumbersCache>(id))

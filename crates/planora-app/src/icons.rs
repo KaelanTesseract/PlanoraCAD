@@ -485,7 +485,7 @@ pub fn source_entry_keys(
     if let IconSource::Font(icon) = source {
         return theme::entry(ui, enabled, with_keys(button(icon, label.to_owned())));
     }
-    let id = egui::Id::new(("planora-icon", label));
+    let id = egui::IdSalt::new(("planora-icon", label));
     // Gesperrt zeichnet der Maler blass, auch das Symbol.
     ui.add_enabled(enabled, |ui: &mut egui::Ui| {
         let result = with_keys(egui::Button::new((
@@ -1923,9 +1923,8 @@ fn source_button_impl(
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     // Selbst gezeichnet: Art, Beschriftung und Zustand für Bildschirmleser selbst melden.
     let enabled = ui.is_enabled();
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, text)
-    });
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, text));
     if ui.is_rect_visible(rect) {
         let p = theme::palette(dark);
         let visuals = ui.style().interact_selectable(&response, selected);

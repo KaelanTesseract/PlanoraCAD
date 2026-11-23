@@ -208,15 +208,15 @@ pub struct DrawingLayout {
 }
 
 fn layout_id() -> egui::Id {
-    egui::Id::new("planora-drawing-layout")
+    egui::Id::unique("planora-drawing-layout")
 }
 
 fn drag_id() -> egui::Id {
-    egui::Id::new("planora-drawing-drag")
+    egui::Id::unique("planora-drawing-drag")
 }
 
 fn sheet_cache_id() -> egui::Id {
-    egui::Id::new("planora-drawing-sheet")
+    egui::Id::unique("planora-drawing-sheet")
 }
 
 /// Aufteilung des zuletzt gezeichneten Zeichnungsbereichs.
@@ -759,7 +759,7 @@ struct CellsCache {
 
 /// Alle Zeilen der Stückliste des Dokuments, je Stand des Dokuments einmal gerechnet.
 pub(crate) fn cached_cells(ctx: &egui::Context, state: &AppState) -> Arc<Vec<PartsCells>> {
-    let id = egui::Id::new("planora-parts-cells");
+    let id = egui::Id::unique("planora-parts-cells");
     let edit = state.document.edit_count();
     if let Some(c) = ctx
         .data(|d| d.get_temp::<CellsCache>(id))
@@ -973,7 +973,7 @@ fn balloons_cached(
     drawing: &Drawing,
     model: u64,
 ) -> Arc<Vec<BalloonMarks>> {
-    let id = egui::Id::new("planora-drawing-balloons");
+    let id = egui::Id::unique("planora-drawing-balloons");
     let owned = state.drawing_ui.results_for(drawing, model);
     let ptrs = result_ptrs(&owned, &BTreeMap::new());
     let edit = state.document.edit_count();
@@ -1544,7 +1544,7 @@ fn tool_field(
                     let info = ui.add_enabled(editable, flat(icon_only(Icon::SheetInfo)));
                     info.widget_info(|| {
                         egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
+                            egui::Role::Button,
                             editable,
                             crate::sheet_dialog::button(),
                         )
@@ -1573,7 +1573,7 @@ fn tool_field(
                     // bei 1100 × 700 ins Feld passt; der Name steht im Tooltip.
                     let fit = ui.add(flat(icon_only(Icon::FitSheet)));
                     fit.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, fit_sheet())
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, fit_sheet())
                     });
                     if fit.on_hover_text(fit_sheet()).clicked() {
                         action = Some(Action::Fit);
@@ -1867,7 +1867,7 @@ fn commit_field(
     shown: &str,
     enabled: bool,
 ) -> Option<String> {
-    let id = egui::Id::new(("planora-section-field", key, view));
+    let id = egui::Id::unique(("planora-section-field", key, view));
     let editing = ui.memory(|m| m.has_focus(id) || m.had_focus_last_frame(id));
     let stored: Option<String> = ui.data(|d| d.get_temp(id)).filter(|_| editing);
     let mut text = stored.clone().unwrap_or_else(|| shown.to_string());
@@ -2011,7 +2011,7 @@ fn hint_field(ctx: &egui::Context, rect: Rect, dark: bool, lines: HintLines<'_>)
                 let (r, response) = ui.allocate_exact_size(size, Sense::hover());
                 let enabled = ui.is_enabled();
                 response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, &lines.hint)
+                    egui::WidgetInfo::labeled(egui::Role::Label, enabled, &lines.hint)
                 });
                 let elided = galley.elided;
                 ui.painter().galley(r.min, galley, weak);
@@ -2242,7 +2242,7 @@ fn tool_finish(state: &mut AppState, id: DrawingId, at: DVec2) -> Result<(), Too
 /// sperrt schon [`viewport::typing`] (außer den dafür freigegebenen Tab-Halten). Muss in jedem
 /// Bild aufgerufen werden (merkt sich den letzten Mausdruck).
 fn keys_for_sheet(ctx: &egui::Context, sheet: &egui::Response) -> bool {
-    let id = egui::Id::new("planora-drawing-keys-on-sheet");
+    let id = egui::Id::unique("planora-drawing-keys-on-sheet");
     if ctx.input(|i| i.pointer.any_pressed()) {
         let on = sheet.hovered();
         ctx.data_mut(|d| d.insert_temp(id, on));
@@ -3067,7 +3067,7 @@ struct PolyCache {
 }
 
 fn polys_cache_id() -> egui::Id {
-    egui::Id::new("planora-drawing-polys")
+    egui::Id::unique("planora-drawing-polys")
 }
 
 /// Zoomstufe: Viertelschritte von Zweierpotenzen, nach oben gerundet.

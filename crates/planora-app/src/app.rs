@@ -140,6 +140,8 @@ pub struct PlanoraApp {
     pub(crate) overview: OverviewState,
     /// Fenster „Rückmeldung“ ([`feedback_dialog`]).
     pub(crate) feedback: FeedbackDialog,
+    /// Ablage für das Bild vom Fenster (Rückruf der Anforderung, egui 0.37).
+    shot_inbox: crate::feedback_shot::ShotInbox,
     /// Öffnet den Rückmeldungsordner: im Programm [`ExplorerOpen`], in Tests eine Nachbildung.
     system_open: Box<dyn SystemOpen>,
     pub(crate) versions_ui: VersionsUi,
@@ -462,6 +464,7 @@ impl PlanoraApp {
             addins: AddinsWindow::default(),
             overview: OverviewState::default(),
             feedback: FeedbackDialog::default(),
+            shot_inbox: Default::default(),
             system_open: Box::new(NoFolderOpen),
             versions_ui: VersionsUi::default(),
             applied_dark: None,
@@ -1268,26 +1271,16 @@ impl PlanoraApp {
     }
 
     /// Bild vom Fenster für die Rückmeldung: anfordern, sobald das Fenster ein Bild lang weg
-    /// war, und das eigene Bild-Ereignis abholen (fremde bleiben unbeachtet).
+    /// war, und das Bild aus der Ablage holen, die der Rückruf füllt.
     fn feedback_shot(&mut self, ctx: &egui::Context) {
-        use crate::feedback_shot::{ShotStep, is_our_shot, shot_user_data};
-        let shots: Vec<_> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot {
-                        user_data, image, ..
-                    } if is_our_shot(user_data) => Some(image.clone()),
-                    _ => None,
-                })
-                .collect()
-        });
-        for img in shots {
+        use crate::feedback_shot::ShotStep;
+        if let Some(img) = self.shot_inbox.take() {
             self.feedback.shot_received(img);
         }
         if self.feedback.shot_tick(std::time::Instant::now()) == ShotStep::RequestScreenshot {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(shot_user_data()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                self.shot_inbox.request(ctx),
+            ));
         }
     }
 
@@ -3382,7 +3375,7 @@ impl eframe::App for PlanoraApp {
         if self.restart_locked() {
             // Über allem: sperrt die Bedienung, bis der Installer gestartet ist und sich das Programm
             // beendet (oder der Start scheitert und das Programm weiterläuft).
-            egui::Modal::new(egui::Id::new("planora_update_restart"))
+            egui::Modal::new(egui::Id::unique("planora_update_restart"))
                 .show(&ctx, |ui| ui.label(update_install::restart_box()));
         }
 

@@ -65,7 +65,7 @@ const VIEW_MAX_H: f32 = 260.0;
 
 /// Kennung des Fensters (für Lage und Größe in Tests).
 pub fn window_id() -> egui::Id {
-    egui::Id::new(WINDOW_ID)
+    egui::Id::unique(WINDOW_ID)
 }
 
 /// Wahl in der Rückfrage.

@@ -17,7 +17,7 @@ fn all_families_have_fonts() {
         let names = defs.families.get(&family).expect("Familie vorhanden");
         assert!(!names.is_empty(), "{family:?} ohne Schrift");
         for name in names {
-            assert!(!defs.font_data[name].font.is_empty());
+            assert!(!(*defs.font_data[name].font).as_ref().is_empty());
         }
     }
 }
@@ -67,7 +67,7 @@ fn every_allowed_character_has_a_glyph_in_proportional() {
             .filter(|c| {
                 !chain
                     .iter()
-                    .any(|n| font_has_char(&defs.font_data[n].font, *c))
+                    .any(|n| font_has_char((*defs.font_data[n].font).as_ref(), *c))
             })
             .collect();
         assert!(missing.is_empty(), "{family:?}: kein Glyph für {missing:?}");

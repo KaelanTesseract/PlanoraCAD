@@ -149,7 +149,7 @@ impl ModTap {
 }
 
 fn mod_tap_id() -> egui::Id {
-    egui::Id::new("planora-keymap-mod-tap")
+    egui::Id::unique("planora-keymap-mod-tap")
 }
 
 /// Der Tipp einer Umschalttaste in diesem Bild (siehe [`ModTap`]); der Verfolger liegt im

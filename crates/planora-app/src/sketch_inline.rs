@@ -38,12 +38,12 @@ pub(crate) fn field_rects(ctx: &egui::Context, se: &SketchSession) -> Vec<egui::
 }
 
 fn area_id(kind: FieldKind) -> egui::Id {
-    egui::Id::new("planora-draw-field-area").with(kind_index(kind))
+    egui::Id::unique("planora-draw-field-area").with(kind_index(kind))
 }
 
 /// Unter diesem Schlüssel steht die Kennung des Textfelds, sobald es einmal gezeichnet wurde.
 fn widget_id_key(kind: FieldKind) -> egui::Id {
-    egui::Id::new("planora-draw-field-widget").with(kind_index(kind))
+    egui::Id::unique("planora-draw-field-widget").with(kind_index(kind))
 }
 
 fn widget_id(ctx: &egui::Context, kind: FieldKind) -> Option<egui::Id> {
@@ -248,13 +248,13 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
         }
     }
 
-    let anchor_key = egui::Id::new("planora-draw-field-anchor");
+    let anchor_key = egui::Id::unique("planora-draw-field-anchor");
     let anchor = pointer
         .or_else(|| ctx.data(|d| d.get_temp(anchor_key)))
         .unwrap_or(rect.center());
     ctx.data_mut(|d| d.insert_temp(anchor_key, anchor));
 
-    let frame_key = egui::Id::new("planora-draw-field-frame");
+    let frame_key = egui::Id::unique("planora-draw-field-frame");
     let frame = ctx.cumulative_frame_nr();
     let appeared = ctx
         .data(|d| d.get_temp::<u64>(frame_key))

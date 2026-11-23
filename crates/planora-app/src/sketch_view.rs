@@ -2045,7 +2045,7 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
     }
     let response = ui.interact(
         rect,
-        ui.id().with("planora-sketch-overlay"),
+        ui.scope_id().with("planora-sketch-overlay"),
         Sense::click_and_drag(),
     );
     // Die Zeichenfläche nimmt den Fokus an (Tab, Pfeile), liest aber keinen Text: ihr Fokus
@@ -2103,38 +2103,41 @@ fn show_curve_menu(ui: &egui::Ui, state: &mut AppState) {
     let km = crate::keymap::mouse::current(ui.ctx());
     let mut run = false;
     let mut clip = None;
-    let response = theme::field_area(egui::Id::new("planora-sketch-curve-menu"), pos2(at.0, at.1))
-        .order(egui::Order::Foreground)
-        .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.scope(|ui| {
-                    theme::menu_style(ui.style_mut());
-                    for (action, label, enabled) in [
-                        (Action::SketchCopy, tr!("action-sketch-copy"), has_selection),
-                        (Action::SketchCut, tr!("action-sketch-cut"), has_selection),
-                        (Action::SketchPaste, tr!("action-sketch-paste"), has_clip),
-                    ] {
-                        let button = egui::Button::new(label).shortcut_text(
-                            egui::RichText::new(crate::keymap::shortcut_hint(&km, action))
-                                .font(theme::kbd_font()),
-                        );
-                        if ui.add_enabled(enabled, button).clicked() {
-                            clip = Some(action);
-                        }
-                    }
-                    ui.separator();
-                    let item = ui.add_enabled(
-                        can,
-                        egui::Button::new(tr!("action-sketch-toggle-curvature")),
+    let response = theme::field_area(
+        egui::Id::unique("planora-sketch-curve-menu"),
+        pos2(at.0, at.1),
+    )
+    .order(egui::Order::Foreground)
+    .show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.scope(|ui| {
+                theme::menu_style(ui.style_mut());
+                for (action, label, enabled) in [
+                    (Action::SketchCopy, tr!("action-sketch-copy"), has_selection),
+                    (Action::SketchCut, tr!("action-sketch-cut"), has_selection),
+                    (Action::SketchPaste, tr!("action-sketch-paste"), has_clip),
+                ] {
+                    let button = egui::Button::new(label).shortcut_text(
+                        egui::RichText::new(crate::keymap::shortcut_hint(&km, action))
+                            .font(theme::kbd_font()),
                     );
-                    if !can {
-                        item.on_disabled_hover_text(tr!("sketch-comb-select-curve"));
-                    } else if item.clicked() {
-                        run = true;
+                    if ui.add_enabled(enabled, button).clicked() {
+                        clip = Some(action);
                     }
-                });
+                }
+                ui.separator();
+                let item = ui.add_enabled(
+                    can,
+                    egui::Button::new(tr!("action-sketch-toggle-curvature")),
+                );
+                if !can {
+                    item.on_disabled_hover_text(tr!("sketch-comb-select-curve"));
+                } else if item.clicked() {
+                    run = true;
+                }
             });
         });
+    });
     let outside = ui.input(|i| i.pointer.primary_pressed())
         && ui
             .input(|i| i.pointer.interact_pos())
@@ -2165,46 +2168,49 @@ pub fn show_sketch_pick_menu(ui: &egui::Ui, state: &mut AppState) {
     }
     let km = crate::keymap::mouse::current(ui.ctx());
     let mut chosen = None;
-    let response = theme::field_area(egui::Id::new("planora-sketch-pick-menu"), pos2(at.0, at.1))
-        .order(egui::Order::Foreground)
-        .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.scope(|ui| {
-                    theme::menu_style(ui.style_mut());
-                    let entry = |ui: &mut egui::Ui, action: Action, label: String| {
-                        let keys = crate::keymap::shortcut_hint(&km, action);
-                        let mut b = egui::Button::new(label);
-                        if !keys.is_empty() {
-                            b = b.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()));
-                        }
-                        ui.add(b).clicked().then_some(action)
-                    };
-                    chosen = chosen.or(entry(
-                        ui,
-                        Action::SketchEditPicked,
-                        tr!("action-sketch-edit-picked"),
-                    ));
-                    // Haken „Maße anzeigen“ der fertigen Skizze (Task 9), danach „Ausblenden“.
-                    if let Some(on) = state
-                        .picked_sketch()
-                        .and_then(|id| state.sketch_dimension_menu(id))
-                    {
-                        let mut checked = on;
-                        if ui
-                            .checkbox(&mut checked, tr!("tree-sketch-show-dimension"))
-                            .clicked()
-                        {
-                            chosen = chosen.or(Some(Action::SketchShowDimensionFinished));
-                        }
+    let response = theme::field_area(
+        egui::Id::unique("planora-sketch-pick-menu"),
+        pos2(at.0, at.1),
+    )
+    .order(egui::Order::Foreground)
+    .show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.scope(|ui| {
+                theme::menu_style(ui.style_mut());
+                let entry = |ui: &mut egui::Ui, action: Action, label: String| {
+                    let keys = crate::keymap::shortcut_hint(&km, action);
+                    let mut b = egui::Button::new(label);
+                    if !keys.is_empty() {
+                        b = b.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()));
                     }
-                    chosen = chosen.or(entry(
-                        ui,
-                        Action::SketchHidePicked,
-                        tr!("action-sketch-hide-picked"),
-                    ));
-                });
+                    ui.add(b).clicked().then_some(action)
+                };
+                chosen = chosen.or(entry(
+                    ui,
+                    Action::SketchEditPicked,
+                    tr!("action-sketch-edit-picked"),
+                ));
+                // Haken „Maße anzeigen“ der fertigen Skizze (Task 9), danach „Ausblenden“.
+                if let Some(on) = state
+                    .picked_sketch()
+                    .and_then(|id| state.sketch_dimension_menu(id))
+                {
+                    let mut checked = on;
+                    if ui
+                        .checkbox(&mut checked, tr!("tree-sketch-show-dimension"))
+                        .clicked()
+                    {
+                        chosen = chosen.or(Some(Action::SketchShowDimensionFinished));
+                    }
+                }
+                chosen = chosen.or(entry(
+                    ui,
+                    Action::SketchHidePicked,
+                    tr!("action-sketch-hide-picked"),
+                ));
             });
         });
+    });
     let outside = ui.input(|i| i.pointer.primary_pressed())
         && ui
             .input(|i| i.pointer.interact_pos())
@@ -4586,7 +4592,7 @@ pub(crate) struct LabelHit {
 /// Ablage der Maßtexte je Skizze: Nach einem Wechsel des Tabs oder der Skizze trifft kein
 /// Rechteck einer anderen Skizze.
 fn label_hits_id(sketch: FeatureId) -> egui::Id {
-    egui::Id::new("planora-sketch-label-hits").with(sketch)
+    egui::Id::unique("planora-sketch-label-hits").with(sketch)
 }
 
 /// Das Maß der Skizze `sketch`, dessen Text im letzten Bild unter `p` stand (der zuletzt

@@ -104,11 +104,11 @@ pub fn clipboard_events_as_keys_with(
 }
 
 fn latch_id(viewport: egui::ViewportId) -> egui::Id {
-    egui::Id::new(("planora-paste-latch", viewport))
+    egui::Id::unique(("planora-paste-latch", viewport))
 }
 
 fn sketch_open_id() -> egui::Id {
-    egui::Id::new("planora-clip-sketch-open")
+    egui::Id::unique("planora-clip-sketch-open")
 }
 
 /// Merkt für die abgedockten Fenster, ob im aktiven Tab eine Skizze offen ist (die App setzt es

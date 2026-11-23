@@ -188,7 +188,7 @@ impl DetachState {
 
 /// Ablage des Abdock-Zustands in `ctx.data` während eines Bilds.
 fn state_id() -> egui::Id {
-    egui::Id::new("planora_detach_state")
+    egui::Id::unique("planora_detach_state")
 }
 
 /// Legt den Abdock-Zustand für dieses Bild in `ctx.data` ab, damit `Dialog` ihn erreicht, ohne
@@ -322,7 +322,7 @@ struct FieldMemo {
 }
 
 fn field_memo_id(p: Place) -> egui::Id {
-    egui::Id::new(("detach_feld_entschieden", p.key()))
+    egui::Id::unique(("detach_feld_entschieden", p.key()))
 }
 
 /// Entscheidung für ein Feld. `memo`: gemerkte Lage und Antwort, falls der Platz im vorigen Bild
@@ -510,7 +510,7 @@ pub fn show_window<R>(
         return (None, WindowEvent::None);
     }
     let saved = state.get(spec.place);
-    let memory = egui::Id::new(("detach_fenster", spec.place.key()));
+    let memory = egui::Id::unique(("detach_fenster", spec.place.key()));
     show_core(
         ctx,
         Some(state),
@@ -649,7 +649,7 @@ pub fn show_sub_window<R>(
         closable: sub.closable,
         head: Head::TitleOnly,
     };
-    let memory = egui::Id::new(("detach_unterfenster", sub.host.key(), sub.dialog));
+    let memory = egui::Id::unique(("detach_unterfenster", sub.host.key(), sub.dialog));
     show_core(
         ctx,
         None,
@@ -661,7 +661,7 @@ pub fn show_sub_window<R>(
 }
 
 fn sub_open_id(host: Place) -> egui::Id {
-    egui::Id::new(("detach_unterdialog_offen", host.key()))
+    egui::Id::unique(("detach_unterdialog_offen", host.key()))
 }
 
 /// Ist über dem Feld `host` ein Unterdialog offen (im vorigen oder diesem Bild des
@@ -691,7 +691,7 @@ pub fn host_place(ctx: &egui::Context) -> Option<Place> {
 }
 
 fn host_rect_id(place: Place) -> egui::Id {
-    egui::Id::new(("detach_feldfenster", place.key()))
+    egui::Id::unique(("detach_feldfenster", place.key()))
 }
 
 /// Bildschirm-Rechteck (Punkte) des Fensters, in dem gerade gezeichnet wird, wenn es ein
@@ -805,7 +805,7 @@ fn window_contents<R>(
                     );
                     let drag = ui.interact(
                         head,
-                        ui.id().with("detach_kopfzeile"),
+                        ui.scope_id().with("detach_kopfzeile"),
                         egui::Sense::click_and_drag(),
                     );
                     let dock =
@@ -824,7 +824,7 @@ fn window_contents<R>(
                     // des Kopfs bleibt er offen: egui gibt einen Klick unter einem obenliegenden
                     // Nur-Ziehen-Feld niemandem (hit_test), die Knöpfe wären sonst tot.
                     let strip = egui::Rect::from_min_size(area.min, egui::vec2(area.width(), band));
-                    let base = ui.id().with("detach_kopfstreifen");
+                    let base = ui.scope_id().with("detach_kopfstreifen");
                     let mut drag: Option<egui::Response> = None;
                     for (i, piece) in strip_pieces(ui, strip).into_iter().enumerate() {
                         let r = ui.interact(piece, base.with(i), egui::Sense::drag());
@@ -923,7 +923,7 @@ pub struct ChildKeys {
 }
 
 fn child_keys_id() -> egui::Id {
-    egui::Id::new("detach_kind_tasten")
+    egui::Id::unique("detach_kind_tasten")
 }
 
 /// Nimmt die unverbrauchten gedrückten Tasten aus der Eingabe des Fensters, in dem gerade
@@ -986,7 +986,7 @@ fn collect_keys(ctx: &egui::Context, dialog: bool) {
 }
 
 fn child_touched_id() -> egui::Id {
-    egui::Id::new("detach_kind_beruehrt")
+    egui::Id::unique("detach_kind_beruehrt")
 }
 
 /// Wurde seit dem letzten Aufruf in einem abgedockten Fenster geklickt oder eine Taste gedrückt?
@@ -1083,7 +1083,7 @@ fn resize_edges(ui: &mut egui::Ui, opened: &mut Opened, outer: Option<egui::Rect
     for (dir, strip) in strips {
         let response = ui.interact(
             strip,
-            egui::Id::new(("detach_rand", format!("{dir:?}"))),
+            egui::Id::unique(("detach_rand", format!("{dir:?}"))),
             egui::Sense::drag(),
         );
         if response.hovered() || response.dragged() {

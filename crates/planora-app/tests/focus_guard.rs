@@ -3,6 +3,9 @@
 //! Fenster ab. [`viewport::remember_keyboard_focus`] (am Ende jedes Bilds, Hauptfenster und
 //! abgedockte Fenster) gibt einen solchen Fokus ab und reicht ihn an das Widget weiter, sobald es
 //! gezeichnet wird.
+//!
+//! egui 0.37 (C13): egui filtert den accesskit-Fokus selbst; der Schutz bleibt, weil sonst ein nicht
+//! gezeichnetes Feld die Tastatur hielte (die Prüfungen auf `memory.focused()` unten).
 
 use egui::{Id, Rect, pos2};
 use planora_app::viewport;
@@ -38,7 +41,7 @@ fn frame(ctx: &egui::Context, draw: impl FnMut(&mut egui::Ui)) {
 fn focus_on_an_undrawn_widget_is_released_at_frame_end() {
     let ctx = context();
     frame(&ctx, |_| {});
-    let ghost = Id::new("nie gezeichnet");
+    let ghost = Id::unique("nie gezeichnet");
     frame(&ctx, |ui| {
         ui.label("etwas");
         ui.ctx().memory_mut(|m| m.request_focus(ghost));

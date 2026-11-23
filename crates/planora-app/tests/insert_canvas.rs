@@ -226,7 +226,7 @@ fn edit_canvas_changes_feature_one_step() {
 
 fn insert_menu_frame<'a>(ws: &'a mut Workspace) -> impl FnMut(&egui::Context) + 'a {
     move |ctx| {
-        egui::Area::new(egui::Id::new("einfuegen"))
+        egui::Area::new(egui::Id::unique("einfuegen"))
             .fixed_pos(Pos2::new(20.0, 20.0))
             .show(ctx, |ui| {
                 ui.set_width(280.0);

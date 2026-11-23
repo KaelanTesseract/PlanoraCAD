@@ -135,7 +135,7 @@ impl SketchDxfDialog {
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
         Dialog::new(tr!("sketch-dxf-title"), DialogSize::File)
             .dock_key("sketch_dxf")
-            .id(egui::Id::new("sketch_dxf_dialog"))
+            .id(egui::Id::unique("sketch_dxf_dialog"))
             .center_on_open()
             .open(&mut open)
             .show_with_footer(

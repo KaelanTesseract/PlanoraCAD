@@ -747,7 +747,7 @@ fn assert_no_missing_glyphs(shot: &Shot, what: &str) {
         for c in run.chars().filter(|c| !c.is_whitespace()) {
             let found = chain
                 .iter()
-                .any(|name| font_has_char(&defs.font_data[name].font, c));
+                .any(|name| font_has_char((*defs.font_data[name].font).as_ref(), c));
             assert!(
                 found,
                 "{what}: {c:?} (U+{:04X}) in „{run}“ fehlt in {family:?}",

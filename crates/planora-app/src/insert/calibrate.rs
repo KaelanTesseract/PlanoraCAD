@@ -323,12 +323,12 @@ pub fn status_hint(c: &Calibrate) -> String {
 }
 
 fn area_id() -> egui::Id {
-    egui::Id::new("planora-calibrate-field-area")
+    egui::Id::unique("planora-calibrate-field-area")
 }
 
 /// Unter diesem Schlüssel steht die Kennung des Textfelds, sobald es einmal gezeichnet wurde.
 fn widget_id_key() -> egui::Id {
-    egui::Id::new("planora-calibrate-field-widget")
+    egui::Id::unique("planora-calibrate-field-widget")
 }
 
 fn widget_id(ctx: &egui::Context) -> Option<egui::Id> {

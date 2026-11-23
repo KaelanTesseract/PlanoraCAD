@@ -498,7 +498,7 @@ fn icons_registered() {
     // Beide Symbole stehen in der Symbolschrift (Abdeckung wie in tests/fonts.rs).
     let defs = fonts::definitions();
     let name = &defs.families[&fonts::icons()][0];
-    let bytes = &defs.font_data[name].font;
+    let bytes = (*defs.font_data[name].font).as_ref();
     use skrifa::MetadataProvider;
     let font = skrifa::FontRef::new(bytes).unwrap();
     for i in [Icon::Undo, Icon::Redo] {

@@ -964,7 +964,7 @@ impl ProjectsWindow {
         let (mut open, mut refresh) = (true, false);
         let response = Dialog::new(title(), DialogSize::File)
             .dock_key("projects")
-            .id(egui::Id::new(WINDOW_ID))
+            .id(egui::Id::unique(WINDOW_ID))
             .center_on_open()
             .open(&mut open)
             .show_with_footer(
@@ -1085,7 +1085,7 @@ impl ProjectsWindow {
                         let is_selected = selected == Some(&tile.path);
                         resp.widget_info(|| {
                             egui::WidgetInfo::selected(
-                                egui::WidgetType::Button,
+                                egui::Role::Button,
                                 !frame.locked,
                                 is_selected,
                                 &tile.name,
@@ -1225,7 +1225,7 @@ impl ProjectsWindow {
             ))
             .on_hover_text(back_hint());
         // Der Knopf trägt nur ein Symbol; für Bildschirmleser heißt er wie sein Hinweis.
-        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, back_hint()));
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, back_hint()));
         theme::focus_ring(ui, &r);
         if r.clicked() {
             out.push(Action::Back);
