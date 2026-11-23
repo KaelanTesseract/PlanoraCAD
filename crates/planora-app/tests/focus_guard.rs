@@ -3,6 +3,9 @@
 //! Fenster ab. [`viewport::remember_keyboard_focus`] (am Ende jedes Bilds, Hauptfenster und
 //! abgedockte Fenster) gibt einen solchen Fokus ab und reicht ihn an das Widget weiter, sobald es
 //! gezeichnet wird.
+//!
+//! egui 0.37 (C13): egui filtert den accesskit-Fokus selbst; der Schutz bleibt, weil sonst ein nicht
+//! gezeichnetes Feld die Tastatur hielte (die Prüfungen auf `memory.focused()` unten).
 
 use egui::{Id, Rect, pos2};
 use planora_app::viewport;

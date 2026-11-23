@@ -625,6 +625,11 @@ fn deferred_focus_id(viewport: egui::ViewportId) -> egui::Id {
 /// nächste Bild: Wird das Widget dort gezeichnet und hat niemand sonst den Fokus, bekommt es ihn
 /// dann (ein Bild später als von egui gedacht). Läuft am Ende jedes Bilds, im Hauptfenster und in
 /// jedem abgedockten Fenster ([`remember_keyboard_focus`]).
+///
+/// Seit egui 0.37 (C13, 2026-11-23) filtert egui den Fokus für accesskit selbst; der Absturz
+/// käme ohne diesen Schutz nicht mehr (geprüft mit `tests/focus_guard.rs`). Er bleibt trotzdem:
+/// Ohne ihn hielte ein nicht gezeichnetes Feld die Tastatur, und die Tastenkürzel blieben gesperrt
+/// (`keyboard_taken`).
 fn guard_focus(ctx: &egui::Context) {
     let key = deferred_focus_id(ctx.viewport_id());
     let deferred: Option<egui::Id> = ctx.data_mut(|d| {
