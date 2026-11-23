@@ -27,6 +27,9 @@ use std::cell::Cell;
 
 /// Kippwinkel der Prüfstrahlen (rad).
 pub const TILT: f64 = 1e-5;
+/// Kippwinkel des Rückfalls an Freiformkanten, wenn alle Strahlen mit [`TILT`] unbrauchbar sind
+/// (sie streifen auf ganzer Länge den Rand einer Fläche, deren Rand nur genähert ist; C15b).
+pub const TILT_FALLBACK: f64 = 1e-3;
 /// Zahl der Kipprichtungen, gleichverteilt um die Blickrichtung.
 pub const TILT_DIRECTIONS: usize = 8;
 /// Stützstellen je Stück (Bruchteil der Stückbreite).
@@ -65,6 +68,9 @@ fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64, near_eps: f64) -> Ra
     let mut blocked = false;
     // Freiformkante: Sie liegt nur auf `NURBS_EDGE_TOL` genau auf ihren Flächen; ein flach
     // streifender Strahl träfe eine eigene Fläche erst hinter `OWN_EPS` (C15b).
+    let freeform = own
+        .iter()
+        .any(|f| *f == FREEFORM_STROKE || f & NEIGHBOR_FLAG != 0);
     let own_eps = if own.contains(&FREEFORM_STROKE) {
         own_eps.max(near_eps)
     } else {
@@ -79,6 +85,9 @@ fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64, near_eps: f64) -> Ra
     }) {
         match h.class {
             HitClass::Boundary => return RayVote::Unusable,
+            // An Freiformkanten (C15b): Ein Innentreffer vor jedem Randtreffer verdeckt die Stelle,
+            // was dahinter kommt, ist ohne Belang (die Treffer sind nach `s` sortiert).
+            HitClass::Inside if freeform => return RayVote::Blocked,
             HitClass::Inside => blocked = true,
         }
     }
@@ -117,16 +126,31 @@ fn sample_counted(
     let eye = basis.eye_dir();
     let min_s = self_eps(extent);
     let own_eps = own_eps(extent);
+    // Striche an Freiformkanten (eigene oder Nachbarfläche über eine Freiformkante, C15b):
+    // Sind alle Strahlen mit `TILT` unbrauchbar, folgt ein Satz mit `TILT_FALLBACK`.
+    let freeform = own
+        .iter()
+        .any(|f| *f == FREEFORM_STROKE || f & NEIGHBOR_FLAG != 0);
+    let tilts: &[f64] = if freeform {
+        &[TILT, TILT_FALLBACK]
+    } else {
+        &[TILT]
+    };
     let mut blocked = false;
-    for k in 0..TILT_DIRECTIONS {
-        let phi = k as f64 * std::f64::consts::TAU / TILT_DIRECTIONS as f64;
-        let dir = (eye + (basis.ex * phi.cos() + basis.ey * phi.sin()) * TILT).normalize();
-        count(counter)?;
-        let ray = caster.cast(p, dir, min_s);
-        match vote(ray, own, body, own_eps, near_eps(extent)) {
-            RayVote::Free => return Ok(Some(true)),
-            RayVote::Blocked => blocked = true,
-            RayVote::Unusable => {}
+    for &tilt in tilts {
+        for k in 0..TILT_DIRECTIONS {
+            let phi = k as f64 * std::f64::consts::TAU / TILT_DIRECTIONS as f64;
+            let dir = (eye + (basis.ex * phi.cos() + basis.ey * phi.sin()) * tilt).normalize();
+            count(counter)?;
+            let ray = caster.cast(p, dir, min_s);
+            match vote(ray, own, body, own_eps, near_eps(extent)) {
+                RayVote::Free => return Ok(Some(true)),
+                RayVote::Blocked => blocked = true,
+                RayVote::Unusable => {}
+            }
+        }
+        if blocked {
+            break;
         }
     }
     Ok(blocked.then_some(false))
@@ -940,6 +964,19 @@ mod tests {
         assert!(matches!(
             w(vec![hit(0.05, 3, HitClass::Inside)]),
             RayVote::Blocked
+        ));
+        // An Freiformkanten entscheidet ein Innentreffer vor einem Randtreffer; sonst bleibt
+        // der Strahl unbrauchbar wie bisher.
+        let both = || {
+            vec![
+                hit(0.1, 9, HitClass::Inside),
+                hit(0.2, 0, HitClass::Boundary),
+            ]
+        };
+        assert!(matches!(w(both()), RayVote::Blocked));
+        assert!(matches!(
+            vote(Ray::Hits(both()), &[3], 0, own_eps, near),
+            RayVote::Unusable
         ));
     }
 
