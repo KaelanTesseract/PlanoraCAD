@@ -395,8 +395,9 @@ pub const COINCIDENT_FACTOR: f64 = 1024.0;
 /// Vielfaches von `geom_tol`: Stücke mit kürzerer Bildlänge entfallen.
 pub const TINY_FACTOR: f64 = 64.0;
 /// Vielfaches von `NURBS_EDGE_TOL`: In Ansichten mit Freiformkanten entfallen Stücke mit kürzerer
-/// Bildlänge (C15b).
-pub const FREEFORM_TINY_FACTOR: f64 = 4.0;
+/// Bildlänge (C15b): 1e-4 mm wie `SILHOUETTE_TOL`. Reste an Umkehrstellen, an denen zwei Hälften
+/// einer Schnittkurve zusammenlaufen, sind im Bild bis etwa 7e-5 mm lang.
+pub const FREEFORM_TINY_FACTOR: f64 = 10.0;
 /// Abschnitte für die Bildlänge eines Stücks.
 const LENGTH_SAMPLES: usize = 16;
 /// Abbruchprüfung je so vielen Stücken bzw. Paaren.
@@ -406,6 +407,12 @@ const MERGE_CHECK_EVERY: usize = 1024;
 /// Schnitts (eine Kurve, die das andere Stück genau an den Vierteln kreuzt und an den Enden
 /// berührt, etwa eine Welle mit zwei Perioden auf einer Geraden, gilt so nicht als bedeckt).
 const COVER_FRACTIONS: [f64; 7] = [0.0, 0.25, 0.381_966, 0.5, 0.618_034, 0.75, 1.0];
+/// Proben je offenem Bereich, an denen bei Freiformkanten der Übergang „im Gleichheitsabstand /
+/// nicht“ gesucht wird (C15b), und Halbierungsschritte für seine Lage.
+const COVER_SCAN: usize = 32;
+const COVER_BISECT: usize = 40;
+/// Anteil, um den die Abdeckungsprobe bei Freiformpaaren von den Enden eines Teilbereichs abrückt.
+const COVER_INSET: f64 = 1e-3;
 /// Rastergröße (je Bildachse) für die Vorauswahl der schon behaltenen Stücke.
 const MERGE_GRID: usize = 64;
 
@@ -775,6 +782,38 @@ fn trim_covered(
             cuts.extend(images.feet(&ps, images.point(qs, qs.t1)?)?);
             let ends_near = !images.feet(qs, images.point(&ps, p.t0)?)?.is_empty()
                 || !images.feet(qs, images.point(&ps, p.t1)?)?.is_empty();
+            // Freiformkante (C15b): Sie kann das andere Stück im Bild berühren und dort ein Stück
+            // weit innerhalb des Gleichheitsabstands laufen (Schnittkurve tangential am Umriss);
+            // dann auch an den Stellen teilen, an denen sie diesen Abstand verlässt.
+            let freeform_pair =
+                matches!(ps.curve, Curve::Nurbs(_)) || matches!(qs.curve, Curve::Nurbs(_));
+            if freeform_pair {
+                let near_at = |t: f64| -> Result<bool, DrawError> {
+                    Ok(!images.feet(qs, images.point(&ps, t)?)?.is_empty())
+                };
+                for &(a, b) in &open {
+                    let ts: Vec<f64> = (0..=COVER_SCAN)
+                        .map(|i| a + (b - a) * i as f64 / COVER_SCAN as f64)
+                        .collect();
+                    let mut prev = near_at(ts[0])?;
+                    for w in ts.windows(2) {
+                        let now = near_at(w[1])?;
+                        if now != prev {
+                            let (mut lo, mut hi) = (w[0], w[1]);
+                            for _ in 0..COVER_BISECT {
+                                let mid = 0.5 * (lo + hi);
+                                if near_at(mid)? == prev {
+                                    lo = mid;
+                                } else {
+                                    hi = mid;
+                                }
+                            }
+                            cuts.push(0.5 * (lo + hi));
+                        }
+                        prev = now;
+                    }
+                }
+            }
             if cuts.is_empty() && !ends_near {
                 continue;
             }
@@ -795,8 +834,12 @@ fn trim_covered(
                         state.push(None);
                         continue;
                     }
+                    // An einer Übergangsstelle (oben per Halbierung gesucht) liegt der Abstand
+                    // genau auf der Grenze; dort knapp innerhalb des Teilbereichs prüfen.
+                    let inset = if freeform_pair { COVER_INSET } else { 0.0 };
                     let mut covered = true;
                     for f in COVER_FRACTIONS {
+                        let f = inset + (1.0 - 2.0 * inset) * f;
                         let pt = images.point(&ps, x + f * (y - x))?;
                         if images.feet(qs, pt)?.is_empty() {
                             covered = false;
