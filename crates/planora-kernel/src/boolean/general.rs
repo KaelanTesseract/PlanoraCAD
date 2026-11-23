@@ -32,20 +32,20 @@ fn rank(s: &Surface) -> u8 {
     }
 }
 
-/// Schnitt zweier analytischer Flächen über den numerischen Schnittrechner; `box_a`, `box_b` sind
-/// die Hüllquader ihrer Flächen. `None`, wenn sich keine Fläche umwandeln lässt (dann bleibt es
+/// Schnitt zweier analytischer Flächen über den numerischen Schnittrechner; `pts_a`, `pts_b` sind
+/// Punkte auf den Rändern ihrer Flächen (sie bestimmen den Bereich entlang der Achse). `None`, wenn sich keine Fläche umwandeln lässt (dann bleibt es
 /// bei „nicht unterstützt“).
 pub(crate) fn intersect_general(
     a: &Surface,
-    box_a: &(DVec3, DVec3),
+    pts_a: &[DVec3],
     b: &Surface,
-    box_b: &(DVec3, DVec3),
+    pts_b: &[DVec3],
     tol: &Tolerance,
 ) -> Option<SurfaceIntersection> {
     let (conv, other) = if rank(b) > rank(a) {
-        (bounded_nurbs(b, box_b)?, a)
+        (bounded_nurbs(b, pts_b)?, a)
     } else {
-        (bounded_nurbs(a, box_a)?, b)
+        (bounded_nurbs(a, pts_a)?, b)
     };
     Some(match intersect_nurbs(&conv, other, tol) {
         SsiOutcome::Curves(cs) => SurfaceIntersection::Curves(cs),
@@ -56,13 +56,15 @@ pub(crate) fn intersect_general(
     })
 }
 
-/// Exakte NURBS-Darstellung von `s`, begrenzt auf den Hüllquader `bbox` seiner Fläche (Zylinder
-/// und Kegel entlang der Achse; der Torus ganz). `None` für Ebene, Kugel und Freiformfläche oder
-/// wenn die Begrenzung keine Fläche übrig lässt.
-pub fn bounded_nurbs(s: &Surface, bbox: &(DVec3, DVec3)) -> Option<Surface> {
+/// Exakte NURBS-Darstellung von `s`, begrenzt auf den Bereich der Randpunkte `pts` seiner Fläche
+/// (Zylinder und Kegel entlang der Achse, mit Zugabe; der Torus ganz). Auf Zylinder und Kegel ist
+/// die Höhe entlang der Achse eine Koordinate der Fläche, ihr Bereich wird also am Rand erreicht.
+/// `None` für Ebene, Kugel, Freiformfläche, einen Torus mit Rohrradius ≥ großem Radius oder wenn
+/// die Begrenzung keine Fläche übrig lässt.
+pub fn bounded_nurbs(s: &Surface, pts: &[DVec3]) -> Option<Surface> {
     match *s {
         Surface::Cylinder { frame, radius } => {
-            let (v0, v1) = axial_range(&frame, bbox)?;
+            let (v0, v1) = axial_range(&frame, pts)?;
             let p = |v: f64| frame.origin + frame.x * radius + frame.z * v;
             revolved(&line(p(v0), p(v1))?, &frame, false)
         }
@@ -71,11 +73,12 @@ pub fn bounded_nurbs(s: &Surface, bbox: &(DVec3, DVec3)) -> Option<Surface> {
             radius,
             slope,
         } => {
-            let (mut v0, mut v1) = axial_range(&frame, bbox)?;
+            let (mut v0, mut v1) = axial_range(&frame, pts)?;
             if slope != 0.0 {
-                // Nie über die Spitze hinaus: auf der Seite, auf der die Fläche liegt.
+                // Nie über die Spitze hinaus: auf der Seite, auf der die Fläche liegt (ihre
+                // Randpunkte liegen alle auf dieser Seite).
                 let apex = -radius / slope;
-                let (lo, hi) = axial_extent(&frame, bbox);
+                let (lo, hi) = axial_extent(&frame, pts);
                 if 0.5 * (lo + hi) >= apex {
                     v0 = v0.max(apex);
                 } else {
@@ -93,6 +96,10 @@ pub fn bounded_nurbs(s: &Surface, bbox: &(DVec3, DVec3)) -> Option<Surface> {
             major,
             minor,
         } => {
+            // Spindel- und Horntorus schnitten sich selbst; die gibt es im Kernel nicht.
+            if minor >= major {
+                return None;
+            }
             let meridian = NurbsCurve::elliptic_arc(
                 frame.origin + frame.x * major,
                 frame.x * minor,
@@ -107,26 +114,24 @@ pub fn bounded_nurbs(s: &Surface, bbox: &(DVec3, DVec3)) -> Option<Surface> {
     }
 }
 
-/// Bereich entlang der Achse `frame.z`, den der Hüllquader überdeckt (ohne Zugabe).
-fn axial_extent(frame: &planora_math::Frame, bbox: &(DVec3, DVec3)) -> (f64, f64) {
-    let (lo, hi) = *bbox;
-    let mut range = (f64::INFINITY, f64::NEG_INFINITY);
-    for i in 0..8 {
-        let c = DVec3::new(
-            if i & 1 == 0 { lo.x } else { hi.x },
-            if i & 2 == 0 { lo.y } else { hi.y },
-            if i & 4 == 0 { lo.z } else { hi.z },
-        );
-        let v = (c - frame.origin).dot(frame.z);
-        range = (range.0.min(v), range.1.max(v));
-    }
-    range
+/// Bereich entlang der Achse `frame.z`, den die Punkte überdecken (ohne Zugabe).
+fn axial_extent(frame: &planora_math::Frame, pts: &[DVec3]) -> (f64, f64) {
+    pts.iter()
+        .map(|p| (*p - frame.origin).dot(frame.z))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        })
 }
 
-/// Wie [`axial_extent`], mit Zugabe; `None` bei nicht endlichem oder leerem Bereich.
-fn axial_range(frame: &planora_math::Frame, bbox: &(DVec3, DVec3)) -> Option<(f64, f64)> {
-    let (lo, hi) = axial_extent(frame, bbox);
-    let pad = PAD_REL * (bbox.1 - bbox.0).length() + PAD_MIN;
+/// Wie [`axial_extent`], mit Zugabe (Anteil der Diagonale der Punkte); `None` bei nicht endlichem
+/// oder leerem Bereich.
+fn axial_range(frame: &planora_math::Frame, pts: &[DVec3]) -> Option<(f64, f64)> {
+    let (lo, hi) = axial_extent(frame, pts);
+    let (bl, bh) = pts.iter().fold(
+        (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)),
+        |(l, h), p| (l.min(*p), h.max(*p)),
+    );
+    let pad = PAD_REL * (bh - bl).length() + PAD_MIN;
     let (v0, v1) = (lo - pad, hi + pad);
     (v0.is_finite() && v1.is_finite() && v1 - v0 >= MIN_LENGTH).then_some((v0, v1))
 }
@@ -165,6 +170,19 @@ mod tests {
         out
     }
 
+    /// Ecken eines Quaders als Randpunkte.
+    fn corners(lo: DVec3, hi: DVec3) -> Vec<DVec3> {
+        (0..8)
+            .map(|i| {
+                DVec3::new(
+                    if i & 1 == 0 { lo.x } else { hi.x },
+                    if i & 2 == 0 { lo.y } else { hi.y },
+                    if i & 4 == 0 { lo.z } else { hi.z },
+                )
+            })
+            .collect()
+    }
+
     fn tilted() -> Frame {
         Frame::from_origin_normal(DVec3::new(1.0, -2.0, 3.0), DVec3::new(0.3, 0.4, 1.0))
     }
@@ -182,7 +200,7 @@ mod tests {
             major: 10.0,
             minor: 3.0,
         };
-        let n = bounded_nurbs(&s, &(DVec3::splat(-20.0), DVec3::splat(20.0))).unwrap();
+        let n = bounded_nurbs(&s, &corners(DVec3::splat(-20.0), DVec3::splat(20.0))).unwrap();
         for p in samples(&n) {
             let q = local(&frame, p);
             let rho = (q.x * q.x + q.y * q.y).sqrt();
@@ -195,9 +213,9 @@ mod tests {
     fn the_cylinder_is_exact_and_covers_the_face() {
         let frame = tilted();
         let s = Surface::Cylinder { frame, radius: 4.0 };
-        let bbox = (DVec3::new(-5.0, -6.0, -2.0), DVec3::new(7.0, 2.0, 9.0));
-        let n = bounded_nurbs(&s, &bbox).unwrap();
-        let (lo, hi) = axial_extent(&frame, &bbox);
+        let pts = corners(DVec3::new(-5.0, -6.0, -2.0), DVec3::new(7.0, 2.0, 9.0));
+        let n = bounded_nurbs(&s, &pts).unwrap();
+        let (lo, hi) = axial_extent(&frame, &pts);
         let (mut vmin, mut vmax) = (f64::INFINITY, f64::NEG_INFINITY);
         for p in samples(&n) {
             let q = local(&frame, p);
@@ -221,7 +239,7 @@ mod tests {
         };
         let n = bounded_nurbs(
             &s,
-            &(DVec3::new(-6.0, -6.0, 0.0), DVec3::new(6.0, 6.0, 12.0)),
+            &corners(DVec3::new(-6.0, -6.0, 0.0), DVec3::new(6.0, 6.0, 12.0)),
         )
         .unwrap();
         for p in samples(&n) {
@@ -233,7 +251,7 @@ mod tests {
 
     #[test]
     fn plane_and_sphere_are_not_converted() {
-        let b = (DVec3::splat(-1.0), DVec3::splat(1.0));
+        let b = corners(DVec3::splat(-1.0), DVec3::splat(1.0));
         assert!(
             bounded_nurbs(
                 &Surface::Plane {
@@ -248,5 +266,46 @@ mod tests {
             radius: 1.0,
         };
         assert!(bounded_nurbs(&sphere, &b).is_none());
+    }
+
+    /// Prüferfund (C15): Ein flaches, schräg liegendes Kegelstück dicht an der Spitze. Die Mitte
+    /// eines weltachsigen Hüllquaders läge auf der anderen Seite der Spitze; die Randpunkte liegen
+    /// alle auf der richtigen.
+    #[test]
+    fn a_flat_tilted_cone_piece_keeps_its_side_of_the_apex() {
+        let frame = Frame::from_origin_normal(DVec3::ZERO, DVec3::new(0.6, 0.2, 0.77));
+        // Spitze bei v = 0, Radius 100 bei v = 0,1 (sehr flach).
+        let s = Surface::Cone {
+            frame,
+            radius: 0.0,
+            slope: 1000.0,
+        };
+        // Randpunkte eines Ausschnitts von etwa 60° bei v ∈ [0,02; 0,1].
+        let mut pts = Vec::new();
+        for i in 0..=12 {
+            let a = -0.5 + i as f64 / 12.0;
+            for v in [0.02, 0.1] {
+                let r = 1000.0 * v;
+                pts.push(frame.origin + (frame.x * a.cos() + frame.y * a.sin()) * r + frame.z * v);
+            }
+        }
+        let n = bounded_nurbs(&s, &pts).unwrap();
+        let mut above = 0;
+        for p in samples(&n) {
+            let v = local(&frame, p).z;
+            assert!(v >= -1e-9, "auf der anderen Seite der Spitze: {v}");
+            above += usize::from(v > 0.05);
+        }
+        assert!(above > 0, "der Bereich der Fläche fehlt");
+    }
+
+    #[test]
+    fn a_spindle_torus_is_not_converted() {
+        let s = Surface::Torus {
+            frame: Frame::WORLD,
+            major: 2.0,
+            minor: 3.0,
+        };
+        assert!(bounded_nurbs(&s, &corners(DVec3::splat(-5.0), DVec3::splat(5.0))).is_none());
     }
 }

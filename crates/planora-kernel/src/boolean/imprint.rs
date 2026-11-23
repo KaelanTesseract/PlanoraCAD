@@ -276,9 +276,9 @@ pub fn imprint(
             if matches!(meeting, SurfaceIntersection::Unsupported)
                 && let Some(general) = super::general::intersect_general(
                     &ga.surface,
-                    &fa.bbox,
+                    &rim_points(ga),
                     &gb.surface,
-                    &fb.bbox,
+                    &rim_points(gb),
                     tol,
                 )
             {
@@ -343,4 +343,14 @@ pub fn imprint(
             .collect()
     };
     Ok((work(pa, sa), work(pb, sb)))
+}
+
+/// Punkte auf den Rändern einer Fläche (je Randstück 17), für den Bereich der Ersatzfläche im
+/// Schnitt in allgemeiner Lage (C15).
+fn rim_points(g: &FaceGeom) -> Vec<DVec3> {
+    g.loops
+        .iter()
+        .flatten()
+        .flat_map(|s| (0..=16).map(move |i| s.at(i as f64 / 16.0)))
+        .collect()
 }
