@@ -4,6 +4,7 @@ mod breaks;
 mod budget;
 mod classify;
 mod error;
+mod general;
 mod imprint;
 mod nurbs_ssi;
 mod roots;

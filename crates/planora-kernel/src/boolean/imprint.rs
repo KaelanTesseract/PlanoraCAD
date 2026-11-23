@@ -269,10 +269,25 @@ pub fn imprint(
             };
             // Der Schnitt selbst rechnet mit der Modelltoleranz; Haltepunkte, Stücke und ihre Lage
             // bei Freiformbeteiligung mit der weiteren Toleranz.
-            let freeform = face_is_freeform(ga) || face_is_freeform(gb);
+            let mut freeform = face_is_freeform(ga) || face_is_freeform(gb);
+            let mut meeting = intersect_surfaces(&ga.surface, &gb.surface, tol);
+            // Allgemeine Lage (C15): Paare ohne exakten Weg rechnet der numerische Schnittrechner
+            // mit einer exakt als NURBS dargestellten Fläche; danach gilt die Freiform-Toleranz.
+            if matches!(meeting, SurfaceIntersection::Unsupported)
+                && let Some(general) = super::general::intersect_general(
+                    &ga.surface,
+                    &fa.bbox,
+                    &gb.surface,
+                    &fb.bbox,
+                    tol,
+                )
+            {
+                meeting = general;
+                freeform = true;
+            }
             let ptol = pipeline_tol(tol, freeform);
             let tol_p = &ptol;
-            match intersect_surfaces(&ga.surface, &gb.surface, tol) {
+            match meeting {
                 SurfaceIntersection::None | SurfaceIntersection::Touch => {}
                 SurfaceIntersection::Unsupported => return Err(unsupported()),
                 SurfaceIntersection::UnsupportedBecause(msg) => {
