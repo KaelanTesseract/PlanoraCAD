@@ -70,7 +70,11 @@ fn same_as_cloning(s: &Sketch, hold: &[PointId], connected: bool, what: &str) ->
             "{what}: gelÃƒÂ¶st braucht einen neuen Stand"
         );
     } else {
-        assert_eq!(new.revision(), rev, "{what}: gescheitert behÃƒÂ¤lt den Stand");
+        assert_eq!(
+            new.revision(),
+            rev,
+            "{what}: gescheitert behÃƒÂ¤lt den Stand"
+        );
         assert_eq!(new.to_data(), data, "{what}: gescheitert ÃƒÂ¤ndert nichts");
     }
     // Danach lÃƒÂ¶st die Skizze wie die alte (LÃƒÂ¶sungsspeicher und Gruppen passen).
@@ -112,7 +116,12 @@ fn a_refused_pin_leaves_the_sketch_as_it_was() {
     let mut t = s.clone();
     let q = t.add_point(50.0, 50.0).unwrap();
     t.remove_point(q).unwrap();
-    assert!(!same_as_cloning(&t, &[p[0], q], false, "gelÃƒÂ¶schter Punkt"));
+    assert!(!same_as_cloning(
+        &t,
+        &[p[0], q],
+        false,
+        "gelÃƒÂ¶schter Punkt"
+    ));
 }
 
 #[test]
@@ -186,4 +195,31 @@ fn holding_in_place_is_not_slower_on_a_large_sketch() {
     eprintln!("solve_holding 50 LÃƒÂ¤ufe: Kopie {old_ms:.1} ms, an Ort und Stelle {new_ms:.1} ms");
     assert_eq!(new_bits, old_bits);
     assert!(new_ms < old_ms, "{new_ms:.1} ms gegen {old_ms:.1} ms");
+}
+
+/// Messung (C12): Sicherung je Bild beim Kurvenzug, Kopie der Skizze gegen Wertestand.
+#[test]
+#[ignore]
+fn a_value_snapshot_is_cheaper_than_a_copy() {
+    let mut s = sketch();
+    let mut sources = Vec::new();
+    for i in 0..20 {
+        let x = i as f64 * 12.0;
+        sources.extend(s.add_rectangle(v(x, 0.0), v(x + 10.0, 6.0)).unwrap().lines);
+    }
+    s.add_pattern(&plan(sources, [10, 4], [300.0, 10.0]))
+        .unwrap();
+    s.solve();
+    let t0 = Instant::now();
+    for _ in 0..200 {
+        std::hint::black_box(s.clone());
+    }
+    let copy_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let t0 = Instant::now();
+    for _ in 0..200 {
+        std::hint::black_box(s.value_snapshot());
+    }
+    let snap_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    eprintln!("200 Sicherungen: Kopie {copy_ms:.2} ms, Wertestand {snap_ms:.2} ms");
+    assert!(snap_ms < copy_ms, "{snap_ms:.2} ms gegen {copy_ms:.2} ms");
 }

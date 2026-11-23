@@ -17,7 +17,9 @@ use planora_sketch::blend::{BlendEnd, BlendKind};
 use planora_sketch::comb::{COMB_DENSITY, COMB_SCALE_MAX, COMB_SCALE_MIN, CombSettings};
 use planora_sketch::constraint::{Axis3, ConstraintId, ConstraintKind, FixToggle, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
-use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
+use planora_sketch::model::{
+    CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch, ValueSnapshot,
+};
 use planora_sketch::offset::{OffsetPlan, OffsetProblem};
 use planora_sketch::shapes::{self, folded_over, sweep_crossed_half_turn};
 use planora_sketch::snap::{SnapHit, SnapIndex};
@@ -567,12 +569,41 @@ pub fn apply_unsolved_message(
 
 /// Gleichen sich die Werte zweier Stände derselben Skizze bis auf die Toleranz?
 fn same_values(a: &Sketch, b: &Sketch) -> bool {
+    same_vars(a, b.variables())
+}
+
+/// Wie [`same_values`] gegen gesicherte Werte `b`.
+fn same_vars(a: &Sketch, b: &[f64]) -> bool {
     let linear = a.tolerance().linear;
-    a.variables().len() == b.variables().len()
+    a.variables().len() == b.len()
         && a.variables()
             .iter()
-            .zip(b.variables())
+            .zip(b)
             .all(|(x, y)| (x - y).abs() <= linear)
+}
+
+/// Stand vor einem Bild des Kurvenzugs (C12): beim gewöhnlichen Zug nur der Wertestand, sonst die
+/// ganze Skizze (Text drehen, Radius, Rho, Mitnehmen und die Suche am Krümmungsbogen ändern mehr
+/// als Werte).
+enum DragBackup {
+    Full(Box<Sketch>),
+    Values(ValueSnapshot),
+}
+
+impl DragBackup {
+    fn same_as(&self, sk: &Sketch) -> bool {
+        match self {
+            DragBackup::Full(b) => same_values(sk, b),
+            DragBackup::Values(s) => same_vars(sk, s.variables()),
+        }
+    }
+
+    fn restore(self, sk: &mut Sketch) {
+        match self {
+            DragBackup::Full(b) => *sk = *b,
+            DragBackup::Values(s) => sk.restore_values(s),
+        }
+    }
 }
 
 /// Laufender Zug auf dem letzten Punkt des Linienzugs: wird ein tangentialer Bogen.
@@ -2617,7 +2648,17 @@ impl SketchSession {
     /// kein Schritt wird.
     fn curve_drag_to(&mut self, sk: &mut Sketch, drag: &CurveDrag, at: DVec2) {
         self.cursor = Some(at);
-        let before = sk.clone();
+        // Nur Werte ändert allein der gewöhnliche Zug ohne Krümmungsbogen-Suche (C12).
+        let plain = drag.text_rot.is_none()
+            && drag.rim.is_none()
+            && drag.rho.is_none()
+            && !drag.carry
+            && drag.aim.is_none();
+        let before = if plain {
+            DragBackup::Values(sk.value_snapshot())
+        } else {
+            DragBackup::Full(Box::new(sk.clone()))
+        };
         let result = match (drag.rim, drag.rho) {
             _ if drag.text_rot.is_some() => {
                 let Some(grab) = drag.text_rot else { return };
@@ -2625,7 +2666,7 @@ impl SketchSession {
                 if let Err(SketchError::InvalidInput(m)) = &r {
                     // Eine Abhängigkeit hält den Winkel: Die Meldung sagt es, der Text bleibt.
                     self.message = Some(err(m));
-                    *sk = before;
+                    before.restore(sk);
                     return;
                 }
                 r
@@ -2666,15 +2707,15 @@ impl SketchSession {
         };
         match result {
             Ok(report) if !frame_is_worse(&report, &drag.baseline) => {
-                if drag.rho.is_none() && same_values(sk, &before) {
-                    *sk = before;
+                if drag.rho.is_none() && before.same_as(sk) {
+                    before.restore(sk);
                 } else {
                     self.last_report = Some(report);
                 }
                 self.message = None;
             }
             other => {
-                *sk = before;
+                before.restore(sk);
                 self.message = Some(drag_blocked_message(
                     other.ok().as_ref(),
                     Some(&drag.baseline),
@@ -3176,7 +3217,7 @@ impl SketchSession {
         if after.redundant.contains(&id) {
             if dimension {
                 se.make_driven(sk, id)?;
-            } else if after.dof < dof_of(prior) {
+            } else if after.dof < se.dof_of(prior) {
                 se.message = Some(crate::msg!("sketch-redundant-partly"));
             } else {
                 se.message = Some(crate::msg!("sketch-redundant"));
@@ -3825,6 +3866,16 @@ impl SketchSession {
 
     /// Wie [`status`](Self::status), legt aber einen an einer Kopie gelösten Bericht in der
     /// Sitzung ab (siehe [`status_report`](Self::status_report)); für die Anzeige je Bild.
+    /// Freiheitsgrade von `sk`, frisch gerechnet (nicht aus einem möglicherweise älteren Bericht):
+    /// aus dem Zwischenspeicher der Statuszeile, wenn er genau zu diesem Stand gehört (dort ebenso
+    /// an einer Kopie gelöst), sonst an einer Kopie (C12).
+    fn dof_of(&self, sk: &Sketch) -> usize {
+        match &self.status_cache {
+            Some((at, r)) if *at == sk.revision() => r.dof,
+            _ => sk.clone().solve().dof,
+        }
+    }
+
     pub fn status_cached(&mut self, sk: &Sketch) -> (String, Severity) {
         let report = self.status_report(sk);
         Self::status_of(&report)
@@ -4302,11 +4353,6 @@ pub(crate) fn round_center(sk: &Sketch, c: CurveId) -> Option<PointId> {
         | CurveKind::Conic { .. }
         | CurveKind::FixedSpline { .. } => None,
     }
-}
-
-/// Freiheitsgrade von `sk`, frisch gerechnet (nicht aus einem möglicherweise älteren Bericht).
-fn dof_of(sk: &Sketch) -> usize {
-    sk.clone().solve().dof
 }
 
 /// Der Messwert von `kind`, bei einem Winkel mit der Zeigerseite `supplement` (Gegenwinkel
