@@ -586,20 +586,87 @@ impl Sketch {
     }
 
     /// Löst bei festgehaltenen Punkten `hold`, ohne dass sie sich auch nur im letzten Bit bewegen:
-    /// auf einer Kopie mit vorübergehendem `Fixed`. Gelöst: Die Werte werden übernommen, `true`.
-    /// Sonst `false`, und die Skizze bleibt, wie sie ist.
+    /// mit vorübergehendem `Fixed`. Gelöst: Die Werte werden übernommen, `true`. Sonst `false`, und
+    /// die Skizze bleibt, wie sie ist (gleiche Werte, gleicher Stand).
     ///
     /// Die Schranke des Lösers reicht hier nicht: Ein Winkelfehler von 1e-8 ist an einer Linie von
     /// 150 mm schon 1,5e-6 mm Abstand. Darum wird genauer nachgezogen; gelingt das nicht, gilt der
     /// Lauf als gescheitert, statt ein ungenaues Ergebnis als gelöst zu melden.
+    ///
+    /// Rechnet an Ort und Stelle statt auf einer Kopie (C12, 2026-11-23): Die Festpunkte werden
+    /// danach abgeschnitten, abgeschaltete Zeilen und die Toleranz zurückgesetzt und der Wertestand
+    /// ([`ValueSnapshot`](crate::model::ValueSnapshot)) wiederhergestellt. Ergebnis bitgleich zu
+    /// [`solve_holding_cloning`](Self::solve_holding_cloning).
     pub fn solve_holding(&mut self, hold: &[PointId]) -> bool {
-        let mut trial = self.clone();
+        // Die Nachführung der Texte beim Lösen kann den Aufbau ändern (Stücke neu anlegen, Punkte
+        // heben); das nähme `cut_back` nicht zurück. Mit Texten darum auf der Kopie (Prüferfund).
+        if !self.only_values_change_when_solving() {
+            return self.solve_holding_cloning(hold);
+        }
+        // Der Lösungsspeicher fällt mit dem ersten Festpunkt ohnehin weg: nehmen statt kopieren.
+        let cache = std::mem::take(&mut self.solve_cache);
+        let mut snap = self.value_snapshot();
+        snap.solve_cache = cache;
+        let tol = self.tol;
+        let mut disabled = Vec::new();
+        let ok = self.hold_in_place(hold, &mut disabled);
+        let solved = ok.then(|| self.vars[..snap.mark.vars].to_vec());
+        for id in disabled {
+            self.constraints[id].enabled = true;
+        }
+        self.tol = tol;
+        self.cut_back(snap.mark);
+        self.restore_snapshot(snap);
+        if let Some(vars) = solved {
+            self.vars = vars;
+            self.touch_values();
+        }
+        ok
+    }
+
+    /// Der Lauf von [`solve_holding`](Self::solve_holding) ohne Aufräumen: hängt Festpunkte an,
+    /// schaltet Zeilen ab (in `disabled` vermerkt) und verschärft die Toleranz.
+    fn hold_in_place(&mut self, hold: &[PointId], disabled: &mut Vec<ConstraintId>) -> bool {
         let mut pins = Vec::with_capacity(hold.len());
         for &p in hold {
             let Ok(at) = self.point_xyz(p) else {
                 return false;
             };
             // Ein 3D-Punkt steht auch in z fest (Skizzen 10).
+            let pin = if self.is_3d_point(p) {
+                ConstraintKind::Fixed3(p, at.x, at.y, at.z)
+            } else {
+                ConstraintKind::Fixed(p, at.x, at.y)
+            };
+            match self.add_constraint(pin) {
+                Ok(id) => pins.push(id),
+                Err(_) => return false,
+            }
+        }
+        let pinned: Vec<(usize, f64)> = self
+            .held_variables(hold)
+            .into_iter()
+            .map(|v| (v, self.vars[v]))
+            .collect();
+        if !self.settle_holding(&pinned) {
+            return false;
+        }
+        self.tol.linear *= HOLD_POLISH;
+        disabled.extend(self.drop_rows_between_held(&pinned, &pins));
+        self.touch_structure();
+        self.settle_holding(&pinned)
+    }
+
+    /// Der alte Weg von [`solve_holding`](Self::solve_holding) auf einer Kopie der Skizze; nur zum
+    /// Vergleichen und Messen (C12).
+    #[doc(hidden)]
+    pub fn solve_holding_cloning(&mut self, hold: &[PointId]) -> bool {
+        let mut trial = self.clone();
+        let mut pins = Vec::with_capacity(hold.len());
+        for &p in hold {
+            let Ok(at) = self.point_xyz(p) else {
+                return false;
+            };
             let pin = if self.is_3d_point(p) {
                 ConstraintKind::Fixed3(p, at.x, at.y, at.z)
             } else {
@@ -633,8 +700,66 @@ impl Sketch {
     /// die Punkte `hold` gehören: Alle anderen Gruppen bleiben, wie sie sind, und ihr Scheitern
     /// zählt nicht (etwa ein Widerspruch an ganz anderer Stelle der Skizze). `false`, wenn eine
     /// der eigenen Gruppen sich bei festen `hold` nicht lösen lässt; dann bleibt die Skizze, wie
-    /// sie ist.
+    /// sie ist. Schaltet die fremden Abhängigkeiten an Ort und Stelle ab und danach wieder an
+    /// (C12, statt Kopie).
     pub(crate) fn solve_holding_connected(&mut self, hold: &[PointId]) -> bool {
+        if !self.only_values_change_when_solving() {
+            return self.solve_holding_connected_cloning(hold);
+        }
+        let other = self.foreign_constraints(hold);
+        let cache = std::mem::take(&mut self.solve_cache);
+        let mut snap = self.value_snapshot();
+        snap.solve_cache = cache;
+        for &id in &other {
+            self.constraints[id].enabled = false;
+        }
+        self.touch_structure();
+        let ok = self.solve_holding(hold);
+        let solved = ok.then(|| std::mem::take(&mut self.vars));
+        for &id in &other {
+            self.constraints[id].enabled = true;
+        }
+        self.restore_snapshot(snap);
+        if let Some(vars) = solved {
+            self.vars = vars;
+            self.touch_values();
+        }
+        ok
+    }
+
+    /// [`solve_holding_connected`](Self::solve_holding_connected) für Tests außerhalb der Kiste.
+    #[doc(hidden)]
+    pub fn solve_holding_connected_for_test(&mut self, hold: &[PointId]) -> bool {
+        self.solve_holding_connected(hold)
+    }
+
+    /// Der alte Weg von [`solve_holding_connected`](Self::solve_holding_connected) auf einer Kopie;
+    /// nur zum Vergleichen und Messen (C12).
+    #[doc(hidden)]
+    pub fn solve_holding_connected_cloning(&mut self, hold: &[PointId]) -> bool {
+        let other = self.foreign_constraints(hold);
+        let mut trial = self.clone();
+        for id in other {
+            trial.constraints[id].enabled = false;
+        }
+        trial.touch_structure();
+        if !trial.solve_holding_cloning(hold) {
+            return false;
+        }
+        self.vars = trial.vars;
+        self.touch_values();
+        true
+    }
+
+    /// Ändern Lösen und Ziehen an dieser Skizze nur Werte (C12)? Nicht, sobald sie einen Text hat:
+    /// Dessen Nachführung kann Stücke neu anlegen oder Punkte heben. Dann taugt ein
+    /// [`ValueSnapshot`](crate::model::ValueSnapshot) nicht zum Zurücksetzen.
+    pub fn only_values_change_when_solving(&self) -> bool {
+        self.texts().next().is_none()
+    }
+
+    /// Eingeschaltete Abhängigkeiten außerhalb der Zusammenhangsgruppen von `hold`.
+    fn foreign_constraints(&self, hold: &[PointId]) -> Vec<ConstraintId> {
         let own: HashSet<usize> = hold
             .iter()
             .flat_map(|&p| {
@@ -649,23 +774,11 @@ impl Sketch {
             .filter(|g| g.vars.iter().any(|v| own.contains(v)))
             .flat_map(|g| g.constraints.iter().copied())
             .collect();
-        let other: Vec<ConstraintId> = self
-            .constraints
+        self.constraints
             .iter()
             .filter(|(id, c)| c.alive && c.enabled && !c.driven && !keep.contains(id))
             .map(|(id, _)| id)
-            .collect();
-        let mut trial = self.clone();
-        for id in other {
-            trial.constraints[id].enabled = false;
-        }
-        trial.touch_structure();
-        if !trial.solve_holding(hold) {
-            return false;
-        }
-        self.vars = trial.vars;
-        self.touch_values();
-        true
+            .collect()
     }
 
     /// Wie [`solve_holding`](Self::solve_holding) für das Maß `dim`, das schon den neuen Wert `to`
@@ -715,7 +828,11 @@ impl Sketch {
 
     /// Schaltet Abhängigkeiten ab, die nur gehaltene Werte lesen: Sie sind schon im Rahmen der
     /// gewöhnlichen Schranke erfüllt, und bewegen darf sie niemand mehr. Die Zeilen `pins` bleiben.
-    fn drop_rows_between_held(&mut self, pinned: &[(usize, f64)], pins: &[ConstraintId]) {
+    fn drop_rows_between_held(
+        &mut self,
+        pinned: &[(usize, f64)],
+        pins: &[ConstraintId],
+    ) -> Vec<ConstraintId> {
         let held: HashSet<usize> = pinned.iter().map(|p| p.0).collect();
         let idle: Vec<ConstraintId> = self
             .constraints
@@ -727,9 +844,10 @@ impl Sketch {
                     .is_some_and(|ev| ev.locals.iter().all(|v| held.contains(v)))
             })
             .collect();
-        for id in idle {
+        for &id in &idle {
             self.constraints[id].enabled = false;
         }
+        idle
     }
 
     /// Löst, setzt `pinned` zurück und löst nach, bis sich nichts mehr rührt: Der Löser kommt nur
