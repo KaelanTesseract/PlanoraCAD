@@ -3510,7 +3510,7 @@ Kurzentwurf: `specs/2026-11-22-haertung-reste-design.md`. Schließt die drei Gre
   - W1 behoben: Punktzug und 3D-Zug nennen den Grund ebenfalls (`a_point_drag_that_lays_the_direction_parallel_names_the_reason`).
   - W2 behoben: Der Grund steht nur bei „nicht lösbar“ und nur, wenn das Muster beim Greifen noch ging; ein Widerspruch wird nicht verdeckt. Meldung in einer Zeile: „Das lässt sich nicht dorthin ziehen: …“.
   - ~~Zurückgestellt (klein): Der Grund steht als fertiger Text in der Meldung und wechselt bei stehender Meldung nicht die Sprache; kein Rücknahmetest für elliptischen Bogen und die 3D-Bögen; der Freiheitsgrad-Test zeigt das Erreichen von `max_rounds` nicht eigens; nach einer Ablehnung werden die Gruppen verworfen statt zurückgegeben; die Schwelle des Messtests (20 ms) hängt vom Rechner ab.~~ Alle erledigt, siehe „Reste von Punkt 8“ unten.
-- **Nachprüfung 2026-11-22 (alle offenen Punkte gegen ebf48731):** Weiter offen sind die Kopien der Skizze je Bild beim Kurvenzug (`curve_drag_to`), in `solve_holding`/`solve_holding_connected` und für Status und Freiheitsgrade (`sk.clone().solve()` in `sketch_state.rs`). Abhängigkeiten, Punkte und Bögen bauen die Gruppen nicht mehr neu.
+- **Nachprüfung 2026-11-22 (alle offenen Punkte gegen ebf48731):** ~~Weiter offen sind die Kopien der Skizze je Bild beim Kurvenzug (`curve_drag_to`), in `solve_holding`/`solve_holding_connected` und für Status und Freiheitsgrade (`sk.clone().solve()` in `sketch_state.rs`).~~ (Erledigt in C12, siehe unten.) Abhängigkeiten, Punkte und Bögen bauen die Gruppen nicht mehr neu.
 
 ## Kleinpunkte 18, 21 und 16 (2026-11-22, Zweig `fix/kleinpunkte-18-21-16`)
 
@@ -3535,3 +3535,11 @@ Kurzentwurf `specs/2026-11-23-punkt8-reste-design.md`, Plan `plans/2026-11-23-pu
 - `free_points`/`free_curves` ohne überholte Mustergruppe (der Bericht trägt intern `free_vars`); der Test prüft auch die Musterrunden bis `PATTERN_ROUNDS`.
 - Rücknahmetests: elliptischer Bogen; 3D-Bögen erreichen die Schleifenprüfung an Mustern nie (Musterpunkte lassen sich nicht heben), geprüft ist diese Ablehnung.
 - Messtest im Vergleich zu 200 Kopien der Skizze (viermal schneller; gemessen 0,9 ms gegen 7,6 ms).
+
+## C12: Löser ohne Kopie je Bild (2026-11-23, Zweig `perf/c12-loeser-kopien`)
+
+- Kurvenzug sichert beim gewöhnlichen Zug nur den Wertestand (`ValueSnapshot`): 200 Sicherungen 0,67 ms statt 32,6 ms (Release, 20 Rechtecke im Muster 10×4).
+- `solve_holding`/`solve_holding_connected` rechnen an Ort und Stelle (Festpunkte anhängen, `cut_back`, Wertestand zurück); bitgleich zum alten Weg (`*_cloning`). Gewinn nur gut 7 %, weil das Lösen selbst überwiegt.
+- Mit Text in der Skizze gilt weiter der Kopie-Weg (Nachführung kann den Aufbau ändern).
+- `dof_of` nimmt den Statusbericht, wenn der Stand passt; `status()` und die einmaligen Kopien beim Zugbeginn und nach dem Löschen bleiben.
+- Offen: `solve_holding_in_steps` (Halbieren) kopiert weiter, weil es Maßwerte setzt; kein Aufräum-Wächter bei Panik mitten im Halten (heute beendet eine Panik das Programm); `text.rs` legt für den Rahmen weiter eine eigene Probekopie an.
