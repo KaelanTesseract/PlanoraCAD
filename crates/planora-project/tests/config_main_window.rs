@@ -32,9 +32,11 @@ fn window() -> MainWindow {
 #[test]
 fn main_window_round_trips_and_keeps_other_fields() {
     let p = temp_file("rund");
-    let mut c = Config::default();
-    c.verbose_log = true;
-    c.main_window = Some(window());
+    let c = Config {
+        verbose_log: true,
+        main_window: Some(window()),
+        ..Config::default()
+    };
     c.save_to(&p).unwrap();
     let text = std::fs::read_to_string(&p).unwrap();
     assert!(text.contains("\"main_window\""), "{text}");

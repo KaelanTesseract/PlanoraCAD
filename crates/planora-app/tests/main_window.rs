@@ -76,8 +76,10 @@ fn a_window_left_of_the_main_monitor_keeps_its_position() {
     // Ganz auf einem Monitor links vom Hauptmonitor (negative Lage).
     let w = track(None, &info((-1700.0, 100.0), (1400.0, 900.0), false, false)).unwrap();
     assert_eq!(w.window.x, Some(-1700.0));
-    let mut c = Config::default();
-    c.main_window = Some(w);
+    let c = Config {
+        main_window: Some(w),
+        ..Config::default()
+    };
     monitors(&[(-2400.0, 0.0, 2400.0, 1350.0), (0.0, 0.0, 2400.0, 1350.0)]);
     let (_, place) = at_start(&c, &running_version()).unwrap();
     assert_eq!(place.px, Some(pos2(-1700.0 * 1.25, 100.0 * 1.25)));
@@ -139,9 +141,11 @@ fn start_prefers_the_saved_window_then_the_update_window() {
 #[test]
 fn a_position_off_every_monitor_is_dropped_but_the_size_stays() {
     let running = running_version();
-    let mut c = Config::default();
     // Lag auf einem zweiten Monitor rechts (Punkte 2500 bei Skalierung 1,25 → 3125 Pixel).
-    c.main_window = Some(normal(2500.0, 100.0, 1400.0, 900.0));
+    let c = Config {
+        main_window: Some(normal(2500.0, 100.0, 1400.0, 900.0)),
+        ..Config::default()
+    };
     monitors(&[(0.0, 0.0, 2400.0, 1350.0), (2400.0, 0.0, 1920.0, 1080.0)]);
     assert_eq!(
         at_start(&c, &running).unwrap().1.px,
@@ -201,8 +205,10 @@ fn closing_saves_the_window_without_touching_other_settings() {
     let dir = common::temp_root("planora-hauptfenster");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("config.json");
-    let mut c = Config::default();
-    c.verbose_log = true;
+    let c = Config {
+        verbose_log: true,
+        ..Config::default()
+    };
     c.save_to(&path).unwrap();
     let w = normal(100.0, 50.0, 1400.0, 900.0);
     assert!(save(&path, w));
