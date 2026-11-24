@@ -105,6 +105,15 @@ pub struct Config {
         deserialize_with = "lenient_pending_update"
     )]
     pub update_pending: Option<PendingUpdate>,
+    /// Programmfenster beim letzten sauberen Schließen (Größe, Lage, maximiert, Skalierung des
+    /// Monitors), damit das Programm wieder so öffnet. Unbrauchbares → keines; ohne wird nichts
+    /// geschrieben.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_main_window"
+    )]
+    pub main_window: Option<MainWindow>,
     /// Gewähltes Design (Ansicht → Helles/Dunkles Design): [`THEME_LIGHT`] oder [`THEME_DARK`].
     /// Keine Wahl, ein falscher Typ oder ein anderer Text → keine (es gilt das dunkle Design);
     /// ohne Wahl wird nichts geschrieben.
@@ -323,6 +332,32 @@ impl WindowState {
     }
 }
 
+/// Gemerktes Programmfenster: [`WindowState`] (bei maximiertem Fenster Größe und Lage im
+/// normalen Zustand) und die Skalierung des Monitors (physische Pixel je Punkt), auf dem es lag.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MainWindow {
+    #[serde(flatten)]
+    pub window: WindowState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
+}
+
+/// Liest `main_window` aus jedem JSON-Wert ([`lenient_window`]); eine Skalierung zählt nur,
+/// wenn sie endlich und größer als 0 ist.
+fn lenient_main_window<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<MainWindow>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(lenient_window(Some(&value)).map(|window| MainWindow {
+        window,
+        scale: value
+            .get("scale")
+            .and_then(serde_json::Value::as_f64)
+            .map(|n| n as f32)
+            .filter(|s| s.is_finite() && *s > 0.0),
+    }))
+}
+
 /// Liest ein Fenster aus einem JSON-Wert und prüft es ([`WindowState::sanitized`]): ohne
 /// brauchbare Größe keines. Fehlt `maximized` oder ist es kein Wahrheitswert, gilt „nicht
 /// maximiert“.
@@ -360,6 +395,7 @@ impl Default for Config {
             last_plugin_check: None,
             skipped_version: None,
             update_pending: None,
+            main_window: None,
             theme: None,
             verbose_log: false,
             catalog_hint_shown: false,

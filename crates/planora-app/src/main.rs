@@ -40,8 +40,9 @@ fn main() -> eframe::Result {
     // Nach einem Update öffnet das Fenster in Größe, Lage und Zustand der alten Version (sie hat
     // es mit dem begonnenen Update in die Konfiguration geschrieben; der Installer hat die neue
     // Version gestartet).
+    // Nach einem Update wie die alte Version, sonst wie beim letzten Schließen (Fusion).
     if let Some(window) =
-        planora_app::update_install::window_for_start(&config, &planora_app::running_version())
+        planora_app::main_window::at_start(&config, &planora_app::running_version())
     {
         viewport = planora_app::update_install::restore_window(viewport, &window);
     }

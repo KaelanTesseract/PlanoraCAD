@@ -217,6 +217,11 @@ pub struct PlanoraApp {
     run_marker: Option<RunMarker>,
     /// Wann die Mitschrift zuletzt in den Laufmarker ging ([`PlanoraApp::run_marker_tick`]).
     run_marker_at: Option<Instant>,
+    /// Programmfenster für das Speichern beim Schließen ([`crate::main_window`]).
+    main_window: Option<planora_project::config::MainWindow>,
+    /// Nur das Programm ([`PlanoraApp::new`]) speichert das Fenster beim Schließen; Tests
+    /// nie (viele Test-Arbeitsbereiche zeigen auf die echte Konfiguration).
+    remember_window: bool,
     /// Schriftliste für Skizzentext (Skizzen 8, Spec G4): im Programm ab dem Start im
     /// Hintergrund aufgebaut ([`crate::fonts_library::start`]), in Tests die mitgelieferten
     /// Schriften ([`PlanoraApp::set_font_state`]). Jedes Bild fragt sie ab.
@@ -320,6 +325,7 @@ impl PlanoraApp {
         app.system_open = Box::new(ExplorerOpen);
         app.run_update_startup();
         app.run_marker = marker;
+        app.remember_window = true;
         app.catalog_hint.enabled = true;
         app.set_start_finding(finding);
         app
@@ -503,6 +509,8 @@ impl PlanoraApp {
             catalog_hint: CatalogHintState::default(),
             run_marker: None,
             run_marker_at: None,
+            main_window: None,
+            remember_window: false,
             // Tests hängen nie an Systemschriften (Spec G7); das Programm setzt in `new` den
             // Hintergrund-Start.
             fonts: FontState::Ready(bundled_fonts()),
@@ -3149,6 +3157,8 @@ impl eframe::App for PlanoraApp {
         }
         self.ws.autosave_tick(Instant::now());
         self.run_marker_tick(Instant::now());
+        self.main_window =
+            crate::main_window::track(self.main_window, &ctx.input(|i| i.viewport().clone()));
         ctx.request_repaint_after(AUTOSAVE_REPAINT);
     }
 
@@ -3159,6 +3169,10 @@ impl eframe::App for PlanoraApp {
     fn on_exit(&mut self) {
         // Spec „Speichern“: beim Beenden einmal den letzten Stand der abgedockten Fenster.
         self.ws.detach.save_if_dirty(&self.ws.config_path);
+        // Programmfenster für den nächsten Start (wie Fusion).
+        if let Some(w) = self.main_window.filter(|_| self.remember_window) {
+            crate::main_window::save(&self.ws.config_path, w);
+        }
         self.projects.shutdown(EXIT_WAIT);
         // Sauberes Ende: der Laufmarker geht (ein Absturz lässt ihn liegen).
         if let Some(marker) = self.run_marker.take() {
