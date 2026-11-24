@@ -41,10 +41,13 @@ fn main() -> eframe::Result {
     // es mit dem begonnenen Update in die Konfiguration geschrieben; der Installer hat die neue
     // Version gestartet).
     // Nach einem Update wie die alte Version, sonst wie beim letzten Schließen (Fusion).
-    if let Some(window) =
+    // Nur die Größe über den Builder; Lage und „maximiert“ setzt das erste Bild.
+    let mut place = None;
+    if let Some((window, p)) =
         planora_app::main_window::at_start(&config, &planora_app::running_version())
     {
         viewport = planora_app::update_install::restore_window(viewport, &window);
+        place = Some(p);
     }
     // Ohne lesbares Symbol bleibt das Standardsymbol des Systems.
     if let Some(icon) = planora_app::logo::window_icon() {
@@ -65,7 +68,11 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "PlanoraCAD",
         options,
-        Box::new(move |cc| Ok(Box::new(PlanoraApp::new(cc, marker, finding)))),
+        Box::new(move |cc| {
+            let mut app = PlanoraApp::new(cc, marker, finding);
+            app.set_start_place(place);
+            Ok(Box::new(app))
+        }),
     );
     // Start sichtbar gescheitert (etwa ohne Grafik): kein „unerwartet beendet“ beim nächsten
     // Mal. Marker und App sind hier schon weg, die Datei ist also nicht mehr offen.

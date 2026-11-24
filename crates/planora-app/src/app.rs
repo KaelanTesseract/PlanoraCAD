@@ -222,6 +222,10 @@ pub struct PlanoraApp {
     /// Nur das Programm ([`PlanoraApp::new`]) speichert das Fenster beim Schließen; Tests
     /// nie (viele Test-Arbeitsbereiche zeigen auf die echte Konfiguration).
     remember_window: bool,
+    /// Lage und „maximiert“ des gemerkten Fensters, die die ersten Bilder setzen
+    /// ([`crate::main_window::place_step`]), und die Zahl der Versuche.
+    start_place: Option<crate::main_window::Place>,
+    place_tries: u8,
     /// Schriftliste für Skizzentext (Skizzen 8, Spec G4): im Programm ab dem Start im
     /// Hintergrund aufgebaut ([`crate::fonts_library::start`]), in Tests die mitgelieferten
     /// Schriften ([`PlanoraApp::set_font_state`]). Jedes Bild fragt sie ab.
@@ -326,6 +330,9 @@ impl PlanoraApp {
         app.run_update_startup();
         app.run_marker = marker;
         app.remember_window = true;
+        // Bis zum ersten Bild gilt der gemerkte Stand (startet das Fenster maximiert, bleibt so
+        // die normale Größe erhalten).
+        app.main_window = app.ws.config.main_window;
         app.catalog_hint.enabled = true;
         app.set_start_finding(finding);
         app
@@ -511,6 +518,8 @@ impl PlanoraApp {
             run_marker_at: None,
             main_window: None,
             remember_window: false,
+            start_place: None,
+            place_tries: 0,
             // Tests hängen nie an Systemschriften (Spec G7); das Programm setzt in `new` den
             // Hintergrund-Start.
             fonts: FontState::Ready(bundled_fonts()),
@@ -555,6 +564,13 @@ impl PlanoraApp {
     #[doc(hidden)]
     pub fn hold_reverify(&mut self, gate: Receiver<()>) {
         self.reverify_gate = Some(gate);
+    }
+
+    /// Lage und „maximiert“ des gemerkten Fensters für die ersten Bilder (aus
+    /// [`crate::main_window::at_start`]).
+    pub fn set_start_place(&mut self, place: Option<crate::main_window::Place>) {
+        self.start_place = place;
+        self.place_tries = 0;
     }
 
     /// Setzt den Laufmarker dieser Instanz (für Tests des Programmendes nach einem Update).
@@ -3157,8 +3173,25 @@ impl eframe::App for PlanoraApp {
         }
         self.ws.autosave_tick(Instant::now());
         self.run_marker_tick(Instant::now());
-        self.main_window =
-            crate::main_window::track(self.main_window, &ctx.input(|i| i.viewport().clone()));
+        if let Some(place) = self.start_place {
+            let tries = self.place_tries;
+            let (cmds, done) =
+                ctx.input(|i| crate::main_window::place_step(place, i.viewport(), tries));
+            for c in cmds {
+                ctx.send_viewport_cmd(c);
+            }
+            if done {
+                self.start_place = None;
+            } else {
+                self.place_tries += 1;
+                ctx.request_repaint();
+            }
+        }
+        // Erst nach dem Platzieren verfolgen (Zwischenstände zählen nicht).
+        if self.start_place.is_none() {
+            let prev = self.main_window;
+            self.main_window = ctx.input(|i| crate::main_window::track(prev, i.viewport()));
+        }
         ctx.request_repaint_after(AUTOSAVE_REPAINT);
     }
 

@@ -304,6 +304,25 @@ pub struct WindowState {
 }
 
 impl WindowState {
+    /// Wie [`WindowState::sanitized`], aber die Lage bleibt auch links oder oberhalb des
+    /// Hauptmonitors (negativ), solange sie endlich ist und ihr Betrag höchstens
+    /// [`MAX_WINDOW_POS`] beträgt; ob sie auf einem Monitor liegt, prüft der Start.
+    pub fn sanitized_any_monitor(self) -> Option<WindowState> {
+        let (x, y) = (self.x, self.y);
+        let mut w = WindowState {
+            x: None,
+            y: None,
+            ..self
+        }
+        .sanitized()?;
+        let ok = |p: Option<f32>| p.filter(|p| p.is_finite() && p.abs() <= MAX_WINDOW_POS);
+        if let (Some(x), Some(y)) = (ok(x), ok(y)) {
+            w.x = Some(x);
+            w.y = Some(y);
+        }
+        Some(w)
+    }
+
     /// Nur Plausibles: ohne endliche Größe über 0 keines; die Größe höchstens
     /// [`MAX_WINDOW_SIZE`]. Die Lage bleibt nur, wenn sie endlich ist, ihr Betrag höchstens
     /// [`MAX_WINDOW_POS`] beträgt und das Fenster wenigstens zum Teil im Bereich 0 bis
@@ -342,13 +361,34 @@ pub struct MainWindow {
     pub scale: Option<f32>,
 }
 
-/// Liest `main_window` aus jedem JSON-Wert ([`lenient_window`]); eine Skalierung zählt nur,
+/// Liest `main_window` aus jedem JSON-Wert ([`WindowState::sanitized_any_monitor`]); eine
+/// Skalierung zählt nur,
 /// wenn sie endlich und größer als 0 ist.
 fn lenient_main_window<'de, D: Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<Option<MainWindow>, D::Error> {
     let value = serde_json::Value::deserialize(d)?;
-    Ok(lenient_window(Some(&value)).map(|window| MainWindow {
+    let num = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .map(|n| n as f32)
+    };
+    let window = match (num("width"), num("height")) {
+        (Some(width), Some(height)) => WindowState {
+            x: num("x"),
+            y: num("y"),
+            width,
+            height,
+            maximized: value
+                .get("maximized")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        }
+        .sanitized_any_monitor(),
+        _ => None,
+    };
+    Ok(window.map(|window| MainWindow {
         window,
         scale: value
             .get("scale")

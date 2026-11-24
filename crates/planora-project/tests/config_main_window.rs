@@ -6,10 +6,7 @@ use planora_project::config::{Config, MainWindow, WindowState};
 use std::path::PathBuf;
 
 fn temp_file(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!(
-        "planora-cfg-mainwin-{}-{name}",
-        std::process::id()
-    ));
+    let d = std::env::temp_dir().join(format!("planora-cfg-mainwin-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d.join("config.json")
@@ -63,6 +60,27 @@ fn old_files_and_defaults_have_no_main_window() {
 }
 
 #[test]
+fn a_negative_position_left_of_the_main_monitor_survives() {
+    let p = temp_file("links");
+    std::fs::write(
+        &p,
+        r#"{"main_window":{"x":-1700,"y":-200,"width":1400,"height":900,"scale":1.5}}"#,
+    )
+    .unwrap();
+    let w = Config::read_from(&p).unwrap().main_window.unwrap();
+    assert_eq!((w.window.x, w.window.y), (Some(-1700.0), Some(-200.0)));
+    // Unbrauchbar weit draußen (Lage eines minimierten Fensters): ohne Lage.
+    std::fs::write(
+        &p,
+        r#"{"main_window":{"x":-32000,"y":-32000,"width":1400,"height":900}}"#,
+    )
+    .unwrap();
+    let w = Config::read_from(&p).unwrap().main_window.unwrap();
+    assert_eq!((w.window.x, w.window.y), (None, None));
+    cleanup(&p);
+}
+
+#[test]
 fn unusable_main_window_is_dropped_without_losing_other_fields() {
     let p = temp_file("kaputt");
     for bad in [
@@ -71,11 +89,7 @@ fn unusable_main_window_is_dropped_without_losing_other_fields() {
         r#"{"width":-5,"height":600}"#,
         r#"{"width":"breit","height":600}"#,
     ] {
-        std::fs::write(
-            &p,
-            format!(r#"{{"verbose_log":true,"main_window":{bad}}}"#),
-        )
-        .unwrap();
+        std::fs::write(&p, format!(r#"{{"verbose_log":true,"main_window":{bad}}}"#)).unwrap();
         let c = Config::read_from(&p).unwrap();
         assert_eq!(c.main_window, None, "{bad}");
         assert!(c.verbose_log, "{bad}");
