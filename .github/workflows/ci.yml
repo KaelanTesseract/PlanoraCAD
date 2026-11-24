@@ -21,9 +21,18 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
-      # Weniger Debug-Daten: Der Linux-Runner lief sonst beim Linken der vielen Testprogramme voll.
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      # Keine Debug-Daten und kein inkrementeller Bau (wie lokal): Der Linux-Runner lief sonst
+      # beim Linken der vielen Testprogramme voll (2026-11-24 auch mit line-tables-only).
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
     steps:
+      # Unter Linux vorinstallierte, hier unbenutzte Werkzeuge entfernen (rund 20 GB mehr Platz).
+      - name: Platz schaffen
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust installieren
         run: rustup toolchain install stable --profile minimal -c rustfmt,clippy
