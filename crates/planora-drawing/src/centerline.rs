@@ -291,8 +291,25 @@ pub fn axial_range(
                     add(e.curve.point(t1));
                 }
                 c => {
-                    for i in 0..=RANGE_SAMPLES {
-                        add(c.point(t0 + (t1 - t0) * i as f64 / RANGE_SAMPLES as f64));
+                    let ts: Vec<f64> = (0..=RANGE_SAMPLES)
+                        .map(|i| t0 + (t1 - t0) * i as f64 / RANGE_SAMPLES as f64)
+                        .collect();
+                    let vs: Vec<f64> = ts.iter().map(|&t| (c.point(t) - origin).dot(z)).collect();
+                    for &t in &ts {
+                        add(c.point(t));
+                    }
+                    // Freiformkanten (etwa Schnittkurven in allgemeiner Lage, C15): Das Extrem liegt
+                    // meist zwischen zwei Proben; zwischen den Nachbarn genau nachsuchen.
+                    if matches!(c, Curve::Nurbs(_)) {
+                        for i in 1..RANGE_SAMPLES {
+                            let (a, m, b) = (vs[i - 1], vs[i], vs[i + 1]);
+                            for sign in [1.0, -1.0] {
+                                if sign * m >= sign * a && sign * m >= sign * b {
+                                    let f = |t: f64| sign * (c.point(t) - origin).dot(z);
+                                    add(c.point(golden_max(&f, ts[i - 1], ts[i + 1])));
+                                }
+                            }
+                        }
                     }
                     // Kreis/Ellipse: (p − o)·z = A cos t + B sin t + C, Extrema bei
                     // t = atan2(B, A) + k·π.
@@ -328,6 +345,30 @@ pub fn axial_range(
         }
     }
     (lo <= hi).then_some((lo, hi))
+}
+
+/// Stelle des größten Werts von `f` auf `[a, b]` (Goldener Schnitt; `f` dort eingipflig).
+fn golden_max(f: &dyn Fn(f64) -> f64, mut a: f64, mut b: f64) -> f64 {
+    const R: f64 = 0.618_033_988_749_894_8;
+    let mut x1 = b - R * (b - a);
+    let mut x2 = a + R * (b - a);
+    let (mut f1, mut f2) = (f(x1), f(x2));
+    for _ in 0..60 {
+        if f1 < f2 {
+            a = x1;
+            x1 = x2;
+            f1 = f2;
+            x2 = a + R * (b - a);
+            f2 = f(x2);
+        } else {
+            b = x2;
+            x2 = x1;
+            f2 = f1;
+            x1 = b - R * (b - a);
+            f1 = f(x1);
+        }
+    }
+    if f1 >= f2 { x1 } else { x2 }
 }
 
 /// Zählt Paartests gegen `MAX_PAIR_TESTS`.

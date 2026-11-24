@@ -269,10 +269,25 @@ pub fn imprint(
             };
             // Der Schnitt selbst rechnet mit der Modelltoleranz; Haltepunkte, Stücke und ihre Lage
             // bei Freiformbeteiligung mit der weiteren Toleranz.
-            let freeform = face_is_freeform(ga) || face_is_freeform(gb);
+            let mut freeform = face_is_freeform(ga) || face_is_freeform(gb);
+            let mut meeting = intersect_surfaces(&ga.surface, &gb.surface, tol);
+            // Allgemeine Lage (C15): Paare ohne exakten Weg rechnet der numerische Schnittrechner
+            // mit einer exakt als NURBS dargestellten Fläche; danach gilt die Freiform-Toleranz.
+            if matches!(meeting, SurfaceIntersection::Unsupported)
+                && let Some(general) = super::general::intersect_general(
+                    &ga.surface,
+                    &rim_points(ga),
+                    &gb.surface,
+                    &rim_points(gb),
+                    tol,
+                )
+            {
+                meeting = general;
+                freeform = true;
+            }
             let ptol = pipeline_tol(tol, freeform);
             let tol_p = &ptol;
-            match intersect_surfaces(&ga.surface, &gb.surface, tol) {
+            match meeting {
                 SurfaceIntersection::None | SurfaceIntersection::Touch => {}
                 SurfaceIntersection::Unsupported => return Err(unsupported()),
                 SurfaceIntersection::UnsupportedBecause(msg) => {
@@ -328,4 +343,14 @@ pub fn imprint(
             .collect()
     };
     Ok((work(pa, sa), work(pb, sb)))
+}
+
+/// Punkte auf den Rändern einer Fläche (je Randstück 17), für den Bereich der Ersatzfläche im
+/// Schnitt in allgemeiner Lage (C15).
+fn rim_points(g: &FaceGeom) -> Vec<DVec3> {
+    g.loops
+        .iter()
+        .flatten()
+        .flat_map(|s| (0..=16).map(move |i| s.at(i as f64 / 16.0)))
+        .collect()
 }

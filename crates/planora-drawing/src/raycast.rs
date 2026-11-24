@@ -568,7 +568,20 @@ impl Region {
             }
         }
         if in_band && let Some((_, seg, info, fr)) = nearest {
-            return self.side_of_rim(tol, p, seg, info, fr);
+            // Fläche mit Freiformrand (C15b): An den Enden der Randstücke (Teilungsstellen der
+            // genäherten Kurve oder Ecken zu ihr) wäre das ganze Band unentscheidbar; dort
+            // entscheidet die Windungszahl wie abseits des Bands (der Abstand zum Rand ist schon
+            // größer als `tol`).
+            let corner = !info.closed && !(CORNER_FRACTION..=1.0 - CORNER_FRACTION).contains(&fr);
+            let freeform_rim = self
+                .geom
+                .loops
+                .iter()
+                .flatten()
+                .any(|s| matches!(s.curve, Curve::Nurbs(_)));
+            if !(corner && freeform_rim) {
+                return self.side_of_rim(tol, p, seg, info, fr);
+            }
         }
         let shifts = |period: Option<f64>| match period {
             Some(t) => vec![-t, 0.0, t],

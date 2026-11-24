@@ -21,12 +21,15 @@ use crate::raycast::{Caster, HitClass, Ray};
 use crate::stroke::{Stroke, StrokeOrigin};
 use crate::{Piece, Visibility};
 use planora_exchange::Progress;
-use planora_kernel::Curve;
+use planora_kernel::{Curve, NURBS_EDGE_TOL};
 use planora_math::{DVec2, DVec3};
 use std::cell::Cell;
 
 /// Kippwinkel der Prüfstrahlen (rad).
 pub const TILT: f64 = 1e-5;
+/// Kippwinkel des Rückfalls an Freiformkanten, wenn alle Strahlen mit [`TILT`] unbrauchbar sind
+/// (sie streifen auf ganzer Länge den Rand einer Fläche, deren Rand nur genähert ist; C15b).
+pub const TILT_FALLBACK: f64 = 1e-3;
 /// Zahl der Kipprichtungen, gleichverteilt um die Blickrichtung.
 pub const TILT_DIRECTIONS: usize = 8;
 /// Stützstellen je Stück (Bruchteil der Stückbreite).
@@ -43,6 +46,9 @@ enum RayVote {
     Free,
     Blocked,
     Unusable,
+    /// Unbrauchbar wegen eines Randtreffers auf einer fremden Fläche (weder eigene noch
+    /// Nachbarfläche): Die Stelle liegt im Bild auf einer Randkante davor.
+    Grazing,
 }
 
 /// Zählt einen Strahlwurf; über `MAX_RAY_TESTS` → `TooComplex`.
@@ -55,19 +61,44 @@ fn count(counter: &Cell<u64>) -> Result<(), DrawError> {
     Ok(())
 }
 
-/// Ein Strahl: Treffer auf eigenen Flächen mit `s ≤ OWN_EPS` entfallen; bleibt ein Randtreffer,
-/// ist der Strahl unbrauchbar, sonst verdeckt ihn ein Innentreffer.
-fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64) -> RayVote {
+/// Ein Strahl: Treffer auf eigenen Flächen mit `s ≤ OWN_EPS` entfallen, ebenso Randtreffer auf
+/// Nachbarflächen über Freiformkanten mit `s ≤ near_eps` ([`NEIGHBOR_FLAG`]); bleibt ein
+/// Randtreffer, ist der Strahl unbrauchbar, sonst verdeckt ihn ein Innentreffer.
+fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64, near_eps: f64) -> RayVote {
     let Ray::Hits(hits) = ray else {
         return RayVote::Unusable;
     };
     let mut blocked = false;
-    for h in hits
+    // Freiformkante: Sie liegt nur auf `NURBS_EDGE_TOL` genau auf ihren Flächen; ein flach
+    // streifender Strahl träfe eine eigene Fläche erst hinter `OWN_EPS` (C15b).
+    let freeform = own
         .iter()
-        .filter(|h| !(h.body == body && own.contains(&h.face) && h.s <= own_eps))
-    {
+        .any(|f| *f == FREEFORM_STROKE || f & NEIGHBOR_FLAG != 0);
+    let own_eps = if own.contains(&FREEFORM_STROKE) {
+        own_eps.max(near_eps)
+    } else {
+        own_eps
+    };
+    for h in hits.iter().filter(|h| {
+        !(h.body == body && own.contains(&h.face) && h.s <= own_eps)
+            && !(h.body == body
+                && own.contains(&(h.face | NEIGHBOR_FLAG))
+                && matches!(h.class, HitClass::Boundary)
+                && h.s <= near_eps)
+    }) {
         match h.class {
-            HitClass::Boundary => return RayVote::Unusable,
+            HitClass::Boundary => {
+                let mine = h.body == body
+                    && (own.contains(&h.face) || own.contains(&(h.face | NEIGHBOR_FLAG)));
+                return if mine {
+                    RayVote::Unusable
+                } else {
+                    RayVote::Grazing
+                };
+            }
+            // An Freiformkanten (C15b): Ein Innentreffer vor jedem Randtreffer verdeckt die Stelle,
+            // was dahinter kommt, ist ohne Belang (die Treffer sind nach `s` sortiert).
+            HitClass::Inside if freeform => return RayVote::Blocked,
             HitClass::Inside => blocked = true,
         }
     }
@@ -78,7 +109,37 @@ fn vote(ray: Ray, own: &[usize], body: usize, own_eps: f64) -> RayVote {
     }
 }
 
-/// Kippabstimmung an `p`, zählt die Strahlwürfe.
+/// Marke in der Liste der eigenen Flächen: Der Strich ist eine Freiformkante (C15b).
+pub const FREEFORM_STROKE: usize = usize::MAX;
+
+/// Kennung einer Nachbarfläche in der Liste der eigenen Flächen eines Strichs (Index plus diese
+/// Marke): eine Fläche, die über eine Freiformkante an einer eigenen Fläche hängt (C15b).
+pub const NEIGHBOR_FLAG: usize = 1 << 40;
+
+/// Bis zu diesem Abstand zählen Randtreffer auf Nachbarflächen ([`NEIGHBOR_FLAG`]) nicht:
+/// Endet ein Umriss oder eine Kante im Bild tangential auf einer Freiformkante, liegt deren
+/// Berührpunkt nur auf `NURBS_EDGE_TOL` genau, und die Prüfstrahlen streifen den Rand der
+/// Nachbarfläche auf einer Länge von etwa `√(2·R·NURBS_EDGE_TOL)` (C15b). Innentreffer zählen.
+fn near_eps(extent: f64) -> f64 {
+    (2.0 * extent.max(1e-9) * planora_kernel::NURBS_EDGE_TOL).sqrt()
+}
+
+/// Urteil der Kippabstimmung an einer Stelle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Sample {
+    /// Sichtbar (`true`) oder verdeckt.
+    Seen(bool),
+    /// Freiformkante, jeder Strahl streift den Rand einer fremden Fläche davor (C15b): Die
+    /// Stelle liegt im Bild auf deren Randkante, etwa eine steile Schnittkurve auf einer Wand,
+    /// die man von der Kante sieht, unter dem Randkreis der Deckfläche. Die vordere Kante wird
+    /// dort gezeichnet; ist sie verdeckt, ist es die Stelle dahinter auch. Gilt als verdeckt,
+    /// wenn keine Ausweichstelle entscheidet (das Zusammenfassen nimmt das verdeckte Stück unter
+    /// einer sichtbaren weg).
+    Grazing,
+    Unknown,
+}
+
+/// Kippabstimmung an `p` (verdeckt auch bei [`Sample::Grazing`]), zählt die Strahlwürfe.
 fn sample_counted(
     caster: &dyn Caster,
     basis: &Basis,
@@ -88,21 +149,64 @@ fn sample_counted(
     extent: f64,
     counter: &Cell<u64>,
 ) -> Result<Option<bool>, DrawError> {
+    Ok(
+        match sample_raw(caster, basis, p, own, body, extent, counter)? {
+            Sample::Seen(v) => Some(v),
+            Sample::Grazing => Some(false),
+            Sample::Unknown => None,
+        },
+    )
+}
+
+/// Kippabstimmung an `p`, zählt die Strahlwürfe.
+fn sample_raw(
+    caster: &dyn Caster,
+    basis: &Basis,
+    p: DVec3,
+    own: &[usize],
+    body: usize,
+    extent: f64,
+    counter: &Cell<u64>,
+) -> Result<Sample, DrawError> {
     let eye = basis.eye_dir();
     let min_s = self_eps(extent);
     let own_eps = own_eps(extent);
+    // Striche an Freiformkanten (eigene oder Nachbarfläche über eine Freiformkante, C15b):
+    // Sind alle Strahlen mit `TILT` unbrauchbar, folgt ein Satz mit `TILT_FALLBACK`.
+    let freeform = own
+        .iter()
+        .any(|f| *f == FREEFORM_STROKE || f & NEIGHBOR_FLAG != 0);
+    let tilts: &[f64] = if freeform {
+        &[TILT, TILT_FALLBACK]
+    } else {
+        &[TILT]
+    };
     let mut blocked = false;
-    for k in 0..TILT_DIRECTIONS {
-        let phi = k as f64 * std::f64::consts::TAU / TILT_DIRECTIONS as f64;
-        let dir = (eye + (basis.ex * phi.cos() + basis.ey * phi.sin()) * TILT).normalize();
-        count(counter)?;
-        match vote(caster.cast(p, dir, min_s), own, body, own_eps) {
-            RayVote::Free => return Ok(Some(true)),
-            RayVote::Blocked => blocked = true,
-            RayVote::Unusable => {}
+    let mut all_grazing = true;
+    for &tilt in tilts {
+        for k in 0..TILT_DIRECTIONS {
+            let phi = k as f64 * std::f64::consts::TAU / TILT_DIRECTIONS as f64;
+            let dir = (eye + (basis.ex * phi.cos() + basis.ey * phi.sin()) * tilt).normalize();
+            count(counter)?;
+            let ray = caster.cast(p, dir, min_s);
+            match vote(ray, own, body, own_eps, near_eps(extent)) {
+                RayVote::Free => return Ok(Sample::Seen(true)),
+                RayVote::Blocked => blocked = true,
+                RayVote::Unusable => all_grazing = false,
+                RayVote::Grazing => {}
+            }
+        }
+        if blocked {
+            break;
         }
     }
-    Ok(blocked.then_some(false))
+    Ok(if blocked {
+        Sample::Seen(false)
+    } else if freeform && all_grazing {
+        Sample::Grazing
+    } else {
+        Sample::Unknown
+    })
 }
 
 /// Ergebnis an einer Stelle: Some(true) = sichtbar, Some(false) = verdeckt, None = unbrauchbar.
@@ -135,7 +239,8 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    /// Urteil an der Stelle `f` des Stücks `[ta, tb]`; unbrauchbar → Ausweichstellen.
+    /// Urteil an der Stelle `f` des Stücks `[ta, tb]`; unbrauchbar → Ausweichstellen. Streift
+    /// an `f` jeder Strahl ([`Sample::Grazing`]) und entscheidet keine Ausweichstelle: verdeckt.
     fn judge(&self, ta: f64, tb: f64, f: f64) -> Result<Visibility, DrawError> {
         let candidates = std::iter::once(f).chain(
             SHIFTS
@@ -143,9 +248,10 @@ impl Ctx<'_> {
                 .map(|s| f + s)
                 .filter(|g| *g > 0.0 && *g < 1.0),
         );
-        for g in candidates {
+        let mut grazing = false;
+        for (k, g) in candidates.enumerate() {
             let p = (self.map)(self.stroke.point(ta + g * (tb - ta)));
-            let v = sample_counted(
+            match sample_raw(
                 self.caster,
                 self.basis,
                 p,
@@ -153,15 +259,15 @@ impl Ctx<'_> {
                 self.body,
                 self.extent,
                 self.counter,
-            )?;
-            if let Some(vis) = v {
-                let vis = if vis {
-                    Visibility::Visible
-                } else {
-                    Visibility::Hidden
-                };
-                return Ok(vis);
+            )? {
+                Sample::Seen(true) => return Ok(Visibility::Visible),
+                Sample::Seen(false) => return Ok(Visibility::Hidden),
+                Sample::Grazing if k == 0 => grazing = true,
+                _ => {}
             }
+        }
+        if grazing {
+            return Ok(Visibility::Hidden);
         }
         Err(DrawError::AmbiguousVisibility(self.name.to_string()))
     }
@@ -308,19 +414,17 @@ pub fn classify_range_mapped(
         min_width: BISECT_TOL * stroke.param_len(),
         map,
     };
-    // Sicherheitsnetz: Urteile knapp innerhalb der Enden (ohne Ausweichen; unbrauchbar → kein
-    // bekanntes Ende), damit ein Wechsel im äußeren Viertel nicht hinter drei gleichen
-    // Stützstellen verschwindet.
+    // Sicherheitsnetz: Urteile knapp innerhalb der Enden (ohne Ausweichen; unbrauchbar oder
+    // streifend → kein bekanntes Ende), damit ein Wechsel im äußeren Viertel nicht hinter drei
+    // gleichen Stützstellen verschwindet.
     let probe = |f: f64| -> Result<Option<Visibility>, DrawError> {
         let p = map(stroke.point(ta + f * (tb - ta)));
         Ok(
-            sample_counted(caster, basis, p, own, body, extent, counter)?.map(|v| {
-                if v {
-                    Visibility::Visible
-                } else {
-                    Visibility::Hidden
-                }
-            }),
+            match sample_raw(caster, basis, p, own, body, extent, counter)? {
+                Sample::Seen(true) => Some(Visibility::Visible),
+                Sample::Seen(false) => Some(Visibility::Hidden),
+                Sample::Grazing | Sample::Unknown => None,
+            },
         )
     };
     let (left, right) = (probe(END_PROBE)?, probe(1.0 - END_PROBE)?);
@@ -343,6 +447,10 @@ pub fn classify_range_mapped(
 pub const COINCIDENT_FACTOR: f64 = 1024.0;
 /// Vielfaches von `geom_tol`: Stücke mit kürzerer Bildlänge entfallen.
 pub const TINY_FACTOR: f64 = 64.0;
+/// Vielfaches von `NURBS_EDGE_TOL`: In Ansichten mit Freiformkanten entfallen Stücke mit kürzerer
+/// Bildlänge (C15b): 1e-4 mm wie `SILHOUETTE_TOL`. Reste an Umkehrstellen, an denen zwei Hälften
+/// einer Schnittkurve zusammenlaufen, sind im Bild bis etwa 7e-5 mm lang.
+pub const FREEFORM_TINY_FACTOR: f64 = 10.0;
 /// Abschnitte für die Bildlänge eines Stücks.
 const LENGTH_SAMPLES: usize = 16;
 /// Abbruchprüfung je so vielen Stücken bzw. Paaren.
@@ -352,6 +460,12 @@ const MERGE_CHECK_EVERY: usize = 1024;
 /// Schnitts (eine Kurve, die das andere Stück genau an den Vierteln kreuzt und an den Enden
 /// berührt, etwa eine Welle mit zwei Perioden auf einer Geraden, gilt so nicht als bedeckt).
 const COVER_FRACTIONS: [f64; 7] = [0.0, 0.25, 0.381_966, 0.5, 0.618_034, 0.75, 1.0];
+/// Proben je offenem Bereich, an denen bei Freiformkanten der Übergang „im Gleichheitsabstand /
+/// nicht“ gesucht wird (C15b), und Halbierungsschritte für seine Lage.
+const COVER_SCAN: usize = 32;
+const COVER_BISECT: usize = 40;
+/// Anteil, um den die Abdeckungsprobe bei Freiformpaaren von den Enden eines Teilbereichs abrückt.
+const COVER_INSET: f64 = 1e-3;
 /// Rastergröße (je Bildachse) für die Vorauswahl der schon behaltenen Stücke.
 const MERGE_GRID: usize = 64;
 
@@ -389,7 +503,17 @@ pub fn merge_pieces(
     let tol = geom_tol(extent);
     let pieces = join_adjacent(strokes, sorted(pieces), progress)?;
     let pieces = trim_covered(strokes, pieces, basis, extent, progress)?;
-    let pieces = drop_tiny(strokes, pieces, basis, TINY_FACTOR * tol, progress)?;
+    // Mit Freiformkanten (C15b): Stücke kürzer als ihre Genauigkeit sind Rechenreste an Ecken
+    // (etwa am Ende eines Bogens, der auf eine Freiformkante trifft).
+    let freeform = strokes
+        .iter()
+        .any(|s| matches!(s.curve, Curve::Nurbs(_)) && !is_fitted(s));
+    let tiny = if freeform {
+        (TINY_FACTOR * tol).max(FREEFORM_TINY_FACTOR * NURBS_EDGE_TOL)
+    } else {
+        TINY_FACTOR * tol
+    };
+    let pieces = drop_tiny(strokes, pieces, basis, tiny, progress)?;
     join_adjacent(strokes, pieces, progress)
 }
 
@@ -532,6 +656,62 @@ impl MergeGrid {
     }
 }
 
+/// Proben je Stück für [`flat_spline_tips`].
+const FLAT_TIP_SAMPLES: usize = 64;
+
+/// Umkehrstellen des Bilds einer Freiformkante (C15): Stellen, an denen die Bildgeschwindigkeit
+/// auf null fällt und das Bild auf sich selbst zurückläuft – etwa eine ebene Schnittkurve, deren
+/// Ebene die Blickrichtung enthält, oder eine Kante auf einer von der Seite gesehenen Zylinder-
+/// wand. Dort läge das Bild sonst zweimal über sich selbst (wie bei [`tip_params`] für Kreise).
+/// Gesucht an den Proben, an denen die Bildrichtung umschlägt; die Stelle der kleinsten
+/// Bildgeschwindigkeit dazwischen auf die Rechengenauigkeit. Echt innerhalb `(a, b)`.
+fn flat_spline_tips(s: &Stroke, basis: &Basis, _thin: f64, a: f64, b: f64) -> Vec<f64> {
+    if !matches!(s.curve, Curve::Nurbs(_)) || b <= a {
+        return Vec::new();
+    }
+    let n = FLAT_TIP_SAMPLES;
+    let ts: Vec<f64> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).collect();
+    let ps: Vec<DVec2> = ts.iter().map(|&t| s.point2(basis, t)).collect();
+    let h = 1e-7 * (b - a);
+    let speed = |t: f64| (s.point2(basis, t + h) - s.point2(basis, t - h)).length() / (2.0 * h);
+    let mut out = Vec::new();
+    for i in 1..n {
+        // Die Bildrichtung schlägt um: Die Sehnen vor und nach der Probe zeigen gegeneinander.
+        let (d0, d1) = (ps[i] - ps[i - 1], ps[i + 1] - ps[i]);
+        if d0.dot(d1) < 0.0 {
+            let t = golden_extreme(&|t| -speed(t), ts[i - 1], ts[i + 1]);
+            if t > a && t < b {
+                out.push(t);
+            }
+        }
+    }
+    out
+}
+
+/// Stelle des größten Werts von `f` auf `[lo, hi]` (Goldener Schnitt; `f` dort eingipflig).
+fn golden_extreme(f: &dyn Fn(f64) -> f64, mut lo: f64, mut hi: f64) -> f64 {
+    const R: f64 = 0.618_033_988_749_894_8;
+    let mut x1 = hi - R * (hi - lo);
+    let mut x2 = lo + R * (hi - lo);
+    let (mut f1, mut f2) = (f(x1), f(x2));
+    for _ in 0..80 {
+        if f1 < f2 {
+            lo = x1;
+            x1 = x2;
+            f1 = f2;
+            x2 = lo + R * (hi - lo);
+            f2 = f(x2);
+        } else {
+            hi = x2;
+            x2 = x1;
+            f2 = f1;
+            x1 = hi - R * (hi - lo);
+            f1 = f(x1);
+        }
+    }
+    if f1 >= f2 { x1 } else { x2 }
+}
+
 /// Schritt 2 von [`merge_pieces`]: entfernt von jedem Stück die Teile, die ranghöhere,
 /// schon behaltene Stücke im Bild bedecken (siehe dort).
 fn trim_covered(
@@ -550,7 +730,16 @@ fn trim_covered(
     let mut split = Vec::with_capacity(pieces.len());
     for p in pieces {
         let mut a = p.t0;
-        for t in tip_params(&strokes[p.stroke], basis, thin, p.t0, p.t1) {
+        let mut tips = tip_params(&strokes[p.stroke], basis, thin, p.t0, p.t1);
+        tips.extend(flat_spline_tips(
+            &strokes[p.stroke],
+            basis,
+            thin + 2.0 * SILHOUETTE_TOL,
+            p.t0,
+            p.t1,
+        ));
+        tips.sort_by(f64::total_cmp);
+        for t in tips {
             split.push(Piece { t0: a, t1: t, ..p });
             a = t;
         }
@@ -562,21 +751,56 @@ fn trim_covered(
     let near = images.near();
     // Paare mit einem angepassten Umriss: Gleichheitsabstand `SILHOUETTE_TOL + near` (angepasst
     // gegen genau) bzw. `2·SILHOUETTE_TOL + near` (zwei angepasste); genaue Paare behalten `near`.
+    // Freiformkanten (etwa Schnittkurven in allgemeiner Lage, C15) liegen nur auf
+    // `NURBS_EDGE_TOL` genau auf ihren Flächen: Sie tragen `2·NURBS_EDGE_TOL` bei (Klasse 1).
     let tol_unit = geom_tol(extent);
-    let wide_one = Images::new(basis, r, extent, (SILHOUETTE_TOL + near) / tol_unit);
-    let wide_two = Images::new(basis, r, extent, (2.0 * SILHOUETTE_TOL + near) / tol_unit);
+    // Eine Freiformkante liegt bis `NURBS_EDGE_TOL` neben jeder ihrer Flächen; zwei Hälften
+    // derselben Schnittkurve, die im Bild zusammenfallen, also bis `2·NURBS_EDGE_TOL` auseinander.
+    let extra = [0.0, 2.0 * NURBS_EDGE_TOL, SILHOUETTE_TOL];
+    let class_of = |st: &Stroke| -> usize {
+        if is_fitted(st) {
+            2
+        } else if matches!(st.curve, Curve::Nurbs(_)) {
+            1
+        } else {
+            0
+        }
+    };
+    let pair_images: Vec<Vec<Images>> = (0..3)
+        .map(|a| {
+            (0..3)
+                .map(|b| Images::new(basis, r, extent, (extra[a] + extra[b] + near) / tol_unit))
+                .collect()
+        })
+        .collect();
+    // Wie `pair_images`, aber ohne den Zuschlag angepasster Umrisse (Suche der Übergänge an
+    // Freiformkanten, C15b).
+    let scan_images: Vec<Vec<Images>> = (0..3)
+        .map(|a| {
+            (0..3)
+                .map(|b| {
+                    let e = |c: usize| if c == 2 { 0.0 } else { extra[c] };
+                    Images::new(basis, r, extent, (e(a) + e(b) + near) / tol_unit)
+                })
+                .collect()
+        })
+        .collect();
     let fitted: Vec<bool> = pieces
         .iter()
         .map(|p| is_fitted(&strokes[p.stroke]))
         .collect();
-    let pad = |f: bool| if f { wide_two.near() } else { near };
+    let class: Vec<usize> = pieces
+        .iter()
+        .map(|p| class_of(&strokes[p.stroke]))
+        .collect();
+    let pad = |c: usize| near + 2.0 * extra[c];
     let mut boxes: Vec<(DVec2, DVec2)> = Vec::with_capacity(pieces.len());
     let mut depth: Vec<f64> = Vec::with_capacity(pieces.len());
     for (k, p) in pieces.iter().enumerate() {
         if k % MERGE_CHECK_EVERY == 0 {
             progress.check()?;
         }
-        let (lo, hi) = piece_stroke(strokes, p).bbox2(basis, pad(fitted[k]));
+        let (lo, hi) = piece_stroke(strokes, p).bbox2(basis, pad(class[k]));
         if !(lo.is_finite() && hi.is_finite()) {
             return Err(DrawError::NonFinite);
         }
@@ -607,12 +831,12 @@ fn trim_covered(
                 progress.check()?;
             }
             let qs = &kept[q].1;
-            let q_fitted = is_fitted(qs);
-            let (qlo, qhi) = qs.bbox2(basis, pad(q_fitted));
-            let images = match (fitted[idx], q_fitted) {
-                (false, false) => &images,
-                (true, true) => &wide_two,
-                _ => &wide_one,
+            let q_class = class_of(qs);
+            let (qlo, qhi) = qs.bbox2(basis, pad(q_class));
+            let images = if class[idx] == 0 && q_class == 0 {
+                &images
+            } else {
+                &pair_images[class[idx]][q_class]
             };
             if qlo.x > phi.x || plo.x > qhi.x || qlo.y > phi.y || plo.y > qhi.y {
                 continue;
@@ -623,6 +847,44 @@ fn trim_covered(
             cuts.extend(images.feet(&ps, images.point(qs, qs.t1)?)?);
             let ends_near = !images.feet(qs, images.point(&ps, p.t0)?)?.is_empty()
                 || !images.feet(qs, images.point(&ps, p.t1)?)?.is_empty();
+            // Freiformkante (C15b): Sie kann das andere Stück im Bild berühren und dort ein Stück
+            // weit innerhalb des Gleichheitsabstands laufen (Schnittkurve tangential am Umriss);
+            // dann auch an den Stellen teilen, an denen sie diesen Abstand verlässt.
+            // Nur echte Freiformkanten (Klasse 1), nicht angepasste Umrisse.
+            // Gesucht wird mit dem Gleichheitsabstand ohne den Zuschlag angepasster Umrisse
+            // (`scan_images`): Sonst fiele die ganze Berührzone einer Schnittkante am Umriss bis
+            // `SILHOUETTE_TOL` weg, und dort fehlte eine Linie, die neben der anderen liegt.
+            let freeform_pair = class[idx] == 1 || q_class == 1;
+            let scan = &scan_images[class[idx]][q_class];
+            let mut scan_cuts: Vec<f64> = Vec::new();
+            if freeform_pair {
+                let near_at = |t: f64| -> Result<bool, DrawError> {
+                    Ok(!scan.feet(qs, scan.point(&ps, t)?)?.is_empty())
+                };
+                for &(a, b) in &open {
+                    let ts: Vec<f64> = (0..=COVER_SCAN)
+                        .map(|i| a + (b - a) * i as f64 / COVER_SCAN as f64)
+                        .collect();
+                    let mut prev = near_at(ts[0])?;
+                    for w in ts.windows(2) {
+                        let now = near_at(w[1])?;
+                        if now != prev {
+                            let (mut lo, mut hi) = (w[0], w[1]);
+                            for _ in 0..COVER_BISECT {
+                                let mid = 0.5 * (lo + hi);
+                                if near_at(mid)? == prev {
+                                    lo = mid;
+                                } else {
+                                    hi = mid;
+                                }
+                            }
+                            scan_cuts.push(0.5 * (lo + hi));
+                        }
+                        prev = now;
+                    }
+                }
+            }
+            cuts.extend(&scan_cuts);
             if cuts.is_empty() && !ends_near {
                 continue;
             }
@@ -643,10 +905,18 @@ fn trim_covered(
                         state.push(None);
                         continue;
                     }
+                    // An einer Übergangsstelle (oben per Halbierung gesucht) liegt der Abstand
+                    // genau auf der Grenze; dort knapp innerhalb des Teilbereichs prüfen.
+                    // Ein Teilbereich an einer solchen Stelle gilt nur mit dem engeren Abstand
+                    // als bedeckt.
+                    let inset = if freeform_pair { COVER_INSET } else { 0.0 };
+                    let at_scan = scan_cuts.contains(&x) || scan_cuts.contains(&y);
+                    let test = if at_scan { scan } else { images };
                     let mut covered = true;
                     for f in COVER_FRACTIONS {
-                        let pt = images.point(&ps, x + f * (y - x))?;
-                        if images.feet(qs, pt)?.is_empty() {
+                        let f = inset + (1.0 - 2.0 * inset) * f;
+                        let pt = test.point(&ps, x + f * (y - x))?;
+                        if test.feet(qs, pt)?.is_empty() {
                             covered = false;
                             break;
                         }
@@ -685,7 +955,7 @@ fn trim_covered(
         for (a, b) in open {
             let piece = Piece { t0: a, t1: b, ..p };
             let st = piece_stroke(strokes, &piece);
-            let (lo, hi) = st.bbox2(basis, pad(fitted[idx]));
+            let (lo, hi) = st.bbox2(basis, pad(class[idx]));
             grid.insert(kept.len(), lo, hi);
             kept.push((piece, st));
         }
@@ -748,6 +1018,150 @@ mod tests {
     use crate::model::ViewKind;
     use crate::stroke::StrokeOrigin;
     use planora_kernel::Curve;
+
+    fn hit(s: f64, face: usize, class: HitClass) -> crate::raycast::Hit {
+        crate::raycast::Hit {
+            s,
+            body: 0,
+            face,
+            class,
+        }
+    }
+
+    /// C15b: Randtreffer auf einer Nachbarfläche über eine Freiformkante zählen nahe dem Start
+    /// nicht; weiter weg, auf anderen Flächen oder im Inneren zählen sie.
+    #[test]
+    fn near_rim_hits_on_freeform_neighbours_are_ignored() {
+        let own = [3, 5 | NEIGHBOR_FLAG];
+        let (own_eps, near) = (1e-4, 0.02);
+        let v = |h: Vec<crate::raycast::Hit>| vote(Ray::Hits(h), &own, 0, own_eps, near);
+        assert!(matches!(
+            v(vec![hit(0.001, 5, HitClass::Boundary)]),
+            RayVote::Free
+        ));
+        assert!(matches!(
+            v(vec![hit(0.05, 5, HitClass::Boundary)]),
+            RayVote::Unusable
+        ));
+        assert!(matches!(
+            v(vec![hit(0.001, 6, HitClass::Boundary)]),
+            RayVote::Grazing
+        ));
+        assert!(matches!(
+            v(vec![hit(0.001, 5, HitClass::Inside)]),
+            RayVote::Blocked
+        ));
+        // Eigene Flächen wie bisher bis OWN_EPS.
+        assert!(matches!(
+            v(vec![hit(5e-5, 3, HitClass::Boundary)]),
+            RayVote::Free
+        ));
+        assert!(matches!(
+            v(vec![hit(0.001, 3, HitClass::Inside)]),
+            RayVote::Blocked
+        ));
+        // Eine Freiformkante: Treffer auf eigenen Flächen zählen bis `near_eps` nicht.
+        let own_ff = [3, FREEFORM_STROKE];
+        let w = |h: Vec<crate::raycast::Hit>| vote(Ray::Hits(h), &own_ff, 0, own_eps, near);
+        assert!(matches!(
+            w(vec![hit(0.001, 3, HitClass::Inside)]),
+            RayVote::Free
+        ));
+        assert!(matches!(
+            w(vec![hit(0.05, 3, HitClass::Inside)]),
+            RayVote::Blocked
+        ));
+        // An Freiformkanten entscheidet ein Innentreffer vor einem Randtreffer; sonst bleibt
+        // der Strahl unbrauchbar wie bisher.
+        let both = || {
+            vec![
+                hit(0.1, 9, HitClass::Inside),
+                hit(0.2, 0, HitClass::Boundary),
+            ]
+        };
+        assert!(matches!(w(both()), RayVote::Blocked));
+        assert!(matches!(
+            vote(Ray::Hits(both()), &[3], 0, own_eps, near),
+            RayVote::Grazing
+        ));
+    }
+
+    /// Gibt für jeden Strahl dieselben Treffer zurück.
+    struct Fixed(Vec<crate::raycast::Hit>);
+    impl Caster for Fixed {
+        fn cast(&self, _: DVec3, _: DVec3, _: f64) -> Ray {
+            Ray::Hits(self.0.clone())
+        }
+    }
+
+    /// C15b: Streift an einer Freiformkante jeder Strahl den Rand einer fremden Fläche davor,
+    /// liegt die Stelle im Bild auf deren Randkante: verdeckt (die vordere Kante wird dort
+    /// gezeichnet). Bei genauen Kanten und bei Randtreffern auf eigenen oder Nachbarflächen
+    /// bleibt die Stelle unentschieden.
+    #[test]
+    fn grazing_a_front_rim_hides_a_freeform_stroke() {
+        let basis = Basis::of(ViewKind::Top);
+        let n = Cell::new(0);
+        let at = |hits: Vec<crate::raycast::Hit>, own: &[usize]| {
+            sample_counted(&Fixed(hits), &basis, DVec3::ZERO, own, 0, 10.0, &n).unwrap()
+        };
+        let rim = || vec![hit(0.01, 13, HitClass::Boundary)];
+        assert_eq!(at(rim(), &[1, 5, FREEFORM_STROKE]), Some(false));
+        assert_eq!(at(rim(), &[1, 5 | NEIGHBOR_FLAG]), Some(false));
+        assert_eq!(at(rim(), &[1, 5]), None);
+        let own_rim = || vec![hit(0.5, 5, HitClass::Boundary)];
+        assert_eq!(at(own_rim(), &[1, 5, FREEFORM_STROKE]), None);
+    }
+
+    /// Streift bis `x < 1.01` (fremder Rand bei `s` = 0,01), dahinter frei.
+    struct Split;
+    impl Caster for Split {
+        fn cast(&self, origin: DVec3, _: DVec3, _: f64) -> Ray {
+            if origin.x < 1.01 {
+                Ray::Hits(vec![hit(0.01, 13, HitClass::Boundary)])
+            } else {
+                Ray::Hits(Vec::new())
+            }
+        }
+    }
+
+    /// Prüferfund C15b: Die Streifregel greift erst, wenn auch die Ausweichstellen nichts
+    /// entscheiden; entscheidet keine, bleibt sie (verdeckt).
+    #[test]
+    fn grazing_yields_to_a_decided_shift() {
+        let basis = Basis::of(ViewKind::Top);
+        let n = Cell::new(0);
+        let st = line(0.0, 1);
+        let own = [1, FREEFORM_STROKE];
+        let id = |p: DVec3| p;
+        let ctx = |caster: &'static dyn Caster| Ctx {
+            caster,
+            basis: &basis,
+            stroke: &st,
+            own: &own,
+            body: 0,
+            extent: 10.0,
+            name: "S",
+            counter: &n,
+            min_width: 1e-9,
+            map: &id,
+        };
+        // Stelle x = 1,0 streift, die Ausweichstelle x ≈ 1,025 ist frei.
+        assert_eq!(
+            ctx(&Split).judge(0.0, 2.0, 0.5).unwrap(),
+            Visibility::Visible
+        );
+        // Überall streifend: verdeckt.
+        static ALL: Fixed2 = Fixed2;
+        assert_eq!(ctx(&ALL).judge(0.0, 2.0, 0.5).unwrap(), Visibility::Hidden);
+    }
+
+    struct Fixed2;
+    impl Caster for Fixed2 {
+        fn cast(&self, _: DVec3, _: DVec3, _: f64) -> Ray {
+            Ray::Hits(vec![hit(0.01, 13, HitClass::Boundary)])
+        }
+    }
 
     fn line(y: f64, edge: usize) -> Stroke {
         Stroke {

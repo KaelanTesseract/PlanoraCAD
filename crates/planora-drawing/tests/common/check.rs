@@ -316,12 +316,19 @@ pub fn check_lines(solids: &[&Solid], kind: ViewKind, v: &ViewLines) -> Report {
         }
     }
 
-    // (d) Keine Phantomlinien.
+    // (d) Keine Phantomlinien: Jedes Stück liegt an einer Merkmalskante oder an einer Grenze
+    // zweier Flächen im Netz (flache Körperkanten unter 20° sind auch Kanten, C15).
+    let bounds: Vec<(DVec2, DVec2)> = meshes
+        .iter()
+        .flat_map(|m| super::mesh_ref::face_boundaries_3d(m, extent))
+        .map(|(a, b)| (proj(&basis, a), proj(&basis, b)))
+        .collect();
     for (k, p) in v.pieces.iter().enumerate() {
         let s = &v.strokes[p.stroke];
         let m = proj(&basis, s.curve.point(0.5 * (p.t0 + p.t1)));
         let d = feats
             .iter()
+            .chain(&bounds)
             .map(|(a, b)| seg_dist(m, *a, *b))
             .fold(f64::INFINITY, f64::min);
         if d > near {
@@ -333,7 +340,22 @@ pub fn check_lines(solids: &[&Solid], kind: ViewKind, v: &ViewLines) -> Report {
     }
 
     // Genauer Abstand zum nächsten (sichtbaren) Stück, Toleranz 1e3·geom_tol im Bild.
+    // Freiformkanten (Schnittkurven in allgemeiner Lage, C15) liegen nur auf `NURBS_EDGE_TOL`
+    // genau: Zwei deckungsgleiche Kanten treffen sich im Bild nur so genau (zwei Kanten je diese
+    // Genauigkeit, dazu Rundung).
+    let freeform_edges = v.strokes.iter().any(|s| {
+        matches!(s.curve, planora_kernel::Curve::Nurbs(_))
+            && matches!(s.origin, planora_drawing::stroke::StrokeOrigin::Edge { .. })
+    });
     let cover = COVER_FACTOR * gtol;
+    // Nur für die Lücken in (a): Dort zählt ein deckungsgleiches Stück im Rahmen dieser
+    // Genauigkeit; (f) bleibt bei der engen Toleranz (die Bibliothek legt Freiformkanten im
+    // Rahmen von `NURBS_EDGE_TOL` zusammen, nicht weiter).
+    let gap_cover = if freeform_edges {
+        cover.max(8.0 * planora_kernel::NURBS_EDGE_TOL)
+    } else {
+        cover
+    };
     let covered = |q: DVec2, only_visible: bool| -> f64 {
         let mut best = f64::INFINITY;
         for (k, ((_, lo, hi), p)) in polys.iter().zip(&v.pieces).enumerate() {
@@ -467,14 +489,14 @@ pub fn check_lines(solids: &[&Solid], kind: ViewKind, v: &ViewLines) -> Report {
                 let t = g0 + (g1 - g0) * (k as f64 + 0.5) / gap_samples as f64;
                 let x = s.curve.point(t);
                 let q = proj(&basis, x);
-                if covered(q, false) > cover {
+                if covered(q, false) > gap_cover {
                     r.errors.push(format!(
                         "(a) Strich {i}: Lücke [{g0}, {g1}] bei ({:.4}, {:.4}) ohne Stück",
                         q.x, q.y
                     ));
                     break;
                 }
-                if covered(q, true) > cover {
+                if covered(q, true) > gap_cover {
                     let h = 1e-6 * (g1 - g0).abs().max(1e-12);
                     let tan = (s.curve.point(t + h) - s.curve.point(t - h)).normalize_or_zero();
                     if let Judged::Differs(true) = judge(&scene, 4.0 * chord, near, x, tan, false) {

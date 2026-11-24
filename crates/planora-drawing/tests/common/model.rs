@@ -1644,7 +1644,9 @@ pub const CSG_TILT: f64 = 1e-5;
 /// sonst `None`. Auch Material dünner als jede Netzgenauigkeit (ein Strahl, der eine Kugel knapp
 /// innerhalb ihres Umrisses durchläuft) wird so erkannt.
 pub struct CsgJudge {
-    pub csg: Csg,
+    /// Vorzeichenbehaftete Abstandsschätzung (innen negativ): das Formelmodell eines
+    /// Zufallskörpers oder eine eigene Funktion ([`CsgJudge::from_fn`]).
+    f: Box<dyn Fn(DVec3) -> f64>,
     pub extent: f64,
     lo: DVec3,
     hi: DVec3,
@@ -1653,6 +1655,12 @@ pub struct CsgJudge {
 impl CsgJudge {
     /// `lo`, `hi`: Hüllbox des Körpers.
     pub fn new(csg: Csg, s: &Solid) -> CsgJudge {
+        CsgJudge::from_fn(move |p| csg.f(p), s)
+    }
+
+    /// Wie [`CsgJudge::new`] mit einer eigenen Abstandsschätzung `f` (innen negativ, höchstens
+    /// so steil wie der wahre Abstand), etwa für gedrehte Grundkörper (C15).
+    pub fn from_fn(f: impl Fn(DVec3) -> f64 + 'static, s: &Solid) -> CsgJudge {
         let mut lo = DVec3::splat(f64::INFINITY);
         let mut hi = DVec3::splat(f64::NEG_INFINITY);
         for (_, e) in s.edges.iter() {
@@ -1668,10 +1676,23 @@ impl CsgJudge {
                 hi = hi.max(frame.origin + DVec3::splat(radius));
             }
         }
+        // Auch gekrümmte Flächen, die über ihre Kanten hinausreichen (Torus, gedrehte Grundkörper):
+        // Hüllbox des Netzes dazu.
+        if let Ok(m) = planora_mesh::tessellate(
+            s,
+            &planora_mesh::TessellationOptions {
+                chord_tolerance: 0.05,
+            },
+        ) {
+            for p in &m.positions {
+                lo = lo.min(*p);
+                hi = hi.max(*p);
+            }
+        }
         let d = hi - lo;
         let extent = d.x.max(d.y).max(d.z).max(1e-9);
         CsgJudge {
-            csg,
+            f: Box::new(f),
             extent,
             lo: lo - DVec3::splat(0.1 * extent),
             hi: hi + DVec3::splat(0.1 * extent),
@@ -1681,7 +1702,7 @@ impl CsgJudge {
     /// Kleinstes `f` auf `[a, b]` des Strahls (Goldener Schnitt).
     fn golden(&self, p: DVec3, dir: DVec3, mut a: f64, mut b: f64) -> f64 {
         let g = 0.5 * (5f64.sqrt() - 1.0);
-        let f = |s: f64| self.csg.f(p + dir * s);
+        let f = |s: f64| (self.f)(p + dir * s);
         let (mut x1, mut x2) = (b - g * (b - a), a + g * (b - a));
         let (mut f1, mut f2) = (f(x1), f(x2));
         for _ in 0..80 {
@@ -1722,9 +1743,7 @@ impl CsgJudge {
         let n = (s_end / h).ceil().max(1.0) as usize;
         let at = |i: usize| s_end * i as f64 / n as f64;
         let s0 = 1e-9 * self.extent;
-        let vals: Vec<f64> = (0..=n)
-            .map(|i| self.csg.f(p + dir * at(i).max(s0)))
-            .collect();
+        let vals: Vec<f64> = (0..=n).map(|i| (self.f)(p + dir * at(i).max(s0))).collect();
         let step = s_end / n as f64;
         let mut free = true;
         for i in 0..n {

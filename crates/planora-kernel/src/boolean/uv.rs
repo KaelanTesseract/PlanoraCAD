@@ -83,15 +83,24 @@ fn unwrap_near(x: f64, reference: f64, period: f64) -> f64 {
 /// gilt der Zielwert als schon erreicht, und es folgt ein voller Umlauf.
 const POLE_JUMP_MIN_RATIO: f64 = 1e-9 / TAU;
 
+/// Abstand im Raum, bis zu dem der Rest eines Sprungs über einen Pol als schon erreicht gilt
+/// (C15): Freiformkanten (Schnittkurven in allgemeiner Lage) treffen die Naht nur auf
+/// `NURBS_EDGE_TOL` genau; nahe einer Kegelspitze ist das ein Winkel von einigen 1e-6 der Periode.
+/// Als kleiner Sprung schlösse die Schleife schräg durch die Fläche (Taschenkegel mit Spitze im
+/// Körper, Zeichnungsreihe Startwert 160). Ein genauer schmaler Sektor ist breiter und behält
+/// seinen kleinen Sprung.
+const POLE_REACHED_DIST: f64 = 2.0 * NURBS_EDGE_TOL;
+
 /// Sprung über einen Pol: von `u_at` in Richtung `dir` (±1) bis zum nächsten Wert, der
 /// `u_target` modulo der Periode entspricht (mindestens ein Stück, höchstens ein voller Umlauf).
-/// Ohne Periode in `u` (offene Freiformfläche mit Pol) direkt zum Zielwert.
-fn pole_jump(u_at: f64, u_target: f64, dir: f64, period: Option<f64>) -> f64 {
+/// Ohne Periode in `u` (offene Freiformfläche mit Pol) direkt zum Zielwert. `reached`: Der Rest
+/// liegt im Raum innerhalb [`POLE_REACHED_DIST`] (voller Umlauf).
+fn pole_jump(u_at: f64, u_target: f64, dir: f64, period: Option<f64>, reached: bool) -> f64 {
     let Some(period) = period else {
         return u_target;
     };
     let mut delta = ((u_target - u_at) * dir).rem_euclid(period);
-    if delta < POLE_JUMP_MIN_RATIO * period {
+    if reached || delta < POLE_JUMP_MIN_RATIO * period {
         delta = period;
     }
     u_at + dir * delta
@@ -198,6 +207,10 @@ pub fn points_to_uv_indexed(
             .copied()
             .find(|pv| (v - pv).abs() < 1e-7 * (1.0 + pv.abs()))
     };
+    // Liegt der Punkt (u, v), auf `u_at` gedreht, im Raum noch bei sich selbst?
+    let reached = |u_at: f64, u: f64, v: f64| {
+        surface.point(u_at, v).distance(surface.point(u, v)) <= POLE_REACHED_DIST
+    };
     // Laufrichtung in `u` am Pol: von unten kommend −s, von oben kommend +s.
     let pole_dir = |v_before: f64, v_pole: f64| if v_before < v_pole { -s } else { s };
 
@@ -229,7 +242,13 @@ pub fn points_to_uv_indexed(
             None => (u0, v0),
         };
         if let Some((vp, v_before, u_at)) = pole.take() {
-            let u_new = pole_jump(u_at, u0, pole_dir(v_before, vp), u_period);
+            let u_new = pole_jump(
+                u_at,
+                u0,
+                pole_dir(v_before, vp),
+                u_period,
+                reached(u_at, u0, v0),
+            );
             out.push((DVec2::new(u_at, vp), None));
             out.push((DVec2::new(u_new, vp), None));
             u = u_new;
@@ -239,11 +258,17 @@ pub fn points_to_uv_indexed(
     }
     if let Some((vp, v_before, u_at)) = pole {
         // Schleife endet am Pol: über den Pol zum Anfangspunkt zurück.
-        let first_u = out.first().map(|p| p.0.x).unwrap_or(0.0);
+        let first = out.first().map(|p| p.0).unwrap_or(DVec2::ZERO);
         out.push((DVec2::new(u_at, vp), None));
         out.push((
             DVec2::new(
-                pole_jump(u_at, first_u, pole_dir(v_before, vp), u_period),
+                pole_jump(
+                    u_at,
+                    first.x,
+                    pole_dir(v_before, vp),
+                    u_period,
+                    reached(u_at, first.x, first.y),
+                ),
                 vp,
             ),
             None,
@@ -355,5 +380,51 @@ fn winding_containment(f: &FaceGeom, polys: &[Vec<DVec2>], (u, v): (f64, f64)) -
         Containment::Inside
     } else {
         Containment::Outside
+    }
+}
+
+#[cfg(test)]
+mod pole_tests {
+    use super::*;
+
+    /// C15: Kommt die Schleife an der Naht zum Pol und beginnt sie (genähert) knapp daneben,
+    /// geht der Sprung über den Pol einen vollen Umlauf, nicht nur den winzigen Rest.
+    #[test]
+    fn a_nearly_reached_seam_takes_a_full_turn_over_the_pole() {
+        let jump = pole_jump(-TAU, 6e-6, 1.0, Some(TAU), true);
+        assert!(jump.abs() < 1e-3, "zurück an der Naht: {jump}");
+        assert!(jump - (-TAU) > 0.5 * TAU, "voller Umlauf erwartet: {jump}");
+        // Ein echter Sprung über einen großen Winkel bleibt, wie er ist.
+        let jump = pole_jump(0.0, 1.0, 1.0, Some(TAU), false);
+        assert!((jump - 1.0).abs() < 1e-12, "{jump}");
+    }
+
+    /// Prüferfund C15: Ein genauer, schmaler Kegelsektor (Winkel 6e-5, am Grundkreis 3e-4 mm
+    /// breit) behält seinen kleinen Sprung über die Spitze; nur ein Rest innerhalb der
+    /// Kantentoleranz gilt als schon erreicht.
+    #[test]
+    fn a_narrow_exact_sector_keeps_its_small_jump_over_the_apex() {
+        let cone = Surface::Cone {
+            frame: planora_math::Frame::WORLD,
+            radius: 5.0,
+            slope: -1.0,
+        };
+        let d = 6e-5;
+        let pts = [
+            cone.point(0.0, 0.0),
+            cone.point(d, 0.0),
+            cone.point(0.0, 5.0),
+        ];
+        let span = |same: bool| {
+            let uv = points_to_uv(&cone, same, &pts);
+            let (lo, hi) = uv
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| {
+                    (a.min(p.x), b.max(p.x))
+                });
+            hi - lo
+        };
+        let best = span(true).min(span(false));
+        assert!(best < 1e-3, "kleinster Umfang in u: {best}");
     }
 }
