@@ -57,6 +57,8 @@ use std::time::{Duration, Instant};
 
 /// Wie oft die App ohne Eingaben neu zeichnet, damit die Autosicherung auch im Leerlauf läuft.
 const AUTOSAVE_REPAINT: Duration = Duration::from_secs(30);
+/// Die Mitschrift im Laufmarker wird höchstens so oft erneuert ([`PlanoraApp::run_marker_tick`]).
+pub const RUN_MARKER_EVERY: Duration = Duration::from_secs(1);
 
 /// So lange wartet das Programmende ([`eframe::App::on_exit`]) höchstens auf eine gerade
 /// entstehende Miniatur, damit sie noch gespeichert wird (danach wird nur ihre Marke entfernt).
@@ -213,6 +215,8 @@ pub struct PlanoraApp {
     /// Laufmarker dieser Instanz ([`crate::crash::start_run`]); [`eframe::App::on_exit`] löscht
     /// ihn.
     run_marker: Option<RunMarker>,
+    /// Wann die Mitschrift zuletzt in den Laufmarker ging ([`PlanoraApp::run_marker_tick`]).
+    run_marker_at: Option<Instant>,
     /// Schriftliste für Skizzentext (Skizzen 8, Spec G4): im Programm ab dem Start im
     /// Hintergrund aufgebaut ([`crate::fonts_library::start`]), in Tests die mitgelieferten
     /// Schriften ([`PlanoraApp::set_font_state`]). Jedes Bild fragt sie ab.
@@ -498,6 +502,7 @@ impl PlanoraApp {
             // Nur das Programm zeigt den Hinweis (in `new`); Tests schalten ihn bei Bedarf ein.
             catalog_hint: CatalogHintState::default(),
             run_marker: None,
+            run_marker_at: None,
             // Tests hängen nie an Systemschriften (Spec G7); das Programm setzt in `new` den
             // Hintergrund-Start.
             fonts: FontState::Ready(bundled_fonts()),
@@ -548,6 +553,26 @@ impl PlanoraApp {
     #[doc(hidden)]
     pub fn set_run_marker(&mut self, marker: Option<RunMarker>) {
         self.run_marker = marker;
+    }
+
+    /// Schreibt höchstens einmal je [`RUN_MARKER_EVERY`] die Mitschrift (Schritte, Protokoll,
+    /// Dokument) in den Laufmarker, damit der nächste Start auch nach einem Ende ohne Bericht
+    /// (`abort`, `__fastfail`, Beenden von außen) einen Bericht schreiben kann. Unverändertes
+    /// schreibt [`RunMarker::refresh`] nicht noch einmal.
+    pub fn run_marker_tick(&mut self, now: Instant) {
+        let Some(marker) = self.run_marker.as_mut() else {
+            return;
+        };
+        if self
+            .run_marker_at
+            .is_some_and(|t| now.saturating_duration_since(t) < RUN_MARKER_EVERY)
+        {
+            return;
+        }
+        if let Some(text) = crate::crash::current_run_snapshot() {
+            marker.refresh(&text);
+            self.run_marker_at = Some(now);
+        }
     }
 
     /// Gibt es das automatische Aktualisieren (für Tests der Entscheidung ohne `cfg`)?
@@ -3123,6 +3148,7 @@ impl eframe::App for PlanoraApp {
             handle_close_request(ctx, &mut self.ws, &mut self.close_sent);
         }
         self.ws.autosave_tick(Instant::now());
+        self.run_marker_tick(Instant::now());
         ctx.request_repaint_after(AUTOSAVE_REPAINT);
     }
 

@@ -857,6 +857,92 @@ fn inner_faces_by_parity(cdt: &Cdt) -> Vec<bool> {
     state.into_iter().map(|s| s.unwrap_or(false)).collect()
 }
 
+/// Dreiecke, deren Höhe über der längsten Seite kleiner als dieser Anteil der Seite ist, gelten
+/// als Splitter ([`flip_collinear_slivers`]).
+const SLIVER_REL: f64 = 1e-5;
+
+/// Höhe über der längsten Seite im Verhältnis zu ihr (0: drei Punkte auf einer Geraden) und die
+/// längste Seite als Paar von Positionen im Dreieck (`k` → `k+1`).
+fn sliver_shape(t: [usize; 3], pts: &[DVec3]) -> (f64, usize) {
+    let p = |i: usize| pts[t[i]];
+    let len = |k: usize| p(k).distance(p((k + 1) % 3));
+    let k = (0..3)
+        .max_by(|&a, &b| len(a).total_cmp(&len(b)))
+        .unwrap_or(0);
+    let l = len(k);
+    if l == 0.0 {
+        return (0.0, k);
+    }
+    ((p(1) - p(0)).cross(p(2) - p(0)).length() / (l * l), k)
+}
+
+/// Entfernt Splitter aus drei Punkten auf einer Geraden durch Tauschen ihrer längsten Seite mit
+/// dem Nachbardreieck. An der Kegelspitze verbindet die Triangulierung im Parameterraum die
+/// Spitze mit mehreren Punkten derselben Mantellinie; im Raum liegen die drei auf einer Geraden,
+/// die Normale des Dreiecks ist Zufall (falsche Umrisskanten in Zeichnung und Bild). Liegt der
+/// mittlere Punkt `m` auf der langen Seite `x`–`y` und ist `r` die dritte Ecke des Nachbarn, so
+/// werden (x,y,m) und (y,x,r) zu (x,r,m) und (r,y,m): kein T-Stoß, Netz bleibt dicht. Getauscht
+/// wird nur, wenn beide neuen Dreiecke keine Splitter sind; Dreiecke mit zusammenfallenden
+/// Ecken sind schon vorher entfallen.
+fn flip_collinear_slivers(tris: &mut [[usize; 3]], pts: &[DVec3]) {
+    use std::collections::HashMap;
+    let mut edges: HashMap<(usize, usize), usize> = HashMap::new();
+    for (i, t) in tris.iter().enumerate() {
+        for k in 0..3 {
+            edges.insert((t[k], t[(k + 1) % 3]), i);
+        }
+    }
+    // Jeder Tausch macht zwei Dreiecke besser; die Grenze schützt nur vor Endlosschleifen.
+    let mut budget = 4 * tris.len();
+    let mut changed = true;
+    while changed && budget > 0 {
+        changed = false;
+        for i in 0..tris.len() {
+            let t = tris[i];
+            let (flat, k) = sliver_shape(t, pts);
+            if flat >= SLIVER_REL {
+                continue;
+            }
+            let (x, y, m) = (t[k], t[(k + 1) % 3], t[(k + 2) % 3]);
+            let Some(&j) = edges.get(&(y, x)) else {
+                continue;
+            };
+            let n = tris[j];
+            let Some(r) = n.iter().copied().find(|&v| v != x && v != y) else {
+                continue;
+            };
+            let (a, c) = ([x, r, m], [r, y, m]);
+            if r == m
+                || edges.contains_key(&(r, m))
+                || edges.contains_key(&(m, r))
+                || sliver_shape(a, pts).0 < SLIVER_REL
+                || sliver_shape(c, pts).0 < SLIVER_REL
+            {
+                continue;
+            }
+            for (tri, idx) in [(t, i), (n, j)] {
+                for q in 0..3 {
+                    if edges.get(&(tri[q], tri[(q + 1) % 3])) == Some(&idx) {
+                        edges.remove(&(tri[q], tri[(q + 1) % 3]));
+                    }
+                }
+            }
+            tris[i] = a;
+            tris[j] = c;
+            for (tri, idx) in [(a, i), (c, j)] {
+                for q in 0..3 {
+                    edges.insert((tri[q], tri[(q + 1) % 3]), idx);
+                }
+            }
+            changed = true;
+            budget -= 1;
+            if budget == 0 {
+                break;
+            }
+        }
+    }
+}
+
 /// Triangulierung einer beschnittenen gekrümmten Fläche im Parameterraum.
 /// `rings` sind die gemeinsamen 3D-Randpunkte je Schleife (aus den Kantenpolylinien, Reihenfolge wie
 /// `g.loops`), damit Nachbarflächen exakt dieselben Randpunkte haben.
@@ -1008,6 +1094,7 @@ pub fn tessellate_trimmed(
             [idx[0], idx[2], idx[1]]
         });
     }
+    flip_collinear_slivers(&mut tris, &b.pts3);
 
     ensure_room(mesh.positions.len(), b.pts3.len())?;
     ensure_room(mesh.indices.len(), tris.len().saturating_mul(3))?;

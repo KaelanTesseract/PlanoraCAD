@@ -254,7 +254,7 @@ fn stale_marker_without_report_is_unexpected() {
     let data = data_dir("planora-lauf-unerwartet");
     let stale = stale_marker(&data, OTHER, Duration::from_secs(60));
     let (marker, finding) = start_run(&data, OWN);
-    assert_eq!(finding, StartFinding::Unexpected);
+    assert_eq!(finding, StartFinding::Unexpected(None));
     assert!(!stale.exists(), "liegengebliebener Marker gelöscht");
     marker.unwrap().finish();
     // Beim nächsten Start ist alles sauber.
@@ -272,6 +272,118 @@ fn stale_marker_with_newer_report_is_crashed() {
     let (marker, finding) = start_run(&data, OWN);
     assert_eq!(finding, StartFinding::Crashed(vec![rep]));
     assert!(!stale.exists());
+    marker.unwrap().finish();
+}
+
+/// Endet ein Lauf ohne Bericht (`abort`, `__fastfail`, Beenden von außen), zeigt der nächste
+/// Start wie bisher nur den Hinweis; die Mitschrift im Marker (Schritte, Protokoll, Dokument)
+/// liegt als `unerwartet-….txt` bei und geht mit „Als Rückmeldung öffnen“ mit. Sie zählt nicht
+/// als Absturzbericht: Der Start danach ist sauber.
+#[test]
+fn an_unclean_end_leaves_a_log_from_the_marker() {
+    let data = data_dir("planora-lauf-mitschrift");
+    let (marker, _) = start_run(&data, OTHER);
+    let mut marker = marker.expect("Marker angelegt");
+    let doc = PathBuf::from("C:/Projekte/Halter/Teil.planora");
+    let text = crash::run_snapshot(
+        "0.2.0-dev.7",
+        &[planora_app::diag::Step {
+            time: "14:03:20".into(),
+            label: "Extrusion ändern".into(),
+        }],
+        &["2026-11-24T13:03:19Z INFO Letzte Zeile vor dem Ende".into()],
+        Some(&doc),
+    );
+    assert!(marker.refresh(&text), "erste Mitschrift wird geschrieben");
+    assert!(
+        !marker.refresh(&text),
+        "gleiche Mitschrift nicht noch einmal"
+    );
+    // Prozess endet hart: Marker bleibt liegen, kein Bericht.
+    drop(marker);
+    let (marker, finding) = start_run(&data, OWN);
+    let StartFinding::Unexpected(Some(log)) = finding else {
+        panic!("erwartet Unexpected mit Mitschrift, war {finding:?}");
+    };
+    assert!(
+        log.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(crash::UNCLEAN_PREFIX)
+    );
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.contains(crash::UNCLEAN_MESSAGE), "{text}");
+    assert!(text.contains("Version: 0.2.0-dev.7"), "{text}");
+    assert!(text.contains("14:03:20 Extrusion ändern"), "{text}");
+    assert!(text.contains("Letzte Zeile vor dem Ende"), "{text}");
+    assert!(text.contains("Document: Teil.planora"), "{text}");
+    assert!(
+        !text.contains("Started:"),
+        "Startzeit nur im Marker: {text}"
+    );
+    assert_eq!(
+        crash::report_project(&log),
+        Some(doc),
+        "voller Pfad in der Begleitdatei"
+    );
+    assert!(!marker_path(&data, OTHER).exists());
+    marker.unwrap().finish();
+    let (marker, finding) = start_run(&data, OWN);
+    assert_eq!(
+        finding,
+        StartFinding::Clean,
+        "Mitschrift zählt nicht als Absturz"
+    );
+    marker.unwrap().finish();
+    // Die Rückfrage bleibt der Hinweis, bietet aber die Mitschrift zum Anhängen.
+    let notice = CrashNotice::from_finding(
+        &StartFinding::Unexpected(Some(log.clone())),
+        data.join(CRASH_DIR),
+    )
+    .unwrap();
+    assert!(!notice.crashed());
+    assert_eq!(notice.newest(), Some(log.as_path()));
+}
+
+/// Ein Bericht, der während des Laufs entstand, ist neuer als dessen Beginn, auch wenn die
+/// Mitschrift danach noch erneuert wurde: Absturz, keine Mitschrift.
+#[test]
+fn a_report_during_a_run_wins_over_its_later_snapshot() {
+    let data = data_dir("planora-lauf-bericht-mitschrift");
+    let (marker, _) = start_run(&data, OTHER);
+    let mut marker = marker.unwrap();
+    let rep = report(&data, "0.2.0", None);
+    marker.refresh(&crash::run_snapshot("0.2.0", &[], &["danach".into()], None));
+    drop(marker);
+    let (marker, finding) = start_run(&data, OWN);
+    assert_eq!(finding, StartFinding::Crashed(vec![rep]));
+    marker.unwrap().finish();
+}
+
+/// Eine kaputte oder fremde Mitschrift ergibt keinen Bericht, nur den Hinweis.
+#[test]
+fn a_marker_without_a_readable_snapshot_stays_unexpected() {
+    let data = data_dir("planora-lauf-kaputt");
+    let p = marker_path(&data, OTHER);
+    std::fs::write(&p, b"irgendwas\nohne Kopf").unwrap();
+    set_age(&p, Duration::from_secs(60));
+    let (marker, finding) = start_run(&data, OWN);
+    assert_eq!(finding, StartFinding::Unexpected(None));
+    assert!(reports_in(&data.join(CRASH_DIR)).is_empty());
+    marker.unwrap().finish();
+}
+
+/// Ein sauberes Ende hinterlässt trotz Mitschrift keinen Bericht.
+#[test]
+fn a_clean_end_after_a_snapshot_writes_no_report() {
+    let data = data_dir("planora-lauf-mitschrift-sauber");
+    let (marker, _) = start_run(&data, OTHER);
+    let mut marker = marker.unwrap();
+    marker.refresh(&crash::run_snapshot("0.2.0", &[], &["x".into()], None));
+    marker.finish();
+    let (marker, finding) = start_run(&data, OWN);
+    assert_eq!(finding, StartFinding::Clean);
+    assert!(reports_in(&data.join(CRASH_DIR)).is_empty());
     marker.unwrap().finish();
 }
 
@@ -583,7 +695,7 @@ fn project_checkbox_copies_the_document_into_the_bundle_only_when_checked() {
 #[test]
 fn unexpected_shows_the_short_hint_without_report() {
     let mut r = Rig::with("planora-rueckfrage-unerwartet", SIZE, |_| {
-        StartFinding::Unexpected
+        StartFinding::Unexpected(None)
     });
     assert!(r.sees(&unexpected_title()), "{:?}", r.texts());
     assert!(r.sees_part(&unexpected_text()));
@@ -618,7 +730,7 @@ fn fits_at_1920x1080_and_no_panic_at_800x600() {
     r.settle();
     assert!(r.notice_shown());
     let mut r = Rig::with("planora-rueckfrage-klein-unerwartet", SMALL, |_| {
-        StartFinding::Unexpected
+        StartFinding::Unexpected(None)
     });
     r.settle();
     assert!(r.sees(&unexpected_title()));

@@ -241,7 +241,7 @@ pub(crate) struct AppendMark {
     pub(crate) vars: usize,
     points: usize,
     curves: usize,
-    constraints: usize,
+    pub(crate) constraints: usize,
     patterns: usize,
     texts: usize,
 }

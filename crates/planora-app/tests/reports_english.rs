@@ -275,7 +275,8 @@ fn crash_prompt_speaks_english_and_its_summary_follows_the_language() {
         assert_english("Absturz-Rückfrage (Bericht)", &seen, &[], &[]);
         assert_has("Absturz-Rückfrage (Bericht)", &seen, &["Hide report"]);
         // Ende ohne Bericht.
-        let mut u = CrashNotice::from_finding(&StartFinding::Unexpected, dir.clone()).unwrap();
+        let mut u =
+            CrashNotice::from_finding(&StartFinding::Unexpected(None), dir.clone()).unwrap();
         u.open = true;
         let seen = (0..3).map(|_| frame_crash(&mut s, &mut u)).last().unwrap();
         assert_english("Unerwartetes Ende", &seen, &[], &[]);

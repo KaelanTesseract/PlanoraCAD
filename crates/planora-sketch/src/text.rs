@@ -1405,25 +1405,40 @@ impl Sketch {
             .filter(|(_, k)| k.alive && k.internal && is_frame_axis(&k.kind, &lines))
             .map(|(i, _)| i)
             .collect();
-        let mut trial = self.clone();
-        for k in level {
-            trial.constraints[k].alive = false;
+        // Ohne Kopie (offener Punkt C12): Bis zum Lösen ändern sich nur Werte und die Lebendigkeit
+        // der Rahmenachsen; gescheitert (auch nach einer Panik) wird beides zurückgenommen.
+        let snap = self.value_snapshot();
+        for &k in &level {
+            self.constraints[k].alive = false;
         }
-        trial.touch_structure();
-        // Ecke 0 steht schon; die anderen genau auf die gedrehte Lage.
-        for (&p, at) in corners.iter().zip(targets).skip(1) {
-            if lift.is_some() {
-                trial.set_point_xyz(p, at)?;
-            } else {
-                trial.set_point_xy(p, at.x, at.y)?;
+        self.touch_structure();
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Ecke 0 steht schon; die anderen genau auf die gedrehte Lage.
+            for (&p, at) in corners.iter().zip(targets).skip(1) {
+                if lift.is_some() {
+                    self.set_point_xyz(p, at)?;
+                } else {
+                    self.set_point_xy(p, at.x, at.y)?;
+                }
             }
+            if self.solve_holding_connected(&corners) {
+                Ok(())
+            } else {
+                Err(SketchError::InvalidInput(tr!("sketch-text-angle-held")))
+            }
+        }));
+        if matches!(run, Ok(Ok(()))) {
+            self.refresh_texts();
+            return Ok(());
         }
-        if !trial.solve_holding_connected(&corners) {
-            return Err(SketchError::InvalidInput(tr!("sketch-text-angle-held")));
+        for &k in &level {
+            self.constraints[k].alive = true;
         }
-        trial.refresh_texts();
-        *self = trial;
-        Ok(())
+        self.restore_values(snap);
+        match run {
+            Ok(r) => r,
+            Err(p) => std::panic::resume_unwind(p),
+        }
     }
 
     /// Legt den Rahmen mit den Ecken `corners` an (Spec B4): vier Konstruktionslinien, Linie `i`
