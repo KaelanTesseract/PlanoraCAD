@@ -52,6 +52,7 @@ pub mod keymap;
 pub mod local_time;
 pub mod logo;
 pub mod lost_projections_dialog;
+pub mod main_window;
 pub mod mesh_body;
 pub mod msg;
 pub mod parameter_dialog;

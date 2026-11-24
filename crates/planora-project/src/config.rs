@@ -105,6 +105,15 @@ pub struct Config {
         deserialize_with = "lenient_pending_update"
     )]
     pub update_pending: Option<PendingUpdate>,
+    /// Programmfenster beim letzten sauberen Schließen (Größe, Lage, maximiert, Skalierung des
+    /// Monitors), damit das Programm wieder so öffnet. Unbrauchbares → keines; ohne wird nichts
+    /// geschrieben.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_main_window"
+    )]
+    pub main_window: Option<MainWindow>,
     /// Gewähltes Design (Ansicht → Helles/Dunkles Design): [`THEME_LIGHT`] oder [`THEME_DARK`].
     /// Keine Wahl, ein falscher Typ oder ein anderer Text → keine (es gilt das dunkle Design);
     /// ohne Wahl wird nichts geschrieben.
@@ -295,6 +304,25 @@ pub struct WindowState {
 }
 
 impl WindowState {
+    /// Wie [`WindowState::sanitized`], aber die Lage bleibt auch links oder oberhalb des
+    /// Hauptmonitors (negativ), solange sie endlich ist und ihr Betrag höchstens
+    /// [`MAX_WINDOW_POS`] beträgt; ob sie auf einem Monitor liegt, prüft der Start.
+    pub fn sanitized_any_monitor(self) -> Option<WindowState> {
+        let (x, y) = (self.x, self.y);
+        let mut w = WindowState {
+            x: None,
+            y: None,
+            ..self
+        }
+        .sanitized()?;
+        let ok = |p: Option<f32>| p.filter(|p| p.is_finite() && p.abs() <= MAX_WINDOW_POS);
+        if let (Some(x), Some(y)) = (ok(x), ok(y)) {
+            w.x = Some(x);
+            w.y = Some(y);
+        }
+        Some(w)
+    }
+
     /// Nur Plausibles: ohne endliche Größe über 0 keines; die Größe höchstens
     /// [`MAX_WINDOW_SIZE`]. Die Lage bleibt nur, wenn sie endlich ist, ihr Betrag höchstens
     /// [`MAX_WINDOW_POS`] beträgt und das Fenster wenigstens zum Teil im Bereich 0 bis
@@ -321,6 +349,53 @@ impl WindowState {
             maximized: self.maximized,
         })
     }
+}
+
+/// Gemerktes Programmfenster: [`WindowState`] (bei maximiertem Fenster Größe und Lage im
+/// normalen Zustand) und die Skalierung des Monitors (physische Pixel je Punkt), auf dem es lag.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MainWindow {
+    #[serde(flatten)]
+    pub window: WindowState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
+}
+
+/// Liest `main_window` aus jedem JSON-Wert ([`WindowState::sanitized_any_monitor`]); eine
+/// Skalierung zählt nur,
+/// wenn sie endlich und größer als 0 ist.
+fn lenient_main_window<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<MainWindow>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let num = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .map(|n| n as f32)
+    };
+    let window = match (num("width"), num("height")) {
+        (Some(width), Some(height)) => WindowState {
+            x: num("x"),
+            y: num("y"),
+            width,
+            height,
+            maximized: value
+                .get("maximized")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        }
+        .sanitized_any_monitor(),
+        _ => None,
+    };
+    Ok(window.map(|window| MainWindow {
+        window,
+        scale: value
+            .get("scale")
+            .and_then(serde_json::Value::as_f64)
+            .map(|n| n as f32)
+            .filter(|s| s.is_finite() && *s > 0.0),
+    }))
 }
 
 /// Liest ein Fenster aus einem JSON-Wert und prüft es ([`WindowState::sanitized`]): ohne
@@ -360,6 +435,7 @@ impl Default for Config {
             last_plugin_check: None,
             skipped_version: None,
             update_pending: None,
+            main_window: None,
             theme: None,
             verbose_log: false,
             catalog_hint_shown: false,
