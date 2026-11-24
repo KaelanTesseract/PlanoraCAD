@@ -91,6 +91,9 @@ pub struct CrashNotice {
     pub viewing: bool,
     /// Bereinigter Text des neuesten Berichts.
     text: String,
+    /// Ende ohne Bericht ([`StartFinding::Unexpected`]): nur der Hinweis; eine Mitschrift des
+    /// Laufs geht als Bericht mit „Als Rückmeldung öffnen“ mit.
+    unexpected: bool,
     /// Angaben für die Zeile mit Zeit und Version des neuesten Berichts; der Text entsteht
     /// erst beim Zeichnen, in der Sprache des Fensters.
     summary: Summary,
@@ -110,8 +113,9 @@ impl CrashNotice {
         let reports = match finding {
             StartFinding::Clean => return None,
             StartFinding::Crashed(r) => r.clone(),
-            StartFinding::Unexpected => Vec::new(),
+            StartFinding::Unexpected(log) => log.iter().cloned().collect(),
         };
+        let unexpected = matches!(finding, StartFinding::Unexpected(_));
         let raw = reports.first().and_then(|p| read(p)).unwrap_or_default();
         let text = feedback::sanitize(&raw, &Personal::from_env(Vec::new()));
         let summary = summary(&text, reports.len());
@@ -121,13 +125,14 @@ impl CrashNotice {
             open: false,
             viewing: false,
             text,
+            unexpected,
             summary,
         })
     }
 
     /// Ein Absturz mit Bericht (sonst ein Ende ohne Bericht).
     pub fn crashed(&self) -> bool {
-        !self.reports.is_empty()
+        !self.unexpected && !self.reports.is_empty()
     }
 
     /// Der neueste Bericht.

@@ -1,16 +1,20 @@
-//! Absturzbericht bei `abort`: Der Test startet sich selbst als Kindprozess, der den Abfang
-//! einrichtet und `abort()` der C-Laufzeit ruft; danach liegt ein Bericht im Ordner.
+//! Ende durch `abort`: Der Test startet sich selbst als Kindprozess, der einen Laufmarker mit
+//! Mitschrift anlegt und `abort()` der C-Laufzeit ruft. Der nächste Start findet den Marker und
+//! zeigt den Hinweis mit der Mitschrift (kein Abfang im Prozess: Er bräuchte Speicher und könnte
+//! nach einem Heap-Fehler hängen bleiben).
 
 #![allow(unsafe_code)]
 
 mod common;
 
-use planora_app::crash::{self, ABORT_MESSAGE, UserMask};
+use planora_app::crash::{self, StartFinding, start_run};
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Umgebungsvariable: Ordner für den Bericht; gesetzt nur im Kindprozess.
+/// Umgebungsvariable: Datenordner; gesetzt nur im Kindprozess.
 const CHILD_DIR: &str = "PLANORA_TEST_ABORT_DIR";
+/// Prozessnummer, die es nie gibt (größer als jede echte).
+const OWN: u32 = 4_000_000_001;
 
 unsafe extern "C" {
     fn abort() -> !;
@@ -18,10 +22,20 @@ unsafe extern "C" {
     fn _set_abort_behavior(flags: u32, mask: u32) -> u32;
 }
 
-/// Im Kindprozess: Abfang einrichten und abbrechen.
+/// Im Kindprozess: Marker mit Mitschrift anlegen und abbrechen.
 fn child(dir: PathBuf) -> ! {
-    crash::install_abort_handler(dir, UserMask::none());
-    planora_app::diag::step("Vor dem Abbruch");
+    let (marker, _) = start_run(&dir, std::process::id());
+    let mut marker = marker.expect("Marker im Kindprozess");
+    let text = crash::run_snapshot(
+        "0.2.0-dev.7",
+        &[planora_app::diag::Step {
+            time: "09:15:00".into(),
+            label: "Vor dem Abbruch".into(),
+        }],
+        &[],
+        None,
+    );
+    assert!(marker.refresh(&text));
     // Unter Windows ohne Meldungsfenster und ohne Windows-Fehlerberichterstattung.
     #[cfg(windows)]
     unsafe {
@@ -31,27 +45,28 @@ fn child(dir: PathBuf) -> ! {
 }
 
 #[test]
-fn abort_writes_a_report() {
+fn an_abort_leaves_the_marker_and_the_next_start_offers_its_log() {
     if let Ok(dir) = std::env::var(CHILD_DIR) {
         child(PathBuf::from(dir));
     }
     let dir = common::temp_root("planora-abort");
     std::fs::create_dir_all(&dir).unwrap();
     let status = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "abort_writes_a_report", "--test-threads=1"])
+        .args([
+            "--exact",
+            "an_abort_leaves_the_marker_and_the_next_start_offers_its_log",
+            "--test-threads=1",
+        ])
         .env(CHILD_DIR, &dir)
         .status()
         .unwrap();
     assert!(!status.success(), "Kindprozess bricht ab");
-    let reports: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "txt"))
-        .collect();
-    assert_eq!(reports.len(), 1, "genau ein Bericht: {reports:?}");
-    let text = std::fs::read_to_string(&reports[0]).unwrap();
-    assert!(text.contains(ABORT_MESSAGE), "{text}");
-    assert!(text.contains("Vor dem Abbruch"), "{text}");
-    assert!(text.contains("Backtrace:"), "{text}");
+    let (marker, finding) = start_run(&dir, OWN);
+    let StartFinding::Unexpected(Some(log)) = finding else {
+        panic!("erwartet Hinweis mit Mitschrift, war {finding:?}");
+    };
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.contains(crash::UNCLEAN_MESSAGE), "{text}");
+    assert!(text.contains("09:15:00 Vor dem Abbruch"), "{text}");
+    marker.unwrap().finish();
 }
