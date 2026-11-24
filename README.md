@@ -34,7 +34,7 @@
 PlanoraCAD ist ein freies Programm, mit dem du Bauteile am Computer in 3D konstruierst: Halterungen, Gehäuse, Ersatzteile oder Teile für den 3D-Druck. Du zeichnest eine Skizze mit Maßen, machst daraus einen Körper und leitest davon eine technische Zeichnung ab. Jeder Schritt wird festgehalten. Änderst du später ein Maß, rechnet das Programm alles neu, was darauf aufbaut.
 
 > [!NOTE]
-> **Frühe Testversion.** Die aktuelle Version ist `0.0.2-dev.4` (Entwicklerkanal). Für Windows (64 Bit) gibt es einen fertigen Installer, unter Ubuntu baust du das Programm selbst. Sie ist zum Ausprobieren gedacht, noch nicht für den Alltag. Rechne mit Fehlern und sichere wichtige Projekte zusätzlich. Über jede [Rückmeldung](#fehler-melden-und-wünsche-äußern) freue ich mich.
+> **Frühe Testversion.** Die aktuelle Version ist `0.0.2-dev.5` (Entwicklerkanal). Für Windows (64 Bit) gibt es einen fertigen Installer, unter Ubuntu baust du das Programm selbst. Sie ist zum Ausprobieren gedacht, noch nicht für den Alltag. Rechne mit Fehlern und sichere wichtige Projekte zusätzlich. Über jede [Rückmeldung](#fehler-melden-und-wünsche-äußern) freue ich mich.
 
 ## Inhalt
 
@@ -86,7 +86,8 @@ PlanoraCAD ist ein freies Programm, mit dem du Bauteile am Computer in 3D konstr
 - Rückgängig und Wiederholen für jede Änderung.
 - Tastenkürzel wie in gängigen CAD-Programmen, alle in den Einstellungen änderbar.
 - Hell oder dunkel, Millimeter oder Zoll, Deutsch oder Englisch.
-- Felder und Spalten in eigene Fenster lösen, zum Beispiel auf einen zweiten Bildschirm.
+- Felder und Spalten in eigene Fenster lösen, zum Beispiel auf einen zweiten Bildschirm. Das Programm öffnet sich in der Größe und Lage, in der du es geschlossen hast.
+- Mit Zusatzmodulen (Plug-ins) erweitern, zum Beispiel aus dem Katalog im Programm. Ein Modul darf nur, was du ihm erlaubst.
 
 Alles mit Einzelheiten steht im [Handbuch](https://dennis-guse.de/planoracad/wiki/) und unter [Funktionen im Detail](docs/funktionen.md).
 
@@ -217,7 +218,7 @@ Die Grenzen jeder Funktion stehen unter [Funktionen im Detail](docs/funktionen.m
 
 ## Datenschutz
 
-- **Updates:** Das Programm fragt höchstens einmal am Tag bei GitHub (`api.github.com`) nach neuen Versionen, solange die Suche eingeschaltet ist. Zum Herunterladen verbindet es sich mit GitHub. Es schickt dabei keine Projekte, keine Namen und keine Kennung deines Rechners. GitHub sieht wie bei jeder Verbindung deine Internetadresse sowie Name und Version des Programms. Schaltest du die Suche ab, verbindet sich das Programm nie von selbst.
+- **Updates:** Das Programm fragt höchstens einmal am Tag bei GitHub (`api.github.com`) nach neuen Versionen, solange die Suche eingeschaltet ist. Mit derselben Suche holt es den Katalog der Zusatzmodule und die Liste neuer Versionen deiner Zusatzmodule. Zum Herunterladen verbindet es sich mit GitHub. Es schickt dabei keine Projekte, keine Namen und keine Kennung deines Rechners. GitHub sieht wie bei jeder Verbindung deine Internetadresse sowie Name und Version des Programms. Schaltest du die Suche ab, verbindet sich das Programm nie von selbst.
 - **Rückmeldungen:** Das Programm schickt nichts von allein. Was mitgehen soll, siehst du vorher und kannst es abwählen. Benutzername, Projektpfade und Mailadressen entfernt das Programm vorher. Die Angaben stehen in der Adresse des Formulars und gehen deshalb schon beim Öffnen im Browser an GitHub oder an dennis-guse.de (sie können dort im Protokoll des Servers stehen). Gespeichert und gemeldet wird erst, wenn du im Formular auf „Absenden“ klickst.
 - **Absturzberichte:** Stürzt das Programm ab, schreibt es einen Bericht auf deinen Rechner, ohne deinen Benutzernamen. Beim nächsten Start fragt es, ob du ihn schicken willst. Ohne dein Zutun verlässt er den Rechner nicht. Alte Berichte löscht das Programm nach 30 Tagen.
 - **Protokoll:** Die Protokolldatei bleibt auf deinem Rechner. Projektinhalte stehen nicht darin.

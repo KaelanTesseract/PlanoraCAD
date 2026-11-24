@@ -34,7 +34,7 @@
 PlanoraCAD is a free program for designing parts in 3D on your computer: brackets, housings, spare parts or parts for 3D printing. You draw a sketch with dimensions, turn it into a solid and derive a technical drawing from it. Every step is recorded. If you change a dimension later, the program recalculates everything that builds on it.
 
 > [!NOTE]
-> **Early test version.** The current version is `0.0.2-dev.4` (developer channel). Windows (64-bit) gets a ready-made installer; on Ubuntu you build the program yourself. It is meant for trying out, not yet for everyday work. Expect bugs and keep extra copies of important projects. All [feedback](#reporting-bugs-and-wishes) is welcome.
+> **Early test version.** The current version is `0.0.2-dev.5` (developer channel). Windows (64-bit) gets a ready-made installer; on Ubuntu you build the program yourself. It is meant for trying out, not yet for everyday work. Expect bugs and keep extra copies of important projects. All [feedback](#reporting-bugs-and-wishes) is welcome.
 
 ## Contents
 
@@ -86,7 +86,8 @@ PlanoraCAD is a free program for designing parts in 3D on your computer: bracket
 - Undo and redo for every change.
 - Keyboard shortcuts like in common CAD programs, all changeable in the settings.
 - Light or dark, millimeters or inches, German or English.
-- Undock panels and columns into their own windows, for example on a second screen.
+- Undock panels and columns into their own windows, for example on a second screen. The program opens at the size and position you closed it in.
+- Extend it with add-ins (plug-ins), for example from the catalog inside the program. An add-in may only do what you allow.
 
 All the details are in the [manual](https://dennis-guse.de/en/planoracad/wiki/).
 
@@ -216,7 +217,7 @@ The limits of each feature are described in the [manual](https://dennis-guse.de/
 
 ## Privacy
 
-- **Updates:** the program asks GitHub (`api.github.com`) for new versions at most once a day, as long as the check is switched on. To download, it connects to GitHub. It sends no projects, no names and no identifier of your computer. As with any connection, GitHub sees your IP address and the name and version of the program. If you switch the check off, the program never connects by itself.
+- **Updates:** the program asks GitHub (`api.github.com`) for new versions at most once a day, as long as the check is switched on. The same check fetches the add-in catalog and the list of new versions of your add-ins. To download, it connects to GitHub. It sends no projects, no names and no identifier of your computer. As with any connection, GitHub sees your IP address and the name and version of the program. If you switch the check off, the program never connects by itself.
 - **Feedback:** the program sends nothing by itself. You see beforehand what will be included and can untick it. The program removes your user name, project paths and e-mail addresses first. The details are part of the form's address and therefore already go to GitHub or dennis-guse.de when the page opens in the browser (they may appear in the server log there). Nothing is stored or reported until you click "Submit" in the form.
 - **Crash reports:** if the program crashes, it writes a report on your computer, without your user name. On the next start it asks whether you want to send it. It never leaves your computer without your action. Old reports are deleted after 30 days.
 - **Log:** the log file stays on your computer. It contains no project content.
