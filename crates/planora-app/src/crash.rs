@@ -631,7 +631,10 @@ fn snapshot_started(text: &str) -> Option<SystemTime> {
 }
 
 /// Liest eine Mitschrift ([`run_snapshot`]); `None` ohne die erwartete erste Zeile.
-fn parse_snapshot(text: &str) -> Option<(String, Vec<Step>, Vec<String>, Option<PathBuf>)> {
+/// Inhalt einer Mitschrift: Version, Schritte, Protokollzeilen, Dokument.
+type Snapshot = (String, Vec<Step>, Vec<String>, Option<PathBuf>);
+
+fn parse_snapshot(text: &str) -> Option<Snapshot> {
     let mut lines = text.lines().peekable();
     (lines.next()? == SNAPSHOT_HEAD).then_some(())?;
     if lines.peek().is_some_and(|l| l.starts_with("Started: ")) {

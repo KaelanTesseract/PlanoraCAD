@@ -203,7 +203,7 @@ fn a_hair_thin_slit_through_a_large_mantle_is_not_bridged() {
 }
 
 /// Höhe des Dreiecks über seiner längsten Kante, bezogen auf diese Kante (0 bei Splittern).
-fn flatness(m: &planora_mesh::Mesh, t: &[u32]) -> f64 {
+fn flatness(m: &planora_mesh::Mesh, t: &[u32; 3]) -> f64 {
     let p = |i: u32| m.positions[i as usize];
     let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
     let longest = (b - a).length().max((c - b).length()).max((a - c).length());
@@ -237,7 +237,9 @@ fn a_cone_apex_has_no_sliver_triangles() {
             .unwrap();
             let slivers = m
                 .indices
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .filter(|t| flatness(&m, t) < 1e-9)
                 .count();
             assert_eq!(slivers, 0, "{name}, Sehnentoleranz {chord}");

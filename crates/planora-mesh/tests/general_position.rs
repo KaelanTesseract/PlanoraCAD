@@ -159,7 +159,7 @@ fn cone_against_a_skew_cylinder() {
 }
 
 /// Höhe über der längsten Seite, bezogen auf deren Quadrat (fast 0 bei Splittern).
-fn flatness(m: &planora_mesh::Mesh, t: &[u32]) -> f64 {
+fn flatness(m: &planora_mesh::Mesh, t: &[u32; 3]) -> f64 {
     let p = |i: u32| m.positions[i as usize];
     let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
     let longest = (b - a).length().max((c - b).length()).max((a - c).length());
@@ -203,7 +203,9 @@ fn cones_in_general_position_have_no_sliver_triangles() {
                 .unwrap();
                 let n = m
                     .indices
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .filter(|t| flatness(&m, t) < 1e-5)
                     .count();
                 if n > 0 {
