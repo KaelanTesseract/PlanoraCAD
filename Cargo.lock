@@ -3305,7 +3305,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "planora-app"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "crc32fast",
  "eframe",
@@ -3338,7 +3338,7 @@ dependencies = [
 
 [[package]]
 name = "planora-drawing"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "planora-exchange",
  "planora-i18n",
@@ -3350,7 +3350,7 @@ dependencies = [
 
 [[package]]
 name = "planora-exchange"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "dxf",
  "earcutr",
@@ -3367,7 +3367,7 @@ dependencies = [
 
 [[package]]
 name = "planora-feature"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "planora-drawing",
  "planora-exchange",
@@ -3384,7 +3384,7 @@ dependencies = [
 
 [[package]]
 name = "planora-i18n"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "fluent-bundle",
  "fluent-syntax",
@@ -3393,7 +3393,7 @@ dependencies = [
 
 [[package]]
 name = "planora-kernel"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "planora-i18n",
  "planora-math",
@@ -3402,7 +3402,7 @@ dependencies = [
 
 [[package]]
 name = "planora-math"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "glam",
  "planora-i18n",
@@ -3412,7 +3412,7 @@ dependencies = [
 
 [[package]]
 name = "planora-mesh"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "earcutr",
  "planora-i18n",
@@ -3424,11 +3424,11 @@ dependencies = [
 
 [[package]]
 name = "planora-plugin-api"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 
 [[package]]
 name = "planora-plugin-host"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3451,7 +3451,7 @@ dependencies = [
 
 [[package]]
 name = "planora-project"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "image",
  "planora-drawing",
@@ -3469,7 +3469,7 @@ dependencies = [
 
 [[package]]
 name = "planora-render"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "bytemuck",
  "egui",
@@ -3486,7 +3486,7 @@ dependencies = [
 
 [[package]]
 name = "planora-setup"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "eframe",
  "egui",
@@ -3500,7 +3500,7 @@ dependencies = [
 
 [[package]]
 name = "planora-sketch"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "planora-exchange",
  "planora-i18n",
@@ -3513,7 +3513,7 @@ dependencies = [
 
 [[package]]
 name = "planora-step"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "planora-drawing",
  "planora-exchange",
@@ -3525,14 +3525,14 @@ dependencies = [
 
 [[package]]
 name = "planora-style"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "egui",
 ]
 
 [[package]]
 name = "planora-text"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "harfrust",
  "planora-math",
@@ -3542,7 +3542,7 @@ dependencies = [
 
 [[package]]
 name = "planora-update"
-version = "0.0.2-dev.4"
+version = "0.0.2-dev.5"
 dependencies = [
  "planora-i18n",
  "semver",

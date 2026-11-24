@@ -2,6 +2,44 @@
 
 Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht oben.
 
+## 0.0.2-dev.5
+
+### Neu
+
+- Zusatzmodule (Plug-ins): PlanoraCAD lässt sich jetzt durch kleine Zusatzprogramme erweitern. Unter „Datei → Zusatzmodule“ öffnet sich ein eigenes Fenster (es lässt sich wie die anderen Fenster abdocken): links die Liste der installierten Module, rechts Beschreibung und Rechte. Ein Modul kann hier ein- und ausgeschaltet, aktualisiert und entfernt werden. Stürzt ein Modul ab, läuft PlanoraCAD weiter, und das Modul lässt sich neu starten.
+- Zusatzmodule installieren: aus einer Datei oder über den Link zu einem GitHub-Repository. Das Programm prüft einmal am Tag, ob es Neuerungen gibt, und lädt sie erst, wenn du auf „Aktualisieren“ klickst.
+- Katalog: Im Fenster „Zusatzmodule“ gibt es einen Reiter „Katalog“ mit einer Auswahl an Modulen zum Aussuchen und Installieren. Beim ersten Start weist ein Hinweis darauf hin.
+- Rechte der Zusatzmodule: Ein Modul bekommt nur die Rechte, die du ihm erlaubst. Beim ersten Gebrauch fragt PlanoraCAD nach, du wählst „Erlauben“, „Nur diesmal“ oder „Ablehnen“ und kannst die Entscheidung später zurücknehmen. Wird ein Modul entfernt, verschwinden auch seine Rechte. Bei einem Update bleiben sie nur, wenn Autor, Herkunft und Netzadressen gleich geblieben sind.
+- Fenster merken: PlanoraCAD öffnet sich so, wie du es zuletzt geschlossen hast, also mit derselben Größe und Lage, auch maximiert und auf dem richtigen Bildschirm (wie in Fusion). Eine nicht mehr vorhandene Lage, etwa nach dem Abstecken eines Bildschirms, wird abgefangen. Unter Linux mit Wayland wird die Lage nicht gespeichert.
+- Absturzbericht: Endet das Programm ohne Bericht, etwa weil es von außen beendet wurde, zeigt der nächste Start den Hinweis „unerwartet beendet“. „Als Rückmeldung öffnen“ hängt jetzt die letzten Schritte und das Protokoll an, damit sich nachvollziehen lässt, was zuletzt passiert ist. Es wird nichts ohne dein Zutun gesendet.
+- Konstruktionsebenen haben Ziehgriffe wie in Fusion: einen Pfeil für den Abstand der Versatzebene und einen Drehpfeil für den Winkel. Die Tangentialebene hat einen Drehpfeil am Berührpunkt, mit dem sie sich um die Achse der Fläche dreht.
+- Skizze, Rundung: Am Bogen sitzt ein Griff für den Radius, den du ziehen kannst. Die Fase hat einen Griff je Abstand und startet bei einem Fünftel der kürzeren Linie.
+- Rückmeldung im Feld: Wenn ein Wert nicht passt, steht am Feld der Grund: „Wert zu klein“ (unter 0,01 mm), „Wert zu groß“ oder „Passt hier nicht“ (zum Beispiel bei einem unmöglichen Fasenwinkel). Zieht man einen Griff über die Grenze, bleibt der Wert am größten passenden Stand, und die Vorschau bleibt sichtbar.
+- Skizze: Lehnt PlanoraCAD das Ziehen an einem Muster ab, nennt die Meldung den Grund, zum Beispiel „Die Richtungslinien des Musters sind parallel.“, und die Statuszeile zeigt „Nicht lösbar: …“. Die Meldung wechselt mit der Sprache der Oberfläche.
+- Zeichnungen: Schnitte und Ansichten gelingen jetzt auch bei Körpern in allgemeiner Lage, etwa bei schräg durchbohrten Kugeln, Kegeln oder Zylindern, die vorher abgelehnt wurden. Verdeckte Kanten sind gestrichelt, die Kegelspitze erscheint ohne Streifen.
+- Stückliste: Sie zählt nur noch eingeblendete Körper. Fehlen welche, steht unter der Zeichnung und im Fenster „Blattangaben“ der Hinweis „N ausgeblendete Körper sind nicht in der Stückliste.“
+
+### Geändert
+
+- Bedienung wie in Fusion: In Erzeugen-, Bearbeiten- und Ebenen-Fenstern bricht Esc ab und Enter bestätigt, auch direkt im Zahlenfeld. Das gilt jetzt auch für Verrunden/Fase, Maß bearbeiten, Neue Zeichnung, Netz-Import, SVG, DXF und Leinwand einfügen, Isoparametrische Kurve und Profil drehen. In den Blattangaben bleibt Enter bewusst ohne Wirkung, weil das Fenster viele Textfelder hat.
+- Skizze: Esc beendet ein Zeichenwerkzeug, wenn noch nichts gesetzt wurde. Esc oder Rechtsklick nimmt beim Ziehen eines Griffs nur den Zug zurück. Ein Zug beginnt erst nach wenigen Pixeln Mausbewegung, ein reiner Klick setzt wie bisher.
+- Umbenennen (Baum, Gruppe, Zeichnungsliste): Das Namensfeld hat sofort den Fokus, und der Name ist markiert.
+- Während „Skizze erstellen“ oder „Skizzenebene neu festlegen“ auf einen Klick wartet, ruhen Rückgängig und Wiederholen. Ein bloßes Öffnen einer Skizze setzt keinen Punkt „•“ mehr an den Reiter.
+- Gezogene Werte werden gerundet wie in Fusion: Längen auf 0,01 mm (Zoll auf 0,001), Winkel auf 0,1°.
+- Felder am Zeiger weichen auf die andere Seite aus, wenn sie sonst eine schwebende Leiste verdecken würden.
+- Ausgeblendete Körper: Sie erscheinen nicht mehr in Zeichnungsansichten, Vorschaubildern und im Export (PDF, DXF, SVG). Maße und Positionsnummern an ausgeblendeten Körpern ruhen, werden nicht mehr rot gemeldet und stehen in den Listen grau mit „Körper ausgeblendet“. Wieder eingeblendet ist alles zurück. In Schnittansichten gilt dasselbe.
+- Skizzen mit Mustern rechnen schneller, vor allem mit Bögen: Eine Skizze mit 200 Bögen braucht nur noch etwa 1 ms statt 194 ms. Das Ziehen von Kurven in großen Skizzen ist etwas flüssiger.
+- Ebenen: Drei fast auf einer Geraden liegende Punkte werden für „Ebene durch drei Punkte“ abgelehnt. Die Mittelebene zweier fast paralleler Ebenen liegt jetzt in der Mitte, nicht mehr unter Umständen weit entfernt.
+- Neuere Oberflächenbibliothek (egui 0.37) und aktualisierte Programmbausteine. Die Oberfläche sieht aus wie vorher; im Parameterfenster rollt eine neue Zeile ganz ins Bild.
+
+### Behoben
+
+- Beim Schneiden gekrümmter Körper entstanden an Kegelspitzen kleine Streifen im Netz. Sie sind beseitigt.
+- Wurde ein Körper ausgeblendet, gingen die Schnittmaße später sichtbarer Körper verloren. Das passiert nicht mehr.
+- Der Hinweis „Erst eine Ebene … wählen“ blieb nach dem Wahlmodus stehen. Er verschwindet jetzt.
+- Der Export zeichnete ausgeblendete Körper mit; er lässt sie jetzt weg wie der Bildschirm.
+- Ein gezogener Wert zeigte im Feld einen langen Zahlenrest wie „20,990000000000002“. Jetzt steht dort „20,99“.
+
 ## 0.0.2-dev.4
 
 ### Neu
