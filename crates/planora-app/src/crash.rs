@@ -414,7 +414,11 @@ pub fn hook_with(dir: PathBuf, mask: UserMask, diag: &'static Mutex<Diag>, previ
         } else {
             let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let input = collect(info, diag);
-                let _ = write_report(&dir, &input, &mask);
+                if write_report(&dir, &input, &mask).is_ok() {
+                    // Folgt ein Abbruch (Panik ohne Abwickeln), schreibt der Abfang nicht noch
+                    // einen zweiten Bericht.
+                    REPORT_WRITTEN.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
             }));
         }
         if entered {
@@ -465,6 +469,79 @@ fn collect(info: &PanicHookInfo, diag: &Mutex<Diag>) -> ReportInput {
     }
 }
 
+// ---- Abbruch (`abort`) ----------------------------------------------------------------------
+
+/// Gesetzt, sobald dieser Prozess einen Panik-Bericht geschrieben hat.
+static REPORT_WRITTEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Ordner und Benutzermaske für den Bericht beim Abbruch ([`install_abort_handler`]).
+static ABORT_TARGET: std::sync::OnceLock<(PathBuf, UserMask)> = std::sync::OnceLock::new();
+
+/// Steht als Fehler im Bericht bei einem Abbruch.
+pub const ABORT_MESSAGE: &str = "The program was aborted (abort)";
+
+/// Richtet den Abfang für `abort()` ein (Signal `SIGABRT` der C-Laufzeit, Windows und Linux):
+/// Er schreibt noch einen Bericht mit Ablauf nach `dir`, außer der Panik-Hook hat schon einen
+/// geschrieben. Nur einmal je Prozess wirksam. `__fastfail` und ein Beenden von außen erreicht
+/// er nicht; dafür schreibt der nächste Start den Bericht aus der Mitschrift ([`start_run`]).
+pub fn install_abort_handler(dir: PathBuf, mask: UserMask) {
+    if ABORT_TARGET.set((dir, mask)).is_ok() {
+        abort_signal::install(on_abort);
+    }
+}
+
+extern "C" fn on_abort(_signal: std::ffi::c_int) {
+    if REPORT_WRITTEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let Some((dir, mask)) = ABORT_TARGET.get() else {
+        return;
+    };
+    let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let (steps, log, document) = match diag::global().try_lock() {
+            Ok(d) => read_diag(&d),
+            Err(TryLockError::Poisoned(e)) => read_diag(&e.into_inner()),
+            Err(TryLockError::WouldBlock) => (Vec::new(), vec![UNAVAILABLE.to_string()], None),
+        };
+        let input = ReportInput {
+            version: crate::RUNNING_VERSION.to_string(),
+            message: ABORT_MESSAGE.to_string(),
+            location: UNKNOWN.to_string(),
+            thread: std::thread::current()
+                .name()
+                .unwrap_or("<unnamed>")
+                .to_string(),
+            backtrace: Backtrace::force_capture().to_string(),
+            addresses: crate::crash_addr::capture(),
+            steps,
+            log,
+            document,
+            time: crate::local_time::now_local(),
+        };
+        let _ = write_report(dir, &input, mask);
+    }));
+}
+
+/// `signal()` der C-Laufzeit für `SIGABRT`.
+#[allow(unsafe_code)]
+mod abort_signal {
+    #[cfg(windows)]
+    const SIGABRT: std::ffi::c_int = 22;
+    #[cfg(not(windows))]
+    const SIGABRT: std::ffi::c_int = 6;
+
+    unsafe extern "C" {
+        fn signal(sig: std::ffi::c_int, handler: usize) -> usize;
+    }
+
+    pub(super) fn install(handler: extern "C" fn(std::ffi::c_int)) {
+        // SAFETY: `signal` der C-Laufzeit mit einer gültigen `extern "C"`-Funktion; der
+        // vorherige Abfang (Standard) wird nicht gebraucht.
+        unsafe {
+            signal(SIGABRT, handler as usize);
+        }
+    }
+}
+
 /// Schritte, letzte Protokollzeilen und Dokument aus dem gemeinsamen Protokoll, ohne je zu warten
 /// (für den Bericht bei harten Abstürzen, [`crate::hard_crash`]).
 #[cfg(windows)]
@@ -510,6 +587,8 @@ pub fn marker_path(dir: &Path, pid: u32) -> PathBuf {
 pub struct RunMarker {
     path: PathBuf,
     file: Option<std::fs::File>,
+    /// Zuletzt geschriebene Mitschrift ([`RunMarker::refresh`]).
+    last: String,
 }
 
 impl RunMarker {
@@ -518,6 +597,120 @@ impl RunMarker {
         self.file = None;
         let _ = std::fs::remove_file(&self.path);
     }
+
+    /// Schreibt die Mitschrift `text` ([`run_snapshot`]) in den Marker, wenn sie sich geändert
+    /// hat. Endet der Lauf ohne Bericht (`abort`, `__fastfail`, Beenden von außen), baut der
+    /// nächste Start daraus den Bericht ([`start_run`]). Gibt zurück, ob geschrieben wurde;
+    /// Schreibfehler bleiben still (dann fehlt beim nächsten Start nur die Mitschrift).
+    pub fn refresh(&mut self, text: &str) -> bool {
+        use std::io::Seek;
+        if self.last == text {
+            return false;
+        }
+        let Some(f) = self.file.as_mut() else {
+            return false;
+        };
+        let ok = f.seek(std::io::SeekFrom::Start(0)).is_ok()
+            && f.write_all(text.as_bytes()).is_ok()
+            && f.set_len(text.len() as u64).is_ok();
+        self.last = text.to_string();
+        ok
+    }
+}
+
+/// Erste Zeile der Mitschrift im Laufmarker ([`run_snapshot`]).
+const SNAPSHOT_HEAD: &str = "PlanoraCAD run snapshot 1";
+
+/// Steht als Fehler im Bericht, den der nächste Start aus der Mitschrift baut.
+pub const UNCLEAN_MESSAGE: &str = "The program ended without writing a report (aborted, \
+     ended from outside or crashed without a Rust message)";
+/// Steht als Ablauf in diesem Bericht.
+pub const UNCLEAN_BACKTRACE: &str =
+    "not available (the program had no chance to write a report; see the last steps and log)";
+
+/// Die Mitschrift für den Laufmarker: Version, Dokument (voller Pfad, bleibt wie die
+/// Begleitdatei auf dem Rechner), letzte Schritte und Protokollzeilen.
+pub fn run_snapshot(
+    version: &str,
+    steps: &[Step],
+    log: &[String],
+    document: Option<&Path>,
+) -> String {
+    let one_line = |s: &str| s.replace(['\r', '\n'], " ");
+    let mut t = format!("{SNAPSHOT_HEAD}\nVersion: {}\n", one_line(version));
+    let doc = document.map(|d| one_line(&d.to_string_lossy()));
+    t.push_str(&format!("Document: {}\n", doc.unwrap_or_default()));
+    t.push_str("Steps:\n");
+    for s in steps {
+        t.push_str(&format!("{}\t{}\n", one_line(&s.time), one_line(&s.label)));
+    }
+    t.push_str("Log:\n");
+    for l in log {
+        t.push_str(&one_line(l));
+        t.push('\n');
+    }
+    t
+}
+
+/// Die Mitschrift dieses Laufs aus dem gemeinsamen Protokoll, ohne zu warten (`None`, solange
+/// es gesperrt ist).
+pub fn current_run_snapshot() -> Option<String> {
+    let (steps, log, document) = match diag::global().try_lock() {
+        Ok(d) => read_diag(&d),
+        Err(TryLockError::Poisoned(e)) => read_diag(&e.into_inner()),
+        Err(TryLockError::WouldBlock) => return None,
+    };
+    Some(run_snapshot(
+        crate::RUNNING_VERSION,
+        &steps,
+        &log,
+        document.as_deref(),
+    ))
+}
+
+/// Liest eine Mitschrift ([`run_snapshot`]); `None` ohne die erwartete erste Zeile.
+fn parse_snapshot(text: &str) -> Option<(String, Vec<Step>, Vec<String>, Option<PathBuf>)> {
+    let mut lines = text.lines();
+    (lines.next()? == SNAPSHOT_HEAD).then_some(())?;
+    let version = lines.next()?.strip_prefix("Version: ")?.to_string();
+    let doc = lines.next()?.strip_prefix("Document:")?.trim();
+    let document = (!doc.is_empty()).then(|| PathBuf::from(doc));
+    (lines.next()? == "Steps:").then_some(())?;
+    let mut steps = Vec::new();
+    let mut log = Vec::new();
+    let mut in_log = false;
+    for l in lines {
+        if !in_log && l == "Log:" {
+            in_log = true;
+        } else if in_log {
+            log.push(l.to_string());
+        } else {
+            let (time, label) = l.split_once('\t').unwrap_or(("", l));
+            steps.push(Step {
+                time: time.to_string(),
+                label: label.to_string(),
+            });
+        }
+    }
+    in_log.then_some((version, steps, log, document))
+}
+
+/// Baut den Bericht für einen Lauf, der ohne Bericht endete, aus seiner Mitschrift.
+fn unclean_report(crash_dir: &Path, snapshot: &str) -> Option<PathBuf> {
+    let (version, steps, log, document) = parse_snapshot(snapshot)?;
+    let input = ReportInput {
+        version,
+        message: UNCLEAN_MESSAGE.to_string(),
+        location: UNKNOWN.to_string(),
+        thread: UNKNOWN.to_string(),
+        backtrace: UNCLEAN_BACKTRACE.to_string(),
+        addresses: None,
+        steps,
+        log,
+        document,
+        time: crate::local_time::now_local(),
+    };
+    write_report(crash_dir, &input, &UserMask::from_env()).ok()
 }
 
 /// Was der Start über den letzten Lauf herausfindet.
@@ -564,11 +757,17 @@ fn marker_pid(name: &str) -> Option<u32> {
         .ok()
 }
 
-/// Räumt fremde, liegengebliebene Marker weg und gibt die Änderungszeit des jüngsten zurück
-/// (`Some(None)`: es gab einen, Zeit unbekannt). Gesperrte gehören einer laufenden Instanz und
-/// bleiben.
-fn take_stale_markers(data_dir: &Path) -> Option<Option<SystemTime>> {
-    let mut found: Option<Option<SystemTime>> = None;
+/// Ein liegengebliebener Marker: Änderungszeit des jüngsten (`None`: unbekannt) und dessen
+/// Mitschrift ([`RunMarker::refresh`]).
+struct Stale {
+    since: Option<SystemTime>,
+    snapshot: Option<String>,
+}
+
+/// Räumt fremde, liegengebliebene Marker weg und gibt den jüngsten zurück. Gesperrte gehören
+/// einer laufenden Instanz und bleiben.
+fn take_stale_markers(data_dir: &Path) -> Option<Stale> {
+    let mut found: Option<Stale> = None;
     let Ok(entries) = std::fs::read_dir(data_dir) else {
         return None;
     };
@@ -589,11 +788,25 @@ fn take_stale_markers(data_dir: &Path) -> Option<Option<SystemTime>> {
             continue;
         }
         let time = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let snapshot = std::fs::read(&path)
+            .ok()
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .filter(|s| !s.is_empty());
         let _ = std::fs::remove_file(&path);
-        found = Some(match (found.flatten(), time) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
-        });
+        let newer = match &found {
+            None => true,
+            Some(f) => match (f.since, time) {
+                (Some(a), Some(b)) => b > a,
+                (None, _) => true,
+                (Some(_), None) => false,
+            },
+        };
+        if newer {
+            found = Some(Stale {
+                since: time,
+                snapshot,
+            });
+        }
     }
     found
 }
@@ -638,10 +851,23 @@ pub fn start_run(data_dir: &Path, pid: u32) -> (Option<RunMarker>, StartFinding)
     let stale = take_stale_markers(data_dir);
     let reports = list_reports(&crash_dir);
     let finding = match stale {
-        Some(since) => {
+        Some(stale) => {
+            let since = stale.since;
             let newer = reports.iter().any(|(_, t)| since.is_none_or(|s| *t >= s));
             if newer {
                 StartFinding::Crashed(reports.into_iter().map(|(p, _)| p).collect())
+            } else if stale
+                .snapshot
+                .is_some_and(|s| unclean_report(&crash_dir, &s).is_some())
+            {
+                // Ohne Bericht beendet (`abort`, `__fastfail`, von außen): Bericht aus der
+                // Mitschrift, neueste zuerst wie die übrigen.
+                StartFinding::Crashed(
+                    list_reports(&crash_dir)
+                        .into_iter()
+                        .map(|(p, _)| p)
+                        .collect(),
+                )
             } else {
                 StartFinding::Unexpected
             }
@@ -657,6 +883,7 @@ pub fn start_run(data_dir: &Path, pid: u32) -> (Option<RunMarker>, StartFinding)
         .map(|file| RunMarker {
             path,
             file: Some(file),
+            last: String::new(),
         });
     match marker {
         Ok(m) => (Some(m), finding),

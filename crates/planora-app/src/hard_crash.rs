@@ -9,9 +9,12 @@
 //! [`WRITE_TIMEOUT`] auf ihn. So reicht der Rest des Stapels auch nach einem Stapelüberlauf; alles,
 //! was Speicher braucht (Text, Datei), läuft im Schreib-Thread mit eigenem Stapel.
 //!
-//! Was nicht erfasst wird: ein Ende von außen (Taskmanager, Abschuss des Prozessbaums) und
-//! `abort`/`__fastfail` (gehen an jedem Filter vorbei). Läuft ein Debugger, bekommt er die
-//! Ausnahme, und der Filter schweigt.
+//! Ein Ende von außen (Taskmanager, Abschuss des Prozessbaums) und `abort`/`__fastfail` gehen an
+//! jedem Filter vorbei: `abort()` der C-Laufzeit fängt [`crate::crash::install_abort_handler`]
+//! ab, für die übrigen schreibt der nächste Start den Bericht aus der Mitschrift im Laufmarker
+//! ([`crate::crash::start_run`]). Läuft ein Debugger, bekommt er die Ausnahme, und der Filter
+//! schweigt. Funktionsnamen zu den Rücksprungadressen liefert `tools/symbolize.ps1` mit der
+//! `.pdb` des Releases.
 
 /// Höchstens so lange wartet der Filter auf den Bericht.
 pub const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);

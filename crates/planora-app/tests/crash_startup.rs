@@ -275,6 +275,77 @@ fn stale_marker_with_newer_report_is_crashed() {
     marker.unwrap().finish();
 }
 
+/// Endet ein Lauf ohne Bericht (`abort`, `__fastfail`, Beenden von außen), schreibt der nächste
+/// Start den Bericht aus der Mitschrift im Marker: Schritte, Protokoll und Dokument.
+#[test]
+fn an_unclean_end_leaves_a_report_from_the_marker() {
+    let data = data_dir("planora-lauf-mitschrift");
+    let (marker, _) = start_run(&data, OTHER);
+    let mut marker = marker.expect("Marker angelegt");
+    let doc = PathBuf::from("C:/Projekte/Halter/Teil.planora");
+    let text = crash::run_snapshot(
+        "0.2.0-dev.7",
+        &[planora_app::diag::Step {
+            time: "14:03:20".into(),
+            label: "Extrusion ändern".into(),
+        }],
+        &["2026-11-24T13:03:19Z INFO Letzte Zeile vor dem Ende".into()],
+        Some(&doc),
+    );
+    assert!(marker.refresh(&text), "erste Mitschrift wird geschrieben");
+    assert!(
+        !marker.refresh(&text),
+        "gleiche Mitschrift nicht noch einmal"
+    );
+    // Prozess endet hart: Marker bleibt liegen, kein Bericht.
+    drop(marker);
+    let (marker, finding) = start_run(&data, OWN);
+    let StartFinding::Crashed(reports) = finding else {
+        panic!("erwartet Crashed, war {finding:?}");
+    };
+    assert_eq!(reports.len(), 1);
+    let text = std::fs::read_to_string(&reports[0]).unwrap();
+    assert!(text.contains(crash::UNCLEAN_MESSAGE), "{text}");
+    assert!(text.contains("Version: 0.2.0-dev.7"), "{text}");
+    assert!(text.contains("14:03:20 Extrusion ändern"), "{text}");
+    assert!(text.contains("Letzte Zeile vor dem Ende"), "{text}");
+    assert!(text.contains("Document: Teil.planora"), "{text}");
+    assert_eq!(
+        crash::report_project(&reports[0]),
+        Some(doc),
+        "voller Pfad in der Begleitdatei"
+    );
+    assert!(!marker_path(&data, OTHER).exists());
+    marker.unwrap().finish();
+}
+
+/// Eine kaputte oder fremde Mitschrift ergibt keinen Bericht, nur den Hinweis.
+#[test]
+fn a_marker_without_a_readable_snapshot_stays_unexpected() {
+    let data = data_dir("planora-lauf-kaputt");
+    let p = marker_path(&data, OTHER);
+    std::fs::write(&p, b"irgendwas\nohne Kopf").unwrap();
+    set_age(&p, Duration::from_secs(60));
+    let (marker, finding) = start_run(&data, OWN);
+    assert_eq!(finding, StartFinding::Unexpected);
+    assert!(reports_in(&data.join(CRASH_DIR)).is_empty());
+    marker.unwrap().finish();
+}
+
+/// Ein sauberes Ende hinterlässt trotz Mitschrift keinen Bericht.
+#[test]
+fn a_clean_end_after_a_snapshot_writes_no_report() {
+    let data = data_dir("planora-lauf-mitschrift-sauber");
+    let (marker, _) = start_run(&data, OTHER);
+    let mut marker = marker.unwrap();
+    marker.refresh(&crash::run_snapshot("0.2.0", &[], &["x".into()], None));
+    marker.finish();
+    let (marker, finding) = start_run(&data, OWN);
+    assert_eq!(finding, StartFinding::Clean);
+    assert!(reports_in(&data.join(CRASH_DIR)).is_empty());
+    marker.unwrap().finish();
+}
+
 #[cfg(windows)]
 #[test]
 fn locked_marker_of_a_running_instance_is_ignored() {
