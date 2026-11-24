@@ -754,6 +754,9 @@ fn card_shows_counts_and_stays_centred_720_equal_height() {
     s.document
         .update_drawing(id, |dr| dr.views[1].centerlines = false)
         .unwrap();
+    // `draw` wartet nicht auf die neue Berechnung (sie läuft im Hintergrund); vor `ready` also
+    // auf sie warten, damit die Karte das fertige Ergebnis zeigt.
+    d.tick(&s, true);
     let text = draw(&mut d, &mut s);
     assert!(text.contains("Mittellinien: teilweise"), "{text}");
     assert_eq!(ready(&d, &s).2, CenterlineUse::Partly);
@@ -800,6 +803,7 @@ fn card_shows_counts_and_stays_centred_720_equal_height() {
     extra.offset += 20.0;
     extra.chain = None;
     s.document.add_dimension(id, extra).unwrap();
+    d.tick(&s, true);
     let text = draw(&mut d, &mut s);
     assert!(text.contains(&format!("Maße: {}", n + 1)), "{text}");
     assert_eq!(ready(&d, &s).0, n + 1);

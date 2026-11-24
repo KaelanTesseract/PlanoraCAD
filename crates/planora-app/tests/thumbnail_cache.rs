@@ -919,19 +919,23 @@ fn set_read_only(p: &Path, on: bool) {
 /// Hält eine Datei offen, sodass sie sich weder löschen noch ersetzen lässt (wie ein
 /// Virenscanner oder ein anderes Programm); Lesen bleibt möglich.
 #[cfg(windows)]
-fn lock(p: &Path) -> fs::File {
+fn lock(p: &Path) -> Option<fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     const FILE_SHARE_READ: u32 = 1;
-    fs::OpenOptions::new()
-        .read(true)
-        .share_mode(FILE_SHARE_READ)
-        .open(p)
-        .unwrap()
+    Some(
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(p)
+            .unwrap(),
+    )
 }
 
-/// Ohne Windows: der Ordner wird schreibgeschützt (Löschen und Anlegen scheitern).
+/// Ohne Windows: der Ordner wird schreibgeschützt (Löschen und Anlegen scheitern). Den
+/// Schreibschutz übergeht root (oder wer `CAP_DAC_OVERRIDE` hat, etwa in WSL oder einem
+/// Container); dann sperrt nichts und es gibt `None`, der Test wird übersprungen.
 #[cfg(not(windows))]
-fn lock(p: &Path) -> impl Drop + use<> {
+fn lock(p: &Path) -> Option<impl Drop + use<>> {
     struct Guard(PathBuf);
     impl Drop for Guard {
         fn drop(&mut self) {
@@ -940,7 +944,14 @@ fn lock(p: &Path) -> impl Drop + use<> {
     }
     let dir = p.parent().unwrap().to_path_buf();
     set_read_only(&dir, true);
-    Guard(dir)
+    let guard = Guard(dir);
+    // Probe: Lässt sich trotz Schreibschutz etwas anlegen, hält die Sperre nicht.
+    let probe = guard.0.join("sperrprobe.tmp");
+    if fs::File::create(&probe).is_ok() {
+        let _ = fs::remove_file(&probe);
+        return None;
+    }
+    Some(guard)
 }
 
 #[test]
@@ -951,7 +962,12 @@ fn a_locked_old_json_never_ends_up_next_to_a_new_png() {
     assert!(first.stored);
     let old_png = fs::read(dir.join(PREVIEW_PNG)).unwrap();
     let old_json = fs::read(dir.join(PREVIEW_JSON)).unwrap();
-    let guard = lock(&dir.join(PREVIEW_JSON));
+    let Some(guard) = lock(&dir.join(PREVIEW_JSON)) else {
+        // Etwa als root unter Linux: der Schreibschutz hält nicht, die Sperre ließe sich hier
+        // nicht nachstellen. Ohne Sperre prüfte der Test nichts – also überspringen.
+        eprintln!("übersprungen: Schreibschutz sperrt hier nicht (root?)");
+        return;
+    };
     let light = ThumbKey {
         dark: false,
         ..dark.clone()
