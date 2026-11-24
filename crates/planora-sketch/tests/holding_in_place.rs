@@ -2,6 +2,9 @@
 //! auf einer Kopie der Skizze. Ergebnis, Werte, Aufbau und Stand müssen dem alten Weg
 //! (`*_cloning`) gleichen, bei Erfolg wie bei Scheitern.
 
+// Zählender Speicher-Allocator für die Messung (siehe `Counting`).
+#![allow(unsafe_code)]
+
 use std::time::Instant;
 
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
@@ -15,6 +18,38 @@ use planora_sketch::text_shape::{
 };
 use planora_sketch::{ConstraintId, ValueSnapshot};
 use std::sync::Arc;
+
+/// Zählt die Speicheranforderungen dieses Test-Programms (eigenes Programm je Testdatei), damit
+/// die Messung „an Ort und Stelle gegen Kopie“ nicht an der Uhr hängt (offener Punkt C12: Die
+/// Zeitmessung wackelte unter WSL um 0,2 ms).
+struct Counting;
+
+thread_local! {
+    /// Angeforderte Bytes je Faden (Tests laufen nebeneinander in eigenen Fäden).
+    static ALLOCATED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+unsafe impl std::alloc::GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        let _ = ALLOCATED.try_with(|a| a.set(a.get() + layout.size() as u64));
+        // SAFETY: an den Systemspeicher weitergereicht, gleiche Anforderung.
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        // SAFETY: Zeiger und Anforderung stammen aus `alloc` oben.
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static GLOBAL: Counting = Counting;
+
+/// Bytes, die `f` auf diesem Faden anfordert.
+fn allocated_by<R>(f: impl FnOnce() -> R) -> (u64, R) {
+    let before = ALLOCATED.with(|a| a.get());
+    let r = f();
+    (ALLOCATED.with(|a| a.get()) - before, r)
+}
 
 fn v(x: f64, y: f64) -> DVec2 {
     DVec2::new(x, y)
@@ -159,7 +194,7 @@ fn a_value_snapshot_restores_values_and_revision() {
 }
 
 /// Messung (C12): große Skizze mit Muster, ein Maß an einem freien Rechteck, viele Läufe mit
-/// zwei gehaltenen Ecken. Druckt beide Zeiten; neu darf nicht langsamer sein.
+/// zwei gehaltenen Ecken. Druckt Zeiten und Bytes; neu fordert weniger Speicher an.
 #[test]
 #[ignore]
 fn holding_in_place_is_not_slower_on_a_large_sketch() {
@@ -186,11 +221,15 @@ fn holding_in_place_is_not_slower_on_a_large_sketch() {
         }
         (t0.elapsed().as_secs_f64() * 1000.0, bits(&t))
     };
-    let (old_ms, old_bits) = run(true);
-    let (new_ms, new_bits) = run(false);
-    eprintln!("solve_holding 50 Läufe: Kopie {old_ms:.1} ms, an Ort und Stelle {new_ms:.1} ms");
+    let (old_bytes, (old_ms, old_bits)) = allocated_by(|| run(true));
+    let (new_bytes, (new_ms, new_bits)) = allocated_by(|| run(false));
+    eprintln!(
+        "solve_holding 50 Läufe: Kopie {old_ms:.1} ms / {old_bytes} B,          an Ort und Stelle {new_ms:.1} ms / {new_bytes} B"
+    );
     assert_eq!(new_bits, old_bits);
-    assert!(new_ms < old_ms, "{new_ms:.1} ms gegen {old_ms:.1} ms");
+    // Die Zeit wird nur ausgegeben (sie wackelt, wenn das Lösen überwiegt); entschieden wird
+    // an den angeforderten Bytes: ohne die Kopie je Lauf deutlich weniger.
+    assert!(new_bytes < old_bytes, "{new_bytes} B gegen {old_bytes} B");
 }
 
 /// Messung (C12): Sicherung je Bild beim Kurvenzug, Kopie der Skizze gegen Wertestand.
@@ -288,4 +327,88 @@ fn with_a_text_holding_takes_the_copy_and_matches_it() {
     assert!(same_as_cloning(&s, &[p[0], p[3]], false, "Text"));
     assert!(same_as_cloning(&s, &[p[0], p[3]], true, "Text, verbunden"));
     assert!(!same_as_cloning(&s, &p, false, "Text, alle fest"));
+}
+
+// ---- Wächter und Halbieren ohne Kopie (offene Punkte C12, 2026-11-24) -----------------------
+
+/// Eine Panik mitten im Halten (Festpunkte angehängt, Toleranz verschärft, Zeilen abgeschaltet)
+/// lässt die Skizze bitgleich zurück, auch im Weg über verbundene Gruppen; die Panik geht weiter.
+#[test]
+fn a_panic_while_holding_restores_the_sketch() {
+    let mut s = sketch();
+    let (p, dim) = measured_rect(&mut s, 0.0);
+    measured_rect(&mut s, 40.0);
+    s.set_constraint_value(dim, 14.0).unwrap();
+    for connected in [false, true] {
+        let (before, data, rev) = (bits(&s), s.to_data(), s.revision());
+        Sketch::panic_in_next_hold_for_tests();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if connected {
+                s.solve_holding_connected_for_test(&[p[0], p[3]])
+            } else {
+                s.solve_holding(&[p[0], p[3]])
+            }
+        }));
+        assert!(r.is_err(), "Panik geht weiter");
+        assert_eq!(bits(&s), before, "Werte");
+        assert_eq!(
+            s.to_data(),
+            data,
+            "Aufbau (Festpunkte, abgeschaltete Zeilen)"
+        );
+        assert_eq!(s.revision(), rev, "Stand");
+        // Danach läuft alles wie vorher.
+        assert!(same_as_cloning(
+            &s,
+            &[p[0], p[3]],
+            connected,
+            "nach der Panik"
+        ));
+    }
+}
+
+/// `solve_holding_in_steps` rechnet ohne Kopie und gleicht dem alten Weg bitgenau, bei Erfolg
+/// wie bei Scheitern; gescheitert bleibt die Skizze unverändert, das Maß steht wieder auf `to`.
+#[test]
+fn holding_in_steps_matches_the_copy() {
+    // Gelenkviereck: a, b gehalten, c und d frei, drei Seiten 10 lang, Winkel bei b als Maß.
+    // Große Sprünge auf fast gestreckte Lagen scheitern direkt und gehen über das Halbieren.
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    let c = s.add_point(10.0, 10.0).unwrap();
+    let d = s.add_point(0.0, 10.0).unwrap();
+    let ab = s.add_line(a, b).unwrap();
+    let bc = s.add_line(b, c).unwrap();
+    s.add_line(c, d).unwrap();
+    s.add_line(d, a).unwrap();
+    s.add_constraint(K::Distance(b, c, 10.0)).unwrap();
+    s.add_constraint(K::Distance(c, d, 10.0)).unwrap();
+    s.add_constraint(K::Distance(d, a, 10.0)).unwrap();
+    let from = std::f64::consts::FRAC_PI_2;
+    let ang = s.add_constraint(K::Angle(ab, bc, from)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let mut halved = 0;
+    for to in [0.3, 2.9, 3.1, 0.05, 1.6, 2.5, 6.0, -1.0] {
+        let (mut new, mut old) = (s.clone(), s.clone());
+        if new.set_constraint_value(ang, to).is_err() {
+            continue;
+        }
+        old.set_constraint_value(ang, to).unwrap();
+        let (data, rev) = (new.to_data(), new.revision());
+        let direct = new.clone().solve_holding(&[a, b]);
+        let ok_new = new.solve_holding_in_steps(ang, &[a, b], from, to);
+        let ok_old = old.solve_holding_in_steps_cloning(ang, &[a, b], from, to);
+        if !direct && ok_new {
+            halved += 1;
+        }
+        assert_eq!(ok_new, ok_old, "{to}: Ergebnis");
+        assert_eq!(bits(&new), bits(&old), "{to}: Werte");
+        assert_eq!(new.to_data(), old.to_data(), "{to}: Aufbau");
+        if !ok_new {
+            assert_eq!(new.to_data(), data, "{to}: gescheitert ändert nichts");
+            assert_eq!(new.revision(), rev, "{to}: gescheitert behält den Stand");
+        }
+    }
+    eprintln!("{halved} Sprünge gingen über das Halbieren");
 }

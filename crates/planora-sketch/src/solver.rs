@@ -158,6 +158,15 @@ const HOLD_POLISH: f64 = 1e-2;
 /// So oft halbiert [`Sketch::solve_holding_in_steps`] den Schritt höchstens.
 const HOLD_HALVINGS: usize = 6;
 
+thread_local! {
+    /// Nur für Tests des Wächters: der nächste Lauf von [`Sketch::solve_holding`] paniken lassen
+    /// ([`Sketch::panic_in_next_hold_for_tests`]).
+    static PANIC_IN_HOLD: Cell<bool> = const { Cell::new(false) };
+    /// Nur für Tests des Halbierens: so viele Läufe von [`Sketch::solve_holding`] scheitern
+    /// ([`Sketch::fail_next_holds_for_tests`]).
+    static FAIL_HOLDS: Cell<u32> = const { Cell::new(0) };
+}
+
 /// Ergebnis eines Solver-Laufs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SolveStatus {
@@ -598,6 +607,14 @@ impl Sketch {
     /// ([`ValueSnapshot`](crate::model::ValueSnapshot)) wiederhergestellt. Ergebnis bitgleich zu
     /// [`solve_holding_cloning`](Self::solve_holding_cloning).
     pub fn solve_holding(&mut self, hold: &[PointId]) -> bool {
+        if FAIL_HOLDS.with(|n| {
+            n.get() > 0 && {
+                n.set(n.get() - 1);
+                true
+            }
+        }) {
+            return false;
+        }
         // Die Nachführung der Texte beim Lösen kann den Aufbau ändern (Stücke neu anlegen, Punkte
         // heben); das nähme `cut_back` nicht zurück. Mit Texten darum auf der Kopie (Prüferfund).
         if !self.only_values_change_when_solving() {
@@ -609,19 +626,67 @@ impl Sketch {
         snap.solve_cache = cache;
         let tol = self.tol;
         let mut disabled = Vec::new();
-        let ok = self.hold_in_place(hold, &mut disabled);
+        // Wächter (offener Punkt C12): Auch nach einer Panik im Lauf wird alles zurückgenommen
+        // (Festpunkte, abgeschaltete Zeilen, Toleranz, Wertestand), dann geht die Panik weiter.
+        let enabled = self.enabled_flags(snap.mark.constraints);
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.hold_in_place(hold, &mut disabled)
+        }));
+        let ok = matches!(run, Ok(true));
         let solved = ok.then(|| self.vars[..snap.mark.vars].to_vec());
         for id in disabled {
             self.constraints[id].enabled = true;
         }
         self.tol = tol;
         self.cut_back(snap.mark);
+        if run.is_err() {
+            self.restore_enabled_flags(&enabled);
+        }
         self.restore_snapshot(snap);
         if let Some(vars) = solved {
             self.vars = vars;
             self.touch_values();
         }
+        if let Err(p) = run {
+            std::panic::resume_unwind(p);
+        }
         ok
+    }
+
+    /// Ob die ersten `n` Abhängigkeiten eingeschaltet sind (für den Wächter in
+    /// [`solve_holding`](Self::solve_holding)).
+    fn enabled_flags(&self, n: usize) -> Vec<bool> {
+        self.constraints
+            .iter()
+            .take(n)
+            .map(|(_, c)| c.enabled)
+            .collect()
+    }
+
+    fn restore_enabled_flags(&mut self, flags: &[bool]) {
+        let ids: Vec<ConstraintId> = self
+            .constraints
+            .iter()
+            .take(flags.len())
+            .map(|(id, _)| id)
+            .collect();
+        for (id, &on) in ids.into_iter().zip(flags) {
+            self.constraints[id].enabled = on;
+        }
+    }
+
+    /// Lässt die nächsten `n` Läufe von [`solve_holding`](Self::solve_holding) auf diesem Faden
+    /// scheitern, ohne etwas zu ändern (nur für Tests des Halbierens).
+    #[doc(hidden)]
+    pub fn fail_next_holds_for_tests(n: u32) {
+        FAIL_HOLDS.with(|c| c.set(n));
+    }
+
+    /// Lässt den nächsten Lauf von [`solve_holding`](Self::solve_holding) auf diesem Faden nach
+    /// dem Anhängen der Festpunkte paniken (nur für Tests des Wächters).
+    #[doc(hidden)]
+    pub fn panic_in_next_hold_for_tests() {
+        PANIC_IN_HOLD.with(|p| p.set(true));
     }
 
     /// Der Lauf von [`solve_holding`](Self::solve_holding) ohne Aufräumen: hängt Festpunkte an,
@@ -652,6 +717,10 @@ impl Sketch {
             return false;
         }
         self.tol.linear *= HOLD_POLISH;
+        if PANIC_IN_HOLD.with(|p| p.replace(false)) {
+            // Nur in Tests: mitten im Lauf (Festpunkte, Werte und Toleranz geändert).
+            panic!("test panic while holding");
+        }
         disabled.extend(self.drop_rows_between_held(&pinned, &pins));
         self.touch_structure();
         self.settle_holding(&pinned)
@@ -714,7 +783,10 @@ impl Sketch {
             self.constraints[id].enabled = false;
         }
         self.touch_structure();
-        let ok = self.solve_holding(hold);
+        // Wächter wie in `solve_holding`: auch nach einer Panik wieder einschalten.
+        let run =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.solve_holding(hold)));
+        let ok = matches!(run, Ok(true));
         let solved = ok.then(|| std::mem::take(&mut self.vars));
         for &id in &other {
             self.constraints[id].enabled = true;
@@ -723,6 +795,9 @@ impl Sketch {
         if let Some(vars) = solved {
             self.vars = vars;
             self.touch_values();
+        }
+        if let Err(p) = run {
+            std::panic::resume_unwind(p);
         }
         ok
     }
@@ -794,6 +869,46 @@ impl Sketch {
         if self.solve_holding(hold) {
             return true;
         }
+        // Ohne Kopie (offener Punkt C12), wenn sich beim Halbieren nur Werte ändern: kein Text
+        // und kein Mustermaß (eine neue Anzahl legt Exemplare an oder nimmt sie weg).
+        let pattern_dim = self
+            .constraints
+            .get(dim)
+            .is_some_and(|c| matches!(c.kind, ConstraintKind::PatternValue(..)));
+        if pattern_dim || !self.only_values_change_when_solving() {
+            return self.halves_on_copy(dim, hold, from, to);
+        }
+        let snap = self.value_snapshot();
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.hold_by_halves(dim, hold, from, to, HOLD_HALVINGS)
+        }));
+        if matches!(run, Ok(true)) {
+            return true;
+        }
+        // Gescheitert: Maß wieder auf `to`, Wertestand zurück (gleiche Werte, gleicher Stand).
+        let _ = self.set_constraint_value(dim, to);
+        self.restore_values(snap);
+        if let Err(p) = run {
+            std::panic::resume_unwind(p);
+        }
+        false
+    }
+
+    /// Der alte Weg von [`solve_holding_in_steps`](Self::solve_holding_in_steps) auf einer Kopie;
+    /// für Texte und Mustermaße und zum Vergleichen (C12).
+    #[doc(hidden)]
+    pub fn solve_holding_in_steps_cloning(
+        &mut self,
+        dim: ConstraintId,
+        hold: &[PointId],
+        from: f64,
+        to: f64,
+    ) -> bool {
+        self.solve_holding(hold) || self.halves_on_copy(dim, hold, from, to)
+    }
+
+    /// Das Halbieren von [`solve_holding_in_steps`](Self::solve_holding_in_steps) auf einer Kopie.
+    fn halves_on_copy(&mut self, dim: ConstraintId, hold: &[PointId], from: f64, to: f64) -> bool {
         let mut trial = self.clone();
         if !trial.hold_by_halves(dim, hold, from, to, HOLD_HALVINGS) {
             return false;

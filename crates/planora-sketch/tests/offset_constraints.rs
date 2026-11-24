@@ -1589,3 +1589,56 @@ fn a_hand_drawn_circle_on_a_line_end_is_no_offset_dimension() {
         .unwrap();
     assert_eq!(s.offset_hold_points(dim), None);
 }
+
+/// Offener Punkt C12 (2026-11-24): `solve_holding_in_steps` halbiert ohne Kopie der Skizze und
+/// gleicht dem alten Weg auf einer Kopie bitgenau (Erfolg wie Scheitern). Große Sprünge des
+/// Versatzmaßes gehen dabei auch über das Halbieren.
+#[test]
+fn offset_jumps_in_steps_match_the_copy() {
+    let bits = |s: &Sketch| -> Vec<u64> { s.variables().iter().map(|x| x.to_bits()).collect() };
+    let mut halved = 0;
+    for (shape, what) in [
+        (single_line as fn() -> (Sketch, Vec<CurveId>), "Linie"),
+        (u_profile, "U"),
+        (open_chain, "mit Bogen"),
+        (hook, "Haken"),
+    ] {
+        for (to, fails) in [0.05, 0.5, 12.0, 40.0, 120.0, -3.0]
+            .into_iter()
+            .flat_map(|to| [(to, 2), (to, 1000)])
+        {
+            let b = Bench::new(shape(), 3.0);
+            let (dim, hold) = (b.dim(), b.hold());
+            let mut new = b.s.clone();
+            if new.set_constraint_value(dim, to).is_err() {
+                continue;
+            }
+            let mut old = new.clone();
+            let (data, rev) = (new.to_data(), new.revision());
+            // Der direkte Lauf und der erste beim Ziel scheitern: Halbieren mit Zwischenschritt.
+            // Mit 1000 scheitert alles: gescheitert bleibt die Skizze unverändert.
+            Sketch::fail_next_holds_for_tests(fails);
+            let ok_new = new.solve_holding_in_steps(dim, &hold, 3.0, to);
+            Sketch::fail_next_holds_for_tests(fails);
+            let ok_old = old.solve_holding_in_steps_cloning(dim, &hold, 3.0, to);
+            Sketch::fail_next_holds_for_tests(0);
+            if ok_new {
+                halved += 1;
+            } else if fails == 2 {
+                eprintln!("{what} {to}: auch halbiert nicht lösbar");
+            }
+            assert_eq!(ok_new, ok_old, "{what} {to}: Ergebnis");
+            assert_eq!(bits(&new), bits(&old), "{what} {to}: Werte");
+            assert_eq!(new.to_data(), old.to_data(), "{what} {to}: Aufbau");
+            if !ok_new {
+                assert_eq!(
+                    new.to_data(),
+                    data,
+                    "{what} {to}: gescheitert ändert nichts"
+                );
+                assert_eq!(new.revision(), rev, "{what} {to}: Stand");
+            }
+        }
+    }
+    assert!(halved > 0, "kein Sprung ging über das Halbieren");
+}
