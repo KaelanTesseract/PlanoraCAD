@@ -157,3 +157,60 @@ fn cone_against_a_skew_cylinder() {
     );
     check_all(&cone, &rod, "Kegel gegen schrägen Zylinder");
 }
+
+/// Höhe über der längsten Seite, bezogen auf deren Quadrat (fast 0 bei Splittern).
+fn flatness(m: &planora_mesh::Mesh, t: &[u32]) -> f64 {
+    let p = |i: u32| m.positions[i as usize];
+    let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+    let longest = (b - a).length().max((c - b).length()).max((a - c).length());
+    if longest == 0.0 {
+        return 0.0;
+    }
+    (b - a).cross(c - a).length() / (longest * longest)
+}
+
+#[test]
+fn cones_in_general_position_have_no_sliver_triangles() {
+    // Offener Punkt C15: An der Spitze beschnittener Kegel verband das Netz die Spitze mit
+    // mehreren Punkten derselben Mantellinie (drei Punkte fast auf einer Geraden).
+    let cone = k().make_cone(6.0, 12.0).unwrap();
+    let slab = moved(
+        &box_solid(
+            DVec3::new(40.0, 40.0, 40.0),
+            DVec3::new(-20.0, -20.0, -40.0),
+        ),
+        DMat4::from_translation(DVec3::new(0.0, 0.0, 5.0))
+            * DMat4::from_rotation_x(0.4)
+            * DMat4::from_rotation_y(0.25),
+    );
+    let rod = moved(
+        &centered_cylinder(1.5, 40.0),
+        DMat4::from_translation(DVec3::new(0.5, 0.0, 4.0)) * DMat4::from_rotation_y(PI / 2.5),
+    );
+    let mut found = Vec::new();
+    for (name, other) in [("Ebene", &slab), ("Zylinder", &rod)] {
+        for op in [BoolOp::Union, BoolOp::Difference, BoolOp::Intersection] {
+            let Ok(s) = boolean(&cone, other, op, &planora_math::Tolerance::default()) else {
+                continue;
+            };
+            for chord in [0.01, 0.002] {
+                let m = planora_mesh::tessellate(
+                    &s,
+                    &planora_mesh::TessellationOptions {
+                        chord_tolerance: chord,
+                    },
+                )
+                .unwrap();
+                let n = m
+                    .indices
+                    .chunks_exact(3)
+                    .filter(|t| flatness(&m, t) < 1e-5)
+                    .count();
+                if n > 0 {
+                    found.push(format!("{name} {op:?} Sehne {chord}: {n}"));
+                }
+            }
+        }
+    }
+    assert!(found.is_empty(), "Splitter: {found:#?}");
+}

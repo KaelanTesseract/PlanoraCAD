@@ -201,3 +201,47 @@ fn a_hair_thin_slit_through_a_large_mantle_is_not_bridged() {
         }
     }
 }
+
+/// Höhe des Dreiecks über seiner längsten Kante, bezogen auf diese Kante (0 bei Splittern).
+fn flatness(m: &planora_mesh::Mesh, t: &[u32]) -> f64 {
+    let p = |i: u32| m.positions[i as usize];
+    let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+    let longest = (b - a).length().max((c - b).length()).max((a - c).length());
+    if longest == 0.0 {
+        return 0.0;
+    }
+    (b - a).cross(c - a).length() / (longest * longest)
+}
+
+#[test]
+fn a_cone_apex_has_no_sliver_triangles() {
+    // Offener Punkt C15: An der Kegelspitze entstanden Dreiecke ohne Fläche (zwei Ecken auf der
+    // Spitze), auch bei rein analytischen Körpern.
+    let k = AnalyticKernel::default();
+    let cone = k.make_cone(2.0, 3.0).unwrap();
+    let b = k
+        .transform(
+            &k.make_box(DVec3::new(2.5, 5.0, 1.0)).unwrap(),
+            &DMat4::from_translation(DVec3::new(0.0, -2.5, -1.0)),
+        )
+        .unwrap();
+    let union = boolean(&cone, &b, BoolOp::Union, &Tolerance::default()).unwrap();
+    for (name, s) in [("Kegel", &cone), ("Vereinigung", &union)] {
+        for chord in [0.1, 0.01] {
+            let m = tessellate(
+                s,
+                &TessellationOptions {
+                    chord_tolerance: chord,
+                },
+            )
+            .unwrap();
+            let slivers = m
+                .indices
+                .chunks_exact(3)
+                .filter(|t| flatness(&m, t) < 1e-9)
+                .count();
+            assert_eq!(slivers, 0, "{name}, Sehnentoleranz {chord}");
+            assert!(is_watertight(&m, 1e-6), "{name}, {chord}");
+        }
+    }
+}
